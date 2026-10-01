@@ -35,6 +35,26 @@ type AuditLog struct {
 	Hmac       []byte
 }
 
+type Role struct {
+	ID      string
+	Name    string
+	Builtin int64
+}
+
+type RoleAssignment struct {
+	ID            string
+	PrincipalType string
+	PrincipalID   string
+	RoleID        string
+	EnvID         sql.NullString
+	CreatedAt     int64
+}
+
+type RolePermission struct {
+	RoleID     string
+	Permission string
+}
+
 type Setting struct {
 	Key       string
 	Value     string
