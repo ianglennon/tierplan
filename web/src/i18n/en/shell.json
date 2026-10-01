@@ -1,0 +1,29 @@
+{
+  "shell": {
+    "skipLink": "Skip to content",
+    "toggleSidebar": "Toggle sidebar",
+    "sidebar": {
+      "title": "Navigation",
+      "description": "Main navigation for Bayplan."
+    },
+    "switcher": {
+      "none": "No environment"
+    },
+    "userMenu": {
+      "trigger": "User menu",
+      "roleAdmin": "Admin",
+      "theme": "Theme",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System",
+      "logout": "Log out"
+    },
+    "home": {
+      "tabTitle": "Home",
+      "noEnvironments": {
+        "heading": "No environments yet",
+        "body": "Bayplan can manage the Docker host it runs on through the Docker socket. Start Bayplan with the socket mounted, then add the host in Settings. Remote hosts will be available in a later release."
+      }
+    }
+  }
+}

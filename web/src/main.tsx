@@ -11,6 +11,7 @@ import "@fontsource-variable/geist-mono";
 import "./index.css";
 import "@/i18n";
 import { queryClient } from "@/api/query-client";
+import { watchSystemTheme } from "@/lib/theme";
 import { routeTree } from "./routeTree.gen";
 
 const router = createRouter({ routeTree });
@@ -20,6 +21,9 @@ declare module "@tanstack/react-router" {
     router: typeof router;
   }
 }
+
+// Keeps "System" in step with the operating system for as long as the page lives.
+watchSystemTheme();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root element");

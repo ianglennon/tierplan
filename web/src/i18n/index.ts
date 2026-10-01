@@ -7,6 +7,7 @@ import { initReactI18next } from "react-i18next";
 import auth from "./en/auth.json";
 import common from "./en/common.json";
 import setup from "./en/setup.json";
+import shell from "./en/shell.json";
 
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
@@ -19,6 +20,7 @@ export const resources = {
     auth,
     common,
     setup,
+    shell,
   },
 } as const;
 
