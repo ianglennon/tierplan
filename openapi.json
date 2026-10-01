@@ -1,6 +1,39 @@
 {
   "components": {
     "schemas": {
+      "ChangePasswordBody": {
+        "additionalProperties": false,
+        "properties": {
+          "csrfToken": {
+            "description": "The CSRF token of the new session, sent as X-CSRF-Token on every mutating request",
+            "type": "string"
+          }
+        },
+        "required": [
+          "csrfToken"
+        ],
+        "type": "object"
+      },
+      "ChangePasswordInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "currentPassword": {
+            "description": "The password the account has now",
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "newPassword": {
+            "description": "The new password; at least 12 characters, not a common password and not containing the username",
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ],
+        "type": "object"
+      },
       "CompleteSetupBody": {
         "additionalProperties": false,
         "properties": {
@@ -381,6 +414,50 @@
           "sourceTreeUrl"
         ],
         "type": "object"
+      },
+      "WarningBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Which warning this is",
+            "enum": [
+              "data_not_persisted",
+              "key_backup"
+            ],
+            "type": "string"
+          },
+          "keyPath": {
+            "description": "For key_backup: where the generated encryption key is stored",
+            "type": "string"
+          },
+          "reason": {
+            "description": "For data_not_persisted: why the data directory is not persisted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "WarningsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Only the warnings that apply; empty when there are none",
+            "items": {
+              "$ref": "#/components/schemas/WarningBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
       }
     }
   },
@@ -550,6 +627,60 @@
         ]
       }
     },
+    "/api/me/password": {
+      "post": {
+        "description": "Needs the current password. On success every session of the user ends, this one included, and a new session starts: its cookie is set and its CSRF token returned (D-32, D-34). A wrong current password or a new password that breaks the policy answers 422 with a stable code per field. Audited as auth.password_changed.",
+        "operationId": "changePassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangePasswordBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change the signed-in user's own password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/setup/complete": {
       "post": {
         "description": "Needs the setup token. Runs once: it creates the admin, assigns the global admin role, stores the instance name and public URL, starts a session and audits setup.completed in one transaction, then consumes the token. A second call answers 409 setup_complete.",
@@ -673,6 +804,70 @@
         "summary": "Get the running Bayplan version and source link",
         "tags": [
           "system"
+        ]
+      }
+    },
+    "/api/warnings": {
+      "get": {
+        "description": "Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The plain-HTTP warning is the browser's to compute and is not listed.",
+        "operationId": "listWarnings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarningsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the instance warnings that need an admin's attention",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/warnings/key-backup/ack": {
+      "post": {
+        "description": "Records, once for the whole instance, that the generated encryption key has been backed up, and audits it as warning.acknowledged.",
+        "operationId": "acknowledgeKeyBackup",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Acknowledge the encryption key backup reminder",
+        "tags": [
+          "settings"
         ]
       }
     }

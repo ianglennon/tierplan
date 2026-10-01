@@ -158,3 +158,25 @@ func (q *Queries) UnlockUserByUsername(ctx context.Context, username string) (in
 	}
 	return result.RowsAffected()
 }
+
+const updatePassword = `-- name: UpdatePassword :exec
+UPDATE users SET password_hash = ?, password_changed_at = ?, updated_at = ? WHERE id = ?
+`
+
+type UpdatePasswordParams struct {
+	PasswordHash      string
+	PasswordChangedAt int64
+	UpdatedAt         int64
+	ID                string
+}
+
+// Stores a new password hash and stamps when it changed (D-34).
+func (q *Queries) UpdatePassword(ctx context.Context, arg UpdatePasswordParams) error {
+	_, err := q.db.ExecContext(ctx, updatePassword,
+		arg.PasswordHash,
+		arg.PasswordChangedAt,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
+}

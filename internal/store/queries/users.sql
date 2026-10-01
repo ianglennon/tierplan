@@ -38,3 +38,7 @@ SELECT role_id FROM role_assignments
 WHERE principal_type = 'user' AND principal_id = ? AND env_id IS NULL
 ORDER BY created_at, id
 LIMIT 1;
+
+-- name: UpdatePassword :exec
+-- Stores a new password hash and stamps when it changed (D-34).
+UPDATE users SET password_hash = ?, password_changed_at = ?, updated_at = ? WHERE id = ?;

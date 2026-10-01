@@ -78,6 +78,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change the signed-in user's own password
+         * @description Needs the current password. On success every session of the user ends, this one included, and a new session starts: its cookie is set and its CSRF token returned (D-32, D-34). A wrong current password or a new password that breaks the policy answers 422 with a stable code per field. Audited as auth.password_changed.
+         */
+        post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/setup/complete": {
         parameters: {
             query?: never;
@@ -132,10 +152,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the instance warnings that need an admin's attention
+         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The plain-HTTP warning is the browser's to compute and is not listed.
+         */
+        get: operations["listWarnings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warnings/key-backup/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge the encryption key backup reminder
+         * @description Records, once for the whole instance, that the generated encryption key has been backed up, and audits it as warning.acknowledged.
+         */
+        post: operations["acknowledgeKeyBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ChangePasswordBody: {
+            /** @description The CSRF token of the new session, sent as X-CSRF-Token on every mutating request */
+            csrfToken: string;
+        };
+        ChangePasswordInputBody: {
+            /** @description The password the account has now */
+            currentPassword: string;
+            /** @description The new password; at least 12 characters, not a common password and not containing the username */
+            newPassword: string;
+        };
         CompleteSetupBody: {
             /** @description Sent as X-CSRF-Token on every mutating request */
             csrfToken: string;
@@ -282,6 +352,21 @@ export interface components {
             /** @description Release version, or dev for an untagged build */
             version: string;
         };
+        WarningBody: {
+            /**
+             * @description Which warning this is
+             * @enum {string}
+             */
+            id: "data_not_persisted" | "key_backup";
+            /** @description For key_backup: where the generated encryption key is stored */
+            keyPath?: string;
+            /** @description For data_not_persisted: why the data directory is not persisted */
+            reason?: string;
+        };
+        WarningsBody: {
+            /** @description Only the warnings that apply; empty when there are none */
+            items: components["schemas"]["WarningBody"][] | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -414,6 +499,41 @@ export interface operations {
             };
         };
     };
+    changePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangePasswordBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     completeSetup: {
         parameters: {
             query?: never;
@@ -499,6 +619,63 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["VersionBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listWarnings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarningsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    acknowledgeKeyBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {
