@@ -44,7 +44,7 @@ func TestLoadOrCreateGeneratesKeyFile(t *testing.T) {
 	if got := st.Mode().Perm(); got != 0o600 {
 		t.Fatalf("key file mode = %o, want 600", got)
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // the test reads the key file it just created
 	if err != nil {
 		t.Fatal(err)
 	}

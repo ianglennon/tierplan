@@ -1,50 +1,331 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-// Package vault holds Bayplan's master key and derives everything from it.
+// Package vault holds Bayplan's master key and derives everything from it
+// (D-13, D-14).
+//
+// The master key is 32 random bytes, written as one line of standard base64.
+// It comes from BAYPLAN_ENCRYPTION_KEY (or the _FILE variant, which config
+// resolves first) or from <data dir>/bayplan.key, which is generated on first
+// start. Every ciphertext and every audit HMAC records the ID of the key that
+// produced it, so a later rotation needs no format change.
+//
+// Formats (confirmed at plan 01-07 Task 1, and one-way once data exists):
+//
+//	key ID      "k1-" + hex(first 8 bytes of SHA-256("bayplan/key-id/v1" || key))
+//	subkey      HKDF-SHA256(key, no salt, info = label), 32 bytes
+//	envelope    "v1." + keyID + "." + base64url(nonce(12) || GCM ciphertext+tag),
+//	            AAD = "bayplan/v1/" + caller context
+//
+// The key is never logged and is only reachable through derived subkeys.
 package vault
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 )
 
-// Errors returned by the vault.
+const (
+	// KeyFile is the generated key's file name inside the data directory.
+	KeyFile = "bayplan.key"
+
+	// Subkey labels. They are part of the on-disk format: changing one
+	// invalidates everything derived with it.
+	LabelAuditHMAC = "bayplan/audit-hmac/v1"
+	LabelVaultAEAD = "bayplan/vault-aead/v1"
+	LabelCSRF      = "bayplan/csrf/v1"
+
+	keyLen         = 32
+	keyIDDomain    = "bayplan/key-id/v1"
+	keyIDPrefix    = "k1-"
+	envelopeV1     = "v1"
+	aadPrefix      = "bayplan/v1/"
+	envKeyName     = "BAYPLAN_ENCRYPTION_KEY"
+	sourceEnv      = "env"
+	sourceFile     = "file"
+	keyFileMode    = 0o600
+	broadModeMask  = 0o077
+	subkeyLenBytes = 32
+)
+
+// Errors returned by the vault. Callers match them with errors.Is.
 var (
-	ErrNoKey      = errors.New("vault: no encryption key")
-	ErrUnknownKey = errors.New("vault: unknown key id")
-	ErrDecrypt    = errors.New("vault: decryption failed")
+	// ErrNoKey means no key is configured and no key file exists. Load
+	// returns it instead of generating one.
+	ErrNoKey = errors.New("vault: no encryption key is configured and no key file exists")
+	// ErrUnknownKey means a sealed value or HMAC names a key ID this vault does
+	// not hold: the wrong key file, or a key that was rotated away.
+	ErrUnknownKey = errors.New("vault: the data was produced with a key this vault does not hold")
+	// ErrDecrypt means authentication failed: the ciphertext was modified, or
+	// it was sealed for a different context. AEAD cannot tell the two apart.
+	ErrDecrypt = errors.New("vault: decryption failed")
+	// ErrMalformed means the sealed value is not a v1 envelope.
+	ErrMalformed = errors.New("vault: malformed sealed value")
 )
 
-var errNotImplemented = errors.New("vault: not implemented")
+// Vault is the loaded master key. It is safe for concurrent use.
+type Vault struct {
+	keys   map[string][]byte // key ID to master key
+	active string
+	source string
 
-// Vault is the loaded master key.
-type Vault struct{}
+	mu      sync.Mutex
+	subkeys map[string][]byte // keyID + "\x00" + label
+}
 
-// LoadOrCreate is a placeholder.
+// LoadOrCreate returns the vault for configKey (the resolved
+// BAYPLAN_ENCRYPTION_KEY, empty when unset). A set configKey always wins and
+// creates no file. Otherwise it reads <dataDir>/bayplan.key, generating it
+// (0600, written atomically) on first start and warning to back it up.
 func LoadOrCreate(configKey, dataDir string, log *slog.Logger) (*Vault, error) {
-	return nil, errNotImplemented
+	return load(configKey, dataDir, log, true)
 }
 
-// Load is a placeholder.
-func Load(configKey, dataDir string) (*Vault, error) { return nil, errNotImplemented }
+// Load is LoadOrCreate that never generates a key: it returns ErrNoKey
+// instead. Command-line tools that only read (for example `audit verify`)
+// use it so they can never mint a key that does not match the server's.
+func Load(configKey, dataDir string) (*Vault, error) {
+	return load(configKey, dataDir, slog.Default(), false)
+}
 
-// KeyID is a placeholder.
-func (v *Vault) KeyID() string { return "" }
+func load(configKey, dataDir string, log *slog.Logger, create bool) (*Vault, error) {
+	if log == nil {
+		log = slog.Default()
+	}
+	if configKey != "" {
+		key, err := decodeKey(configKey)
+		if err != nil {
+			// The supplied value is never echoed into the error.
+			return nil, fmt.Errorf("%s: %w", envKeyName, err)
+		}
+		return newVault(key, sourceEnv), nil
+	}
 
-// KeySource is a placeholder.
-func (v *Vault) KeySource() string { return "" }
+	path := filepath.Join(dataDir, KeyFile)
+	raw, err := os.ReadFile(path) //nolint:gosec // path is <data dir>/bayplan.key
+	switch {
+	case err == nil:
+		key, derr := decodeKey(string(raw))
+		if derr != nil {
+			return nil, fmt.Errorf("key file %s: %w", path, derr)
+		}
+		warnIfBroad(path, log)
+		return newVault(key, sourceFile), nil
+	case !errors.Is(err, fs.ErrNotExist):
+		return nil, fmt.Errorf("read key file %s: %w", path, err)
+	case !create:
+		return nil, ErrNoKey
+	}
 
-// Subkey is a placeholder.
-func (v *Vault) Subkey(label string) []byte { return nil }
+	key := make([]byte, keyLen)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate encryption key: %w", err)
+	}
+	created, err := writeKeyFile(path, key)
+	if err != nil {
+		return nil, err
+	}
+	if !created {
+		// Another process won the race to create the file; use its key.
+		return load("", dataDir, log, false)
+	}
+	log.Warn("generated encryption key at "+path+": back it up together with the database; "+
+		"without it stored secrets cannot be decrypted and the audit log cannot be verified",
+		"path", path)
+	return newVault(key, sourceFile), nil
+}
 
-// SubkeyFor is a placeholder.
-func (v *Vault) SubkeyFor(keyID, label string) ([]byte, error) { return nil, errNotImplemented }
+// decodeKey parses one line of standard base64 that must hold exactly 32
+// bytes. The error never contains the input.
+func decodeKey(s string) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(s))
+	if err != nil {
+		return nil, errors.New("must be standard base64 of exactly 32 random bytes (generate one with: openssl rand -base64 32)")
+	}
+	if len(key) != keyLen {
+		return nil, fmt.Errorf("must decode to exactly 32 bytes, got %d (generate one with: openssl rand -base64 32)", len(key))
+	}
+	return key, nil
+}
 
-// Seal is a placeholder.
+// writeKeyFile writes the key atomically: a 0600 temporary file in the same
+// directory, hard-linked into place so an existing file is never replaced. It
+// reports false when the file already exists. Where hard links are not
+// available it falls back to a rename.
+func writeKeyFile(path string, key []byte) (created bool, err error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return false, fmt.Errorf("create data directory %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".bayplan.key-*")
+	if err != nil {
+		return false, fmt.Errorf("write key file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if err := tmp.Chmod(keyFileMode); err != nil {
+		_ = tmp.Close()
+		return false, fmt.Errorf("write key file: %w", err)
+	}
+	if _, err := tmp.WriteString(base64.StdEncoding.EncodeToString(key) + "\n"); err != nil {
+		_ = tmp.Close()
+		return false, fmt.Errorf("write key file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return false, fmt.Errorf("write key file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return false, fmt.Errorf("write key file: %w", err)
+	}
+
+	if err := os.Link(tmpName, path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return false, nil
+		}
+		if rerr := os.Rename(tmpName, path); rerr != nil {
+			return false, fmt.Errorf("install key file %s: %w", path, rerr)
+		}
+	}
+	if d, err := os.Open(dir); err == nil { //nolint:gosec // dir is the operator data directory
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return true, nil
+}
+
+func warnIfBroad(path string, log *slog.Logger) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if st.Mode().Perm()&broadModeMask != 0 {
+		log.Warn("the encryption key file is readable by other users: run chmod 600 on it",
+			"path", path, "mode", fmt.Sprintf("%04o", st.Mode().Perm()))
+	}
+}
+
+func newVault(key []byte, source string) *Vault {
+	id := keyID(key)
+	return &Vault{
+		keys:    map[string][]byte{id: key},
+		active:  id,
+		source:  source,
+		subkeys: make(map[string][]byte),
+	}
+}
+
+func keyID(key []byte) string {
+	h := sha256.New()
+	h.Write([]byte(keyIDDomain))
+	h.Write(key)
+	return keyIDPrefix + hex.EncodeToString(h.Sum(nil)[:8])
+}
+
+// KeyID is the active key's ID, recorded on every ciphertext and audit entry.
+func (v *Vault) KeyID() string { return v.active }
+
+// KeySource reports where the key came from: "env" (BAYPLAN_ENCRYPTION_KEY or
+// its _FILE variant) or "file" (<data dir>/bayplan.key).
+func (v *Vault) KeySource() string { return v.source }
+
+// Subkey derives the 32-byte subkey for label from the active key.
+func (v *Vault) Subkey(label string) []byte {
+	k, err := v.SubkeyFor(v.active, label)
+	if err != nil {
+		// Unreachable: the active key is always held.
+		panic("vault: " + err.Error())
+	}
+	return k
+}
+
+// SubkeyFor derives the subkey for label from the key with the given ID, for
+// verifying data written under an older key. The result is a copy.
+func (v *Vault) SubkeyFor(id, label string) ([]byte, error) {
+	master, ok := v.keys[id]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, id)
+	}
+	cacheKey := id + "\x00" + label
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	sub, ok := v.subkeys[cacheKey]
+	if !ok {
+		var err error
+		sub, err = hkdf.Key(sha256.New, master, nil, label, subkeyLenBytes)
+		if err != nil {
+			return nil, fmt.Errorf("derive subkey: %w", err)
+		}
+		v.subkeys[cacheKey] = sub
+	}
+	return append([]byte(nil), sub...), nil
+}
+
+func (v *Vault) aead(id string) (cipher.AEAD, error) {
+	sub, err := v.SubkeyFor(id, LabelVaultAEAD)
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(sub)
+	if err != nil {
+		return nil, fmt.Errorf("vault: %w", err)
+	}
+	return cipher.NewGCM(block)
+}
+
+// Seal encrypts plaintext with AES-256-GCM under the active key. context
+// binds the ciphertext to its purpose: Open fails if it differs.
 func (v *Vault) Seal(context string, plaintext []byte) (string, error) {
-	return "", errNotImplemented
+	gcm, err := v.aead(v.active)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("vault: generate nonce: %w", err)
+	}
+	body := gcm.Seal(nonce, nonce, plaintext, []byte(aadPrefix+context))
+	return envelopeV1 + "." + v.active + "." + base64.RawURLEncoding.EncodeToString(body), nil
 }
 
-// Open is a placeholder.
-func (v *Vault) Open(context, sealed string) ([]byte, error) { return nil, errNotImplemented }
+// Open decrypts a value produced by Seal with the same context. It returns
+// ErrMalformed, ErrUnknownKey or ErrDecrypt so callers can tell a bad value
+// from a missing key from a failed authentication.
+func (v *Vault) Open(context, sealed string) ([]byte, error) {
+	version, rest, ok := strings.Cut(sealed, ".")
+	if !ok || version != envelopeV1 {
+		return nil, ErrMalformed
+	}
+	id, encoded, ok := strings.Cut(rest, ".")
+	if !ok || id == "" || encoded == "" {
+		return nil, ErrMalformed
+	}
+	gcm, err := v.aead(id)
+	if err != nil {
+		return nil, err
+	}
+	body, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || len(body) < gcm.NonceSize()+gcm.Overhead() {
+		return nil, ErrMalformed
+	}
+	nonce, ct := body[:gcm.NonceSize()], body[gcm.NonceSize():]
+	plain, err := gcm.Open(nil, nonce, ct, []byte(aadPrefix+context))
+	if err != nil {
+		return nil, ErrDecrypt
+	}
+	return plain, nil
+}
