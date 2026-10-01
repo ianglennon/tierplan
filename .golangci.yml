@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+#
+# golangci-lint v2 (pinned in the Makefile). Besides the usual correctness and
+# security linters this file carries the architectural guard rails: they turn
+# "do not bypass the policy seam" into a build failure instead of a review comment.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - gosec
+    - bodyclose
+    - ineffassign
+    - unused
+    - forbidigo
+    - depguard
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+
+    forbidigo:
+      # Match on resolved identifiers, so an import alias cannot dodge a rule.
+      analyze-types: true
+      forbid:
+        - pattern: '^huma\.(Register|Get|Post|Put|Patch|Delete)$'
+          msg: register operations through httpx.Register so every route carries an rbac.Requirement (D-44, Pitfall 5)
+        - pattern: '^client\.FromEnv$'
+          msg: client.FromEnv honours DOCKER_API_VERSION and tcp:// hosts; build the client in internal/dockerx (Pitfall 1, D-52)
+        - pattern: '^middleware\.RealIP$'
+          msg: chi RealIP trusts forwarded headers and lets a client forge the audit IP; use the trusted-proxy logic (Pitfall 6)
+
+    depguard:
+      rules:
+        docker-client-seam:
+          list-mode: lax
+          files:
+            - $all
+            - "!**/internal/dockerx/**"
+          deny:
+            - pkg: github.com/moby/moby/client
+              desc: only internal/dockerx may import the Docker client, so negotiation, timeouts and the Transport seam stay in one place (D-52, T-01-14)
+        forbidden-libraries:
+          list-mode: lax
+          files:
+            - $all
+          deny:
+            - pkg: github.com/docker/docker
+              desc: deprecated and frozen at v28.5.2; use github.com/moby/moby/client and api inside internal/dockerx (CLAUDE.md "What NOT to Use")
+            - pkg: github.com/gorilla/websocket
+              desc: unmaintained since 2024; use github.com/coder/websocket (CLAUDE.md "What NOT to Use")
+            - pkg: github.com/mattn/go-sqlite3
+              desc: needs CGO, which breaks static multi-arch builds; use modernc.org/sqlite (CLAUDE.md "What NOT to Use")
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # httpx owns the typed-registration seam, so it is the one place that may
+      # call huma directly. Only that rule is lifted; the others still apply.
+      - path: ^internal/httpx/
+        linters:
+          - forbidigo
+        text: httpx.Register
