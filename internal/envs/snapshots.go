@@ -110,6 +110,12 @@ func (s *Snapshots) fetch(ctx context.Context, envID string, e *snapEntry, f *sn
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	snap, err := cli.Snapshot(ctx, swarmManager)
+	if err != nil {
+		// The engine answered its last probe but not this read: ask the monitor
+		// to look now, so the status catches up instead of waiting for the next
+		// scheduled probe.
+		s.mon.Kick(envID)
+	}
 
 	s.mu.Lock()
 	if e.flight == f {

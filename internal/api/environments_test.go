@@ -59,6 +59,7 @@ func newEnvFix(t *testing.T, cfg dockertest.FakeConfig) *envFix {
 	t.Cleanup(mon.StopAll)
 	svc := envs.NewService(f.st, f.aud, mon, "unix://"+fake.SocketPath(), "0123456789ab", f.clk.now)
 	f.envSvc = svc
+	f.snaps = envs.NewSnapshots(mon, 5*time.Second, f.clk.now)
 	f.localHost.DockerHost = "unix://" + fake.SocketPath()
 	f.localHost.ProbeTimeout = 500 * time.Millisecond
 	f.localHost.Envs = svc

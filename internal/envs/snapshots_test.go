@@ -267,3 +267,15 @@ func TestSnapshotsCountNodesAndServicesOnSwarmManagersOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestAFailedReadAsksTheMonitorToProbeNow(t *testing.T) {
+	r := newSnapRig(t, oneContainer(), StateOnline)
+	r.fake.Stop() // the monitor sleeps for ever, so it still believes the engine is online
+	_, _, err := NewSnapshots(r.mon, time.Second, nil).Get(context.Background(), "env1")
+	if err == nil || errors.Is(err, ErrOffline) {
+		t.Fatalf("Get = %v, want a read failure that is not yet ErrOffline", err)
+	}
+	eventually(t, "the kicked probe to find the engine offline", func() bool {
+		return r.mon.Status("env1").State == StateOffline
+	})
+}

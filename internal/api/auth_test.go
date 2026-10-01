@@ -71,6 +71,9 @@ type authFixture struct {
 	// routes and the {envId} resolver (plan 16). Without it, no environment
 	// exists and the environment routes are never called.
 	envSvc *envs.Service
+	// snaps, when set with envSvc, is the snapshot cache behind the summary and
+	// list routes (plan 18).
+	snaps *envs.Snapshots
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -125,6 +128,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	})
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{Envs: f.envSvc, Checker: checker, Log: log})
+	if f.envSvc != nil && f.snaps != nil {
+		api.RegisterDashboard(r, api.DashboardDeps{Snapshots: f.snaps, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+	}
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
 	}
