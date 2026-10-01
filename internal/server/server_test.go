@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -27,6 +28,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 )
 
 func testConfig(t *testing.T, env map[string]string) config.Config {
@@ -332,5 +334,82 @@ func TestBuildWritesASetupTokenWhileNoUserExistsAndServesTheGate(t *testing.T) {
 	_ = body.Body.Close()
 	if body.StatusCode != http.StatusOK {
 		t.Fatalf("POST /api/setup/token = %d, want 200", body.StatusCode)
+	}
+}
+
+// TestBuildSignsInWithTheSessionAuthenticatorAndCSRFGuard drives the assembled
+// handler: the placeholders of earlier plans are gone, so a user can sign in,
+// is recognised from the cookie, and a mutation without the CSRF token is
+// refused (plan 12).
+func TestBuildSignsInWithTheSessionAuthenticatorAndCSRFGuard(t *testing.T) {
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	const password = "correct horse battery"
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	tx, err := srv.Store().Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().UnixNano()
+	if err := srv.Store().Q.WithTx(tx).InsertUser(ctx, sqlc.InsertUserParams{
+		ID: "u1", Username: "admin", PasswordHash: hash, CreatedAt: now, UpdatedAt: now, PasswordChangedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbac.AssignGlobalRole(ctx, tx, srv.Store().Q, rbac.PrincipalUser, "u1", rbac.AdminRoleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	do := func(method, path, body string, cookie *http.Cookie, csrf string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		if csrf != "" {
+			req.Header.Set("X-CSRF-Token", csrf)
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := do(http.MethodGet, "/api/me", "", nil, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/api/me without a session: %d, want 401", rec.Code)
+	}
+	rec := do(http.MethodPost, "/api/auth/login", `{"username":"admin","password":"`+password+`"}`, nil, "")
+	if rec.Code != http.StatusOK || len(rec.Result().Cookies()) != 1 {
+		t.Fatalf("login: %d %s", rec.Code, rec.Body)
+	}
+	cookie := rec.Result().Cookies()[0]
+	if rec := do(http.MethodGet, "/api/me", "", cookie, ""); rec.Code != http.StatusOK {
+		t.Fatalf("/api/me with the cookie: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(http.MethodPost, "/api/auth/logout", "", cookie, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("logout without the CSRF token: %d, want 403", rec.Code)
+	}
+	var got struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if err := json.Unmarshal(do(http.MethodGet, "/api/me", "", cookie, "").Body.Bytes(), &got); err != nil || got.CSRFToken == "" {
+		t.Fatalf("no CSRF token from /api/me: %v", err)
+	}
+	if rec := do(http.MethodPost, "/api/auth/logout", "", cookie, got.CSRFToken); rec.Code != http.StatusNoContent {
+		t.Fatalf("logout with the CSRF token: %d, want 204", rec.Code)
+	}
+	if rec := do(http.MethodGet, "/api/me", "", cookie, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/api/me after logout: %d, want 401", rec.Code)
 	}
 }

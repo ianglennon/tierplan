@@ -53,6 +53,7 @@ func newRoot() *cobra.Command {
 		serve,
 		newAuditCmd(),
 		newSetupTokenCmd(),
+		newUserCmd(),
 		&cobra.Command{
 			Use:   "healthcheck",
 			Short: "Exit 0 if the local server answers /healthz, else 1 (for the container HEALTHCHECK)",

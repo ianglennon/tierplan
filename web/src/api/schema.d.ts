@@ -4,6 +4,46 @@
  */
 
 export interface paths {
+    "/api/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in with a username and password
+         * @description Starts a server-side session and sets its cookie. Every failure, whether the user is unknown, the password is wrong, the account is locked or disabled or the address is rate limited, answers 401 invalid_credentials with the same body (D-30). A session the browser already holds is ended first.
+         */
+        post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out of this browser
+         * @description Ends only the session this request was made with and clears its cookie. The user's other devices stay signed in (D-33).
+         */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instance": {
         parameters: {
             query?: never;
@@ -13,6 +53,23 @@ export interface paths {
         };
         /** Get the instance name, whether setup is needed and the remember-me length */
         get: operations["getInstance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the signed-in user, their CSRF token and their effective permissions */
+        get: operations["getMe"];
         put?: never;
         post?: never;
         delete?: never;
@@ -155,6 +212,36 @@ export interface components {
              */
             rememberDays: number;
         };
+        LoginBody: {
+            /** @description Sent as X-CSRF-Token on every mutating request */
+            csrfToken: string;
+            /** @description The signed-in user */
+            user: components["schemas"]["UserBody"];
+        };
+        LoginInputBody: {
+            /** @description The account password */
+            password: string;
+            /** @description Keep this browser signed in for the remember lifetime instead of until it has been idle for the idle timeout */
+            remember?: boolean;
+            /** @description The account name; matched case-insensitively */
+            username: string;
+        };
+        MeBody: {
+            /** @description Sent as X-CSRF-Token on every mutating request */
+            csrfToken: string;
+            /** @description Effective permissions of the signed-in user */
+            permissions: components["schemas"]["PermissionsBody"];
+            /** @description The signed-in user */
+            user: components["schemas"]["UserBody"];
+        };
+        PermissionsBody: {
+            /** @description Permissions per environment ID; the key * holds those that apply to every environment */
+            environments: {
+                [key: string]: string[] | null;
+            };
+            /** @description Installation-wide permissions */
+            global: string[] | null;
+        };
         SetupDefaultsBody: {
             /** @description The server's hostname */
             defaultInstanceName: string;
@@ -167,6 +254,14 @@ export interface components {
             /** @description The user's ID */
             id: string;
             /** @description The user's global role */
+            role: string;
+            /** @description The lower-cased username */
+            username: string;
+        };
+        UserBody: {
+            /** @description The user's ID */
+            id: string;
+            /** @description The user's global role, empty when they have none */
             role: string;
             /** @description The lower-cased username */
             username: string;
@@ -196,6 +291,70 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    "Cache-Control"?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getInstance: {
         parameters: {
             query?: never;
@@ -212,6 +371,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeBody"];
                 };
             };
             /** @description Error */

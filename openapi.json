@@ -168,6 +168,104 @@
         ],
         "type": "object"
       },
+      "LoginBody": {
+        "additionalProperties": false,
+        "properties": {
+          "csrfToken": {
+            "description": "Sent as X-CSRF-Token on every mutating request",
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserBody",
+            "description": "The signed-in user"
+          }
+        },
+        "required": [
+          "user",
+          "csrfToken"
+        ],
+        "type": "object"
+      },
+      "LoginInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "description": "The account password",
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "remember": {
+            "description": "Keep this browser signed in for the remember lifetime instead of until it has been idle for the idle timeout",
+            "type": "boolean"
+          },
+          "username": {
+            "description": "The account name; matched case-insensitively",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "type": "object"
+      },
+      "MeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "csrfToken": {
+            "description": "Sent as X-CSRF-Token on every mutating request",
+            "type": "string"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/PermissionsBody",
+            "description": "Effective permissions of the signed-in user"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserBody",
+            "description": "The signed-in user"
+          }
+        },
+        "required": [
+          "user",
+          "csrfToken",
+          "permissions"
+        ],
+        "type": "object"
+      },
+      "PermissionsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "environments": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "description": "Permissions per environment ID; the key * holds those that apply to every environment",
+            "type": "object"
+          },
+          "global": {
+            "description": "Installation-wide permissions",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "global",
+          "environments"
+        ],
+        "type": "object"
+      },
       "SetupDefaultsBody": {
         "additionalProperties": false,
         "properties": {
@@ -200,6 +298,29 @@
           },
           "role": {
             "description": "The user's global role",
+            "type": "string"
+          },
+          "username": {
+            "description": "The lower-cased username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "role"
+        ],
+        "type": "object"
+      },
+      "UserBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The user's ID",
+            "type": "string"
+          },
+          "role": {
+            "description": "The user's global role, empty when they have none",
             "type": "string"
           },
           "username": {
@@ -269,6 +390,97 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/auth/login": {
+      "post": {
+        "description": "Starts a server-side session and sets its cookie. Every failure, whether the user is unknown, the password is wrong, the account is locked or disabled or the address is rate limited, answers 401 invalid_credentials with the same body (D-30). A session the browser already holds is ended first.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Sign in with a username and password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "description": "Ends only the session this request was made with and clears its cookie. The user's other devices stay signed in (D-33).",
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "No Content",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Sign out of this browser",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/instance": {
       "get": {
         "operationId": "getInstance",
@@ -297,6 +509,44 @@
         "summary": "Get the instance name, whether setup is needed and the remember-me length",
         "tags": [
           "setup"
+        ]
+      }
+    },
+    "/api/me": {
+      "get": {
+        "operationId": "getMe",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get the signed-in user, their CSRF token and their effective permissions",
+        "tags": [
+          "auth"
         ]
       }
     },

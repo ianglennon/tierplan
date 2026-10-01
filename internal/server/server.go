@@ -154,14 +154,22 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		return nil, fmt.Errorf("load instance settings: %w", err)
 	}
 	sessions := auth.NewSessions(st, vlt, cfg.SessionIdleTimeout, cfg.SessionRememberLifetime, nil)
+	checker := rbac.NewChecker(st)
+
+	// Sign-in: 10 attempts at once, then one every 2 seconds, per client address.
+	// This is protection against stuffing across usernames; the per-account lock
+	// is in auth.Login (D-29).
+	login := auth.NewLogin(st, sessions, aud, cfg.LoginMaxFailures, cfg.LoginLockout,
+		auth.NewIPLimiter(2*time.Second, 10, 10*time.Minute, nil), log, nil)
 
 	spa := webui.Handler(web.FS())
 	router := NewRouter(httpx.Options{
 		Fallback:       spa,
-		Checker:        rbac.NewChecker(st),
-		Authenticator:  httpx.AnonymousAuthenticator{}, // plan 12 provides the session-backed one
-		EnvResolver:    httpx.NoEnvironments{},         // plan 16 provides the DB-backed one
+		Checker:        checker,
+		Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, nil),
+		EnvResolver:    httpx.NoEnvironments{}, // plan 16 provides the DB-backed one
 		Auditor:        aud,
+		MutationGuard:  auth.NewCSRFGuard(sessions),
 		TrustedProxies: cfg.TrustedProxies,
 		PublicOrigin:   inst.PublicOrigin,
 		Logger:         log,
@@ -176,7 +184,14 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		Sessions: sessions,
 		SPA:      spa,
 		Log:      log,
-	}, api.AuthDeps{}) // wired in the next commit
+	}, api.AuthDeps{
+		Login:    login,
+		Sessions: sessions,
+		Instance: inst,
+		Store:    st,
+		Checker:  checker,
+		Log:      log,
+	})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		_ = st.Close()
@@ -199,6 +214,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 	bg, stop := context.WithCancel(ctx)
 	srv.stopBackground = stop
 	srv.background.Go(func() { audit.RunNightly(bg, srv.audit, cfg.AuditRetentionDays, log) })
+	// Expired sessions are refused on lookup; this hourly sweep only keeps the table small.
+	srv.background.Go(func() { auth.RunSessionCleanup(bg, st, cfg.SessionIdleTimeout, nil) })
 	return srv, nil
 }
 
