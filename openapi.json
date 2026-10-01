@@ -73,6 +73,67 @@
         },
         "type": "object"
       },
+      "InstanceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "instanceName": {
+            "description": "Display name of this instance, empty before setup",
+            "type": "string"
+          },
+          "needsSetup": {
+            "description": "True while no admin exists and the setup wizard is open",
+            "type": "boolean"
+          },
+          "rememberDays": {
+            "description": "Days a 'keep me signed in' session lasts",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "instanceName",
+          "needsSetup",
+          "rememberDays"
+        ],
+        "type": "object"
+      },
+      "SetupDefaultsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "defaultInstanceName": {
+            "description": "The server's hostname",
+            "type": "string"
+          },
+          "publicUrl": {
+            "description": "The configured public URL, empty when none is set",
+            "type": "string"
+          },
+          "publicUrlLocked": {
+            "description": "True when BAYPLAN_PUBLIC_URL fixes the public URL",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "defaultInstanceName",
+          "publicUrl",
+          "publicUrlLocked"
+        ],
+        "type": "object"
+      },
+      "VerifySetupTokenInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "description": "The setup token printed in the container log",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
       "VersionBody": {
         "additionalProperties": false,
         "properties": {
@@ -114,6 +175,78 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/instance": {
+      "get": {
+        "operationId": "getInstance",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get the instance name, whether setup is needed and the remember-me length",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/api/setup/token": {
+      "post": {
+        "operationId": "verifySetupToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifySetupTokenInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupDefaultsBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Check the setup token and return the step 3 defaults",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
     "/api/version": {
       "get": {
         "operationId": "getVersion",

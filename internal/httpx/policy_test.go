@@ -663,6 +663,15 @@ func TestVerifyAllGuardedAllowsTheTwoProbeRoutes(t *testing.T) {
 	}
 }
 
+func TestVerifyAllGuardedAllowsTheSetupPageRoutes(t *testing.T) {
+	r := New(Options{})
+	r.Exempt(http.MethodGet, "/setup", func(http.ResponseWriter, *http.Request) {})
+	r.Exempt(http.MethodGet, "/setup/*", func(http.ResponseWriter, *http.Request) {})
+	if err := VerifyAllGuarded(r); err != nil {
+		t.Fatalf("VerifyAllGuarded: %v", err)
+	}
+}
+
 func TestOriginOf(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://Bayplan.example/base": "https://bayplan.example",

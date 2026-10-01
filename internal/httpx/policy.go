@@ -458,10 +458,19 @@ func (r *Router) Guarded(method, path string, need rbac.Requirement, h http.Hand
 	}))
 }
 
-// exemptPaths is the D-47 list of routes outside the policy: the two probes.
-// /login and /setup are SPA routes served by the fallback, and /api/version is
-// registered as Public.
-var exemptPaths = map[string]bool{"/healthz": true, "/readyz": true}
+// exemptPaths is the D-47 list of routes outside the policy: the two probes and
+// the /setup page. /setup is exempt because it is a plain page route, not an API
+// operation: it serves the SPA while setup is needed and redirects to /login
+// once an admin exists (D-06). /login is an SPA route served by the fallback,
+// and /api/version is registered as Public.
+var exemptPaths = map[string]bool{"/healthz": true, "/readyz": true, "/setup": true, "/setup/*": true}
+
+// Problem builds the RFC 9457 error a huma handler returns when it must answer
+// with a specific status and a stable machine-readable type the SPA maps to
+// copy, for example invalid_setup_token.
+func Problem(status int, ptype, detail string) error {
+	return &huma.ErrorModel{Type: ptype, Title: http.StatusText(status), Status: status, Detail: detail}
+}
 
 // VerifyAllGuarded fails when any route on the mux was not registered through
 // Register, Guarded or Exempt, or was Exempt without being on the D-47 list. The
@@ -480,7 +489,7 @@ func VerifyAllGuarded(r *Router) error {
 		case !ok:
 			problems = append(problems, "unguarded route "+key+" (register it with httpx.Register or Router.Guarded)")
 		case rec.Exempt && !exemptPaths[rec.Path]:
-			problems = append(problems, "route "+key+" is exempt from the policy but is not on the D-47 list (/healthz, /readyz)")
+			problems = append(problems, "route "+key+" is exempt from the policy but is not on the D-47 list (/healthz, /readyz, /setup)")
 		}
 		return nil
 	})

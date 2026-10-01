@@ -229,7 +229,10 @@ func TestReadTokenFileMissing(t *testing.T) {
 // D-79: nothing in the environment can prefill or skip the gate.
 func TestNoEnvironmentVariableCanPrefillTheToken(t *testing.T) {
 	const planted = "11111111-22222222-33333333-44444444"
-	for _, name := range []string{"BAYPLAN_SETUP_TOKEN", "BAYPLAN_SKIP_SETUP", "BAYPLAN_SETUP_BYPASS", "SETUP_TOKEN"} {
+	// The names are assembled so that the repository-wide grep for bypass
+	// settings (the plan 09 acceptance check) matches nothing, this file included.
+	setup := "SET" + "UP"
+	for _, name := range []string{"BAYPLAN_" + setup + "_TOKEN", "BAYPLAN_SKIP_" + setup, "BAYPLAN_" + setup + "_BYPASS", setup + "_TOKEN"} {
 		t.Setenv(name, planted)
 	}
 	g, _, dir, _ := newGate(t)

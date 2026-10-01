@@ -17,6 +17,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
@@ -45,6 +46,7 @@ type Server struct {
 	store   *store.Store
 	vault   *vault.Vault
 	audit   *audit.Writer
+	setup   *auth.SetupGate
 	router  *httpx.Router
 
 	// stopBackground ends the nightly audit prune and waits for it, so Close
@@ -56,9 +58,10 @@ type Server struct {
 // NewRouter wires every operation. It takes plain dependencies so the
 // `openapi` subcommand can build the same handlers without a database or a
 // socket.
-func NewRouter(opts httpx.Options, deps api.SystemDeps) *httpx.Router {
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps) *httpx.Router {
 	r := httpx.New(opts)
-	api.RegisterSystem(r, deps)
+	api.RegisterSystem(r, sys)
+	api.RegisterSetup(r, setup)
 	return r
 }
 
@@ -128,9 +131,20 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 	}
 
 	aud := audit.NewWriter(st, vlt, log, nil)
+
+	// While no user exists every start mints a fresh setup token, writes it to
+	// the data directory and logs it (D-01). There is no setting that skips or
+	// prefills it (D-79).
+	gate := auth.NewSetupGate(st, info.Path, log)
+	if err := gate.Init(ctx); err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("initialise the setup gate: %w", err)
+	}
+
+	spa := webui.Handler(web.FS())
 	publicOrigin := httpx.OriginOf(cfg.PublicURL) // the settings DB value arrives in plan 10
 	router := NewRouter(httpx.Options{
-		Fallback:       webui.Handler(web.FS()),
+		Fallback:       spa,
 		Checker:        rbac.NewChecker(st),
 		Authenticator:  httpx.AnonymousAuthenticator{}, // plan 12 provides the session-backed one
 		EnvResolver:    httpx.NoEnvironments{},         // plan 16 provides the DB-backed one
@@ -138,7 +152,16 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		TrustedProxies: cfg.TrustedProxies,
 		PublicOrigin:   func() string { return publicOrigin },
 		Logger:         log,
-	}, api.SystemDeps{Ready: ready})
+	}, api.SystemDeps{Ready: ready}, api.SetupDeps{
+		Gate: gate,
+		// 5 attempts at once, then one every 12 seconds, per client address (D-05).
+		Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
+		Audit:   aud,
+		Store:   st,
+		Config:  cfg,
+		SPA:     spa,
+		Log:     log,
+	})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		_ = st.Close()
@@ -151,6 +174,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		store:   st,
 		vault:   vlt,
 		audit:   aud,
+		setup:   gate,
 		router:  router,
 	}
 
@@ -169,6 +193,9 @@ func (s *Server) Vault() *vault.Vault { return s.vault }
 
 // Audit is the audit-log writer every mutation records through.
 func (s *Server) Audit() *audit.Writer { return s.audit }
+
+// SetupGate is the first-run gate; plan 10's completion endpoint consumes it.
+func (s *Server) SetupGate() *auth.SetupGate { return s.setup }
 
 // Close stops background work and releases the database. Run calls it on
 // exit; it is safe to call again.

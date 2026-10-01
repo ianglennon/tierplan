@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/ianglennon/bayplan/internal/api"
+	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -297,7 +298,39 @@ func TestBuildSeedsTheAdminRoleAndEveryRouteIsGuarded(t *testing.T) {
 		t.Errorf("the assembled router has an unguarded route: %v", err)
 	}
 	// The openapi subcommand builds the same routes with no dependencies.
-	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{})); err != nil {
+	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{})); err != nil {
 		t.Errorf("the dependency-free router has an unguarded route: %v", err)
+	}
+}
+
+func TestBuildWritesASetupTokenWhileNoUserExistsAndServesTheGate(t *testing.T) {
+	dir := t.TempDir() + "/data"
+	var logs bytes.Buffer
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	token, err := auth.ReadTokenFile(dir)
+	if err != nil {
+		t.Fatalf("no setup token file after Build: %v", err)
+	}
+	if !strings.Contains(logs.String(), token) || !strings.Contains(logs.String(), "setup required") {
+		t.Error("the setup token was not logged")
+	}
+	if !srv.SetupGate().NeedsSetup() {
+		t.Error("NeedsSetup = false on a fresh data directory")
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	body, err := http.Post(ts.URL+"/api/setup/token", "application/json", strings.NewReader(`{"token":"`+token+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = body.Body.Close()
+	if body.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/setup/token = %d, want 200", body.StatusCode)
 	}
 }

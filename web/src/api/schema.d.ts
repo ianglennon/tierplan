@@ -4,6 +4,40 @@
  */
 
 export interface paths {
+    "/api/instance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the instance name, whether setup is needed and the remember-me length */
+        get: operations["getInstance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check the setup token and return the step 3 defaults */
+        post: operations["verifySetupToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/version": {
         parameters: {
             query?: never;
@@ -66,6 +100,29 @@ export interface components {
              */
             type: string;
         };
+        InstanceBody: {
+            /** @description Display name of this instance, empty before setup */
+            instanceName: string;
+            /** @description True while no admin exists and the setup wizard is open */
+            needsSetup: boolean;
+            /**
+             * Format: int64
+             * @description Days a 'keep me signed in' session lasts
+             */
+            rememberDays: number;
+        };
+        SetupDefaultsBody: {
+            /** @description The server's hostname */
+            defaultInstanceName: string;
+            /** @description The configured public URL, empty when none is set */
+            publicUrl: string;
+            /** @description True when BAYPLAN_PUBLIC_URL fixes the public URL */
+            publicUrlLocked: boolean;
+        };
+        VerifySetupTokenInputBody: {
+            /** @description The setup token printed in the container log */
+            token: string;
+        };
         VersionBody: {
             /** @description Full source commit, empty when unknown */
             commit: string;
@@ -87,6 +144,68 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    verifySetupToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifySetupTokenInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getVersion: {
         parameters: {
             query?: never;

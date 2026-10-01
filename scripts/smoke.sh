@@ -91,8 +91,40 @@ grep -q 'back it up' "${LOG}" || fail "first start did not log the key back-up w
 if grep -qF "$(tr -d '\n' <"${DATA}/bayplan.key")" "${LOG}"; then
   fail "the server log contains the encryption key"
 fi
-[ "$(BAYPLAN_DATA_DIR="${DATA}" "${BIN}" audit verify)" = "audit chain OK: 0 entries" ] \
-  || fail "bayplan audit verify did not report 'audit chain OK: 0 entries' on a fresh data directory"
+# A count pattern, not "0 entries": later checks write audit entries (setup attempts below).
+BAYPLAN_DATA_DIR="${DATA}" "${BIN}" audit verify | grep -Eq '^audit chain OK: [0-9]+ entries$' \
+  || fail "bayplan audit verify did not report an intact chain on a fresh data directory"
+
+# Setup gate (D-01, D-05): while no user exists the server mints a token, writes
+# it 0600, logs it and `bayplan setup-token` prints the same value.
+TOKEN_RE='^[0-9a-f]{8}(-[0-9a-f]{8}){3}$'
+[ -f "${DATA}/setup-token" ] || fail "first start did not write ${DATA}/setup-token"
+[ "$(stat -c '%a' "${DATA}/setup-token")" = "600" ] || fail "setup-token is not mode 600"
+TOKEN="$(BAYPLAN_DATA_DIR="${DATA}" "${BIN}" setup-token)" || fail "bayplan setup-token failed on a fresh data directory"
+printf '%s' "${TOKEN}" | grep -Eq "${TOKEN_RE}" || fail "bayplan setup-token printed '${TOKEN}', not a setup token"
+grep -q '"setup required"' "${LOG}" || fail "first start did not log 'setup required'"
+grep -qF "${TOKEN}" "${LOG}" || fail "the server log does not contain the setup token"
+
+curl -fsS "${BASE}/api/instance" -o "${WORK}/instance.json" || fail "/api/instance did not answer 200"
+grep -q '"needsSetup":true' "${WORK}/instance.json" || fail "/api/instance does not report needsSetup true"
+code="$(curl -sS -o "${WORK}/setup.html" -w '%{http_code}' "${BASE}/setup")"
+[ "${code}" = "200" ] || fail "/setup returned ${code}, want 200 while setup is needed"
+grep -q 'id="root"' "${WORK}/setup.html" || fail "/setup is not the SPA"
+
+code="$(curl -sS -o "${WORK}/wrong.json" -w '%{http_code}' -H 'Content-Type: application/json' \
+  -d '{"token":"00000000-00000000-00000000-00000000"}' "${BASE}/api/setup/token")"
+[ "${code}" = "401" ] || fail "a wrong setup token returned ${code}, want 401"
+grep -q 'invalid_setup_token' "${WORK}/wrong.json" || fail "a wrong setup token did not answer invalid_setup_token"
+grep -q 'setup.token_failed' "${LOG}" || fail "a wrong setup token was not audited as setup.token_failed"
+if grep -q '00000000-00000000-00000000-00000000' "${LOG}"; then
+  fail "the server log contains the attempted setup token"
+fi
+code="$(curl -sS -o "${WORK}/right.json" -w '%{http_code}' -H 'Content-Type: application/json' \
+  -d "{\"token\":\"${TOKEN}\"}" "${BASE}/api/setup/token")"
+[ "${code}" = "200" ] || fail "the right setup token returned ${code}, want 200"
+grep -q '"defaultInstanceName"' "${WORK}/right.json" || fail "the right setup token did not return the step 3 defaults"
+[ "$(BAYPLAN_DATA_DIR="${DATA}" "${BIN}" audit verify)" = "audit chain OK: 1 entries" ] \
+  || fail "audit verify does not report exactly the one wrong-token entry"
 
 # The healthcheck subcommand, as the container HEALTHCHECK runs it.
 BAYPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck \
