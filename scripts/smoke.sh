@@ -83,6 +83,17 @@ if grep -q '"snapshot"' "${LOG}"; then
   fail "a first start on an empty data directory must not take a snapshot"
 fi
 
+# Master key (D-13): generated on first start, mode 0600, never logged, and the
+# audit chain verifies from a second process against the same data directory.
+[ -f "${DATA}/bayplan.key" ] || fail "first start did not generate ${DATA}/bayplan.key"
+[ "$(stat -c '%a' "${DATA}/bayplan.key")" = "600" ] || fail "bayplan.key is not mode 600"
+grep -q 'back it up' "${LOG}" || fail "first start did not log the key back-up warning"
+if grep -qF "$(tr -d '\n' <"${DATA}/bayplan.key")" "${LOG}"; then
+  fail "the server log contains the encryption key"
+fi
+[ "$(BAYPLAN_DATA_DIR="${DATA}" "${BIN}" audit verify)" = "audit chain OK: 0 entries" ] \
+  || fail "bayplan audit verify did not report 'audit chain OK: 0 entries' on a fresh data directory"
+
 # The healthcheck subcommand, as the container HEALTHCHECK runs it.
 BAYPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck \
   || fail "bayplan healthcheck exited non-zero while the server is up"

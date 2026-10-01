@@ -12,14 +12,17 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/api"
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/vault"
 	"github.com/ianglennon/bayplan/internal/webui"
 	"github.com/ianglennon/bayplan/web"
 )
@@ -39,7 +42,14 @@ type Server struct {
 	log     *slog.Logger
 	dataDir datadir.Info
 	store   *store.Store
+	vault   *vault.Vault
+	audit   *audit.Writer
 	router  *httpx.Router
+
+	// stopBackground ends the nightly audit prune and waits for it, so Close
+	// never closes the database under a running prune.
+	stopBackground context.CancelFunc
+	background     sync.WaitGroup
 }
 
 // NewRouter wires every operation. It takes plain dependencies so the
@@ -51,8 +61,8 @@ func NewRouter(fallback http.Handler, deps api.SystemDeps) *httpx.Router {
 	return r
 }
 
-// Build prepares the data directory, opens and migrates the database and
-// assembles the server. It logs the effective configuration with secrets
+// Build prepares the data directory, loads (or on first start generates) the
+// master key, opens and migrates the database and assembles the server. It logs the effective configuration with secrets
 // redacted. A migration failure (or a database newer than this binary) is
 // returned as an error so `serve` exits non-zero before it listens (D-82, D-84).
 func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, error) {
@@ -72,6 +82,14 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		log.Warn("the data directory is not persisted: data written to it is lost when the container is removed; mount a named volume or bind mount at "+info.Path,
 			"path", info.Path, "reason", info.Reason)
 	}
+
+	// The master key comes before the database: a bad BAYPLAN_ENCRYPTION_KEY
+	// should stop startup before anything is written (D-13).
+	vlt, err := vault.LoadOrCreate(cfg.EncryptionKey, info.Path, log)
+	if err != nil {
+		return nil, fmt.Errorf("load encryption key: %w", err)
+	}
+	log.Info("encryption key loaded", "key_id", vlt.KeyID(), "source", vlt.KeySource())
 
 	st, err := store.Open(ctx, info.Path)
 	if err != nil {
@@ -100,20 +118,39 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		}
 		return st.Ready(ctx)
 	}
-	return &Server{
+	srv := &Server{
 		cfg:     cfg,
 		log:     log,
 		dataDir: info,
 		store:   st,
+		vault:   vlt,
+		audit:   audit.NewWriter(st, vlt, log, nil),
 		router:  NewRouter(webui.Handler(web.FS()), api.SystemDeps{Ready: ready}),
-	}, nil
+	}
+
+	// The nightly audit.Prune runs in this process for as long as the server does.
+	bg, stop := context.WithCancel(ctx)
+	srv.stopBackground = stop
+	srv.background.Go(func() { audit.RunNightly(bg, srv.audit, cfg.AuditRetentionDays, log) })
+	return srv, nil
 }
 
 // Store is the migrated database, for the dependencies later plans add.
 func (s *Server) Store() *store.Store { return s.store }
 
-// Close releases the database. Run calls it on exit; it is safe to call again.
-func (s *Server) Close() error { return s.store.Close() }
+// Vault is the loaded master key, for the dependencies later plans add.
+func (s *Server) Vault() *vault.Vault { return s.vault }
+
+// Audit is the audit-log writer every mutation records through.
+func (s *Server) Audit() *audit.Writer { return s.audit }
+
+// Close stops background work and releases the database. Run calls it on
+// exit; it is safe to call again.
+func (s *Server) Close() error {
+	s.stopBackground()
+	s.background.Wait()
+	return s.store.Close()
+}
 
 // DataDir reports the prepared data directory, for the admin banner (plan 14).
 func (s *Server) DataDir() datadir.Info { return s.dataDir }

@@ -6,6 +6,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"log/slog"
@@ -47,7 +48,9 @@ func httpGet(t *testing.T, url string) (int, string) {
 }
 
 func TestBuildLogsRedactedConfigAndPreparesDataDir(t *testing.T) {
-	const secret = "never-log-this-key"
+	// Exactly 32 bytes, as BAYPLAN_ENCRYPTION_KEY must decode to.
+	const raw = "never-log-this-key-never-log-thi"
+	secret := base64.StdEncoding.EncodeToString([]byte(raw))
 	dir := t.TempDir() + "/data"
 	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir, "BAYPLAN_ENCRYPTION_KEY": secret})
 
@@ -57,7 +60,7 @@ func TestBuildLogsRedactedConfigAndPreparesDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
-	if strings.Contains(logs.String(), secret) {
+	if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), raw) {
 		t.Fatalf("startup log leaks the encryption key: %s", logs.String())
 	}
 	for _, want := range []string{"BAYPLAN_ENCRYPTION_KEY", "[redacted]", "BAYPLAN_LISTEN", "version"} {
@@ -227,5 +230,51 @@ func TestBuildRefusesADatabaseNewerThanTheBinary(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not contain %q", err, want)
 		}
+	}
+}
+
+func TestBuildGeneratesTheKeyFileAndNeverLogsIt(t *testing.T) {
+	dir := t.TempDir() + "/data"
+	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+
+	var logs bytes.Buffer
+	srv, err := Build(context.Background(), cfg, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	keyPath := dir + "/bayplan.key"
+	st, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("no key file generated: %v", err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Errorf("key file mode = %o, want 600", st.Mode().Perm())
+	}
+	raw, err := os.ReadFile(keyPath) //nolint:gosec // reading the file the test just generated
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), strings.TrimSpace(string(raw))) {
+		t.Fatal("startup log leaks the generated key")
+	}
+	if !strings.Contains(logs.String(), "back it up") {
+		t.Errorf("startup log lacks the key back-up warning: %s", logs.String())
+	}
+	if srv.Vault().KeySource() != "file" || srv.Audit() == nil {
+		t.Errorf("vault source = %q, audit writer = %v", srv.Vault().KeySource(), srv.Audit())
+	}
+}
+
+func TestBuildRejectsAMalformedKeyBeforeTouchingTheDatabase(t *testing.T) {
+	dir := t.TempDir() + "/data"
+	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir, "BAYPLAN_ENCRYPTION_KEY": "too-short"})
+	_, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
+	if err == nil || !strings.Contains(err.Error(), "BAYPLAN_ENCRYPTION_KEY") {
+		t.Fatalf("Build = %v, want an error naming BAYPLAN_ENCRYPTION_KEY", err)
+	}
+	if _, statErr := os.Stat(dir + "/bayplan.db"); statErr == nil {
+		t.Error("a malformed key must stop startup before the database is created")
 	}
 }
