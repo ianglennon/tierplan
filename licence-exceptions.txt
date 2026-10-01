@@ -1,0 +1,29 @@
+# Reviewed licence exceptions (D-70). Read by scripts/licence-check.mjs.
+#
+# Format, one per line:
+#   <go|npm> <package-or-module-prefix> <licence>  # reason
+#
+# The prefix matches the package name exactly or as a "/"-delimited path prefix
+# (so "@fontsource-variable" covers its scope, and "argparse" does not cover
+# "argparse-evil"). The licence must equal what the scanner reports, so a package
+# that changes licence in a later version fails again and is re-reviewed.
+#
+# Every entry needs a reviewed reason. An entry is a decision, not a convenience:
+# GPL-2.0-only, SSPL, BUSL and Commons Clause code must not be added here.
+
+# --- Reviewed 2026-10-01 (plan 01-04), against the real production tree ---
+
+# Geist and Geist Mono variable fonts, bundled as font files and served to browsers.
+# SIL OFL 1.1 explicitly permits bundling and redistribution with software and applies to
+# the font files only (data, not linked code), so it does not interact with the AGPL.
+# Obligation: keep the OFL notice in the third-party notices (plan 26).
+npm @fontsource-variable/geist OFL-1.1  # font data bundled with the SPA; OFL permits redistribution, notice kept
+npm @fontsource-variable/geist-mono OFL-1.1  # same as above
+
+# The next three arrive only through the shadcn CLI (a pinned `dependencies` entry
+# approved at 01-01), which is build-time tooling that is never part of the SPA bundle
+# or the shipped binary. They are permissive licences that carry attribution only.
+npm argparse Python-2.0  # via shadcn > cosmiconfig > js-yaml; PSF-style permissive, GPL-compatible, tooling only
+npm caniuse-lite CC-BY-4.0  # via shadcn > babel > browserslist; browser-support data, attribution only, tooling only
+npm isexe BlueOak-1.0.0  # via shadcn > dotenvx > which; permissive, attribution only, tooling only
+npm minimatch BlueOak-1.0.0  # via shadcn > ts-morph; permissive, attribution only, tooling only

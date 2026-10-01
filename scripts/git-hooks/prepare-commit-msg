@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+#
+# Appends a Signed-off-by trailer (DCO, D-69) to every commit message, so
+# contributors do not have to remember `git commit -s`. Enable with `make hooks`.
+# $1 = message file, $2 = source (message, template, merge, squash, commit).
+set -euo pipefail
+
+case "${2:-}" in
+  merge | squash) exit 0 ;;
+esac
+
+name="$(git config user.name || true)"
+email="$(git config user.email || true)"
+if [ -z "$name" ] || [ -z "$email" ]; then
+  echo "prepare-commit-msg: set git user.name and user.email to sign off" >&2
+  exit 0
+fi
+
+git interpret-trailers --in-place --if-exists addIfDifferent \
+  --trailer "Signed-off-by: ${name} <${email}>" "$1"

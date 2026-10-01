@@ -16,7 +16,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check test smoke dev dev-go dev-web
+.PHONY: web build gen gen-check test smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -61,3 +61,27 @@ dev-go:
 
 dev-web:
 	pnpm -C web dev
+
+# --- Policy gates (D-68 to D-70, D-74) ---
+
+# D-68: every .go/.ts/.tsx/.sql file carries the two SPDX lines.
+spdx:
+	scripts/spdx-check.sh
+
+# D-70: Go (linux/amd64 and linux/arm64) and production pnpm dependency licences.
+licences:
+	scripts/licences-check.sh
+
+# D-69: every non-merge commit in the range is signed off. CI overrides the range.
+DCO_BASE ?= origin/main
+DCO_HEAD ?= HEAD
+dco:
+	scripts/dco-check.sh $(DCO_BASE) $(DCO_HEAD)
+
+# Installs the prepare-commit-msg hook that adds Signed-off-by automatically.
+hooks:
+	git config core.hooksPath scripts/git-hooks
+
+# Fail-first proof: each gate fails on a seeded violation and passes on a clean fixture.
+test-scripts:
+	scripts/test-scripts.sh
