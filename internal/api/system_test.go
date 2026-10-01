@@ -117,7 +117,7 @@ func TestNonPublicRequirementIsDeniedByDefault(t *testing.T) {
 	r := newRouter(t)
 	httpx.Register(r, huma.Operation{
 		OperationID: "secret", Method: http.MethodGet, Path: "/api/secret",
-	}, rbac.Requirement{Perm: "x.read", Scope: rbac.ScopeGlobal},
+	}, rbac.Require(rbac.PermAuditRead),
 		func(context.Context, *struct{}) (*struct{}, error) { return &struct{}{}, nil })
 
 	rec := get(t, r.Handler(), "/api/secret")
@@ -126,7 +126,7 @@ func TestNonPublicRequirementIsDeniedByDefault(t *testing.T) {
 	}
 	found := false
 	for _, rt := range r.Routes() {
-		if rt.Path == "/api/secret" && rt.Req.Perm == "x.read" {
+		if rt.Path == "/api/secret" && rt.Req.Perm == rbac.PermAuditRead {
 			found = true
 		}
 	}

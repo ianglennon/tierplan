@@ -36,8 +36,9 @@ var (
 	SelfService = Requirement{SelfService: true}
 )
 
-// MustBeValid panics at startup when a route declares no requirement, or a
-// contradictory one. A route that forgot to say who may call it must never run.
+// MustBeValid panics at startup when a route declares no requirement, a
+// contradictory one, a permission that is not in the registry, or a scope that
+// differs from the registered one. A route that forgot to say who may call it must never run.
 func (r Requirement) MustBeValid() {
 	switch {
 	case r.Public && r.Perm != "":
@@ -48,5 +49,15 @@ func (r Requirement) MustBeValid() {
 		panic("rbac: route registered without a requirement: set Public, SelfService or a Perm")
 	case r.Perm != "" && r.Scope != ScopeGlobal && r.Scope != ScopeEnvironment:
 		panic(fmt.Sprintf("rbac: permission %q has no scope", r.Perm))
+	}
+	if r.Perm == "" {
+		return
+	}
+	reg, ok := Lookup(r.Perm)
+	switch {
+	case !ok:
+		panic(fmt.Sprintf("rbac: permission %q is not in the registry", r.Perm))
+	case reg.Scope != r.Scope:
+		panic(fmt.Sprintf("rbac: permission %q is registered with scope %d, not %d", r.Perm, reg.Scope, r.Scope))
 	}
 }
