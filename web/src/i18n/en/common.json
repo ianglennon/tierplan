@@ -6,8 +6,7 @@
     "versionFooter": {
       "label": "Bayplan {{display}}",
       "source": "Source code",
-      "sourceAria": "Source code (opens in a new tab)",
-      "unavailable": "Version unavailable"
+      "sourceAria": "Source code (opens in a new tab)"
     },
     "plainHttp": {
       "warning": "This connection isn't encrypted. Passwords you type here can be read on the network."

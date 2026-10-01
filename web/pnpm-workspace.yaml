@@ -1,7 +1,18 @@
+# Supply-chain guard (T-01-08): refuse any package version published less than
+# 24 hours ago (unit: minutes). Direct dependencies that were human-approved at
+# 01-01 Task 1 are exempt; transitive packages are not.
+minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - vite@8.3.2
   - "@shadcn/registry@0.1.0"
   - shadcn@4.21.1
+  - "@tanstack/react-query@5.104.0"
+  - "@tanstack/react-router@1.170.41"
+  - "@tanstack/router-plugin@1.168.42"
+  - vitest@5.0.3
+  - jsdom@30.1.1
+  - "@testing-library/react@16.3.3"
+  - "@biomejs/biome@2.5.15"
 peerDependencyRules:
   allowedVersions:
     typescript: "6"
