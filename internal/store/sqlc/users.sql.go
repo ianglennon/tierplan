@@ -7,6 +7,7 @@ package sqlc
 
 import (
 	"context"
+	"database/sql"
 )
 
 const countUsers = `-- name: CountUsers :one
@@ -66,6 +67,22 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 	return i, err
 }
 
+const getUserGlobalRole = `-- name: GetUserGlobalRole :one
+SELECT role_id FROM role_assignments
+WHERE principal_type = 'user' AND principal_id = ? AND env_id IS NULL
+ORDER BY created_at, id
+LIMIT 1
+`
+
+// The role a user holds across the whole installation (an assignment with no
+// environment). Phase 1 has one such role per user.
+func (q *Queries) GetUserGlobalRole(ctx context.Context, principalID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getUserGlobalRole, principalID)
+	var role_id string
+	err := row.Scan(&role_id)
+	return role_id, err
+}
+
 const insertUser = `-- name: InsertUser :exec
 INSERT INTO users (id, username, password_hash, created_at, updated_at, password_changed_at)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -90,4 +107,54 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) error {
 		arg.PasswordChangedAt,
 	)
 	return err
+}
+
+const lockUser = `-- name: LockUser :exec
+UPDATE users SET locked_until = ? WHERE id = ?
+`
+
+type LockUserParams struct {
+	LockedUntil sql.NullInt64
+	ID          string
+}
+
+func (q *Queries) LockUser(ctx context.Context, arg LockUserParams) error {
+	_, err := q.db.ExecContext(ctx, lockUser, arg.LockedUntil, arg.ID)
+	return err
+}
+
+const recordLoginFailure = `-- name: RecordLoginFailure :one
+UPDATE users SET failed_count = failed_count + 1 WHERE id = ? RETURNING failed_count
+`
+
+// Counts one wrong password and returns the new count, in one statement so
+// concurrent attempts cannot both read the same count (D-29).
+func (q *Queries) RecordLoginFailure(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, recordLoginFailure, id)
+	var failed_count int64
+	err := row.Scan(&failed_count)
+	return failed_count, err
+}
+
+const resetLoginFailures = `-- name: ResetLoginFailures :exec
+UPDATE users SET failed_count = 0, locked_until = NULL WHERE id = ?
+`
+
+// A successful sign-in, an expired lock or an operator unlock all clear the
+// count and the lock together.
+func (q *Queries) ResetLoginFailures(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, resetLoginFailures, id)
+	return err
+}
+
+const unlockUserByUsername = `-- name: UnlockUserByUsername :execrows
+UPDATE users SET failed_count = 0, locked_until = NULL WHERE username = ?
+`
+
+func (q *Queries) UnlockUserByUsername(ctx context.Context, username string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, unlockUserByUsername, username)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
