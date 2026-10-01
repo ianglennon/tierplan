@@ -7,11 +7,14 @@ package dockerx_test
 import (
 	"context"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -147,4 +150,139 @@ func TestIntegrationLocalSocketTransport(t *testing.T) {
 	if res.Hostname == "" || res.NegotiatedAPI == "" {
 		t.Errorf("hostname %q negotiated %q", res.Hostname, res.NegotiatedAPI)
 	}
+}
+
+// TestIntegrationSnapshotCountsEqualTheCreatedResources checks Pitfall 22 and
+// A3 on a real engine of whichever major CI runs: the counts are the lengths of
+// the lists, and the lists hold what was created, including a container that
+// was created but never started. Engine 29 may use the containerd image store,
+// so image counts are only compared with the image list, never with Info.
+func TestIntegrationSnapshotCountsEqualTheCreatedResources(t *testing.T) {
+	host := dockertest.DockerHost(t)
+	cli, err := dockerx.New(dockertest.TCPTransportFor(host))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	raw := dockertest.RawClient(t, host)
+	cleanup := func(f func(context.Context)) {
+		t.Cleanup(func() {
+			c, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			f(c)
+		})
+	}
+
+	pull, err := raw.ImagePull(ctx, "alpine:3", client.ImagePullOptions{})
+	if err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+	if err := pull.Wait(ctx); err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+
+	sfx := strconv.FormatInt(time.Now().UnixNano(), 36)
+	running, stopped, vol, net := "bp-run-"+sfx, "bp-stop-"+sfx, "bp-vol-"+sfx, "bp-net-"+sfx
+	for _, name := range []string{running, stopped} {
+		if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
+			Name:   name,
+			Config: &container.Config{Image: "alpine:3", Cmd: []string{"sleep", "300"}},
+		}); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		cleanup(func(c context.Context) {
+			_, _ = raw.ContainerRemove(c, name, client.ContainerRemoveOptions{Force: true})
+		})
+	}
+	if _, err := raw.ContainerStart(ctx, running, client.ContainerStartOptions{}); err != nil {
+		t.Fatalf("start %s: %v", running, err)
+	}
+	if _, err := raw.VolumeCreate(ctx, client.VolumeCreateOptions{Name: vol}); err != nil {
+		t.Fatalf("create volume: %v", err)
+	}
+	cleanup(func(c context.Context) { _, _ = raw.VolumeRemove(c, vol, client.VolumeRemoveOptions{Force: true}) })
+	if _, err := raw.NetworkCreate(ctx, net, client.NetworkCreateOptions{}); err != nil {
+		t.Fatalf("create network: %v", err)
+	}
+	cleanup(func(c context.Context) { _, _ = raw.NetworkRemove(c, net, client.NetworkRemoveOptions{}) })
+
+	// The client negotiates in Probe, as the monitor does before any read.
+	if _, err := cli.Probe(ctx); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+
+	assertConsistent := func(t *testing.T, s dockerx.Snapshot) {
+		t.Helper()
+		c := s.Counts
+		if c.Containers != len(s.Containers) || c.Images != len(s.Images) || c.Volumes != len(s.Volumes) || c.Networks != len(s.Networks) {
+			t.Errorf("counts %+v do not equal the list lengths %d/%d/%d/%d",
+				c, len(s.Containers), len(s.Images), len(s.Volumes), len(s.Networks))
+		}
+		if c.ContainersRunning+c.ContainersStopped != c.Containers {
+			t.Errorf("running %d + stopped %d != containers %d", c.ContainersRunning, c.ContainersStopped, c.Containers)
+		}
+	}
+
+	t.Run("a standalone engine lists what was created", func(t *testing.T) {
+		snap, err := cli.Snapshot(ctx, false)
+		if err != nil {
+			t.Fatalf("Snapshot: %v", err)
+		}
+		assertConsistent(t, snap)
+		byName := map[string]dockerx.ContainerRow{}
+		for _, c := range snap.Containers {
+			byName[c.Name] = c
+		}
+		if byName[running].State != "running" || byName[stopped].State != "created" {
+			t.Errorf("states = %q and %q, want running and created", byName[running].State, byName[stopped].State)
+		}
+		if snap.Counts.ContainersRunning < 1 || snap.Counts.ContainersStopped < 1 {
+			t.Errorf("counts = %+v, want at least one running and one stopped", snap.Counts)
+		}
+		if !slices.ContainsFunc(snap.Volumes, func(v dockerx.VolumeRow) bool { return v.Name == vol && v.Driver == "local" }) {
+			t.Errorf("volume %s is missing from %+v", vol, snap.Volumes)
+		}
+		if !slices.ContainsFunc(snap.Networks, func(n dockerx.NetworkRow) bool { return n.Name == net && n.Driver == "bridge" }) {
+			t.Errorf("network %s is missing from %+v", net, snap.Networks)
+		}
+		if !slices.ContainsFunc(snap.Images, func(i dockerx.ImageRow) bool { return slices.Contains(i.RepoTags, "alpine:3") }) {
+			t.Errorf("alpine:3 is missing from %+v", snap.Images)
+		}
+		if snap.Counts.Nodes != nil || snap.Counts.Services != nil {
+			t.Errorf("a standalone engine reported swarm counts: %+v", snap.Counts)
+		}
+	})
+
+	t.Run("a swarm manager also counts its node and service", func(t *testing.T) {
+		if _, err := raw.SwarmInit(ctx, client.SwarmInitOptions{ListenAddr: "0.0.0.0:2377", AdvertiseAddr: "127.0.0.1"}); err != nil {
+			t.Fatalf("swarm init: %v", err)
+		}
+		cleanup(func(c context.Context) { _, _ = raw.SwarmLeave(c, client.SwarmLeaveOptions{Force: true}) })
+		svc, err := raw.ServiceCreate(ctx, client.ServiceCreateOptions{Spec: swarm.ServiceSpec{
+			Annotations:  swarm.Annotations{Name: "bp-svc-" + sfx},
+			TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "alpine:3", Command: []string{"sleep", "300"}}},
+		}})
+		if err != nil {
+			t.Fatalf("create service: %v", err)
+		}
+		cleanup(func(c context.Context) { _, _ = raw.ServiceRemove(c, svc.ID, client.ServiceRemoveOptions{}) })
+
+		// The engine now reports itself as a manager; the probe is what tells
+		// the monitor to pass true.
+		res, err := cli.Probe(ctx)
+		if err != nil || res.Type != dockerx.TypeSwarmManager {
+			t.Fatalf("Probe type = %q, err %v, want swarm-manager", res.Type, err)
+		}
+		snap, err := cli.Snapshot(ctx, true)
+		if err != nil {
+			t.Fatalf("Snapshot: %v", err)
+		}
+		assertConsistent(t, snap)
+		if snap.Counts.Nodes == nil || *snap.Counts.Nodes != 1 || snap.Counts.Services == nil || *snap.Counts.Services != 1 {
+			t.Errorf("nodes/services = %v/%v, want 1/1", snap.Counts.Nodes, snap.Counts.Services)
+		}
+	})
 }
