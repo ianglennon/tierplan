@@ -7,7 +7,14 @@
       "description": "Main navigation for Bayplan."
     },
     "switcher": {
-      "none": "No environment"
+      "none": "No environment",
+      "manage": "Manage environments",
+      "loadFailed": "Couldn't load environments",
+      "label": "Environment",
+      "menu": "Switch environment"
+    },
+    "nav": {
+      "dashboard": "Dashboard"
     },
     "userMenu": {
       "trigger": "User menu",

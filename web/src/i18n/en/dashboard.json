@@ -1,0 +1,56 @@
+{
+  "dashboard": {
+    "tabTitle": "Dashboard",
+    "environmentFallback": "this environment",
+    "selfBadge": "Bayplan (this instance)",
+    "workerNotice": "This host is a swarm worker. Pin Bayplan to a manager node to manage the swarm. Showing node-local data only.",
+    "tiles": {
+      "containers": "Containers",
+      "containersSubline": "{{running}} running · {{stopped}} stopped",
+      "images": "Images",
+      "volumes": "Volumes",
+      "networks": "Networks",
+      "nodes": "Nodes",
+      "services": "Services"
+    },
+    "engine": {
+      "title": "Docker engine",
+      "version": "Engine version",
+      "apiVersion": "API version",
+      "osArch": "OS / architecture",
+      "storageDriver": "Storage driver",
+      "cpus": "CPUs",
+      "memory": "Memory",
+      "memoryValue": "{{value}} GiB",
+      "missing": "—"
+    },
+    "error": {
+      "heading": "Couldn't load the dashboard.",
+      "body": "Docker may be unreachable. Try again.",
+      "retry": "Retry"
+    },
+    "fullPage": {
+      "retry": "Retry",
+      "retrying": "Retrying…",
+      "attempted": "Attempted {{when}}",
+      "time": {
+        "justNow": "just now",
+        "minutesAgo": "{{count}} min ago",
+        "hoursAgo": "{{count}} h ago"
+      },
+      "offline": {
+        "heading": "Docker isn't reachable",
+        "body": "Bayplan lost its connection to {{name}} at {{time}}. Check that /var/run/docker.sock is mounted into the Bayplan container and that the Docker daemon is running.",
+        "bodyNoTime": "Bayplan lost its connection to {{name}}. Check that /var/run/docker.sock is mounted into the Bayplan container and that the Docker daemon is running."
+      },
+      "unsupported": {
+        "heading": "This engine isn't supported",
+        "body": "{{engine}} {{version}} (API {{api}}) is below the minimum Bayplan supports, Docker Engine 24. Upgrade Docker Engine, then retry.",
+        "bodyOther": "{{engine}} {{version}} (API {{api}}) isn't a setup Bayplan supports. Bayplan manages Docker Engine 24 or later.",
+        "podmanHeading": "Podman isn't supported",
+        "podmanBody": "Bayplan manages Docker Engine only.",
+        "engineFallback": "This engine"
+      }
+    }
+  }
+}
