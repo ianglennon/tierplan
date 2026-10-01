@@ -527,7 +527,7 @@ func TestFieldLengthsAreCappedAndStillVerify(t *testing.T) {
 	}
 	e2 := ent(audit.ActionAuthLoginFailed)
 	e2.UserAgent = strings.Repeat("é", 300) // 600 bytes
-	e2.Reason = "bad \xff\xfe bytes"
+	e2.Reason = "bad \xff\xfe bytes \x00 and\nnewlines"
 	if err := f.w.Record(context.Background(), e2); err != nil {
 		t.Fatal(err)
 	}
@@ -542,6 +542,9 @@ func TestFieldLengthsAreCappedAndStillVerify(t *testing.T) {
 	var ua2, reason2 string
 	if err := f.s.Read.QueryRow("SELECT user_agent, reason FROM audit_log WHERE seq = 2").Scan(&ua2, &reason2); err != nil {
 		t.Fatal(err)
+	}
+	if strings.ContainsAny(reason2, "\x00\n") {
+		t.Fatalf("control characters survived into the stored reason: %q", reason2)
 	}
 	if len(ua2) > 512 || !utf8.ValidString(ua2) || !utf8.ValidString(reason2) {
 		t.Fatalf("truncation broke UTF-8 or the cap: %d bytes valid=%v/%v", len(ua2), utf8.ValidString(ua2), utf8.ValidString(reason2))

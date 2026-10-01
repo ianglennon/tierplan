@@ -5,6 +5,7 @@ go 1.27
 require (
 	github.com/danielgtaylor/huma/v2 v2.39.1
 	github.com/go-chi/chi/v5 v5.3.2
+	github.com/google/uuid v1.6.0
 	github.com/moby/sys/mountinfo v0.7.2
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/spf13/cobra v1.10.2
@@ -14,7 +15,6 @@ require (
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect

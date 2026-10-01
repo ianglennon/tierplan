@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -33,6 +34,26 @@ func plus(t *testing.T, n int) fstest.MapFS {
 			fmt.Sprintf("-- +goose Up\nCREATE TABLE extra%d (id INTEGER PRIMARY KEY);\n", i))}
 	}
 	return m
+}
+
+// embeddedTarget is the highest version in the real embedded migrations, so
+// tests of the real set do not hard-code how many there are.
+func embeddedTarget(t *testing.T) int64 {
+	t.Helper()
+	files, err := filepath.Glob("migrations/*.sql")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no embedded migrations found: %v", err)
+	}
+	var highest int64
+	for _, f := range files {
+		prefix, _, _ := strings.Cut(filepath.Base(f), "_")
+		v, err := strconv.ParseInt(prefix, 10, 64)
+		if err != nil {
+			t.Fatalf("migration %s has no numeric prefix", f)
+		}
+		highest = max(highest, v)
+	}
+	return highest
 }
 
 func open(t *testing.T, dir string) *store.Store {
@@ -66,8 +87,8 @@ func TestMigrateFreshDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	if res.From != 0 || res.To != 1 {
-		t.Errorf("From, To = %d, %d; want 0, 1", res.From, res.To)
+	if want := embeddedTarget(t); res.From != 0 || res.To != want {
+		t.Errorf("From, To = %d, %d; want 0, %d", res.From, res.To, want)
 	}
 	if res.SnapshotPath != "" || len(snapshots(t, dir)) != 0 {
 		t.Errorf("a fresh database must not be snapshotted, got %q", res.SnapshotPath)
@@ -93,7 +114,7 @@ func TestMigrateSnapshotsBeforePendingMigration(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	s := open(t, dir)
-	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir}); err != nil {
+	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir, Migrations: plus(t, 0)}); err != nil {
 		t.Fatal(err)
 	}
 	res, err := store.Migrate(ctx, s, store.MigrateOptions{
@@ -126,7 +147,7 @@ func TestMigrateKeepsNewestThreeSnapshots(t *testing.T) {
 	ctx := context.Background()
 	s := open(t, dir)
 	clock := fixedClock(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
-	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir, Now: clock}); err != nil {
+	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir, Now: clock, Migrations: plus(t, 0)}); err != nil {
 		t.Fatal(err)
 	}
 	var newest string
@@ -161,7 +182,7 @@ func TestMigrateRefusesWhenFreeSpaceIsLow(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	s := open(t, dir)
-	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir}); err != nil {
+	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir, Migrations: plus(t, 0)}); err != nil {
 		t.Fatal(err)
 	}
 	low := func(string) (uint64, error) { return 1, nil }
@@ -190,7 +211,7 @@ func TestMigrateRefusesDowngrade(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	s := open(t, dir)
-	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir}); err != nil {
+	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir, Migrations: plus(t, 0)}); err != nil {
 		t.Fatal(err)
 	}
 	up, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v2", DataDir: dir, Migrations: plus(t, 1)})
@@ -198,8 +219,8 @@ func TestMigrateRefusesDowngrade(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// An older binary (embedded target 1) meets the schema at version 2.
-	_, err = store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir})
+	// An older binary (migrations up to 1) meets the schema at version 2.
+	_, err = store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir, Migrations: plus(t, 0)})
 	if !errors.Is(err, store.ErrDowngrade) {
 		t.Fatalf("error = %v, want ErrDowngrade", err)
 	}
@@ -271,8 +292,8 @@ func TestRestartKeepsStateAndRerunsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.From != 1 || res.To != 1 || res.SnapshotPath != "" {
-		t.Errorf("restart result = %+v, want From 1 To 1 and no snapshot", res)
+	if want := embeddedTarget(t); res.From != want || res.To != want || res.SnapshotPath != "" {
+		t.Errorf("restart result = %+v, want From %d To %d and no snapshot", res, want, want)
 	}
 	if got, err := s2.RQ.GetSetting(ctx, "greeting"); err != nil || got != "hello" {
 		t.Errorf("setting after restart = %q, %v; want hello", got, err)
@@ -304,7 +325,7 @@ func TestFailedMigrationNamesSnapshotAndRollsBack(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	s := open(t, dir)
-	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir}); err != nil {
+	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir, Migrations: plus(t, 0)}); err != nil {
 		t.Fatal(err)
 	}
 	bad := plus(t, 1)

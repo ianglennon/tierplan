@@ -4,10 +4,35 @@
 
 package sqlc
 
+import (
+	"database/sql"
+)
+
 type AppMetum struct {
 	Key       string
 	Value     string
 	UpdatedAt int64
+}
+
+type AuditLog struct {
+	Seq        int64
+	ID         string
+	Ts         int64
+	ActorType  string
+	ActorID    string
+	ActorName  string
+	Action     string
+	TargetType string
+	TargetID   string
+	EnvID      sql.NullString
+	Result     string
+	Reason     string
+	Ip         string
+	UserAgent  string
+	Details    string
+	KeyID      string
+	PrevHmac   []byte
+	Hmac       []byte
 }
 
 type Setting struct {
