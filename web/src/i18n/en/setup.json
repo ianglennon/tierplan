@@ -1,0 +1,65 @@
+{
+  "setup": {
+    "stepper": {
+      "label": "Step {{current}} of {{total}}"
+    },
+    "token": {
+      "heading": "Set up Bayplan",
+      "body": "Enter the setup token printed in the container logs when Bayplan started.",
+      "label": "Setup token",
+      "helper": "Not in the logs? Run {{command}}.",
+      "command": "docker exec <container> bayplan setup-token",
+      "continue": "Continue",
+      "pending": "Checking…"
+    },
+    "admin": {
+      "heading": "Create the admin account",
+      "body": "This account can manage everything in this Bayplan instance.",
+      "username": {
+        "label": "Username",
+        "helper": "3 to 32 characters: letters, numbers, dot, dash or underscore. Not case-sensitive."
+      },
+      "password": {
+        "label": "Password",
+        "helper": "At least 12 characters. A long passphrase works well."
+      },
+      "confirm": {
+        "label": "Confirm password"
+      },
+      "show": "Show password",
+      "hide": "Hide password",
+      "back": "Back",
+      "continue": "Continue"
+    },
+    "instance": {
+      "heading": "Name this instance",
+      "body": "You can change both of these later in Settings.",
+      "name": {
+        "label": "Instance name",
+        "helper": "Shown in the header, the browser tab and the sign-in page."
+      },
+      "url": {
+        "label": "Public URL",
+        "helper": "The address people use to reach Bayplan. It controls cookies and request origin checks.",
+        "locked": "Set by the BAYPLAN_PUBLIC_URL environment variable.",
+        "lockedIcon": "Locked"
+      },
+      "back": "Back",
+      "submit": "Create admin account",
+      "pending": "Creating account…"
+    },
+    "errors": {
+      "tokenRequired": "Enter the setup token.",
+      "tokenInvalid": "That setup token isn't valid. Copy it again from the container logs.",
+      "rateLimited": "Too many attempts. Wait a minute and try again.",
+      "username": "Use 3 to 32 characters: letters, numbers, dot, dash or underscore.",
+      "passwordShort": "Use at least 12 characters.",
+      "passwordCommon": "That password is too common. Choose something harder to guess.",
+      "passwordMismatch": "The passwords don't match.",
+      "instanceNameRequired": "Enter a name.",
+      "instanceNameTooLong": "Use 64 characters or fewer.",
+      "publicUrl": "Enter a full address such as https://bayplan.example.com.",
+      "server": "Something went wrong on the server. Try again, and check the container logs if it keeps happening."
+    }
+  }
+}
