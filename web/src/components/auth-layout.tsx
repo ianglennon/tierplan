@@ -4,10 +4,9 @@
 import { TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-
-import { VersionFooter } from "@/components/version-footer";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
+import { VersionFooter } from "@/components/version-footer";
 import { cn } from "@/lib/utils";
 
 // Hosts where plain http: is not a network exposure (D-12).
@@ -15,7 +14,9 @@ const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
 // isPlainHttpRemote is true when the page was loaded over http: from a host
 // other than the machine itself, so typed passwords cross the network readable.
-export function isPlainHttpRemote(loc: Pick<Location, "protocol" | "hostname"> = window.location): boolean {
+export function isPlainHttpRemote(
+  loc: Pick<Location, "protocol" | "hostname"> = window.location,
+): boolean {
   return loc.protocol === "http:" && !LOCAL_HOSTNAMES.has(loc.hostname);
 }
 

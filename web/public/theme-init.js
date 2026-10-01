@@ -4,15 +4,15 @@
 // Applies the saved theme before first paint. Served from the Bayplan origin as
 // a plain blocking script, so the CSP can keep script-src 'self' with no inline
 // script (D-37, D-63). Values: "light", "dark" or "system" (default).
-(function () {
-  var choice = "system";
+(() => {
+  let choice = "system";
   try {
-    var saved = window.localStorage.getItem("bayplan-theme");
+    const saved = window.localStorage.getItem("bayplan-theme");
     if (saved === "light" || saved === "dark" || saved === "system") choice = saved;
-  } catch (e) {
+  } catch {
     // localStorage can be blocked; fall back to following the system.
   }
-  var dark =
+  const dark =
     choice === "dark" ||
     (choice === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.classList.toggle("dark", dark);

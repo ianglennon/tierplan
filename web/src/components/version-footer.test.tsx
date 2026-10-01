@@ -75,7 +75,9 @@ describe("VersionFooter", () => {
   it("falls back the same way when the API answers with an error status", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => Response.json({ title: "Internal Server Error", status: 500 }, { status: 500 })),
+      vi.fn(async () =>
+        Response.json({ title: "Internal Server Error", status: 500 }, { status: 500 }),
+      ),
     );
     renderFooter();
 

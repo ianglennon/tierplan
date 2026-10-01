@@ -1,9 +1,12 @@
+//go:build !devspa
+
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 // Package web embeds the built single-page app. dist/ is produced by
 // `make web`; dist/.gitkeep is committed so a fresh clone still compiles
-// (RESEARCH Pitfall 12).
+// (RESEARCH Pitfall 12). Release builds always use this file; the devspa build
+// tag swaps it for embed_dev.go.
 package web
 
 import (
