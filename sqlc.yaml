@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+version: "2"
+sql:
+  - engine: "sqlite"
+    schema: "internal/store/migrations" # goose Down sections are ignored by sqlc
+    queries: "internal/store/queries"
+    gen:
+      go:
+        package: "sqlc"
+        out: "internal/store/sqlc"
+        sql_package: "database/sql"
+        emit_json_tags: false

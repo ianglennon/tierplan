@@ -26,12 +26,16 @@ web:
 build: web
 	CGO_ENABLED=0 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o bin/bayplan ./cmd/bayplan
 
+# sqlc runs through `go run` at a pinned version, so nothing is added to go.mod.
+SQLC_VERSION := v1.31.1
+
 gen:
 	go run ./cmd/bayplan openapi > openapi.json
 	pnpm -C web exec openapi-typescript ../openapi.json -o src/api/schema.d.ts
+	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 
 gen-check: gen
-	git diff --exit-code -- openapi.json web/src/api/schema.d.ts
+	git diff --exit-code -- openapi.json web/src/api/schema.d.ts internal/store/sqlc
 
 test:
 	go test ./... -race -count=1
