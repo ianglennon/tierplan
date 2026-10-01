@@ -60,3 +60,15 @@ type Setting struct {
 	Value     string
 	UpdatedAt int64
 }
+
+type User struct {
+	ID                string
+	Username          string
+	PasswordHash      string
+	CreatedAt         int64
+	UpdatedAt         int64
+	PasswordChangedAt int64
+	FailedCount       int64
+	LockedUntil       sql.NullInt64
+	Disabled          int64
+}
