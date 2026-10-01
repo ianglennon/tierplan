@@ -1,6 +1,77 @@
 {
   "components": {
     "schemas": {
+      "CompleteSetupBody": {
+        "additionalProperties": false,
+        "properties": {
+          "csrfToken": {
+            "description": "Sent as X-CSRF-Token on every mutating request",
+            "type": "string"
+          },
+          "instanceName": {
+            "description": "The stored instance name",
+            "type": "string"
+          },
+          "publicUrl": {
+            "description": "The public URL in effect",
+            "type": "string"
+          },
+          "publicUrlLocked": {
+            "description": "True when BAYPLAN_PUBLIC_URL fixed the public URL and the submitted one was ignored",
+            "type": "boolean"
+          },
+          "user": {
+            "$ref": "#/components/schemas/SetupUserBody",
+            "description": "The admin account that was created"
+          }
+        },
+        "required": [
+          "user",
+          "csrfToken",
+          "instanceName",
+          "publicUrl",
+          "publicUrlLocked"
+        ],
+        "type": "object"
+      },
+      "CompleteSetupInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "instanceName": {
+            "description": "Display name, 1 to 64 characters",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "password": {
+            "description": "At least 12 characters, not on the common-password list and not containing the username",
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "publicUrl": {
+            "description": "The address people use to reach Bayplan; ignored when BAYPLAN_PUBLIC_URL fixes it",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "token": {
+            "description": "The setup token printed in the container log",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "username": {
+            "description": "3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "username",
+          "password",
+          "instanceName",
+          "publicUrl"
+        ],
+        "type": "object"
+      },
       "ErrorDetail": {
         "additionalProperties": false,
         "properties": {
@@ -120,6 +191,29 @@
         ],
         "type": "object"
       },
+      "SetupUserBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The user's ID",
+            "type": "string"
+          },
+          "role": {
+            "description": "The user's global role",
+            "type": "string"
+          },
+          "username": {
+            "description": "The lower-cased username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "role"
+        ],
+        "type": "object"
+      },
       "VerifySetupTokenInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -201,6 +295,60 @@
           }
         },
         "summary": "Get the instance name, whether setup is needed and the remember-me length",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/api/setup/complete": {
+      "post": {
+        "description": "Needs the setup token. Runs once: it creates the admin, assigns the global admin role, stores the instance name and public URL, starts a session and audits setup.completed in one transaction, then consumes the token. A second call answers 409 setup_complete.",
+        "operationId": "completeSetup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteSetupInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompleteSetupBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create the first admin, store the instance settings and sign in",
         "tags": [
           "setup"
         ]

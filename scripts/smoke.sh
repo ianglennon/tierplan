@@ -126,6 +126,48 @@ grep -q '"defaultInstanceName"' "${WORK}/right.json" || fail "the right setup to
 [ "$(BAYPLAN_DATA_DIR="${DATA}" "${BIN}" audit verify)" = "audit chain OK: 1 entries" ] \
   || fail "audit verify does not report exactly the one wrong-token entry"
 
+# Setup completion (D-02, AUTH-01): the token holder creates the one admin, is
+# signed in with a hardened cookie, and the token is spent.
+PW='correct horse battery'
+code="$(curl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H 'Content-Type: application/json' \
+  -d "{\"token\":\"${TOKEN}\",\"username\":\"Admin\",\"password\":\"${PW}\",\"instanceName\":\"Smoke lab\",\"publicUrl\":\"https://bayplan.example\"}" \
+  "${BASE}/api/setup/complete")"
+[ "${code}" = "200" ] || fail "setup completion returned ${code}, want 200: $(cat "${WORK}/complete.json")"
+grep -q '"username":"admin"' "${WORK}/complete.json" || fail "setup completion did not return the lower-cased admin"
+grep -q '"role":"admin"' "${WORK}/complete.json" || fail "setup completion did not return the admin role"
+grep -q '"csrfToken":"[A-Za-z0-9_-]\{20,\}"' "${WORK}/complete.json" || fail "setup completion did not return a CSRF token"
+COOKIE_LINE="$(grep -i '^set-cookie:' "${WORK}/complete.hdr" | tr -d '\r')"
+printf '%s' "${COOKIE_LINE}" | grep -q '^[Ss]et-[Cc]ookie: __Host-bayplan_session=' || fail "no __Host- session cookie under an https public URL: ${COOKIE_LINE}"
+for attr in 'HttpOnly' 'Secure' 'SameSite=Lax' 'Path=/'; do
+  printf '%s' "${COOKIE_LINE}" | grep -q "${attr}" || fail "session cookie lacks ${attr}: ${COOKIE_LINE}"
+done
+if printf '%s' "${COOKIE_LINE}" | grep -qi 'domain='; then fail "session cookie carries a Domain: ${COOKIE_LINE}"; fi
+SESSION_ID="$(printf '%s' "${COOKIE_LINE}" | sed 's/^[^=]*=//; s/;.*//')"
+grep -qi '^cache-control: .*no-store' "${WORK}/complete.hdr" || fail "setup completion is cacheable"
+
+[ ! -e "${DATA}/setup-token" ] || fail "the setup-token file survived completion"
+if BAYPLAN_DATA_DIR="${DATA}" "${BIN}" setup-token >/dev/null 2>&1; then
+  fail "bayplan setup-token still prints a token after completion"
+fi
+code="$(curl -sS -o "${WORK}/replay.json" -w '%{http_code}' -H 'Content-Type: application/json' \
+  -d "{\"token\":\"${TOKEN}\",\"username\":\"mallory\",\"password\":\"${PW}\",\"instanceName\":\"x\",\"publicUrl\":\"https://bayplan.example\"}" \
+  "${BASE}/api/setup/complete")"
+[ "${code}" = "409" ] || fail "a second completion returned ${code}, want 409"
+grep -q 'setup_complete' "${WORK}/replay.json" || fail "a second completion did not answer setup_complete"
+code="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE}/setup")"
+[ "${code}" = "302" ] || fail "/setup returned ${code} after completion, want 302"
+curl -fsS "${BASE}/api/instance" -o "${WORK}/instance2.json" || fail "/api/instance did not answer after completion"
+grep -q '"needsSetup":false' "${WORK}/instance2.json" || fail "/api/instance still reports needsSetup after completion"
+grep -q '"instanceName":"Smoke lab"' "${WORK}/instance2.json" || fail "/api/instance does not report the stored instance name"
+# Secrets are never logged, and the database holds only a hash of the session ID.
+if grep -qF "${PW}" "${LOG}"; then fail "the server log contains the admin password"; fi
+if grep -qF "${SESSION_ID}" "${LOG}"; then fail "the server log contains the session ID"; fi
+if grep -qaF "${SESSION_ID}" "${DATA}"/bayplan.db*; then fail "the database contains the raw session ID"; fi
+# 3 entries: the wrong token, setup.completed, and the denied replay.
+AUDIT_OUT="$(BAYPLAN_DATA_DIR="${DATA}" "${BIN}" audit verify)"
+[ "${AUDIT_OUT}" = "audit chain OK: 3 entries" ] || fail "audit verify after setup reports '${AUDIT_OUT}', want 3 entries"
+grep -q 'setup.completed' "${LOG}" || fail "setup.completed was not logged"
+
 # The healthcheck subcommand, as the container HEALTHCHECK runs it.
 BAYPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck \
   || fail "bayplan healthcheck exited non-zero while the server is up"
@@ -161,6 +203,11 @@ done
 [ -n "${up}" ] || fail "/readyz did not answer 200 within 10 seconds after the restart"
 [ "$(cat "${WORK}/readyz2.txt")" = "ready" ] || fail "/readyz body after the restart is not exactly 'ready'"
 grep -q '"database ready"' "${LOG}" || fail "restart did not log 'database ready'"
+# The admin and the settings survive the restart, and no new setup token is minted.
+curl -fsS "${BASE}/api/instance" -o "${WORK}/instance3.json" || fail "/api/instance did not answer after the restart"
+grep -q '"needsSetup":false' "${WORK}/instance3.json" || fail "the restart reopened setup"
+grep -q '"instanceName":"Smoke lab"' "${WORK}/instance3.json" || fail "the instance name did not survive the restart"
+[ ! -e "${DATA}/setup-token" ] || fail "the restart wrote a setup-token although an admin exists"
 if grep -q '"snapshot"' "${LOG}"; then
   fail "the restart on the same data directory re-ran a migration (a snapshot was logged)"
 fi

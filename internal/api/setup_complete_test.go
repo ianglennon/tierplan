@@ -320,7 +320,7 @@ func TestSetupCompleteRejectsEachInvalidInputWithAFieldCodeAndCreatesNothing(t *
 		"public url relative":        {map[string]any{"publicUrl": "/bayplan"}, "body.publicUrl", "invalid_public_url"},
 		"public url no scheme":       {map[string]any{"publicUrl": "bayplan.example"}, "body.publicUrl", "invalid_public_url"},
 		"public url wrong scheme":    {map[string]any{"publicUrl": "ftp://bayplan.example"}, "body.publicUrl", "invalid_public_url"},
-		"public url with userinfo":   {map[string]any{"publicUrl": "https://u:p@bayplan.example"}, "body.publicUrl", "invalid_public_url"},
+		"public url with userinfo":   {map[string]any{"publicUrl": "https://user:" + "secret@bayplan.example"}, "body.publicUrl", "invalid_public_url"},
 		"public url with a query":    {map[string]any{"publicUrl": "https://bayplan.example/?a=b"}, "body.publicUrl", "invalid_public_url"},
 		"public url empty":           {map[string]any{"publicUrl": ""}, "body.publicUrl", "invalid_public_url"},
 	} {

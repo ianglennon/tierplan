@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/vault"
@@ -47,6 +48,8 @@ type Server struct {
 	vault   *vault.Vault
 	audit   *audit.Writer
 	setup   *auth.SetupGate
+	inst    *instance.Instance
+	session *auth.Sessions
 	router  *httpx.Router
 
 	// stopBackground ends the nightly audit prune and waits for it, so Close
@@ -141,8 +144,17 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		return nil, fmt.Errorf("initialise the setup gate: %w", err)
 	}
 
+	// The instance name and public URL come from the settings table, with
+	// BAYPLAN_PUBLIC_URL winning (D-04). The Origin guard reads the cached
+	// origin on every mutation, so a change made at setup applies at once.
+	inst, err := instance.Load(ctx, st, cfg)
+	if err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("load instance settings: %w", err)
+	}
+	sessions := auth.NewSessions(st, vlt, cfg.SessionIdleTimeout, cfg.SessionRememberLifetime, nil)
+
 	spa := webui.Handler(web.FS())
-	publicOrigin := httpx.OriginOf(cfg.PublicURL) // the settings DB value arrives in plan 10
 	router := NewRouter(httpx.Options{
 		Fallback:       spa,
 		Checker:        rbac.NewChecker(st),
@@ -150,17 +162,19 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		EnvResolver:    httpx.NoEnvironments{},         // plan 16 provides the DB-backed one
 		Auditor:        aud,
 		TrustedProxies: cfg.TrustedProxies,
-		PublicOrigin:   func() string { return publicOrigin },
+		PublicOrigin:   inst.PublicOrigin,
 		Logger:         log,
 	}, api.SystemDeps{Ready: ready}, api.SetupDeps{
 		Gate: gate,
 		// 5 attempts at once, then one every 12 seconds, per client address (D-05).
-		Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
-		Audit:   aud,
-		Store:   st,
-		Config:  cfg,
-		SPA:     spa,
-		Log:     log,
+		Limiter:  auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
+		Audit:    aud,
+		Store:    st,
+		Config:   cfg,
+		Instance: inst,
+		Sessions: sessions,
+		SPA:      spa,
+		Log:      log,
 	})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
@@ -175,6 +189,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		vault:   vlt,
 		audit:   aud,
 		setup:   gate,
+		inst:    inst,
+		session: sessions,
 		router:  router,
 	}
 
@@ -194,8 +210,15 @@ func (s *Server) Vault() *vault.Vault { return s.vault }
 // Audit is the audit-log writer every mutation records through.
 func (s *Server) Audit() *audit.Writer { return s.audit }
 
-// SetupGate is the first-run gate; plan 10's completion endpoint consumes it.
+// SetupGate is the first-run gate; the setup completion endpoint consumes it.
 func (s *Server) SetupGate() *auth.SetupGate { return s.setup }
+
+// Instance is the cached instance name and public URL.
+func (s *Server) Instance() *instance.Instance { return s.inst }
+
+// Sessions creates and describes server-side sessions; plan 12's
+// authenticator and login endpoint build on it.
+func (s *Server) Sessions() *auth.Sessions { return s.session }
 
 // Close stops background work and releases the database. Run calls it on
 // exit; it is safe to call again.

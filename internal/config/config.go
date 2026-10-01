@@ -303,6 +303,11 @@ func parsePrefixes(raw string) ([]netip.Prefix, error) {
 	return out, nil
 }
 
+// NormalisePublicURL validates a public URL the same way BAYPLAN_PUBLIC_URL is
+// validated, so a value entered in the setup wizard and one set in the
+// environment are held to one rule. Empty stays empty.
+func NormalisePublicURL(raw string) (string, error) { return normalisePublicURL(raw) }
+
 // normalisePublicURL accepts an absolute http or https URL and returns its
 // origin plus an optional path with no trailing slash. Empty stays empty.
 func normalisePublicURL(raw string) (string, error) {

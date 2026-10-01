@@ -21,6 +21,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/setup/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create the first admin, store the instance settings and sign in
+         * @description Needs the setup token. Runs once: it creates the admin, assigns the global admin role, stores the instance name and public URL, starts a session and audits setup.completed in one transaction, then consumes the token. A second call answers 409 setup_complete.
+         */
+        post: operations["completeSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/setup/token": {
         parameters: {
             query?: never;
@@ -59,6 +79,30 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        CompleteSetupBody: {
+            /** @description Sent as X-CSRF-Token on every mutating request */
+            csrfToken: string;
+            /** @description The stored instance name */
+            instanceName: string;
+            /** @description The public URL in effect */
+            publicUrl: string;
+            /** @description True when BAYPLAN_PUBLIC_URL fixed the public URL and the submitted one was ignored */
+            publicUrlLocked: boolean;
+            /** @description The admin account that was created */
+            user: components["schemas"]["SetupUserBody"];
+        };
+        CompleteSetupInputBody: {
+            /** @description Display name, 1 to 64 characters */
+            instanceName: string;
+            /** @description At least 12 characters, not on the common-password list and not containing the username */
+            password: string;
+            /** @description The address people use to reach Bayplan; ignored when BAYPLAN_PUBLIC_URL fixes it */
+            publicUrl: string;
+            /** @description The setup token printed in the container log */
+            token: string;
+            /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
+            username: string;
+        };
         ErrorDetail: {
             /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
             location?: string;
@@ -119,6 +163,14 @@ export interface components {
             /** @description True when BAYPLAN_PUBLIC_URL fixes the public URL */
             publicUrlLocked: boolean;
         };
+        SetupUserBody: {
+            /** @description The user's ID */
+            id: string;
+            /** @description The user's global role */
+            role: string;
+            /** @description The lower-cased username */
+            username: string;
+        };
         VerifySetupTokenInputBody: {
             /** @description The setup token printed in the container log */
             token: string;
@@ -160,6 +212,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    completeSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteSetupInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompleteSetupBody"];
                 };
             };
             /** @description Error */
