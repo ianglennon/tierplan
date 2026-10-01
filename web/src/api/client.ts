@@ -13,3 +13,7 @@ export const api = createClient<paths>({
   baseUrl: window.location.origin,
   fetch: (input) => globalThis.fetch(input),
 });
+
+// RED stubs: the real middleware arrives with the next commit.
+export function setCsrfToken(_token: string | null): void {}
+export function setUnauthorizedHandler(_fn: ((path: string) => void) | null): void {}
