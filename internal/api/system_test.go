@@ -113,7 +113,7 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
-func TestNonPublicRequirementIsDeniedByDefault(t *testing.T) {
+func TestNonPublicRequirementIsRefusedWithoutASession(t *testing.T) {
 	r := newRouter(t)
 	httpx.Register(r, huma.Operation{
 		OperationID: "secret", Method: http.MethodGet, Path: "/api/secret",
@@ -121,8 +121,8 @@ func TestNonPublicRequirementIsDeniedByDefault(t *testing.T) {
 		func(context.Context, *struct{}) (*struct{}, error) { return &struct{}{}, nil })
 
 	rec := get(t, r.Handler(), "/api/secret")
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: the default authenticator knows nobody", rec.Code)
 	}
 	found := false
 	for _, rt := range r.Routes() {

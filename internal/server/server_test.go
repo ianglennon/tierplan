@@ -21,7 +21,10 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 )
 
@@ -276,5 +279,25 @@ func TestBuildRejectsAMalformedKeyBeforeTouchingTheDatabase(t *testing.T) {
 	}
 	if _, statErr := os.Stat(dir + "/bayplan.db"); statErr == nil {
 		t.Error("a malformed key must stop startup before the database is created")
+	}
+}
+
+func TestBuildSeedsTheAdminRoleAndEveryRouteIsGuarded(t *testing.T) {
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	got, err := srv.Store().RQ.ListRolePermissions(context.Background(), rbac.AdminRoleID)
+	if err != nil || len(got) != len(rbac.All()) {
+		t.Errorf("admin holds %d permissions (%v), want %d", len(got), err, len(rbac.All()))
+	}
+	if err := httpx.VerifyAllGuarded(srv.router); err != nil {
+		t.Errorf("the assembled router has an unguarded route: %v", err)
+	}
+	// The openapi subcommand builds the same routes with no dependencies.
+	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{})); err != nil {
+		t.Errorf("the dependency-free router has an unguarded route: %v", err)
 	}
 }

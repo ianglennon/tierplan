@@ -9,6 +9,7 @@ package httpx
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -54,13 +55,25 @@ type Options struct {
 	// (the embedded SPA). Nil means a plain 404.
 	Fallback http.Handler
 
-	Checker        *rbac.Checker
-	Authenticator  Authenticator
-	EnvResolver    EnvResolver
-	Auditor        Auditor
-	MutationGuard  MutationGuard
+	// Checker answers permission questions. Nil denies every non-Public request.
+	Checker *rbac.Checker
+	// Authenticator resolves the caller. Nil means every caller is anonymous.
+	Authenticator Authenticator
+	// EnvResolver resolves {envId}. Nil means no environment exists.
+	EnvResolver EnvResolver
+	// Auditor records denials (D-49). Nil records nothing and is only for
+	// callers that serve no requests, such as the openapi subcommand and tests.
+	Auditor Auditor
+	// MutationGuard vets authenticated mutations (CSRF, plan 12). Nil skips it.
+	MutationGuard MutationGuard
+	// TrustedProxies are the peers whose X-Forwarded-For is believed (D-39).
 	TrustedProxies []netip.Prefix
-	PublicOrigin   func() string
+	// PublicOrigin returns the origin mutations must come from, read on every
+	// request so it can change at runtime. Empty means "the request's own
+	// origin", which is the state before setup stores a public URL (D-04).
+	PublicOrigin func() string
+	// Logger receives policy warnings and errors. Nil means slog.Default().
+	Logger *slog.Logger
 }
 
 // Router is the chi mux, the huma API and the registry of registered routes.
@@ -68,6 +81,7 @@ type Router struct {
 	mux      *chi.Mux
 	api      huma.API
 	fallback http.Handler
+	opts     Options
 
 	mu     sync.Mutex
 	routes []RouteRecord
@@ -77,9 +91,19 @@ type Router struct {
 // It does not use chi's RealIP middleware, which trusts forwarded headers
 // unconditionally.
 func New(opts Options) *Router {
-	r := &Router{mux: chi.NewRouter(), fallback: opts.Fallback}
+	if opts.Authenticator == nil {
+		opts.Authenticator = AnonymousAuthenticator{}
+	}
+	if opts.EnvResolver == nil {
+		opts.EnvResolver = NoEnvironments{}
+	}
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	r := &Router{mux: chi.NewRouter(), fallback: opts.Fallback, opts: opts}
 
 	r.mux.Use(middleware.RequestID)
+	r.mux.Use(clientIP(opts.TrustedProxies))
 	r.mux.Use(middleware.Recoverer)
 	r.mux.Use(securityHeaders)
 	r.mux.NotFound(r.notFound)
@@ -101,16 +125,14 @@ func New(opts Options) *Router {
 // operation only, never through a global UseMiddleware, because huma reads the
 // global chain at registration time (Pitfall 5).
 func Register[I, O any](r *Router, op huma.Operation, req rbac.Requirement, h func(context.Context, *I) (*O, error)) {
-	req.MustBeValid()
+	checkRoute(op.Method, op.Path, req)
 	if op.Metadata == nil {
 		op.Metadata = map[string]any{}
 	}
 	op.Metadata[requirementKey] = req
 	op.Middlewares = append(huma.Middlewares{r.policy(req)}, op.Middlewares...)
 
-	r.mu.Lock()
-	r.routes = append(r.routes, RouteRecord{Method: op.Method, Path: op.Path, Req: req})
-	r.mu.Unlock()
+	r.record(RouteRecord{Method: op.Method, Path: op.Path, Req: req})
 
 	huma.Register(r.api, op, h)
 }
@@ -120,23 +142,14 @@ func Register[I, O any](r *Router, op huma.Operation, req rbac.Requirement, h fu
 // registry flagged Exempt so the router-walk test can check it against the
 // short allowed list. It still passes through the security-header middleware.
 func (r *Router) Exempt(method, path string, h http.HandlerFunc) {
-	r.mu.Lock()
-	r.routes = append(r.routes, RouteRecord{Method: method, Path: path, Exempt: true})
-	r.mu.Unlock()
-
+	r.record(RouteRecord{Method: method, Path: path, Exempt: true})
 	r.mux.MethodFunc(method, path, h)
 }
 
-// policy is the per-operation gate. Until the policy engine evaluates real
-// principals, every non-Public requirement is denied (default deny).
-func (r *Router) policy(req rbac.Requirement) func(huma.Context, func(huma.Context)) {
-	return func(ctx huma.Context, next func(huma.Context)) {
-		if req.Public {
-			next(ctx)
-			return
-		}
-		_ = huma.WriteErr(r.api, ctx, http.StatusForbidden, "forbidden")
-	}
+func (r *Router) record(rec RouteRecord) {
+	r.mu.Lock()
+	r.routes = append(r.routes, rec)
+	r.mu.Unlock()
 }
 
 // Routes returns a copy of the registry of registered operations.
@@ -182,7 +195,14 @@ func isReservedPath(p string) bool {
 
 // writeProblem writes an RFC 9457 problem body, the same shape huma emits.
 func writeProblem(w http.ResponseWriter, status int, detail string) {
+	writeProblemType(w, status, "", detail)
+}
+
+// writeProblemType is writeProblem with a stable machine-readable type the SPA
+// maps to copy, for example origin_mismatch.
+func writeProblemType(w http.ResponseWriter, status int, ptype, detail string) {
 	body, _ := json.Marshal(&huma.ErrorModel{
+		Type:   ptype,
 		Title:  http.StatusText(status),
 		Status: status,
 		Detail: detail,

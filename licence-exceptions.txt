@@ -27,3 +27,10 @@ npm argparse Python-2.0  # via shadcn > cosmiconfig > js-yaml; PSF-style permiss
 npm caniuse-lite CC-BY-4.0  # via shadcn > babel > browserslist; browser-support data, attribution only, tooling only
 npm isexe BlueOak-1.0.0  # via shadcn > dotenvx > which; permissive, attribution only, tooling only
 npm minimatch BlueOak-1.0.0  # via shadcn > ts-morph; permissive, attribution only, tooling only
+
+# --- Reviewed 2026-10-01 (plan 01-08) ---
+
+# Trusted-proxy aware client IP resolution (rightmost-trusted-range strategy), approved at 01-01.
+# 0BSD (BSD Zero Clause) is a public-domain-equivalent permissive licence with no attribution
+# requirement, OSI approved and compatible with the AGPL. The allowlist has no 0BSD entry yet.
+go github.com/realclientip/realclientip-go BSD-0-Clause  # permissive, no obligations, AGPL-compatible

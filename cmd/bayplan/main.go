@@ -19,6 +19,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/server"
 )
 
@@ -90,7 +91,7 @@ func loadConfig(cmd *cobra.Command) (config.Config, error) {
 // writeOpenAPI needs no configuration, data directory or socket: it builds the
 // router with no dependencies.
 func writeOpenAPI(w io.Writer) error {
-	doc, err := json.MarshalIndent(server.NewRouter(nil, api.SystemDeps{}).API().OpenAPI(), "", "  ")
+	doc, err := json.MarshalIndent(server.NewRouter(httpx.Options{}, api.SystemDeps{}).API().OpenAPI(), "", "  ")
 	if err != nil {
 		return err
 	}

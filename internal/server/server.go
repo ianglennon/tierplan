@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/vault"
 	"github.com/ianglennon/bayplan/internal/webui"
@@ -55,8 +56,8 @@ type Server struct {
 // NewRouter wires every operation. It takes plain dependencies so the
 // `openapi` subcommand can build the same handlers without a database or a
 // socket.
-func NewRouter(fallback http.Handler, deps api.SystemDeps) *httpx.Router {
-	r := httpx.New(httpx.Options{Fallback: fallback})
+func NewRouter(opts httpx.Options, deps api.SystemDeps) *httpx.Router {
+	r := httpx.New(opts)
 	api.RegisterSystem(r, deps)
 	return r
 }
@@ -118,14 +119,39 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		}
 		return st.Ready(ctx)
 	}
+
+	// The admin role holds every registered permission, re-synced at every
+	// start so a new permission reaches admins on upgrade (D-45).
+	if err := rbac.SeedAdminRole(ctx, st); err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("seed admin role: %w", err)
+	}
+
+	aud := audit.NewWriter(st, vlt, log, nil)
+	publicOrigin := httpx.OriginOf(cfg.PublicURL) // the settings DB value arrives in plan 10
+	router := NewRouter(httpx.Options{
+		Fallback:       webui.Handler(web.FS()),
+		Checker:        rbac.NewChecker(st),
+		Authenticator:  httpx.AnonymousAuthenticator{}, // plan 12 provides the session-backed one
+		EnvResolver:    httpx.NoEnvironments{},         // plan 16 provides the DB-backed one
+		Auditor:        aud,
+		TrustedProxies: cfg.TrustedProxies,
+		PublicOrigin:   func() string { return publicOrigin },
+		Logger:         log,
+	}, api.SystemDeps{Ready: ready})
+	// A route that skipped the policy seam stops startup, before anything listens (D-44).
+	if err := httpx.VerifyAllGuarded(router); err != nil {
+		_ = st.Close()
+		return nil, err
+	}
 	srv := &Server{
 		cfg:     cfg,
 		log:     log,
 		dataDir: info,
 		store:   st,
 		vault:   vlt,
-		audit:   audit.NewWriter(st, vlt, log, nil),
-		router:  NewRouter(webui.Handler(web.FS()), api.SystemDeps{Ready: ready}),
+		audit:   aud,
+		router:  router,
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.

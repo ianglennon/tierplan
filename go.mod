@@ -8,6 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/moby/sys/mountinfo v0.7.2
 	github.com/pressly/goose/v3 v3.28.0
+	github.com/realclientip/realclientip-go v1.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	modernc.org/sqlite v1.60.1

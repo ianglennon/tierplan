@@ -474,10 +474,12 @@ func TestASystemPrincipalWithAnEmptySetIsDeniedUnderItsOwnName(t *testing.T) {
 
 func TestAMutationGuardRefusalIs403CSRFFailedAndAudited(t *testing.T) {
 	var sawPrincipal *rbac.Principal
-	f := newFixture(t, func(o *Options) { o.MutationGuard = guardFunc(func(_ *http.Request, p *rbac.Principal) error {
-		sawPrincipal = p
-		return errors.New("bad token")
-	}) })
+	f := newFixture(t, func(o *Options) {
+		o.MutationGuard = guardFunc(func(_ *http.Request, p *rbac.Principal) error {
+			sawPrincipal = p
+			return errors.New("bad token")
+		})
+	})
 	rec := do(f.r.Handler(), http.MethodPut, "/api/settings", as("admin-user"))
 	if rec.Code != http.StatusForbidden || problemType(t, rec) != "csrf_failed" {
 		t.Fatalf("status = %d %s, want 403 csrf_failed", rec.Code, rec.Body)
