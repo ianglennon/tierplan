@@ -6,6 +6,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/store"
 )
 
 func testConfig(t *testing.T, env map[string]string) config.Config {
@@ -54,6 +56,7 @@ func TestBuildLogsRedactedConfigAndPreparesDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = srv.Close() })
 	if strings.Contains(logs.String(), secret) {
 		t.Fatalf("startup log leaks the encryption key: %s", logs.String())
 	}
@@ -91,6 +94,7 @@ func TestReadyzTurns503WhenTheDataDirDisappears(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = srv.Close() })
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -113,6 +117,7 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = srv.Close() })
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -178,5 +183,49 @@ func TestRunReportsListenErrorsNamingTheEnvVar(t *testing.T) {
 	err = srv.Run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "BAYPLAN_LISTEN") {
 		t.Fatalf("Run on a busy port = %v, want an error naming BAYPLAN_LISTEN", err)
+	}
+}
+
+func TestBuildMigratesAndRecordsTheVersion(t *testing.T) {
+	dir := t.TempDir() + "/data"
+	var logs bytes.Buffer
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	if _, err := os.Stat(dir + "/bayplan.db"); err != nil {
+		t.Errorf("database file missing: %v", err)
+	}
+	if v, err := srv.Store().RQ.GetMeta(context.Background(), "app_version"); err != nil || v != "dev" {
+		t.Errorf("app_version = %q, %v; want dev", v, err)
+	}
+	if !strings.Contains(logs.String(), "database ready") {
+		t.Errorf("no migration log line: %s", logs.String())
+	}
+}
+
+func TestBuildRefusesADatabaseNewerThanTheBinary(t *testing.T) {
+	dir := t.TempDir() + "/data"
+	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+	first, err := Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Store().Write.Exec("INSERT INTO goose_db_version (version_id, is_applied) VALUES (999, 1)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if !errors.Is(err, store.ErrDowngrade) {
+		t.Fatalf("Build = %v, want ErrDowngrade", err)
+	}
+	for _, want := range []string{"migration failed", "version 999"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
 	}
 }

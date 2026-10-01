@@ -19,6 +19,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/webui"
 	"github.com/ianglennon/bayplan/web"
 )
@@ -37,6 +38,7 @@ type Server struct {
 	cfg     config.Config
 	log     *slog.Logger
 	dataDir datadir.Info
+	store   *store.Store
 	router  *httpx.Router
 }
 
@@ -49,14 +51,14 @@ func NewRouter(fallback http.Handler, deps api.SystemDeps) *httpx.Router {
 	return r
 }
 
-// Build prepares the data directory and assembles the server. It logs the
-// effective configuration with secrets redacted.
+// Build prepares the data directory, opens and migrates the database and
+// assembles the server. It logs the effective configuration with secrets
+// redacted. A migration failure (or a database newer than this binary) is
+// returned as an error so `serve` exits non-zero before it listens (D-82, D-84).
 func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	_ = ctx // reserved: plan 06 opens and migrates the database with it
-
 	log.Info("starting bayplan",
 		"version", buildinfo.Get().Display,
 		"config", cfg.Redacted(),
@@ -71,14 +73,47 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 			"path", info.Path, "reason", info.Reason)
 	}
 
-	ready := func(context.Context) error { return datadir.CheckWritable(info.Path) }
+	st, err := store.Open(ctx, info.Path)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	res, err := store.Migrate(ctx, st, store.MigrateOptions{
+		AppVersion: buildinfo.Get().Version,
+		DataDir:    info.Path,
+		SkipBackup: cfg.SkipPreMigrateBackup,
+	})
+	if err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("migration failed: %w", err)
+	}
+	attrs := []any{"from", res.From, "to", res.To}
+	if res.SnapshotPath != "" {
+		attrs = append(attrs, "snapshot", res.SnapshotPath)
+	}
+	log.Info("database ready", attrs...)
+
+	// /readyz needs a usable data directory and a database at this binary's
+	// schema version (D-86).
+	ready := func(ctx context.Context) error {
+		if err := datadir.CheckWritable(info.Path); err != nil {
+			return err
+		}
+		return st.Ready(ctx)
+	}
 	return &Server{
 		cfg:     cfg,
 		log:     log,
 		dataDir: info,
+		store:   st,
 		router:  NewRouter(webui.Handler(web.FS()), api.SystemDeps{Ready: ready}),
 	}, nil
 }
+
+// Store is the migrated database, for the dependencies later plans add.
+func (s *Server) Store() *store.Store { return s.store }
+
+// Close releases the database. Run calls it on exit; it is safe to call again.
+func (s *Server) Close() error { return s.store.Close() }
 
 // DataDir reports the prepared data directory, for the admin banner (plan 14).
 func (s *Server) DataDir() datadir.Info { return s.dataDir }
@@ -88,6 +123,7 @@ func (s *Server) Handler() http.Handler { return s.router.Handler() }
 
 // Run serves until ctx is cancelled, then shuts down gracefully within 10s.
 func (s *Server) Run(ctx context.Context) error {
+	defer func() { _ = s.Close() }()
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen on %s (BAYPLAN_LISTEN): %w", s.cfg.Listen, err)

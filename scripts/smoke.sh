@@ -77,6 +77,11 @@ code="$(curl -sS -o "${WORK}/readyz.txt" -w '%{http_code}' "${BASE}/readyz")"
 [ "$(cat "${WORK}/readyz.txt")" = "ready" ] || fail "/readyz body is not exactly 'ready'"
 
 [ -d "${DATA}" ] || fail "data directory ${DATA} was not created"
+[ -f "${DATA}/bayplan.db" ] || fail "database ${DATA}/bayplan.db was not created"
+grep -q '"database ready"' "${LOG}" || fail "first start did not log 'database ready'"
+if grep -q '"snapshot"' "${LOG}"; then
+  fail "a first start on an empty data directory must not take a snapshot"
+fi
 
 # The healthcheck subcommand, as the container HEALTHCHECK runs it.
 BAYPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck \
@@ -95,5 +100,27 @@ PID=""
 if BAYPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck 2>/dev/null; then
   fail "bayplan healthcheck exited 0 after the server stopped"
 fi
+
+# Restart on the same data directory (PLAT-01): state is kept, /readyz is 200
+# and no migration re-runs, so no pre-migration snapshot is taken (D-83).
+LOG="${WORK}/restart.log"
+(cd "${WORK}" && BAYPLAN_DATA_DIR="${DATA}" exec "${BIN}" serve --listen "127.0.0.1:${PORT}") >"${LOG}" 2>&1 &
+PID=$!
+up=""
+for _ in $(seq 1 100); do
+  if curl -fsS "${BASE}/readyz" -o "${WORK}/readyz2.txt" 2>/dev/null; then
+    up=1
+    break
+  fi
+  kill -0 "${PID}" 2>/dev/null || fail "server exited during the restart"
+  sleep 0.1
+done
+[ -n "${up}" ] || fail "/readyz did not answer 200 within 10 seconds after the restart"
+[ "$(cat "${WORK}/readyz2.txt")" = "ready" ] || fail "/readyz body after the restart is not exactly 'ready'"
+grep -q '"database ready"' "${LOG}" || fail "restart did not log 'database ready'"
+if grep -q '"snapshot"' "${LOG}"; then
+  fail "the restart on the same data directory re-ran a migration (a snapshot was logged)"
+fi
+[ ! -d "${DATA}/backups" ] || [ -z "$(ls -A "${DATA}/backups")" ] || fail "the restart left a snapshot in ${DATA}/backups"
 
 echo "SMOKE OK"
