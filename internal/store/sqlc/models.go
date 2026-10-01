@@ -35,6 +35,16 @@ type AuditLog struct {
 	Hmac       []byte
 }
 
+type Environment struct {
+	ID         string
+	Kind       string
+	Name       string
+	SocketPath string
+	Enabled    int64
+	CreatedAt  int64
+	UpdatedAt  int64
+}
+
 type Role struct {
 	ID      string
 	Name    string

@@ -112,6 +112,7 @@ type Fake struct {
 	mu       sync.Mutex
 	cfg      FakeConfig
 	requests []string
+	srv      *httptest.Server // nil while the daemon is stopped
 }
 
 var versionPrefix = regexp.MustCompile(`^/v(\d+)\.(\d+)(/.*)$`)
@@ -135,15 +136,63 @@ func NewFake(t testing.TB, cfg FakeConfig) *Fake {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults()}
+	if err := f.listen(); err != nil {
+		t.Fatalf("listen on the fake daemon socket: %v", err)
+	}
+	t.Cleanup(f.Stop)
+	return f
+}
+
+// listen starts serving on the fake's socket path.
+func (f *Fake) listen() error {
 	ln, err := net.Listen("unix", f.path)
 	if err != nil {
-		t.Fatalf("listen on the fake daemon socket: %v", err)
+		return err
 	}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(f.serve))
 	srv.Listener = ln
 	srv.Start()
-	t.Cleanup(srv.Close)
-	return f
+	f.mu.Lock()
+	f.srv = srv
+	f.mu.Unlock()
+	return nil
+}
+
+// Stop takes the daemon down: the socket is closed and removed, so a client
+// sees "no such file" or "connection refused" as it would with a stopped
+// engine. It is safe to call twice. Restart brings the daemon back on the same
+// path, with whatever configuration it has then.
+func (f *Fake) Stop() {
+	f.mu.Lock()
+	srv := f.srv
+	f.srv = nil
+	f.mu.Unlock()
+	if srv != nil {
+		srv.Close()
+	}
+}
+
+// Restart starts the daemon again on the same socket path after Stop. It does
+// nothing if the daemon is already running.
+func (f *Fake) Restart(t testing.TB) {
+	t.Helper()
+	f.mu.Lock()
+	running := f.srv != nil
+	f.mu.Unlock()
+	if running {
+		return
+	}
+	if err := f.listen(); err != nil {
+		t.Fatalf("restart the fake daemon: %v", err)
+	}
+}
+
+// SetAPIVersion changes the maximum API version the daemon reports from now
+// on, as an engine upgraded while it was stopped.
+func (f *Fake) SetAPIVersion(v string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cfg.APIVersion = v
 }
 
 // SocketPath is the path of the fake's unix socket.
