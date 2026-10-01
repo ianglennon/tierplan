@@ -102,11 +102,17 @@ var settings = []setting{
 	{env: "BAYPLAN_SESSION_IDLE_TIMEOUT", flag: "session-idle-timeout", def: "12h", desc: "idle time after which a session ends",
 		apply: func(c *Config, raw string) (err error) { c.SessionIdleTimeout, err = parseDuration(raw); return err }},
 	{env: "BAYPLAN_SESSION_REMEMBER_LIFETIME", flag: "session-remember-lifetime", def: "720h", desc: "lifetime of a remember-me session",
-		apply: func(c *Config, raw string) (err error) { c.SessionRememberLifetime, err = parseDuration(raw); return err }},
+		apply: func(c *Config, raw string) (err error) {
+			c.SessionRememberLifetime, err = parseDuration(raw)
+			return err
+		}},
 	{env: "BAYPLAN_AUDIT_RETENTION_DAYS", flag: "audit-retention-days", def: "365", desc: "days to keep audit entries, 0 for forever",
 		apply: func(c *Config, raw string) (err error) { c.AuditRetentionDays, err = parseInt(raw, 0); return err }},
 	{env: "BAYPLAN_SKIP_PRE_MIGRATE_BACKUP", flag: "skip-pre-migrate-backup", def: "false", desc: "do not back up the database before a migration",
-		apply: func(c *Config, raw string) (err error) { c.SkipPreMigrateBackup, err = strconv.ParseBool(raw); return err }},
+		apply: func(c *Config, raw string) (err error) {
+			c.SkipPreMigrateBackup, err = strconv.ParseBool(raw)
+			return err
+		}},
 	{env: "BAYPLAN_TLS_CERT_FILE", flag: "tls-cert-file", desc: "path to a TLS certificate (PEM)",
 		apply: func(c *Config, raw string) error { c.TLSCertFile = raw; return nil }},
 	{env: "BAYPLAN_TLS_KEY_FILE", flag: "tls-key-file", desc: "path to the TLS private key (PEM)",

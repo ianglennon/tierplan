@@ -35,7 +35,8 @@ fail() {
 [ -x bin/bayplan ] || fail "bin/bayplan missing; run make build first"
 
 BIN="$(pwd)/bin/bayplan"
-(cd "${WORK}" && exec "${BIN}" serve --listen "127.0.0.1:${PORT}") >"${LOG}" 2>&1 &
+DATA="${WORK}/data"
+(cd "${WORK}" && BAYPLAN_DATA_DIR="${DATA}" exec "${BIN}" serve --listen "127.0.0.1:${PORT}") >"${LOG}" 2>&1 &
 PID=$!
 
 up=""
@@ -65,5 +66,34 @@ code="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE}/docs")"
 
 curl -sSI "${BASE}/api/version" | grep -qi '^content-security-policy:' \
   || fail "Content-Security-Policy header missing"
+
+# Health endpoints (D-86): fixed bodies, no version details.
+code="$(curl -sS -o "${WORK}/healthz.txt" -w '%{http_code}' "${BASE}/healthz")"
+[ "${code}" = "200" ] || fail "/healthz returned ${code}, want 200"
+[ "$(cat "${WORK}/healthz.txt")" = "ok" ] || fail "/healthz body is not exactly 'ok'"
+
+code="$(curl -sS -o "${WORK}/readyz.txt" -w '%{http_code}' "${BASE}/readyz")"
+[ "${code}" = "200" ] || fail "/readyz returned ${code}, want 200"
+[ "$(cat "${WORK}/readyz.txt")" = "ready" ] || fail "/readyz body is not exactly 'ready'"
+
+[ -d "${DATA}" ] || fail "data directory ${DATA} was not created"
+
+# The healthcheck subcommand, as the container HEALTHCHECK runs it.
+BAYPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck \
+  || fail "bayplan healthcheck exited non-zero while the server is up"
+
+# A bad setting stops startup and names the env var (D-11).
+if BAYPLAN_PUBLIC_URL=nope BAYPLAN_DATA_DIR="${WORK}/bad" "${BIN}" serve --listen "127.0.0.1:$((PORT + 1))" >"${WORK}/bad.log" 2>&1; then
+  fail "serve accepted BAYPLAN_PUBLIC_URL=nope"
+fi
+grep -q 'BAYPLAN_PUBLIC_URL' "${WORK}/bad.log" || fail "startup error does not name BAYPLAN_PUBLIC_URL"
+
+# After the server stops, the healthcheck must fail.
+kill "${PID}"
+wait "${PID}" 2>/dev/null || true
+PID=""
+if BAYPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck 2>/dev/null; then
+  fail "bayplan healthcheck exited 0 after the server stopped"
+fi
 
 echo "SMOKE OK"

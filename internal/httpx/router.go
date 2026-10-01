@@ -41,6 +41,10 @@ type RouteRecord struct {
 	Method string
 	Path   string
 	Req    rbac.Requirement
+	// Exempt marks a plain route mounted with Router.Exempt. It has no
+	// Requirement and is not in the OpenAPI contract. The router-walk test
+	// allows only the D-47 exempt paths.
+	Exempt bool
 }
 
 // Options configures New.
@@ -100,6 +104,18 @@ func Register[I, O any](r *Router, op huma.Operation, req rbac.Requirement, h fu
 	r.mu.Unlock()
 
 	huma.Register(r.api, op, h)
+}
+
+// Exempt mounts a plain chi route that is outside the policy seam and the
+// OpenAPI contract: the health probes (D-47, D-86). It is recorded in the route
+// registry flagged Exempt so the router-walk test can check it against the
+// short allowed list. It still passes through the security-header middleware.
+func (r *Router) Exempt(method, path string, h http.HandlerFunc) {
+	r.mu.Lock()
+	r.routes = append(r.routes, RouteRecord{Method: method, Path: path, Exempt: true})
+	r.mu.Unlock()
+
+	r.mux.MethodFunc(method, path, h)
 }
 
 // policy is the per-operation gate. Until the policy engine evaluates real
