@@ -61,10 +61,11 @@ type Server struct {
 // NewRouter wires every operation. It takes plain dependencies so the
 // `openapi` subcommand can build the same handlers without a database or a
 // socket.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps) *httpx.Router {
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps) *httpx.Router {
 	r := httpx.New(opts)
 	api.RegisterSystem(r, sys)
 	api.RegisterSetup(r, setup)
+	api.RegisterAuth(r, authDeps)
 	return r
 }
 
@@ -175,7 +176,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		Sessions: sessions,
 		SPA:      spa,
 		Log:      log,
-	})
+	}, api.AuthDeps{}) // wired in the next commit
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		_ = st.Close()

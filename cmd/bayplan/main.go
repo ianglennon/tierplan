@@ -92,7 +92,7 @@ func loadConfig(cmd *cobra.Command) (config.Config, error) {
 // writeOpenAPI needs no configuration, data directory or socket: it builds the
 // router with no dependencies.
 func writeOpenAPI(w io.Writer) error {
-	doc, err := json.MarshalIndent(server.NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}).API().OpenAPI(), "", "  ")
+	doc, err := json.MarshalIndent(server.NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}).API().OpenAPI(), "", "  ")
 	if err != nil {
 		return err
 	}
