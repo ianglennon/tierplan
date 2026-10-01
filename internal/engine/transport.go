@@ -9,7 +9,10 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"os"
+	"strings"
 )
 
 // DefaultSocketPath is where Docker listens unless DOCKER_HOST says otherwise.
@@ -36,18 +39,38 @@ type LocalSocketTransport struct {
 }
 
 // DialContext implements Transport.
-func (t LocalSocketTransport) DialContext(_ context.Context, _, _ string) (net.Conn, error) {
-	return nil, errors.New("not implemented")
+func (t LocalSocketTransport) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", t.Path)
+	if err != nil {
+		// The dial error already names the path; wrapping adds the transport
+		// so a log line says what was being reached.
+		return nil, fmt.Errorf("dial the Docker socket %s: %w", t.Path, err)
+	}
+	return conn, nil
 }
 
 // Describe implements Transport.
-func (t LocalSocketTransport) Describe() string { return "" }
+func (t LocalSocketTransport) Describe() string { return "unix://" + t.Path }
 
 // ParseDockerHost turns a DOCKER_HOST value into a socket path. Empty means
 // the default socket. Only unix:// is accepted (D-21, D-22).
 func ParseDockerHost(raw string) (string, error) {
-	return "", errors.New("not implemented")
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultSocketPath, nil
+	}
+	path, ok := strings.CutPrefix(raw, "unix://")
+	if !ok || !strings.HasPrefix(path, "/") {
+		return "", fmt.Errorf("%w: %q is not a unix socket path; DOCKER_HOST may only be unix:///path/to/docker.sock "+
+			"(Bayplan reaches Docker through a local socket or an agent, never over tcp:// or ssh://, D-21)",
+			ErrUnsupportedDockerHost, raw)
+	}
+	return path, nil
 }
 
 // SocketExists reports whether path exists and is a unix socket.
-func SocketExists(path string) bool { return false }
+func SocketExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode()&os.ModeSocket != 0
+}
