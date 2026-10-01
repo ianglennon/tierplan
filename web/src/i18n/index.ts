@@ -4,6 +4,7 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
+import auth from "./en/auth.json";
 import common from "./en/common.json";
 import setup from "./en/setup.json";
 
@@ -15,6 +16,7 @@ import setup from "./en/setup.json";
 // the i18next _one and _other suffixes.
 export const resources = {
   en: {
+    auth,
     common,
     setup,
   },
