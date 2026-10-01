@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -66,6 +67,10 @@ type authFixture struct {
 	acctVault *vault.Vault
 	// localHost feeds GET /api/local-host (plan 15).
 	localHost api.LocalHostDeps
+	// envSvc, when set, is the environment registry behind the environment
+	// routes and the {envId} resolver (plan 16). Without it, no environment
+	// exists and the environment routes are never called.
+	envSvc *envs.Service
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -101,20 +106,25 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	log := slog.New(slog.NewJSONHandler(f.logs, nil))
 	login := auth.NewLogin(f.st, f.sess, f.aud, 5, 30*time.Minute, f.limiter, log, f.clk.now)
 	checker := rbac.NewChecker(f.st)
-	r := httpx.New(httpx.Options{
+	opts := httpx.Options{
 		Checker:       checker,
 		Authenticator: auth.NewAuthenticator(f.st, authIdle, f.clk.now),
 		Auditor:       f.aud,
 		MutationGuard: auth.NewCSRFGuard(f.sess),
 		PublicOrigin:  f.inst.PublicOrigin,
 		Logger:        log,
-	})
+	}
+	if f.envSvc != nil {
+		opts.EnvResolver = f.envSvc
+	}
+	r := httpx.New(opts)
 	api.RegisterAuth(r, api.AuthDeps{Login: login, Sessions: f.sess, Instance: f.inst, Store: f.st, Checker: checker, Log: log})
 	api.RegisterAccount(r, api.AccountDeps{
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
 		DataDir: f.dataInfo, Vault: f.acctVault, Log: log,
 	})
 	api.RegisterLocalHost(r, f.localHost)
+	api.RegisterEnvironments(r, api.EnvironmentsDeps{Envs: f.envSvc, Checker: checker, Log: log})
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
 	}

@@ -30,6 +30,16 @@ type LocalHostDeps struct {
 	ProbeTimeout time.Duration
 	// Log receives probe failures. Nil means slog.Default().
 	Log *slog.Logger
+	// Envs says whether the local host is already an environment and what
+	// Bayplan's own container is. Nil means neither is known.
+	Envs LocalHostEnvs
+}
+
+// LocalHostEnvs is what GET /api/local-host needs from the environment
+// registry. *envs.Service implements it.
+type LocalHostEnvs interface {
+	HasLocal(ctx context.Context) (bool, error)
+	SelfContainerID() string
 }
 
 // LocalHostBody says whether this server's own Docker socket exists, and what
