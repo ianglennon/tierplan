@@ -6,6 +6,7 @@ import { initReactI18next } from "react-i18next";
 
 import auth from "./en/auth.json";
 import common from "./en/common.json";
+import env from "./en/env.json";
 import setup from "./en/setup.json";
 import shell from "./en/shell.json";
 
@@ -19,6 +20,7 @@ export const resources = {
   en: {
     auth,
     common,
+    env,
     setup,
     shell,
   },
