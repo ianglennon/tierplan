@@ -62,12 +62,14 @@ function stubApi(opts: {
 }
 
 async function renderWizard() {
-  // The wizard is the root's own component; "/" is where it navigates to.
+  // The wizard is the root's own component; "/" is where a finished setup
+  // would otherwise land and "/welcome" is where it navigates to (step 4).
   const root = createRootRoute({ component: SetupWizard });
   const home = createRoute({ getParentRoute: () => root, path: "/" });
   const setup = createRoute({ getParentRoute: () => root, path: "/setup" });
+  const welcome = createRoute({ getParentRoute: () => root, path: "/welcome" });
   const router = createRouter({
-    routeTree: root.addChildren([home, setup]),
+    routeTree: root.addChildren([home, setup, welcome]),
     history: createMemoryHistory({ initialEntries: ["/setup"] }),
   });
   const client = new QueryClient();
@@ -240,7 +242,7 @@ describe("SetupWizard", () => {
     expect(screen.getByRole("img", { name: "Locked" })).toBeTruthy();
   });
 
-  it("creates the admin in one request, stores nothing in the browser and goes home", async () => {
+  it("creates the admin in one request, stores nothing in the browser and goes to step 4", async () => {
     const setItem = vi.spyOn(Storage.prototype, "setItem");
     stubApi({});
     const { router } = await renderWizard();
@@ -250,7 +252,7 @@ describe("SetupWizard", () => {
     type("Instance name", "  Home lab ");
     type("Public URL", "https://bayplan.example.com");
     click("Create admin account");
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/welcome"));
 
     const complete = calls.filter((c) => c.url === "/api/setup/complete");
     expect(complete).toEqual([
@@ -265,7 +267,7 @@ describe("SetupWizard", () => {
         },
       },
     ]);
-    expect(router.state.location.pathname).toBe("/");
+    expect(router.state.location.pathname).toBe("/welcome");
     expect(router.state.location.search).toEqual({});
     expect(setItem).not.toHaveBeenCalled();
     expect(window.localStorage.length).toBe(0);
@@ -364,6 +366,6 @@ describe("SetupWizard", () => {
         publicUrlLocked: false,
       }),
     );
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/welcome"));
   });
 });

@@ -242,7 +242,10 @@ export function SetupWizard() {
         // The browser now holds the session cookie. The instance no longer
         // needs setup, so refresh the query before leaving.
         await queryClient.invalidateQueries({ queryKey: ["instance"] });
-        await navigate({ to: "/" });
+        // Step 4 (the local Docker host) is its own signed-in page (UI-SPEC
+        // interpretation 1). A session started by this request has no cached
+        // /api/me answer yet, so the route loads it.
+        await navigate({ to: "/welcome" });
         return;
       }
       if (response.status === 409) {

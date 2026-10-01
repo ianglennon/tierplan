@@ -45,6 +45,7 @@ function stubApi() {
         meStatus = 401;
         return new Response(null, { status: 204 });
       }
+      if (path === "/api/environments") return Response.json({ items: [] });
       if (path === "/api/version") {
         return Response.json({
           commit: "",
