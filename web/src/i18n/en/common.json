@@ -1,0 +1,29 @@
+{
+  "common": {
+    "brand": {
+      "wordmark": "Bayplan"
+    },
+    "versionFooter": {
+      "label": "Bayplan {{display}}",
+      "source": "Source code",
+      "sourceAria": "Source code (opens in a new tab)",
+      "unavailable": "Version unavailable"
+    },
+    "plainHttp": {
+      "warning": "This connection isn't encrypted. Passwords you type here can be read on the network."
+    },
+    "errors": {
+      "unreachable": "Can't reach Bayplan. Check your connection and try again."
+    },
+    "notFound": {
+      "heading": "Page not found",
+      "body": "That page doesn't exist or has moved.",
+      "action": "Go to the dashboard"
+    },
+    "noPermission": {
+      "heading": "You don't have permission to view this page",
+      "body": "Ask an admin for access."
+    },
+    "mutationFailed": "Something went wrong. Try again."
+  }
+}

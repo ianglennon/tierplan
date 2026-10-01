@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { api } from "@/api/client";
 
@@ -18,6 +19,7 @@ const linkClass =
 // VersionFooter shows the running version, linked to the exact source tree it
 // was built from, plus a link to the source root (AGPL section 13, PLAT-05).
 export function VersionFooter() {
+  const { t } = useTranslation();
   const [version, setVersion] = useState<Version | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -39,7 +41,7 @@ export function VersionFooter() {
   }, []);
 
   const footerClass = "text-xs text-muted-foreground";
-  if (failed) return <footer className={footerClass}>Version unavailable</footer>;
+  if (failed) return <footer className={footerClass}>{t("common.versionFooter.unavailable")}</footer>;
   if (!version) return <footer className={footerClass} aria-busy="true">&nbsp;</footer>;
 
   return (
@@ -50,17 +52,17 @@ export function VersionFooter() {
         rel="noopener noreferrer"
         className={linkClass}
       >
-        Bayplan {version.display}
+        {t("common.versionFooter.label", { display: version.display })}
       </a>
       {" · "}
       <a
         href={version.sourceUrl}
         target="_blank"
         rel="noopener noreferrer"
-        aria-label="Source code (opens in a new tab)"
+        aria-label={t("common.versionFooter.sourceAria")}
         className={linkClass}
       >
-        Source code
+        {t("common.versionFooter.source")}
       </a>
     </footer>
   );

@@ -7,16 +7,14 @@ import { createRoot } from "react-dom/client";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./index.css";
-import { VersionFooter } from "@/components/version-footer";
+import { AuthLayout } from "@/components/auth-layout";
+import i18n from "@/i18n";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root element");
 
 createRoot(root).render(
   <StrictMode>
-    <main>
-      <h1>Bayplan</h1>
-      <VersionFooter />
-    </main>
+    <AuthLayout title={i18n.t("common.brand.wordmark")} />
   </StrictMode>,
 );
