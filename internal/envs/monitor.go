@@ -9,7 +9,11 @@ package envs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"math/rand/v2"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -21,61 +25,343 @@ type State string
 
 // States.
 const (
-	StateUnknown     State = "unknown"
-	StateOnline      State = "online"
-	StateOffline     State = "offline"
+	// StateUnknown is an environment whose monitor has not probed yet, or is
+	// not running.
+	StateUnknown State = "unknown"
+	// StateOnline is an environment whose engine answered and is supported.
+	StateOnline State = "online"
+	// StateOffline is an environment whose engine did not answer.
+	StateOffline State = "offline"
+	// StateUnsupported is an environment whose engine answered but is not one
+	// Bayplan manages (too old, Podman, rootless, Docker Desktop).
 	StateUnsupported State = "unsupported"
 )
 
 // Status is the monitor's view of one environment.
 type Status struct {
-	State       State
-	Since       time.Time
-	Reason      string
+	State State
+	// Since is when the environment entered State. For an offline environment
+	// it is the first failed probe, not the latest, so the UI can say
+	// "Offline since 14:03" (D-26).
+	Since time.Time
+	// Reason is the dockerx reason code for offline and unsupported states.
+	Reason string
+	// LastAttempt is when the most recent probe finished.
 	LastAttempt time.Time
-	Probe       dockerx.ProbeResult
+	// Probe is the result of the most recent probe.
+	Probe dockerx.ProbeResult
 }
 
-// Errors from Monitor.Client.
+// Errors from Monitor.Client. A handler that gets one answers with the
+// full-page offline or unsupported state instead of an error.
 var (
-	ErrOffline     = errors.New("envs: the environment is offline")
-	ErrUnsupported = errors.New("envs: the environment's engine is not supported")
+	ErrOffline      = errors.New("envs: the environment is offline")
+	ErrUnsupported  = errors.New("envs: the environment's engine is not supported")
+	errNotMonitored = errors.New("envs: the environment is not monitored")
 )
 
-var errNotImplemented = errors.New("envs: not implemented")
+// Probe timing (D-26). While an engine answers it is probed every 30s with a
+// 5s timeout; after a failure the retry delay starts at 1s, doubles, and is
+// capped at 30s, with jitter so several environments do not retry in step.
+const (
+	defaultInterval     = 30 * time.Second
+	defaultProbeTimeout = 5 * time.Second
+	backoffStart        = time.Second
+	backoffMax          = 30 * time.Second
+)
 
-// Monitor probes each started environment.
+// entry is one monitored environment.
+type entry struct {
+	client *dockerx.Client
+	cancel context.CancelFunc
+	done   chan struct{}
+	// kick asks the loop for an immediate probe. Capacity one: a second kick
+	// while one is pending adds nothing.
+	kick chan struct{}
+
+	mu sync.RWMutex
+	st Status
+}
+
+// Monitor probes each started environment from one goroutine per environment.
+// It is safe for concurrent use.
 type Monitor struct {
+	log   *slog.Logger
+	now   func() time.Time
+	sleep func(context.Context, time.Duration) error
+
 	// interval and probeTimeout are the online probe period and the per-probe
-	// timeout; tests shorten them.
+	// timeout. They are fields so tests can shorten them.
 	interval, probeTimeout time.Duration
+
+	mu      sync.Mutex
+	entries map[string]*entry
+	wg      sync.WaitGroup
+	live    atomic.Int64
 }
 
-// NewMonitor returns a Monitor.
+// NewMonitor returns an empty Monitor. now and sleep default to the real
+// clock; tests inject them to observe backoff without waiting. sleep must
+// return early with the context's error when the context ends.
 func NewMonitor(log *slog.Logger, now func() time.Time, sleep func(context.Context, time.Duration) error) *Monitor {
-	return &Monitor{interval: 30 * time.Second, probeTimeout: 5 * time.Second}
+	if log == nil {
+		log = slog.Default()
+	}
+	if now == nil {
+		now = time.Now
+	}
+	if sleep == nil {
+		sleep = realSleep
+	}
+	return &Monitor{
+		log: log, now: now, sleep: sleep,
+		interval: defaultInterval, probeTimeout: defaultProbeTimeout,
+		entries: map[string]*entry{},
+	}
 }
 
-// Start begins monitoring envID.
+func realSleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// Start begins monitoring envID through t, with its first probe at once. The
+// loop ends when ctx ends or Stop is called. Starting an environment that is
+// already monitored does nothing, so there is exactly one loop per environment.
 func (m *Monitor) Start(ctx context.Context, envID string, t engine.Transport) error {
-	return errNotImplemented
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if old, ok := m.entries[envID]; ok {
+		select {
+		case <-old.done:
+			// Its context ended and the loop exited; start a fresh one.
+			_ = old.client.Close()
+			delete(m.entries, envID)
+		default:
+			return nil
+		}
+	}
+	cli, err := dockerx.New(t)
+	if err != nil {
+		return fmt.Errorf("monitor %s: %w", envID, err)
+	}
+	lctx, cancel := context.WithCancel(ctx)
+	e := &entry{
+		client: cli, cancel: cancel,
+		done: make(chan struct{}),
+		kick: make(chan struct{}, 1),
+		st:   Status{State: StateUnknown},
+	}
+	m.entries[envID] = e
+	m.live.Add(1)
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		defer m.live.Add(-1)
+		defer close(e.done)
+		m.run(lctx, envID, e)
+	}()
+	return nil
 }
 
-// Stop ends monitoring envID.
-func (m *Monitor) Stop(envID string) {}
+// Stop ends monitoring envID and waits for its loop to exit. It does nothing
+// for an environment that is not monitored.
+func (m *Monitor) Stop(envID string) {
+	m.mu.Lock()
+	e, ok := m.entries[envID]
+	delete(m.entries, envID)
+	m.mu.Unlock()
+	if ok {
+		m.stop(e)
+	}
+}
 
-// StopAll ends every monitor.
-func (m *Monitor) StopAll() {}
+// StopAll ends every monitor and waits for them. The server calls it before it
+// closes the database.
+func (m *Monitor) StopAll() {
+	m.mu.Lock()
+	all := make([]*entry, 0, len(m.entries))
+	for id, e := range m.entries {
+		all = append(all, e)
+		delete(m.entries, id)
+	}
+	m.mu.Unlock()
+	for _, e := range all {
+		m.stop(e)
+	}
+}
 
-// Status returns the current status of envID.
-func (m *Monitor) Status(envID string) Status { return Status{} }
+func (m *Monitor) stop(e *entry) {
+	e.cancel()
+	<-e.done
+	_ = e.client.Close()
+}
 
-// Kick asks for an immediate probe.
-func (m *Monitor) Kick(envID string) {}
+func (m *Monitor) entry(envID string) (*entry, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.entries[envID]
+	return e, ok
+}
 
-// Client returns the environment's Docker client when it is online.
+// Status returns the current status of envID: StateUnknown until the first
+// probe finishes, and for an environment that is not monitored.
+func (m *Monitor) Status(envID string) Status {
+	e, ok := m.entry(envID)
+	if !ok {
+		return Status{State: StateUnknown}
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.st
+}
+
+// Kick asks for an immediate probe of envID, for "Retry now". It returns at
+// once and does nothing for an environment that is not monitored.
+func (m *Monitor) Kick(envID string) {
+	e, ok := m.entry(envID)
+	if !ok {
+		return
+	}
+	select {
+	case e.kick <- struct{}{}:
+	default: // one is already pending
+	}
+}
+
+// Client returns the Docker client of envID together with its status when the
+// environment is online. For any other state it returns ErrOffline or
+// ErrUnsupported with the status, so a handler can show the full-page state;
+// for an unknown state (no probe finished yet) it returns ErrOffline too.
 func (m *Monitor) Client(envID string) (*dockerx.Client, Status, error) {
-	return nil, Status{}, errNotImplemented
+	e, ok := m.entry(envID)
+	if !ok {
+		return nil, Status{State: StateUnknown}, errNotMonitored
+	}
+	e.mu.RLock()
+	st := e.st
+	e.mu.RUnlock()
+	switch st.State {
+	case StateOnline:
+		return e.client, st, nil
+	case StateUnsupported:
+		return nil, st, ErrUnsupported
+	default:
+		return nil, st, ErrOffline
+	}
 }
 
-func (m *Monitor) loopCount() int { return 0 }
+// loopCount is the number of monitor goroutines running, for tests.
+func (m *Monitor) loopCount() int { return int(m.live.Load()) }
+
+// run is the one loop of an environment: probe, record, wait, repeat.
+func (m *Monitor) run(ctx context.Context, envID string, e *entry) {
+	failures := 0
+	for {
+		pctx, cancel := context.WithTimeout(ctx, m.probeTimeout)
+		res, err := e.client.Probe(pctx)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		reached := m.record(envID, e, res, err)
+		var wait time.Duration
+		if reached {
+			failures = 0
+			wait = m.interval
+		} else {
+			failures++
+			wait = backoff(failures)
+		}
+		if !m.wait(ctx, e, wait) {
+			return
+		}
+	}
+}
+
+// wait sleeps for d, or less when the environment is kicked. It reports false
+// when ctx ended, which ends the loop.
+func (m *Monitor) wait(ctx context.Context, e *entry, d time.Duration) bool {
+	wctx, cancel := context.WithCancel(ctx)
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		select {
+		case <-e.kick:
+			cancel()
+		case <-wctx.Done():
+		}
+	}()
+	_ = m.sleep(wctx, d)
+	cancel()
+	<-watched
+	return ctx.Err() == nil
+}
+
+// backoff is the retry delay after the nth consecutive failure: 1s, 2s, 4s and
+// so on up to 30s, then jittered into the upper half of that step so the delay
+// never exceeds the cap.
+func backoff(failures int) time.Duration {
+	step := backoffStart
+	for i := 1; i < failures && step < backoffMax; i++ {
+		step *= 2
+	}
+	step = min(step, backoffMax)
+	half := step / 2
+	return half + time.Duration(rand.Int64N(int64(half)+1)) //nolint:gosec // jitter, not a security decision
+}
+
+// statusFromProbe turns one probe result into a Status stamped now, and
+// reports whether the engine answered (online or unsupported). Since is now;
+// the monitor keeps the earlier one while the state does not change.
+func statusFromProbe(res dockerx.ProbeResult, probeErr error, now time.Time) (st Status, reached bool) {
+	st = Status{LastAttempt: now, Since: now, Probe: res}
+	switch {
+	case probeErr != nil || !res.Reachable:
+		st.State = StateOffline
+		st.Reason = res.Reason
+		if st.Reason == "" {
+			st.Reason = dockerx.ReasonUnreachable
+		}
+	case !res.Supported:
+		st.State, st.Reason, reached = StateUnsupported, res.Reason, true
+	default:
+		st.State, reached = StateOnline, true
+	}
+	return st, reached
+}
+
+// record stores the result of a probe and reports whether the engine answered
+// (online or unsupported), as opposed to a failure that starts backoff.
+func (m *Monitor) record(envID string, e *entry, res dockerx.ProbeResult, probeErr error) bool {
+	now := m.now()
+	st, reached := statusFromProbe(res, probeErr, now)
+
+	e.mu.Lock()
+	prev := e.st
+	if prev.State == st.State {
+		st.Since = prev.Since // the state began at the first probe that showed it
+	} else {
+		st.Since = now
+	}
+	e.st = st
+	e.mu.Unlock()
+
+	if prev.State != st.State {
+		attrs := []any{"environment", envID, "from", prev.State, "to", st.State}
+		if st.Reason != "" {
+			attrs = append(attrs, "reason", st.Reason)
+		}
+		if res.Detail != "" {
+			attrs = append(attrs, "detail", res.Detail)
+		}
+		m.log.Info("environment status changed", attrs...)
+	}
+	return reached
+}
