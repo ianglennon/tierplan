@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -58,6 +59,11 @@ type authFixture struct {
 	clk     *fakeClock
 	logs    *bytes.Buffer
 	limiter *auth.IPLimiter
+	// dataInfo and acctVault feed the account routes (plan 14). A test sets them
+	// before calling build; the defaults are a persisted directory and the
+	// environment-keyed vault.
+	dataInfo  datadir.Info
+	acctVault *vault.Vault
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -69,6 +75,8 @@ func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 		t.Fatal(err)
 	}
 	f.v = v
+	f.acctVault = v
+	f.dataInfo = datadir.Info{Path: t.TempDir(), Persisted: true}
 	f.aud = audit.NewWriter(f.st, v, log, f.clk.now)
 	if err := rbac.SeedAdminRole(context.Background(), f.st); err != nil {
 		t.Fatal(err)
@@ -100,6 +108,10 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Logger:        log,
 	})
 	api.RegisterAuth(r, api.AuthDeps{Login: login, Sessions: f.sess, Instance: f.inst, Store: f.st, Checker: checker, Log: log})
+	api.RegisterAccount(r, api.AccountDeps{
+		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
+		DataDir: f.dataInfo, Vault: f.acctVault, Log: log,
+	})
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
 	}
