@@ -11,6 +11,10 @@ interface Version {
   sourceTreeUrl: string;
 }
 
+// Links use the accent ink with a 2px focus ring (UI-SPEC Color, accent use 3 and 4).
+const linkClass =
+  "text-accent-ink underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm";
+
 // VersionFooter shows the running version, linked to the exact source tree it
 // was built from, plus a link to the source root (AGPL section 13, PLAT-05).
 export function VersionFooter() {
@@ -34,12 +38,18 @@ export function VersionFooter() {
     };
   }, []);
 
-  if (failed) return <footer>Version unavailable</footer>;
-  if (!version) return <footer aria-busy="true">&nbsp;</footer>;
+  const footerClass = "text-xs text-muted-foreground";
+  if (failed) return <footer className={footerClass}>Version unavailable</footer>;
+  if (!version) return <footer className={footerClass} aria-busy="true">&nbsp;</footer>;
 
   return (
-    <footer>
-      <a href={version.sourceTreeUrl} target="_blank" rel="noopener noreferrer">
+    <footer className={footerClass}>
+      <a
+        href={version.sourceTreeUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={linkClass}
+      >
         Bayplan {version.display}
       </a>
       {" · "}
@@ -48,6 +58,7 @@ export function VersionFooter() {
         target="_blank"
         rel="noopener noreferrer"
         aria-label="Source code (opens in a new tab)"
+        className={linkClass}
       >
         Source code
       </a>
