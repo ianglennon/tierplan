@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,8 +28,11 @@ import (
 	"time"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -82,6 +86,71 @@ type FakeConfig struct {
 	SwarmControl bool
 	// FailInfo makes /info answer 500, for the partial-failure path.
 	FailInfo bool
+
+	// Containers, Images, Volumes and Networks are what the list endpoints
+	// answer. Nil means an empty engine: the fake answers an empty list, never
+	// an error.
+	Containers []FakeContainer
+	Images     []FakeImage
+	Volumes    []FakeVolume
+	Networks   []FakeNetwork
+	// Nodes and Services are how many swarm nodes and services /nodes and
+	// /services list. A fake that is not a swarm manager answers both with the
+	// 503 a real worker gives, so a client that asks anyway fails loudly.
+	Nodes, Services int
+	// ListDelay is how long /containers/json takes to answer, so a test can
+	// make concurrent callers overlap.
+	ListDelay time.Duration
+}
+
+// FakeContainer is one entry of /containers/json. Labels and Mounts exist so a
+// test can prove they never reach a Bayplan response.
+type FakeContainer struct {
+	ID      string
+	Names   []string
+	Image   string
+	State   string
+	Status  string
+	Created int64
+	Ports   []FakePort
+	Labels  map[string]string
+	Mounts  []string
+}
+
+// FakePort is one published or exposed container port. IP is empty for a port
+// that is not published.
+type FakePort struct {
+	IP      string
+	Private uint16
+	Public  uint16
+	Type    string
+}
+
+// FakeImage is one entry of /images/json. An untagged image has no RepoTags.
+type FakeImage struct {
+	ID       string
+	RepoTags []string
+	Size     int64
+	Created  int64
+	Labels   map[string]string
+}
+
+// FakeVolume is one entry of /volumes. CreatedAt is RFC 3339, or empty.
+type FakeVolume struct {
+	Name      string
+	Driver    string
+	CreatedAt string
+	Labels    map[string]string
+}
+
+// FakeNetwork is one entry of /networks.
+type FakeNetwork struct {
+	ID      string
+	Name    string
+	Driver  string
+	Scope   string
+	Subnets []string
+	Created time.Time
 }
 
 func (c FakeConfig) withDefaults() FakeConfig {
@@ -313,9 +382,104 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 				ControlAvailable: cfg.SwarmControl,
 			},
 		})
+	case "/containers/json":
+		if cfg.ListDelay > 0 {
+			select {
+			case <-time.After(cfg.ListDelay):
+			case <-r.Context().Done():
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, cfg.containerList(r.URL.Query().Get("all") != ""))
+	case "/images/json":
+		writeJSON(w, http.StatusOK, cfg.imageList())
+	case "/volumes":
+		writeJSON(w, http.StatusOK, cfg.volumeList())
+	case "/networks":
+		writeJSON(w, http.StatusOK, cfg.networkList())
+	case "/nodes":
+		if !cfg.swarmManager() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "This node is not a swarm manager. Use \"docker swarm init\" or \"docker swarm join\" to connect this node to swarm and try again."})
+			return
+		}
+		nodes := make([]swarm.Node, cfg.Nodes)
+		for i := range nodes {
+			nodes[i].ID = fmt.Sprintf("node%02d", i)
+		}
+		writeJSON(w, http.StatusOK, nodes)
+	case "/services":
+		if !cfg.swarmManager() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "This node is not a swarm manager. Use \"docker swarm init\" or \"docker swarm join\" to connect this node to swarm and try again."})
+			return
+		}
+		services := make([]swarm.Service, cfg.Services)
+		for i := range services {
+			services[i].ID = fmt.Sprintf("svc%02d", i)
+		}
+		writeJSON(w, http.StatusOK, services)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "page not found"})
 	}
+}
+
+func (c FakeConfig) swarmManager() bool { return c.SwarmState == "active" && c.SwarmControl }
+
+// containerList is the /containers/json answer. Without all, the way a real
+// daemon behaves, only running containers are listed.
+func (c FakeConfig) containerList(all bool) []container.Summary {
+	out := make([]container.Summary, 0, len(c.Containers))
+	for _, fc := range c.Containers {
+		if !all && fc.State != "running" {
+			continue
+		}
+		s := container.Summary{
+			ID: fc.ID, Names: fc.Names, Image: fc.Image, Created: fc.Created,
+			State: container.ContainerState(fc.State), Status: fc.Status, Labels: fc.Labels,
+		}
+		for _, p := range fc.Ports {
+			ps := container.PortSummary{PrivatePort: p.Private, PublicPort: p.Public, Type: p.Type}
+			if p.IP != "" {
+				ps.IP = netip.MustParseAddr(p.IP)
+			}
+			s.Ports = append(s.Ports, ps)
+		}
+		for _, m := range fc.Mounts {
+			s.Mounts = append(s.Mounts, container.MountPoint{Source: m, Destination: "/mnt"})
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func (c FakeConfig) imageList() []image.Summary {
+	out := make([]image.Summary, 0, len(c.Images))
+	for _, fi := range c.Images {
+		out = append(out, image.Summary{ID: fi.ID, RepoTags: fi.RepoTags, Size: fi.Size, Created: fi.Created, Labels: fi.Labels})
+	}
+	return out
+}
+
+func (c FakeConfig) volumeList() volume.ListResponse {
+	out := volume.ListResponse{Volumes: make([]volume.Volume, 0, len(c.Volumes))}
+	for _, fv := range c.Volumes {
+		out.Volumes = append(out.Volumes, volume.Volume{
+			Name: fv.Name, Driver: fv.Driver, CreatedAt: fv.CreatedAt, Labels: fv.Labels,
+			Mountpoint: "/var/lib/docker/volumes/" + fv.Name + "/_data", Scope: "local",
+		})
+	}
+	return out
+}
+
+func (c FakeConfig) networkList() []network.Summary {
+	out := make([]network.Summary, 0, len(c.Networks))
+	for _, fn := range c.Networks {
+		n := network.Summary{Network: network.Network{ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created}}
+		for _, sub := range fn.Subnets {
+			n.IPAM.Config = append(n.IPAM.Config, network.IPAMConfig{Subnet: netip.MustParsePrefix(sub)})
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

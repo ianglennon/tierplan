@@ -394,7 +394,7 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 
 // allowedMethods is the exported method set of *dockerx.Client. Later plans add
 // their read-only methods here, deliberately and one at a time (D-52).
-var allowedMethods = []string{"Close", "Probe"}
+var allowedMethods = []string{"Close", "Probe", "Snapshot"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 
@@ -431,5 +431,247 @@ func TestNoExportedMethodTakesOrReturnsAMobyType(t *testing.T) {
 				t.Errorf("%s returns a type from %s", m.Name, pkg)
 			}
 		}
+	}
+}
+
+// The resource snapshot (plan 18, ENV-07, D-55, D-56, Pitfall 22). The fake
+// daemon serves the list endpoints, so the real client code runs.
+
+func fakeEngine() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Containers: []dockertest.FakeContainer{
+			{ID: "c3", Names: []string{"/db"}, Image: "postgres:17", State: "exited", Status: "Exited (0) 2 hours ago", Created: 1700000300},
+			{ID: "c1", Names: []string{"/web"}, Image: "nginx:1.27", State: "running", Status: "Up 3 hours", Created: 1700000100,
+				Ports: []dockertest.FakePort{{IP: "0.0.0.0", Private: 80, Public: 8080, Type: "tcp"}}},
+			{ID: "c2", Names: []string{"/cache"}, Image: "redis:8", State: "running", Status: "Up 3 hours", Created: 1700000200,
+				Ports: []dockertest.FakePort{{Private: 6379, Type: "tcp"}}},
+		},
+		Images: []dockertest.FakeImage{
+			{ID: "sha256:aaaa", RepoTags: []string{"nginx:1.27"}, Size: 1000, Created: 1700000000},
+			{ID: "sha256:bbbb", Size: 2000, Created: 1700000500},
+		},
+		Volumes: []dockertest.FakeVolume{{Name: "data", Driver: "local", CreatedAt: "2026-03-04T05:06:07Z"}},
+		Networks: []dockertest.FakeNetwork{
+			{ID: "n4", Name: "none", Driver: "null", Scope: "local"},
+			{ID: "n1", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+			{ID: "n3", Name: "host", Driver: "host", Scope: "local"},
+			{ID: "n2", Name: "app", Driver: "bridge", Scope: "local", Subnets: []string{"172.20.0.0/16", "fd00::/64"}},
+		},
+	}
+}
+
+func snapshot(t *testing.T, cfg dockertest.FakeConfig, swarmManager bool) (dockerx.Snapshot, *dockertest.Fake) {
+	t.Helper()
+	fake := dockertest.NewFake(t, cfg)
+	snap, err := newClient(t, fake).Snapshot(context.Background(), swarmManager)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	return snap, fake
+}
+
+func TestSnapshotCountsEqualTheLengthOfTheListsTheyLinkTo(t *testing.T) {
+	snap, _ := snapshot(t, fakeEngine(), false)
+	c := snap.Counts
+	if c.ContainersRunning != 2 || c.ContainersStopped != 1 || c.Containers != 3 || c.Images != 2 || c.Volumes != 1 || c.Networks != 4 {
+		t.Errorf("counts = %+v", c)
+	}
+	if c.Containers != len(snap.Containers) || c.Images != len(snap.Images) || c.Volumes != len(snap.Volumes) || c.Networks != len(snap.Networks) {
+		t.Errorf("counts %+v do not match the list lengths %d/%d/%d/%d (Pitfall 22)",
+			c, len(snap.Containers), len(snap.Images), len(snap.Volumes), len(snap.Networks))
+	}
+	if c.Nodes != nil || c.Services != nil {
+		t.Errorf("a standalone engine has no node or service counts: %+v", c)
+	}
+	if snap.FetchedAt.IsZero() {
+		t.Error("FetchedAt is zero")
+	}
+}
+
+func TestSnapshotListsStoppedContainersToo(t *testing.T) {
+	// Without all=1 a real daemon omits exited containers; the fake does too.
+	snap, _ := snapshot(t, fakeEngine(), false)
+	found := false
+	for _, c := range snap.Containers {
+		found = found || c.Name == "db"
+	}
+	if !found {
+		t.Errorf("the exited container is missing: %+v", snap.Containers)
+	}
+}
+
+func TestSnapshotRowsAreFormattedForTheLists(t *testing.T) {
+	snap, _ := snapshot(t, fakeEngine(), false)
+
+	byName := map[string]dockerx.ContainerRow{}
+	for _, c := range snap.Containers {
+		byName[c.Name] = c
+	}
+	web, ok := byName["web"]
+	if !ok {
+		t.Fatalf("no container named web (the leading slash must go): %+v", snap.Containers)
+	}
+	if web.State != "running" || web.Status != "Up 3 hours" || web.Image != "nginx:1.27" || web.ID != "c1" {
+		t.Errorf("web = %+v", web)
+	}
+	if want := time.Unix(1700000100, 0).UTC(); !web.Created.Equal(want) || web.Created.Location() != time.UTC {
+		t.Errorf("web.Created = %v, want %v in UTC", web.Created, want)
+	}
+	if !slices.Equal(web.Ports, []string{"0.0.0.0:8080->80/tcp"}) {
+		t.Errorf("web ports = %q", web.Ports)
+	}
+	if !slices.Equal(byName["cache"].Ports, []string{"6379/tcp"}) {
+		t.Errorf("an unpublished port reads %q, want 6379/tcp", byName["cache"].Ports)
+	}
+
+	var untagged, tagged *dockerx.ImageRow
+	for i := range snap.Images {
+		switch snap.Images[i].ID {
+		case "sha256:bbbb":
+			untagged = &snap.Images[i]
+		case "sha256:aaaa":
+			tagged = &snap.Images[i]
+		}
+	}
+	if untagged == nil || tagged == nil {
+		t.Fatalf("images = %+v", snap.Images)
+	}
+	if !slices.Equal(untagged.RepoTags, []string{"<none>"}) {
+		t.Errorf("the untagged image has repoTags %q, want [<none>]", untagged.RepoTags)
+	}
+	if !slices.Equal(tagged.RepoTags, []string{"nginx:1.27"}) || tagged.Size != 1000 {
+		t.Errorf("tagged image = %+v", tagged)
+	}
+
+	if v := snap.Volumes[0]; v.Name != "data" || v.Driver != "local" || !v.Created.Equal(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)) {
+		t.Errorf("volume = %+v", v)
+	}
+
+	nets := map[string]dockerx.NetworkRow{}
+	for _, n := range snap.Networks {
+		nets[n.Name] = n
+	}
+	if n := nets["app"]; !slices.Equal(n.Subnets, []string{"172.20.0.0/16", "fd00::/64"}) || n.Driver != "bridge" || n.Scope != "local" {
+		t.Errorf("app network = %+v", n)
+	}
+	if n := nets["host"]; n.Subnets == nil || len(n.Subnets) != 0 {
+		t.Errorf("a network with no subnet has Subnets %#v, want an empty non-nil slice", n.Subnets)
+	}
+}
+
+func TestSnapshotOfAnEmptyEngineHasEmptyNonNilSlicesAndZeroCounts(t *testing.T) {
+	snap, _ := snapshot(t, dockertest.FakeConfig{}, false)
+	if snap.Containers == nil || snap.Images == nil || snap.Volumes == nil || snap.Networks == nil {
+		t.Errorf("a nil slice would serialise as null: %#v %#v %#v %#v", snap.Containers, snap.Images, snap.Volumes, snap.Networks)
+	}
+	if len(snap.Containers)+len(snap.Images)+len(snap.Volumes)+len(snap.Networks) != 0 {
+		t.Errorf("an empty engine listed something: %+v", snap)
+	}
+	if c := snap.Counts; c.Containers != 0 || c.ContainersRunning != 0 || c.ContainersStopped != 0 || c.Images != 0 || c.Volumes != 0 || c.Networks != 0 {
+		t.Errorf("counts = %+v", c)
+	}
+}
+
+func TestSnapshotOrdersEqualSortKeysByID(t *testing.T) {
+	cfg := dockertest.FakeConfig{
+		Containers: []dockertest.FakeContainer{
+			{ID: "cz", Names: []string{"/web"}, State: "running"},
+			{ID: "ca", Names: []string{"/web"}, State: "running"},
+			{ID: "cm", Names: []string{"/api"}, State: "running"},
+		},
+		Images: []dockertest.FakeImage{
+			{ID: "sha256:2", Created: 100},
+			{ID: "sha256:1", Created: 100},
+			{ID: "sha256:3", Created: 300},
+		},
+		Volumes: []dockertest.FakeVolume{{Name: "b"}, {Name: "a"}},
+		Networks: []dockertest.FakeNetwork{
+			{ID: "n2", Name: "x"}, {ID: "n1", Name: "x"}, {ID: "n0", Name: "w"},
+		},
+	}
+	// The fake lists them in an order that is not the sorted one, so an
+	// ordering that merely mirrored the daemon's would fail.
+	snap, _ := snapshot(t, cfg, false)
+
+	var cs []string
+	for _, c := range snap.Containers {
+		cs = append(cs, c.Name+"/"+c.ID)
+	}
+	if want := []string{"api/cm", "web/ca", "web/cz"}; !slices.Equal(cs, want) {
+		t.Errorf("containers = %v, want %v (name, then ID)", cs, want)
+	}
+	var is []string
+	for _, i := range snap.Images {
+		is = append(is, i.ID)
+	}
+	if want := []string{"sha256:3", "sha256:1", "sha256:2"}; !slices.Equal(is, want) {
+		t.Errorf("images = %v, want %v (newest first, then ID)", is, want)
+	}
+	if snap.Volumes[0].Name != "a" || snap.Volumes[1].Name != "b" {
+		t.Errorf("volumes = %+v, want by name", snap.Volumes)
+	}
+	var ns []string
+	for _, n := range snap.Networks {
+		ns = append(ns, n.Name+"/"+n.ID)
+	}
+	if want := []string{"w/n0", "x/n1", "x/n2"}; !slices.Equal(ns, want) {
+		t.Errorf("networks = %v, want %v (name, then ID)", ns, want)
+	}
+}
+
+func TestSnapshotCountsEveryStateButRunningAsStopped(t *testing.T) {
+	var cs []dockertest.FakeContainer
+	for i, state := range []string{"running", "created", "paused", "restarting", "removing", "exited", "dead"} {
+		cs = append(cs, dockertest.FakeContainer{ID: "c" + string(rune('a'+i)), Names: []string{"/" + state}, State: state})
+	}
+	snap, _ := snapshot(t, dockertest.FakeConfig{Containers: cs}, false)
+	if c := snap.Counts; c.ContainersRunning != 1 || c.ContainersStopped != 6 || c.Containers != 7 {
+		t.Errorf("counts = %+v, want 1 running, 6 stopped (Pitfall 21: removing is stopped)", c)
+	}
+}
+
+func TestSnapshotOnASwarmManagerAlsoCountsNodesAndServices(t *testing.T) {
+	cfg := fakeEngine()
+	cfg.SwarmState, cfg.SwarmControl, cfg.Nodes, cfg.Services = "active", true, 3, 5
+	snap, _ := snapshot(t, cfg, true)
+	if snap.Counts.Nodes == nil || *snap.Counts.Nodes != 3 || snap.Counts.Services == nil || *snap.Counts.Services != 5 {
+		t.Errorf("nodes/services = %v/%v, want 3/5", snap.Counts.Nodes, snap.Counts.Services)
+	}
+}
+
+func TestSnapshotOnAWorkerNeverAsksForNodesOrServices(t *testing.T) {
+	cfg := fakeEngine()
+	cfg.SwarmState, cfg.SwarmControl = "active", false
+	snap, fake := snapshot(t, cfg, false)
+	if snap.Counts.Nodes != nil || snap.Counts.Services != nil {
+		t.Errorf("a worker has no node or service counts: %+v", snap.Counts)
+	}
+	for _, p := range fake.Requests() {
+		if strings.HasSuffix(p, "/nodes") || strings.HasSuffix(p, "/services") {
+			t.Errorf("asked a worker for %s, which fails there (Pattern 5)", p)
+		}
+	}
+}
+
+func TestSnapshotRowsCannotCarryEnvironmentVariablesLabelsOrMounts(t *testing.T) {
+	// T-01-77. The row types are the only thing that crosses to the API, so a
+	// field that could hold these must not exist.
+	banned := regexp.MustCompile(`(?i)^(labels?|env|environment|mounts?|binds?|command|cmd|entrypoint|options|attachments|containers)$`)
+	for _, v := range []any{dockerx.ContainerRow{}, dockerx.ImageRow{}, dockerx.VolumeRow{}, dockerx.NetworkRow{}} {
+		typ := reflect.TypeOf(v)
+		for i := range typ.NumField() {
+			if f := typ.Field(i); banned.MatchString(f.Name) {
+				t.Errorf("%s has field %s, which can hold secrets", typ.Name(), f.Name)
+			}
+		}
+	}
+}
+
+func TestSnapshotFailsWhenTheEngineIsDown(t *testing.T) {
+	fake := dockertest.NewFake(t, fakeEngine())
+	cli := newClient(t, fake)
+	fake.Stop()
+	if _, err := cli.Snapshot(context.Background(), false); err == nil {
+		t.Fatal("Snapshot succeeded against a stopped engine")
 	}
 }
