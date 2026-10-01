@@ -1,0 +1,321 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+// Package config is the one place Bayplan reads its settings (D-11). Every
+// setting is a row in the settings table below. Precedence, highest first:
+//
+//	command-line flag (only when explicitly set)
+//	environment variable
+//	<NAME>_FILE environment variable (secrets only, for Docker secrets)
+//	built-in default
+//
+// Setting both X and X_FILE is a startup error. Every error names the
+// environment variable, so an operator can find the setting from the message.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/netip"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/spf13/pflag"
+)
+
+// redactedMark replaces the value of a set secret in Redacted.
+const redactedMark = "[redacted]"
+
+// Config is the validated configuration.
+type Config struct {
+	Listen    string
+	DataDir   string
+	PublicURL string // normalised origin plus optional path, no trailing slash; empty when unset
+
+	EncryptionKey string // secret
+	// TrustedProxies are the peers whose forwarded headers are believed (D-39).
+	TrustedProxies []netip.Prefix
+
+	LoginMaxFailures        int
+	LoginLockout            time.Duration
+	SessionIdleTimeout      time.Duration
+	SessionRememberLifetime time.Duration
+	AuditRetentionDays      int // 0 means keep forever
+	SkipPreMigrateBackup    bool
+
+	TLSCertFile   string
+	TLSKeyFile    string
+	TLSSelfSigned bool
+
+	// DockerGID overrides the detected socket group; nil when unset (D-17).
+	DockerGID *int
+	LogLevel  slog.Level
+	// DockerHost is the raw string; the Docker transport enforces unix-only (D-21).
+	DockerHost string
+
+	// raw holds the resolved text of every setting, for Redacted.
+	raw map[string]string
+}
+
+// setting is one row of the table.
+type setting struct {
+	env    string
+	flag   string // empty: no command-line flag (secrets, to keep them out of the process list)
+	def    string
+	desc   string
+	secret bool
+	apply  func(c *Config, raw string) error
+}
+
+// settings is the single source of truth for env names, flags, defaults and parsing.
+var settings = []setting{
+	{env: "BAYPLAN_LISTEN", flag: "listen", def: ":7480", desc: "address to listen on",
+		apply: func(c *Config, raw string) error {
+			_, port, err := net.SplitHostPort(raw)
+			if err != nil {
+				return fmt.Errorf("must be host:port or :port: %w", err)
+			}
+			n, err := strconv.Atoi(port)
+			if err != nil || n < 0 || n > 65535 {
+				return fmt.Errorf("port %q must be a number from 0 to 65535", port)
+			}
+			c.Listen = raw
+			return nil
+		}},
+	{env: "BAYPLAN_DATA_DIR", flag: "data-dir", def: "/data", desc: "directory for the database, key and checkouts",
+		apply: func(c *Config, raw string) error { c.DataDir = raw; return nil }},
+	{env: "BAYPLAN_PUBLIC_URL", flag: "public-url", desc: "externally visible base URL; overrides and locks the stored value",
+		apply: func(c *Config, raw string) (err error) { c.PublicURL, err = normalisePublicURL(raw); return err }},
+	{env: "BAYPLAN_ENCRYPTION_KEY", secret: true, desc: "key for secrets at rest (also BAYPLAN_ENCRYPTION_KEY_FILE)",
+		apply: func(c *Config, raw string) error { c.EncryptionKey = raw; return nil }},
+	{env: "BAYPLAN_TRUSTED_PROXIES", flag: "trusted-proxies", desc: "comma-separated IPs or CIDRs of proxies whose forwarded headers are trusted",
+		apply: func(c *Config, raw string) (err error) { c.TrustedProxies, err = parsePrefixes(raw); return err }},
+	{env: "BAYPLAN_LOGIN_MAX_FAILURES", flag: "login-max-failures", def: "5", desc: "failed sign-ins before an account locks",
+		apply: func(c *Config, raw string) (err error) { c.LoginMaxFailures, err = parseInt(raw, 1); return err }},
+	{env: "BAYPLAN_LOGIN_LOCKOUT", flag: "login-lockout", def: "30m", desc: "how long an account stays locked",
+		apply: func(c *Config, raw string) (err error) { c.LoginLockout, err = parseDuration(raw); return err }},
+	{env: "BAYPLAN_SESSION_IDLE_TIMEOUT", flag: "session-idle-timeout", def: "12h", desc: "idle time after which a session ends",
+		apply: func(c *Config, raw string) (err error) { c.SessionIdleTimeout, err = parseDuration(raw); return err }},
+	{env: "BAYPLAN_SESSION_REMEMBER_LIFETIME", flag: "session-remember-lifetime", def: "720h", desc: "lifetime of a remember-me session",
+		apply: func(c *Config, raw string) (err error) { c.SessionRememberLifetime, err = parseDuration(raw); return err }},
+	{env: "BAYPLAN_AUDIT_RETENTION_DAYS", flag: "audit-retention-days", def: "365", desc: "days to keep audit entries, 0 for forever",
+		apply: func(c *Config, raw string) (err error) { c.AuditRetentionDays, err = parseInt(raw, 0); return err }},
+	{env: "BAYPLAN_SKIP_PRE_MIGRATE_BACKUP", flag: "skip-pre-migrate-backup", def: "false", desc: "do not back up the database before a migration",
+		apply: func(c *Config, raw string) (err error) { c.SkipPreMigrateBackup, err = strconv.ParseBool(raw); return err }},
+	{env: "BAYPLAN_TLS_CERT_FILE", flag: "tls-cert-file", desc: "path to a TLS certificate (PEM)",
+		apply: func(c *Config, raw string) error { c.TLSCertFile = raw; return nil }},
+	{env: "BAYPLAN_TLS_KEY_FILE", flag: "tls-key-file", desc: "path to the TLS private key (PEM)",
+		apply: func(c *Config, raw string) error { c.TLSKeyFile = raw; return nil }},
+	{env: "BAYPLAN_TLS_SELF_SIGNED", flag: "tls-self-signed", def: "false", desc: "serve a generated self-signed certificate",
+		apply: func(c *Config, raw string) (err error) { c.TLSSelfSigned, err = strconv.ParseBool(raw); return err }},
+	{env: "BAYPLAN_DOCKER_GID", flag: "docker-gid", desc: "group ID of the Docker socket, overriding detection",
+		apply: func(c *Config, raw string) error {
+			if raw == "" {
+				c.DockerGID = nil
+				return nil
+			}
+			n, err := parseInt(raw, 0)
+			if err != nil {
+				return err
+			}
+			c.DockerGID = &n
+			return nil
+		}},
+	{env: "BAYPLAN_LOG_LEVEL", flag: "log-level", def: "info", desc: "log level: debug, info, warn or error",
+		apply: func(c *Config, raw string) error {
+			switch strings.ToLower(raw) {
+			case "debug":
+				c.LogLevel = slog.LevelDebug
+			case "info":
+				c.LogLevel = slog.LevelInfo
+			case "warn":
+				c.LogLevel = slog.LevelWarn
+			case "error":
+				c.LogLevel = slog.LevelError
+			default:
+				return fmt.Errorf("%q is not one of debug, info, warn, error", raw)
+			}
+			return nil
+		}},
+	{env: "DOCKER_HOST", flag: "docker-host", def: "unix:///var/run/docker.sock", desc: "Docker daemon address (unix sockets only)",
+		apply: func(c *Config, raw string) error { c.DockerHost = raw; return nil }},
+}
+
+// BindFlags registers one string flag for every setting that has a flag. The
+// flags are all strings so that "explicitly set" is exactly pflag's Changed;
+// Load does the parsing, so env vars and flags share one parser and one set of
+// error messages.
+func BindFlags(fs *pflag.FlagSet) {
+	for _, s := range settings {
+		if s.flag == "" {
+			continue
+		}
+		fs.String(s.flag, s.def, fmt.Sprintf("%s (env %s)", s.desc, s.env))
+	}
+}
+
+// Load resolves every setting. flags may be nil. env and readFile are injected
+// so tests need neither a real environment nor real files.
+func Load(flags *pflag.FlagSet, env func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
+	c := Config{raw: make(map[string]string, len(settings))}
+	for _, s := range settings {
+		raw, err := resolve(s, flags, env, readFile)
+		if err != nil {
+			return Config{}, err
+		}
+		if err := s.apply(&c, raw); err != nil {
+			return Config{}, fmt.Errorf("invalid %s: %w", s.env, err)
+		}
+		c.raw[s.env] = raw
+	}
+	if err := c.crossCheck(); err != nil {
+		return Config{}, err
+	}
+	return c, nil
+}
+
+// resolve applies the precedence rules to one setting.
+func resolve(s setting, flags *pflag.FlagSet, env func(string) string, readFile func(string) ([]byte, error)) (string, error) {
+	if s.flag != "" && flags != nil {
+		if f := flags.Lookup(s.flag); f != nil && f.Changed {
+			return f.Value.String(), nil
+		}
+	}
+	direct := env(s.env)
+	if !s.secret {
+		if direct != "" {
+			return direct, nil
+		}
+		return s.def, nil
+	}
+	fileVar := s.env + "_FILE"
+	path := env(fileVar)
+	switch {
+	case direct != "" && path != "":
+		return "", fmt.Errorf("both %s and %s are set; set only one", s.env, fileVar)
+	case direct != "":
+		return direct, nil
+	case path != "":
+		b, err := readFile(path)
+		if err != nil {
+			return "", fmt.Errorf("%s: cannot read %s: %w", fileVar, path, err)
+		}
+		v := strings.TrimRight(string(b), "\r\n")
+		if v == "" {
+			return "", fmt.Errorf("%s: file %s is empty", fileVar, path)
+		}
+		return v, nil
+	default:
+		return s.def, nil
+	}
+}
+
+// crossCheck validates combinations of settings.
+func (c Config) crossCheck() error {
+	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
+		if c.TLSCertFile == "" {
+			return errors.New("BAYPLAN_TLS_KEY_FILE is set without BAYPLAN_TLS_CERT_FILE; set both or neither")
+		}
+		return errors.New("BAYPLAN_TLS_CERT_FILE is set without BAYPLAN_TLS_KEY_FILE; set both or neither")
+	}
+	if c.TLSSelfSigned && c.TLSCertFile != "" {
+		return errors.New("BAYPLAN_TLS_SELF_SIGNED conflicts with BAYPLAN_TLS_CERT_FILE and BAYPLAN_TLS_KEY_FILE; use one or the other")
+	}
+	return nil
+}
+
+// Redacted returns every setting as env name to display value, for the startup
+// log. A set secret shows as "[redacted]" and an unset one as empty; the value
+// itself never appears.
+func (c Config) Redacted() map[string]string {
+	out := make(map[string]string, len(settings))
+	for _, s := range settings {
+		v := c.raw[s.env]
+		if s.secret && v != "" {
+			v = redactedMark
+		}
+		out[s.env] = v
+	}
+	return out
+}
+
+// Names lists every environment variable the table defines, sorted. It exists
+// so documentation and tests can check against the table.
+func Names() []string {
+	out := make([]string, 0, len(settings))
+	for _, s := range settings {
+		out = append(out, s.env)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func parseInt(raw string, minimum int) (int, error) {
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a whole number", raw)
+	}
+	if n < minimum {
+		return 0, fmt.Errorf("%d is below the minimum of %d", n, minimum)
+	}
+	return n, nil
+}
+
+func parseDuration(raw string) (time.Duration, error) {
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a duration such as 30m or 12h", raw)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%q must be greater than zero", raw)
+	}
+	return d, nil
+}
+
+func parsePrefixes(raw string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(part); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(part)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not an IP address or CIDR", part)
+		}
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	return out, nil
+}
+
+// normalisePublicURL accepts an absolute http or https URL and returns its
+// origin plus an optional path with no trailing slash. Empty stays empty.
+func normalisePublicURL(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("must be an absolute http or https URL: %w", err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", errors.New("must be an absolute http or https URL, for example https://bayplan.example.com")
+	}
+	if u.User != nil {
+		return "", errors.New("must not contain a user name or password")
+	}
+	if u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
+		return "", errors.New("must not contain a query or fragment")
+	}
+	path := strings.TrimRight(u.EscapedPath(), "/")
+	return u.Scheme + "://" + strings.ToLower(u.Host) + path, nil
+}
