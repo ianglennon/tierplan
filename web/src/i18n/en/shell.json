@@ -12,6 +12,7 @@
     "userMenu": {
       "trigger": "User menu",
       "roleAdmin": "Admin",
+      "changePassword": "Change password",
       "theme": "Theme",
       "light": "Light",
       "dark": "Dark",
@@ -24,6 +25,50 @@
         "heading": "No environments yet",
         "body": "Bayplan can manage the Docker host it runs on through the Docker socket. Start Bayplan with the socket mounted, then add the host in Settings. Remote hosts will be available in a later release."
       }
+    },
+    "account": {
+      "changePassword": {
+        "title": "Change password",
+        "description": "Enter your current password, then choose a new one.",
+        "current": {
+          "label": "Current password"
+        },
+        "new": {
+          "label": "New password",
+          "helper": "At least 12 characters. A long passphrase works well."
+        },
+        "confirm": {
+          "label": "Confirm new password"
+        },
+        "helper": "Other devices will be signed out.",
+        "show": "Show password",
+        "hide": "Hide password",
+        "cancel": "Cancel",
+        "submit": "Change password",
+        "pending": "Changing password…",
+        "success": "Password changed. Your other sessions were signed out.",
+        "errors": {
+          "currentRequired": "Enter your current password.",
+          "currentIncorrect": "Your current password is incorrect."
+        }
+      }
+    },
+    "warnings": {
+      "title": "Warnings",
+      "bell": "Warnings",
+      "bellCount_one": "Warnings, {{count}} item",
+      "bellCount_other": "Warnings, {{count}} items",
+      "empty": "No warnings",
+      "plainHttp": {
+        "title": "You're using Bayplan over plain HTTP.",
+        "fix": "Serve Bayplan over HTTPS or put it behind a reverse proxy"
+      },
+      "keyBackup": {
+        "title": "Back up your encryption key.",
+        "body": "Stored secrets can't be recovered without /data/bayplan.key.",
+        "ack": "I've backed it up"
+      },
+      "banner": "Data isn't being persisted. /data isn't a mounted volume, so users, sessions and the audit log are lost when this container is removed. Mount a volume at /data and restart."
     }
   }
 }

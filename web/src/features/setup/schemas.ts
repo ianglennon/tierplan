@@ -64,12 +64,23 @@ const usernameSchema = z
   .regex(new RegExp(`^[A-Za-z0-9._-]{3,${MAX_USERNAME_LENGTH}}$`), { error: KEY.username })
   .transform(lowerAscii);
 
+// passwordSchema is the length rule of D-07, shared with the change-password
+// dialog. The common-password and contains-the-username rules are server-only.
+export const passwordSchema = z
+  .string()
+  .refine((s) => chars(s) >= MIN_PASSWORD_LENGTH, { error: KEY.passwordShort });
+
+// The i18n keys the change-password dialog shares with the wizard.
+export const PASSWORD_KEYS = {
+  short: KEY.passwordShort,
+  common: KEY.passwordCommon,
+  mismatch: KEY.passwordMismatch,
+} as const;
+
 export const adminSchema = z
   .object({
     username: usernameSchema,
-    password: z
-      .string()
-      .refine((s) => chars(s) >= MIN_PASSWORD_LENGTH, { error: KEY.passwordShort }),
+    password: passwordSchema,
     confirm: z.string(),
   })
   .refine((v) => v.password === v.confirm, { path: ["confirm"], error: KEY.passwordMismatch });

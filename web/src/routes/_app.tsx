@@ -9,10 +9,12 @@ import { loadInstance } from "@/api/instance";
 import { queryClient } from "@/api/query-client";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider, SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UserMenu } from "@/components/user-menu";
 import { VersionFooter } from "@/components/version-footer";
-import { meQueryOptions, UnauthenticatedError, useMe } from "@/hooks/use-me";
+import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
+import { meQueryOptions, UnauthenticatedError, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { getSidebarOpen, setSidebarOpen } from "@/lib/sidebar-state";
 
@@ -21,6 +23,8 @@ import { getSidebarOpen, setSidebarOpen } from "@/lib/sidebar-state";
 function ShellBody() {
   const t = useT();
   const { data: me } = useMe();
+  // Instance warnings are for admins: the server refuses them to anyone else.
+  const canSeeWarnings = usePermission("settings.read");
   const { state, isMobile, openMobile } = useSidebar();
   // The mirror image of AppSidebar: the sidebar holds the footer while it is
   // expanded or its drawer is open, so this holds it the rest of the time.
@@ -28,10 +32,12 @@ function ShellBody() {
 
   return (
     <div className="flex min-h-svh min-w-0 flex-1 flex-col bg-background">
+      {canSeeWarnings ? <DataNotPersistedBanner /> : null}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4 md:px-6">
         <SidebarTrigger aria-label={t("shell.toggleSidebar")} className="max-md:size-11" />
         {/* The page title goes here: breadcrumbs or a heading, set by each page. */}
         <div id="header-title" className="min-w-0 flex-1 truncate text-sm font-medium" />
+        {canSeeWarnings ? <HealthBell /> : null}
         {me ? <UserMenu username={me.user.username} role={me.user.role} /> : null}
       </header>
       <main id="main" tabIndex={-1} className="flex-1 p-4 outline-none md:p-6">
@@ -87,6 +93,7 @@ function AppLayout() {
         <AppSidebar />
         <ShellBody />
       </SidebarProvider>
+      <Toaster />
     </TooltipProvider>
   );
 }
