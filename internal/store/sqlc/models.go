@@ -55,6 +55,17 @@ type RolePermission struct {
 	Permission string
 }
 
+type Session struct {
+	IDHash            []byte
+	UserID            string
+	CreatedAt         int64
+	LastSeenAt        int64
+	AbsoluteExpiresAt sql.NullInt64
+	Remember          int64
+	Ip                string
+	UserAgent         string
+}
+
 type Setting struct {
 	Key       string
 	Value     string
