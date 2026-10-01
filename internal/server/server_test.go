@@ -23,9 +23,12 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/ianglennon/bayplan/internal/api"
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/engine"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
@@ -315,7 +318,7 @@ func TestBuildSeedsTheAdminRoleAndEveryRouteIsGuarded(t *testing.T) {
 		t.Errorf("the assembled router has an unguarded route: %v", err)
 	}
 	// The openapi subcommand builds the same routes with no dependencies.
-	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{})); err != nil {
+	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{})); err != nil {
 		t.Errorf("the dependency-free router has an unguarded route: %v", err)
 	}
 }
@@ -426,5 +429,62 @@ func TestBuildSignsInWithTheSessionAuthenticatorAndCSRFGuard(t *testing.T) {
 	}
 	if rec := do(http.MethodGet, "/api/me", "", cookie, ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("/api/me after logout: %d, want 401", rec.Code)
+	}
+}
+
+// Environments (plan 16): the local host is managed only after an admin opts
+// in, and a restart picks the environment up again and resumes monitoring it.
+func TestBuildAddsNoEnvironmentAndNeverContactsDockerUntilAnAdminOptsIn(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "node-1"})
+	dir := t.TempDir() + "/data"
+	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir, "DOCKER_HOST": "unix://" + fake.SocketPath()})
+
+	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := srv.Environments().List(context.Background())
+	if err != nil || len(list) != 0 {
+		t.Fatalf("a fresh start lists %v (%v), want no environments (D-19)", list, err)
+	}
+	if got := fake.Requests(); len(got) != 0 {
+		t.Fatalf("startup with no environment talked to Docker: %v", got)
+	}
+
+	added, err := srv.Environments().AddLocal(context.Background(), audit.SystemCLI, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A restart: the row is in the database, the monitor is started again, and
+	// {envId} resolves against the database.
+	srv, err = Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := srv.Environments().Get(context.Background(), added.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status.State == envs.StateOnline {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the restarted server never monitored the environment: %+v", got.Status)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	env, err := srv.Environments().Resolve(context.Background(), added.ID)
+	if err != nil || env.Name != "node-1" {
+		t.Errorf("Resolve = %+v, %v", env, err)
+	}
+	if _, err := srv.Environments().Resolve(context.Background(), "nope"); !errors.Is(err, httpx.ErrEnvNotFound) {
+		t.Errorf("Resolve(unknown) = %v, want ErrEnvNotFound", err)
 	}
 }

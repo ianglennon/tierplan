@@ -44,6 +44,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/reconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry the connection to an environment now
+         * @description Asks the health monitor to probe the engine immediately instead of waiting for its next retry, and returns the status as it is now; poll the environment for the result. The probe renegotiates the API version.
+         */
+        post: operations["reconnectEnvironment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the environments the signed-in user may see
+         * @description Each environment comes with the health monitor's status. An environment the caller does not hold environments.read for is left out, so the list never reveals what the caller cannot open.
+         */
+        get: operations["listEnvironments"];
+        put?: never;
+        /**
+         * Add the Docker host Bayplan runs on as an environment
+         * @description The admin's explicit opt-in to managing this host (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists; 422 invalid_name. The name defaults to the hostname the daemon reports. Audited as environment.added.
+         */
+        post: operations["addEnvironment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove an environment
+         * @description Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched (D-20). Audited as environment.removed.
+         */
+        delete: operations["removeEnvironment"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename an environment
+         * @description 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.
+         */
+        patch: operations["renameEnvironment"];
+        trace?: never;
+    };
     "/api/instance": {
         parameters: {
             query?: never;
@@ -216,6 +284,17 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AddEnvironmentInputBody: {
+            /** @description Add the host even though its engine is not supported; it is stored and shown as unsupported */
+            allowUnsupported?: boolean;
+            /**
+             * @description local is the only kind in this release: the Docker socket on this server's own host
+             * @enum {string}
+             */
+            kind: "local";
+            /** @description 1 to 64 characters; defaults to the hostname the daemon reports */
+            name?: string;
+        };
         ChangePasswordBody: {
             /** @description The CSRF token of the new session, sent as X-CSRF-Token on every mutating request */
             csrfToken: string;
@@ -249,6 +328,61 @@ export interface components {
             token: string;
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
+        };
+        EnvironmentBody: {
+            /** Format: date-time */
+            createdAt: string;
+            enabled: boolean;
+            engine: components["schemas"]["EnvironmentEngineBody"];
+            /** @description The environment ID, used in /api/env/{envId}/... */
+            id: string;
+            /** @description True for the Docker host Bayplan itself runs on */
+            isSelfHost: boolean;
+            /**
+             * @description local: the Docker socket on the host Bayplan runs on
+             * @enum {string}
+             */
+            kind: "local";
+            /** @description The display name; defaults to the daemon's hostname */
+            name: string;
+            status: components["schemas"]["EnvironmentStatusBody"];
+            /**
+             * @description What the engine is; absent until it has answered
+             * @enum {string}
+             */
+            type?: "swarm-manager" | "swarm-worker" | "standalone";
+        };
+        EnvironmentEngineBody: {
+            /** @description The newest Engine API version the daemon speaks */
+            apiVersion?: string;
+            /** @description For example Docker Engine */
+            name?: string;
+            /** @description The API version Bayplan uses with it */
+            negotiatedApi?: string;
+            /** @description The engine version */
+            version?: string;
+        };
+        EnvironmentListBody: {
+            items: components["schemas"]["EnvironmentBody"][] | null;
+        };
+        EnvironmentStatusBody: {
+            /**
+             * Format: date-time
+             * @description When the most recent probe finished
+             */
+            lastAttempt?: string;
+            /** @description Why it is offline or unsupported, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop */
+            reason?: string;
+            /**
+             * Format: date-time
+             * @description When the environment entered this state; for offline, the first failed probe
+             */
+            since?: string;
+            /**
+             * @description online: the engine answers and is supported. offline: it does not answer. unsupported: it answers but Bayplan does not manage it. unknown: not probed yet
+             * @enum {string}
+             */
+            state: "unknown" | "online" | "offline" | "unsupported";
         };
         ErrorDetail: {
             /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
@@ -305,6 +439,10 @@ export interface components {
         LocalHostBody: {
             /** @description Whether a unix socket exists at that path */
             detected: boolean;
+            /** @description Whether this host is already an environment (D-19) */
+            managed: boolean;
+            /** @description The ID of the container Bayplan runs in, when it can tell (D-27) */
+            ownContainerId?: string;
             /** @description What the engine behind the socket reported; absent when no socket exists */
             probe?: components["schemas"]["ProbeResult"];
             /** @description The Docker socket path Bayplan was configured with */
@@ -363,6 +501,10 @@ export interface components {
             supported: boolean;
             swarmNodeState?: string;
             type?: string;
+        };
+        RenameEnvironmentInputBody: {
+            /** @description The new name, 1 to 64 characters */
+            name: string;
         };
         SetupDefaultsBody: {
             /** @description The server's hostname */
@@ -480,6 +622,170 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    reconnectEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvironments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    addEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddEnvironmentInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    renameEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameEnvironmentInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
             };
             /** @description Error */
             default: {

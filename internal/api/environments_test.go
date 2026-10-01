@@ -70,7 +70,11 @@ func newEnvFix(t *testing.T, cfg dockertest.FakeConfig) *envFix {
 func (f *envFix) req(t *testing.T, method, path, body string) *envRec {
 	t.Helper()
 	rec := f.call(t, authReq{method: method, path: path, body: body, cookie: f.cookie, csrf: f.csrf})
-	return &envRec{rec.Code, rec.Body.Bytes(), problemType(t, rec)}
+	ptyp := ""
+	if rec.Code >= 400 {
+		ptyp = problemType(t, rec)
+	}
+	return &envRec{rec.Code, rec.Body.Bytes(), ptyp}
 }
 
 type envRec struct {

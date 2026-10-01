@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/engine"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -51,6 +52,8 @@ type Server struct {
 	setup   *auth.SetupGate
 	inst    *instance.Instance
 	session *auth.Sessions
+	envs    *envs.Service
+	monitor *envs.Monitor
 	router  *httpx.Router
 
 	// stopBackground ends the nightly audit prune and waits for it, so Close
@@ -62,13 +65,14 @@ type Server struct {
 // NewRouter wires every operation. It takes plain dependencies so the
 // `openapi` subcommand can build the same handlers without a database or a
 // socket.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps) *httpx.Router {
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps) *httpx.Router {
 	r := httpx.New(opts)
 	api.RegisterSystem(r, sys)
 	api.RegisterSetup(r, setup)
 	api.RegisterAuth(r, authDeps)
 	api.RegisterAccount(r, account)
 	api.RegisterLocalHost(r, localHost)
+	api.RegisterEnvironments(r, environments)
 	return r
 }
 
@@ -173,12 +177,19 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 	login := auth.NewLogin(st, sessions, aud, cfg.LoginMaxFailures, cfg.LoginLockout,
 		auth.NewIPLimiter(2*time.Second, 10, 10*time.Minute, nil), log, nil)
 
+	// The environment registry and its health monitors. Nothing is added here:
+	// the local host becomes an environment only when an admin asks (D-19).
+	// Bayplan's own container is identified now, while mountinfo is readable
+	// whatever user the process later runs as (RESEARCH A9).
+	monitor := envs.NewMonitor(log, nil, nil)
+	envSvc := envs.NewService(st, aud, monitor, cfg.DockerHost, envs.ReadSelfContainerID(), nil)
+
 	spa := webui.Handler(web.FS())
 	router := NewRouter(httpx.Options{
 		Fallback:       spa,
 		Checker:        checker,
 		Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, nil),
-		EnvResolver:    httpx.NoEnvironments{}, // plan 16 provides the DB-backed one
+		EnvResolver:    envSvc,
 		Auditor:        aud,
 		MutationGuard:  auth.NewCSRFGuard(sessions),
 		TrustedProxies: cfg.TrustedProxies,
@@ -210,7 +221,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		DataDir:  info,
 		Vault:    vlt,
 		Log:      log,
-	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log})
+	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
+		api.EnvironmentsDeps{Envs: envSvc, Checker: checker, Log: log})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		_ = st.Close()
@@ -226,6 +238,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		setup:   gate,
 		inst:    inst,
 		session: sessions,
+		envs:    envSvc,
+		monitor: monitor,
 		router:  router,
 	}
 
@@ -235,6 +249,15 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 	srv.background.Go(func() { audit.RunNightly(bg, srv.audit, cfg.AuditRetentionDays, log) })
 	// Expired sessions are refused on lookup; this hourly sweep only keeps the table small.
 	srv.background.Go(func() { auth.RunSessionCleanup(bg, st, cfg.SessionIdleTimeout, nil) })
+	// Monitoring resumes for the environments an admin already added. The
+	// monitors live as long as bg, and Close waits for them.
+	if err := envSvc.StartAll(bg); err != nil {
+		stop()
+		srv.background.Wait()
+		monitor.StopAll()
+		_ = st.Close()
+		return nil, fmt.Errorf("start environment monitors: %w", err)
+	}
 	return srv, nil
 }
 
@@ -257,11 +280,15 @@ func (s *Server) Instance() *instance.Instance { return s.inst }
 // authenticator and login endpoint build on it.
 func (s *Server) Sessions() *auth.Sessions { return s.session }
 
-// Close stops background work and releases the database. Run calls it on
-// exit; it is safe to call again.
+// Environments is the environment registry.
+func (s *Server) Environments() *envs.Service { return s.envs }
+
+// Close stops background work, including the environment monitors, and
+// releases the database. Run calls it on exit; it is safe to call again.
 func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
+	s.monitor.StopAll()
 	return s.store.Close()
 }
 

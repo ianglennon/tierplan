@@ -1,6 +1,31 @@
 {
   "components": {
     "schemas": {
+      "AddEnvironmentInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "allowUnsupported": {
+            "description": "Add the host even though its engine is not supported; it is stored and shown as unsupported",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "local is the only kind in this release: the Docker socket on this server's own host",
+            "enum": [
+              "local"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "1 to 64 characters; defaults to the hostname the daemon reports",
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
       "ChangePasswordBody": {
         "additionalProperties": false,
         "properties": {
@@ -102,6 +127,136 @@
           "password",
           "instanceName",
           "publicUrl"
+        ],
+        "type": "object"
+      },
+      "EnvironmentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/EnvironmentEngineBody"
+          },
+          "id": {
+            "description": "The environment ID, used in /api/env/{envId}/...",
+            "type": "string"
+          },
+          "isSelfHost": {
+            "description": "True for the Docker host Bayplan itself runs on",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "local: the Docker socket on the host Bayplan runs on",
+            "enum": [
+              "local"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The display name; defaults to the daemon's hostname",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EnvironmentStatusBody"
+          },
+          "type": {
+            "description": "What the engine is; absent until it has answered",
+            "enum": [
+              "swarm-manager",
+              "swarm-worker",
+              "standalone"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "isSelfHost",
+          "enabled",
+          "createdAt",
+          "status",
+          "engine"
+        ],
+        "type": "object"
+      },
+      "EnvironmentEngineBody": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "description": "The newest Engine API version the daemon speaks",
+            "type": "string"
+          },
+          "name": {
+            "description": "For example Docker Engine",
+            "type": "string"
+          },
+          "negotiatedApi": {
+            "description": "The API version Bayplan uses with it",
+            "type": "string"
+          },
+          "version": {
+            "description": "The engine version",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EnvironmentListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "EnvironmentStatusBody": {
+        "additionalProperties": false,
+        "properties": {
+          "lastAttempt": {
+            "description": "When the most recent probe finished",
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it is offline or unsupported, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop",
+            "type": "string"
+          },
+          "since": {
+            "description": "When the environment entered this state; for offline, the first failed probe",
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "online: the engine answers and is supported. offline: it does not answer. unsupported: it answers but Bayplan does not manage it. unknown: not probed yet",
+            "enum": [
+              "unknown",
+              "online",
+              "offline",
+              "unsupported"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
         ],
         "type": "object"
       },
@@ -208,6 +363,14 @@
             "description": "Whether a unix socket exists at that path",
             "type": "boolean"
           },
+          "managed": {
+            "description": "Whether this host is already an environment (D-19)",
+            "type": "boolean"
+          },
+          "ownContainerId": {
+            "description": "The ID of the container Bayplan runs in, when it can tell (D-27)",
+            "type": "string"
+          },
           "probe": {
             "$ref": "#/components/schemas/ProbeResult",
             "description": "What the engine behind the socket reported; absent when no socket exists"
@@ -219,7 +382,8 @@
         },
         "required": [
           "socketPath",
-          "detected"
+          "detected",
+          "managed"
         ],
         "type": "object"
       },
@@ -389,6 +553,20 @@
           "reachable",
           "supported",
           "probedAt"
+        ],
+        "type": "object"
+      },
+      "RenameEnvironmentInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The new name, 1 to 64 characters",
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -648,6 +826,239 @@
         "summary": "Sign out of this browser",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/env/{envId}/reconnect": {
+      "post": {
+        "description": "Asks the health monitor to probe the engine immediately instead of waiting for its next retry, and returns the status as it is now; poll the environment for the result. The probe renegotiates the API version.",
+        "operationId": "reconnectEnvironment",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Retry the connection to an environment now",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments": {
+      "get": {
+        "description": "Each environment comes with the health monitor's status. An environment the caller does not hold environments.read for is left out, so the list never reveals what the caller cannot open.",
+        "operationId": "listEnvironments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the environments the signed-in user may see",
+        "tags": [
+          "environments"
+        ]
+      },
+      "post": {
+        "description": "The admin's explicit opt-in to managing this host (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists; 422 invalid_name. The name defaults to the hostname the daemon reports. Audited as environment.added.",
+        "operationId": "addEnvironment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddEnvironmentInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Add the Docker host Bayplan runs on as an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}": {
+      "delete": {
+        "description": "Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched (D-20). Audited as environment.removed.",
+        "operationId": "removeEnvironment",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Remove an environment",
+        "tags": [
+          "environments"
+        ]
+      },
+      "patch": {
+        "description": "422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.",
+        "operationId": "renameEnvironment",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameEnvironmentInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Rename an environment",
+        "tags": [
+          "environments"
         ]
       }
     },

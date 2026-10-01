@@ -47,6 +47,10 @@ type LocalHostEnvs interface {
 type LocalHostBody struct {
 	SocketPath string `json:"socketPath" doc:"The Docker socket path Bayplan was configured with"`
 	Detected   bool   `json:"detected" doc:"Whether a unix socket exists at that path"`
+	// Managed is true once an admin has added this host as an environment.
+	Managed bool `json:"managed" doc:"Whether this host is already an environment (D-19)"`
+	// OwnContainerID is Bayplan's own container, so the UI can badge it "Bayplan (this instance)".
+	OwnContainerID string `json:"ownContainerId,omitempty" doc:"The ID of the container Bayplan runs in, when it can tell (D-27)"`
 	// Probe is only present when a socket was detected.
 	Probe *dockerx.ProbeResult `json:"probe,omitempty" doc:"What the engine behind the socket reported; absent when no socket exists"`
 }
@@ -59,7 +63,7 @@ type LocalHostOutput struct {
 
 // RegisterLocalHost registers GET /api/local-host. It is the context for the
 // admin's opt-in to manage this host (D-19): it only reads. Adding the host as
-// an environment, and the managed and ownContainerId fields, come in plan 16.
+// an environment is POST /api/environments.
 func RegisterLocalHost(r *httpx.Router, d LocalHostDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
@@ -87,6 +91,15 @@ func RegisterLocalHost(r *httpx.Router, d LocalHostDeps) {
 				return nil, huma.Error500InternalServerError("DOCKER_HOST is not a unix socket path")
 			}
 			out := &LocalHostOutput{CacheControl: "no-store", Body: LocalHostBody{SocketPath: path}}
+			if d.Envs != nil {
+				managed, err := d.Envs.HasLocal(ctx)
+				if err != nil {
+					d.Log.Error("look up the local environment", "error", err)
+					return nil, huma.Error500InternalServerError("internal error")
+				}
+				out.Body.Managed = managed
+				out.Body.OwnContainerID = d.Envs.SelfContainerID()
+			}
 			if !engine.SocketExists(path) {
 				return out, nil
 			}
