@@ -535,10 +535,14 @@ func (f *loginFixture) authenticator() interface {
 	return auth.NewAuthenticator(f.st, testIdle, f.clk.now)
 }
 
+func addCookie(req *http.Request, name, value string) {
+	req.AddCookie(&http.Cookie{Name: name, Value: value}) //nolint:gosec // a request cookie as a browser sends it: only name and value travel
+}
+
 func cookieRequest(name, value string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	if name != "" {
-		req.AddCookie(&http.Cookie{Name: name, Value: value})
+		addCookie(req, name, value)
 	}
 	return req
 }
@@ -678,8 +682,8 @@ func TestAuthenticatePrefersTheHostPrefixedCookie(t *testing.T) {
 	planted := f.mustLogin(t, "other", false)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	req.AddCookie(&http.Cookie{Name: auth.CookieName(false), Value: planted.RawSessionID})
-	req.AddCookie(&http.Cookie{Name: auth.CookieName(true), Value: good.RawSessionID})
+	addCookie(req, auth.CookieName(false), planted.RawSessionID)
+	addCookie(req, auth.CookieName(true), good.RawSessionID)
 	p, err := f.authenticator().Authenticate(req)
 	if err != nil || p == nil || p.Name != "admin" {
 		t.Fatalf("both cookies present: %+v, %v; want the __Host- one (admin)", p, err)
@@ -687,8 +691,8 @@ func TestAuthenticatePrefersTheHostPrefixedCookie(t *testing.T) {
 
 	// A bare cookie never overrides a __Host- cookie that does not resolve.
 	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	req.AddCookie(&http.Cookie{Name: auth.CookieName(true), Value: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"})
-	req.AddCookie(&http.Cookie{Name: auth.CookieName(false), Value: planted.RawSessionID})
+	addCookie(req, auth.CookieName(true), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	addCookie(req, auth.CookieName(false), planted.RawSessionID)
 	if p, err := f.authenticator().Authenticate(req); err != nil || p != nil {
 		t.Fatalf("a bad __Host- cookie fell through to the bare one: %+v, %v", p, err)
 	}

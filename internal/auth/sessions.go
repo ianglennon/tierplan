@@ -71,8 +71,7 @@ func (m *Sessions) CreateTx(ctx context.Context, tx *sql.Tx, userID string, reme
 		return "", nil, fmt.Errorf("generate session id: %w", err)
 	}
 	rawID = base64.RawURLEncoding.EncodeToString(buf)
-	sum := sha256.Sum256([]byte(rawID))
-	idHash = sum[:]
+	idHash = HashSessionID(rawID)
 
 	now := m.now().UTC().UnixNano()
 	p := sqlc.InsertSessionParams{
