@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 
@@ -52,6 +53,14 @@ type Options struct {
 	// Fallback serves every non-/api/ path that no registered route matched
 	// (the embedded SPA). Nil means a plain 404.
 	Fallback http.Handler
+
+	Checker        *rbac.Checker
+	Authenticator  Authenticator
+	EnvResolver    EnvResolver
+	Auditor        Auditor
+	MutationGuard  MutationGuard
+	TrustedProxies []netip.Prefix
+	PublicOrigin   func() string
 }
 
 // Router is the chi mux, the huma API and the registry of registered routes.
