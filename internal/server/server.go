@@ -54,7 +54,10 @@ type Server struct {
 	session *auth.Sessions
 	envs    *envs.Service
 	monitor *envs.Monitor
-	router  *httpx.Router
+	// snapshots caches the resource lists per environment for a few seconds.
+	// The events feed (plan 21) calls Invalidate on it.
+	snapshots *envs.Snapshots
+	router    *httpx.Router
 
 	// stopBackground ends the nightly audit prune and waits for it, so Close
 	// never closes the database under a running prune.
@@ -65,7 +68,7 @@ type Server struct {
 // NewRouter wires every operation. It takes plain dependencies so the
 // `openapi` subcommand can build the same handlers without a database or a
 // socket.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps) *httpx.Router {
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, dashboard api.DashboardDeps) *httpx.Router {
 	r := httpx.New(opts)
 	api.RegisterSystem(r, sys)
 	api.RegisterSetup(r, setup)
@@ -73,6 +76,7 @@ func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, auth
 	api.RegisterAccount(r, account)
 	api.RegisterLocalHost(r, localHost)
 	api.RegisterEnvironments(r, environments)
+	api.RegisterDashboard(r, dashboard)
 	return r
 }
 
@@ -182,7 +186,11 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 	// Bayplan's own container is identified now, while mountinfo is readable
 	// whatever user the process later runs as (RESEARCH A9).
 	monitor := envs.NewMonitor(log, nil, nil)
-	envSvc := envs.NewService(st, aud, monitor, cfg.DockerHost, envs.ReadSelfContainerID(), nil)
+	selfID := envs.ReadSelfContainerID()
+	envSvc := envs.NewService(st, aud, monitor, cfg.DockerHost, selfID, nil)
+	// The dashboard counts and the four lists read one snapshot of Docker, cached
+	// for 5 seconds per environment (Pitfall 22, D-57).
+	snapshots := envs.NewSnapshots(monitor, envs.DefaultSnapshotTTL, time.Now)
 
 	spa := webui.Handler(web.FS())
 	router := NewRouter(httpx.Options{
@@ -222,25 +230,27 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		Vault:    vlt,
 		Log:      log,
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		api.EnvironmentsDeps{Envs: envSvc, Checker: checker, Log: log})
+		api.EnvironmentsDeps{Envs: envSvc, Checker: checker, Log: log},
+		api.DashboardDeps{Snapshots: snapshots, SelfContainerID: selfID, Log: log})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		_ = st.Close()
 		return nil, err
 	}
 	srv := &Server{
-		cfg:     cfg,
-		log:     log,
-		dataDir: info,
-		store:   st,
-		vault:   vlt,
-		audit:   aud,
-		setup:   gate,
-		inst:    inst,
-		session: sessions,
-		envs:    envSvc,
-		monitor: monitor,
-		router:  router,
+		cfg:       cfg,
+		log:       log,
+		dataDir:   info,
+		store:     st,
+		vault:     vlt,
+		audit:     aud,
+		setup:     gate,
+		inst:      inst,
+		session:   sessions,
+		envs:      envSvc,
+		monitor:   monitor,
+		snapshots: snapshots,
+		router:    router,
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
@@ -282,6 +292,10 @@ func (s *Server) Sessions() *auth.Sessions { return s.session }
 
 // Environments is the environment registry.
 func (s *Server) Environments() *envs.Service { return s.envs }
+
+// Snapshots is the per-environment resource snapshot cache; the events feed
+// invalidates it when Docker reports a change.
+func (s *Server) Snapshots() *envs.Snapshots { return s.snapshots }
 
 // Close stops background work, including the environment monitors, and
 // releases the database. Run calls it on exit; it is safe to call again.

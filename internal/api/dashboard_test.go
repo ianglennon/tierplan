@@ -158,7 +158,7 @@ func TestSummaryReturnsTheEngineCardAndCountsForAnOnlineEnvironment(t *testing.T
 	f, e := dashEnv(t, richEngine())
 	rec := f.get(t, e, "summary")
 	if rec.code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.code, rec.body)
+		t.Fatalf("status = %d: %s\n%s", rec.code, rec.body, f.logs)
 	}
 	s := decode[summaryBody](t, rec)
 	if s.Environment.ID != e.ID || s.Environment.Name != "node-1" || s.Environment.Type != "standalone" || s.Environment.Status.State != "online" {

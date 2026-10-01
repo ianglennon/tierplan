@@ -5,6 +5,7 @@ package envs
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -69,6 +70,12 @@ func NewSnapshots(m *Monitor, ttl time.Duration, now func() time.Time) *Snapshot
 // others.
 func (s *Snapshots) Get(ctx context.Context, envID string) (dockerx.Snapshot, Status, error) {
 	cli, st, err := s.mon.Client(envID)
+	if errors.Is(err, ErrOffline) && st.State == StateUnknown {
+		// Just added: the monitor has not finished its first probe. Wait for it
+		// rather than report an engine nobody has asked yet as offline.
+		s.mon.AwaitProbe(ctx, envID)
+		cli, st, err = s.mon.Client(envID)
+	}
 	if err != nil {
 		return dockerx.Snapshot{}, st, err
 	}

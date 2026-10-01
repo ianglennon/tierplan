@@ -279,3 +279,33 @@ func TestAFailedReadAsksTheMonitorToProbeNow(t *testing.T) {
 		return r.mon.Status("env1").State == StateOffline
 	})
 }
+
+func TestGetRightAfterStartWaitsForTheFirstProbeInsteadOfReportingOffline(t *testing.T) {
+	fake := dockertest.NewFake(t, oneContainer())
+	mon := NewMonitor(slog.New(slog.DiscardHandler), nil, blockingSleep)
+	t.Cleanup(mon.StopAll)
+	if err := mon.Start(context.Background(), "env1", fake); err != nil {
+		t.Fatal(err)
+	}
+	// No waiting for the probe: this is the moment right after an environment is added.
+	snap, st, err := NewSnapshots(mon, time.Second, nil).Get(context.Background(), "env1")
+	if err != nil || st.State != StateOnline || snap.Counts.Containers != 1 {
+		t.Fatalf("Get = %+v, state %q, err %v, want the snapshot of an online environment", snap.Counts, st.State, err)
+	}
+}
+
+func TestAwaitProbeGivesUpWhenTheCallerDoes(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	fake.Stop()
+	mon := NewMonitor(slog.New(slog.DiscardHandler), nil, blockingSleep)
+	t.Cleanup(mon.StopAll)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() { mon.AwaitProbe(ctx, "not-monitored"); mon.AwaitProbe(ctx, "env1"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("AwaitProbe did not return for a cancelled context or an unmonitored environment")
+	}
+}

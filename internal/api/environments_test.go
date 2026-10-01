@@ -191,6 +191,9 @@ func TestEnvironmentListShowsEachEnvironmentWithItsStatus(t *testing.T) {
 		t.Fatalf("empty list = %d %s", got.code, got.body)
 	}
 	added := f.add(t)
+	// Right after add the monitor has not finished its first probe, and the
+	// list shows its state; wait for it so the assertions below do not race it.
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(added.ID).State == envs.StateOnline })
 	rec := f.req(t, http.MethodGet, "/api/environments", "")
 	var list struct {
 		Items []envBody `json:"items"`

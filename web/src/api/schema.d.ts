@@ -44,6 +44,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/containers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the containers of an environment
+         * @description Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         */
+        get: operations["listContainers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the images of an environment
+         * @description Newest first. An untagged image is listed as <none>. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         */
+        get: operations["listImages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/networks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the networks of an environment
+         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         */
+        get: operations["listNetworks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/reconnect": {
         parameters: {
             query?: never;
@@ -58,6 +118,46 @@ export interface paths {
          * @description Asks the health monitor to probe the engine immediately instead of waiting for its next retry, and returns the status as it is now; poll the environment for the result. The probe renegotiates the API version.
          */
         post: operations["reconnectEnvironment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The dashboard of an environment
+         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         */
+        get: operations["getEnvironmentSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/volumes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the volumes of an environment
+         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         */
+        get: operations["listVolumes"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -365,6 +465,56 @@ export interface components {
         EnvironmentListBody: {
             items: components["schemas"]["EnvironmentBody"][] | null;
         };
+        EnvironmentProblem: {
+            /**
+             * @description A human-readable explanation specific to this occurrence of the problem.
+             * @example Property foo is required but is missing.
+             */
+            detail?: string;
+            /** @description environment_unsupported: the engine that was found */
+            engine?: components["schemas"]["EnvironmentProblemEngine"];
+            /** @description Optional list of individual error details */
+            errors?: components["schemas"]["ErrorDetail"][] | null;
+            /**
+             * Format: uri
+             * @description A URI reference that identifies the specific occurrence of the problem.
+             * @example https://example.com/error-log/abc123
+             */
+            instance?: string;
+            /** @description Why, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop */
+            reason?: string;
+            /**
+             * Format: date-time
+             * @description environment_offline: when the engine first stopped answering
+             */
+            since?: string;
+            /**
+             * Format: int64
+             * @description HTTP status code
+             * @example 400
+             */
+            status?: number;
+            /**
+             * @description A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
+             * @example Bad Request
+             */
+            title?: string;
+            /**
+             * Format: uri
+             * @description A URI reference to human-readable documentation for the error.
+             * @default about:blank
+             * @example https://example.com/errors/example
+             */
+            type: string;
+        };
+        EnvironmentProblemEngine: {
+            /** @description The newest Engine API version the daemon speaks */
+            apiVersion?: string;
+            /** @description For example Docker Engine or Podman */
+            name?: string;
+            /** @description The engine version */
+            version?: string;
+        };
         EnvironmentStatusBody: {
             /**
              * Format: date-time
@@ -383,6 +533,20 @@ export interface components {
              * @enum {string}
              */
             state: "unknown" | "online" | "offline" | "unsupported";
+        };
+        EnvironmentSummaryBody: {
+            counts: components["schemas"]["SummaryCountsBody"];
+            engine: components["schemas"]["SummaryEngineBody"];
+            environment: components["schemas"]["SummaryEnvironmentBody"];
+            /**
+             * Format: date-time
+             * @description When the counts were read from Docker; they are cached for a few seconds
+             */
+            fetchedAt: string;
+            /** @description True on a swarm worker, which can show only its own containers, images, volumes and networks (D-24) */
+            isWorker: boolean;
+            /** @description The ID of Bayplan's own container, when it can tell (D-27) */
+            selfContainerId?: string;
         };
         ErrorDetail: {
             /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
@@ -522,6 +686,75 @@ export interface components {
             /** @description The lower-cased username */
             username: string;
         };
+        SummaryCountsBody: {
+            /**
+             * Format: int64
+             * @description All containers, stopped ones included
+             */
+            containers: number;
+            /**
+             * Format: int64
+             * @description Containers in state running
+             */
+            containersRunning: number;
+            /**
+             * Format: int64
+             * @description Containers in any other state, including created, paused and exited
+             */
+            containersStopped: number;
+            /** Format: int64 */
+            images: number;
+            /** Format: int64 */
+            networks: number;
+            /**
+             * Format: int64
+             * @description Swarm nodes; present on swarm managers only
+             */
+            nodes?: number;
+            /**
+             * Format: int64
+             * @description Swarm services; present on swarm managers only
+             */
+            services?: number;
+            /** Format: int64 */
+            volumes: number;
+        };
+        SummaryEngineBody: {
+            /** @description The newest Engine API version the daemon speaks */
+            apiVersion?: string;
+            /** @description The CPU architecture, for example amd64 */
+            arch?: string;
+            /**
+             * Format: int64
+             * @description Total memory in bytes
+             */
+            memTotal: number;
+            /** @description For example Docker Engine */
+            name?: string;
+            /**
+             * Format: int64
+             * @description The number of CPUs
+             */
+            ncpu: number;
+            /** @description The operating system, for example linux */
+            os?: string;
+            /** @description The storage driver, for example overlayfs */
+            storageDriver?: string;
+            /** @description The engine version */
+            version?: string;
+        };
+        SummaryEnvironmentBody: {
+            /** @description The environment ID */
+            id: string;
+            /** @description The display name */
+            name: string;
+            status: components["schemas"]["EnvironmentStatusBody"];
+            /**
+             * @description What the engine is
+             * @enum {string}
+             */
+            type?: "swarm-manager" | "swarm-worker" | "standalone";
+        };
         UserBody: {
             /** @description The user's ID */
             id: string;
@@ -634,6 +867,132 @@ export interface operations {
             };
         };
     };
+    listContainers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentSummaryBody"];
+                };
+            };
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    listImages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentSummaryBody"];
+                };
+            };
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    listNetworks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentSummaryBody"];
+                };
+            };
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
     reconnectEnvironment: {
         parameters: {
             query?: never;
@@ -663,6 +1022,90 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getEnvironmentSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentSummaryBody"];
+                };
+            };
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    listVolumes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentSummaryBody"];
+                };
+            };
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
         };

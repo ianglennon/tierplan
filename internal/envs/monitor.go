@@ -78,6 +78,9 @@ type entry struct {
 	// kick asks the loop for an immediate probe. Capacity one: a second kick
 	// while one is pending adds nothing.
 	kick chan struct{}
+	// probed is closed once the first probe has finished, whatever it found.
+	probed     chan struct{}
+	probedOnce sync.Once
 
 	mu sync.RWMutex
 	st Status
@@ -154,9 +157,10 @@ func (m *Monitor) Start(ctx context.Context, envID string, t engine.Transport) e
 	lctx, cancel := context.WithCancel(ctx)
 	e := &entry{
 		client: cli, cancel: cancel,
-		done: make(chan struct{}),
-		kick: make(chan struct{}, 1),
-		st:   Status{State: StateUnknown},
+		done:   make(chan struct{}),
+		kick:   make(chan struct{}, 1),
+		probed: make(chan struct{}),
+		st:     Status{State: StateUnknown},
 	}
 	m.entries[envID] = e
 	m.live.Add(1)
@@ -220,6 +224,22 @@ func (m *Monitor) Status(envID string) Status {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.st
+}
+
+// AwaitProbe waits until the first probe of envID has finished, or ctx ends, or
+// the monitor stops. It returns at once for an environment that is already
+// probed or not monitored. Right after an environment is added its state is
+// still unknown; a handler waits here instead of reporting it offline.
+func (m *Monitor) AwaitProbe(ctx context.Context, envID string) {
+	e, ok := m.entry(envID)
+	if !ok {
+		return
+	}
+	select {
+	case <-e.probed:
+	case <-e.done:
+	case <-ctx.Done():
+	}
 }
 
 // Kick asks for an immediate probe of envID, for "Retry now". It returns at
@@ -352,6 +372,7 @@ func (m *Monitor) record(envID string, e *entry, res dockerx.ProbeResult, probeE
 	}
 	e.st = st
 	e.mu.Unlock()
+	e.probedOnce.Do(func() { close(e.probed) })
 
 	if prev.State != st.State {
 		attrs := []any{"environment", envID, "from", prev.State, "to", st.State}
