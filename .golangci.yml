@@ -8,6 +8,11 @@ version: "2"
 
 run:
   timeout: 5m
+  # Lint the real-engine tests (internal/dockerx/integration_test.go) too: they
+  # are only compiled with this tag, so without it depguard and errcheck never
+  # see them (plan 15).
+  build-tags:
+    - integration
 
 linters:
   default: none

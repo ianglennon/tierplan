@@ -61,6 +61,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/local-host": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Detect the Docker engine on this server's own host
+         * @description Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.write because it is the context for adding the host.
+         */
+        get: operations["getLocalHost"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/me": {
         parameters: {
             query?: never;
@@ -282,6 +302,14 @@ export interface components {
              */
             rememberDays: number;
         };
+        LocalHostBody: {
+            /** @description Whether a unix socket exists at that path */
+            detected: boolean;
+            /** @description What the engine behind the socket reported; absent when no socket exists */
+            probe?: components["schemas"]["ProbeResult"];
+            /** @description The Docker socket path Bayplan was configured with */
+            socketPath: string;
+        };
         LoginBody: {
             /** @description Sent as X-CSRF-Token on every mutating request */
             csrfToken: string;
@@ -311,6 +339,30 @@ export interface components {
             };
             /** @description Installation-wide permissions */
             global: string[] | null;
+        };
+        ProbeResult: {
+            apiVersion?: string;
+            arch?: string;
+            detail?: string;
+            engineName?: string;
+            engineVersion?: string;
+            hostname?: string;
+            kernelVersion?: string;
+            /** Format: int64 */
+            memTotal?: number;
+            /** Format: int64 */
+            ncpu?: number;
+            negotiatedApi?: string;
+            os?: string;
+            osType?: string;
+            /** Format: date-time */
+            probedAt: string;
+            reachable: boolean;
+            reason?: string;
+            storageDriver?: string;
+            supported: boolean;
+            swarmNodeState?: string;
+            type?: string;
         };
         SetupDefaultsBody: {
             /** @description The server's hostname */
@@ -456,6 +508,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getLocalHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalHostBody"];
                 };
             };
             /** @description Error */

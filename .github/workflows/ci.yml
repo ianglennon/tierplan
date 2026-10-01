@@ -6,7 +6,8 @@
 #
 # Supply chain (T-01-12): every action is pinned to a full commit SHA with the
 # release tag in a trailing comment, the token is read-only and there are no
-# secrets. Plans 15 and 28 add the engine matrix and e2e jobs.
+# secrets. Plan 15 added the engine matrix (the integration job); plan 28 adds
+# the e2e job.
 name: CI
 
 on:
@@ -137,3 +138,45 @@ jobs:
         with:
           fetch-depth: 0
       - run: make dco DCO_BASE=${{ github.event.pull_request.base.sha }} DCO_HEAD=${{ github.event.pull_request.head.sha }}
+
+  # D-28: the dockerx integration tests against every Docker Engine major from
+  # 24 to 29 on every pull request. Each matrix leg gets its own docker:N-dind
+  # service, and the tests dial it over TCP through the same dockerx code path
+  # (a socket shared out of dind is root-only, so the runner user cannot open it).
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [24, 25, 26, 27, 28, 29]
+    services:
+      dind:
+        image: docker:${{ matrix.engine }}-dind
+        env:
+          DOCKER_TLS_CERTDIR: ""
+        options: --privileged
+        ports:
+          - 2375:2375
+    env:
+      BAYPLAN_TEST_DOCKER_HOST: tcp://localhost:2375
+      BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Wait for the daemon by polling, never by sleeping a fixed time (Pitfall 23).
+      - name: Wait for the dind daemon
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:2375/_ping >/dev/null; then
+              echo "docker:${{ matrix.engine }}-dind is up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "docker:${{ matrix.engine }}-dind did not answer /_ping within 60s" >&2
+          exit 1
+      - run: make test-int

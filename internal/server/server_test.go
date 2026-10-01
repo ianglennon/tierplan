@@ -25,6 +25,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
@@ -285,6 +286,20 @@ func TestBuildRejectsAMalformedKeyBeforeTouchingTheDatabase(t *testing.T) {
 	}
 }
 
+func TestBuildRejectsADockerHostThatIsNotAUnixSocketBeforeTouchingTheDataDirectory(t *testing.T) {
+	for _, host := range []string{"tcp://1.2.3.4:2375", "ssh://host", "npipe:////./pipe/docker_engine", "/var/run/docker.sock"} {
+		dir := t.TempDir() + "/data"
+		cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir, "DOCKER_HOST": host})
+		_, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
+		if !errors.Is(err, engine.ErrUnsupportedDockerHost) || !strings.Contains(err.Error(), "unix") {
+			t.Errorf("DOCKER_HOST=%s: Build = %v, want ErrUnsupportedDockerHost naming unix", host, err)
+		}
+		if _, statErr := os.Stat(dir); statErr == nil {
+			t.Errorf("DOCKER_HOST=%s: a refused startup must not create the data directory (D-21)", host)
+		}
+	}
+}
+
 func TestBuildSeedsTheAdminRoleAndEveryRouteIsGuarded(t *testing.T) {
 	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -300,7 +315,7 @@ func TestBuildSeedsTheAdminRoleAndEveryRouteIsGuarded(t *testing.T) {
 		t.Errorf("the assembled router has an unguarded route: %v", err)
 	}
 	// The openapi subcommand builds the same routes with no dependencies.
-	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{})); err != nil {
+	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{})); err != nil {
 		t.Errorf("the dependency-free router has an unguarded route: %v", err)
 	}
 }

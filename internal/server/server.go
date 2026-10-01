@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
+	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -61,12 +62,13 @@ type Server struct {
 // NewRouter wires every operation. It takes plain dependencies so the
 // `openapi` subcommand can build the same handlers without a database or a
 // socket.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps) *httpx.Router {
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps) *httpx.Router {
 	r := httpx.New(opts)
 	api.RegisterSystem(r, sys)
 	api.RegisterSetup(r, setup)
 	api.RegisterAuth(r, authDeps)
 	api.RegisterAccount(r, account)
+	api.RegisterLocalHost(r, localHost)
 	return r
 }
 
@@ -82,6 +84,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		"version", buildinfo.Get().Display,
 		"config", cfg.Redacted(),
 	)
+
+	// DOCKER_HOST is honoured for unix:// only (D-21). Checking it before
+	// anything is written means a bad value stops startup with a clear message.
+	socketPath, err := engine.ParseDockerHost(cfg.DockerHost)
+	if err != nil {
+		return nil, err
+	}
 
 	info, err := datadir.Prepare(cfg.DataDir, datadir.Options{})
 	if err != nil {
@@ -99,6 +108,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		return nil, fmt.Errorf("load encryption key: %w", err)
 	}
 	log.Info("encryption key loaded", "key_id", vlt.KeyID(), "source", vlt.KeySource())
+	log.Info("docker socket", "path", socketPath, "present", engine.SocketExists(socketPath))
 
 	st, err := store.Open(ctx, info.Path)
 	if err != nil {
@@ -200,7 +210,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		DataDir:  info,
 		Vault:    vlt,
 		Log:      log,
-	})
+	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		_ = st.Close()

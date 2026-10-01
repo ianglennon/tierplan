@@ -64,6 +64,8 @@ type authFixture struct {
 	// environment-keyed vault.
 	dataInfo  datadir.Info
 	acctVault *vault.Vault
+	// localHost feeds GET /api/local-host (plan 15).
+	localHost api.LocalHostDeps
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -112,6 +114,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
 		DataDir: f.dataInfo, Vault: f.acctVault, Log: log,
 	})
+	api.RegisterLocalHost(r, f.localHost)
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
 	}

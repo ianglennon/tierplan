@@ -16,7 +16,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check test smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint
+.PHONY: web build gen gen-check test test-int smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -40,6 +40,13 @@ gen-check: gen
 test:
 	go test ./... -race -count=1
 	pnpm -C web exec vitest run
+
+# Real-engine tests (D-28), build tag `integration`. With BAYPLAN_TEST_DOCKER_HOST
+# set (CI points it at the dind service) they use that engine; without it each
+# run starts docker:<N>-dind (N is BAYPLAN_TEST_ENGINE, default 29) with testcontainers, so the
+# machine needs a Docker it can reach.
+test-int:
+	go test -tags=integration -race -count=1 ./internal/...
 
 smoke:
 	scripts/smoke.sh

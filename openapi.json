@@ -201,6 +201,28 @@
         ],
         "type": "object"
       },
+      "LocalHostBody": {
+        "additionalProperties": false,
+        "properties": {
+          "detected": {
+            "description": "Whether a unix socket exists at that path",
+            "type": "boolean"
+          },
+          "probe": {
+            "$ref": "#/components/schemas/ProbeResult",
+            "description": "What the engine behind the socket reported; absent when no socket exists"
+          },
+          "socketPath": {
+            "description": "The Docker socket path Bayplan was configured with",
+            "type": "string"
+          }
+        },
+        "required": [
+          "socketPath",
+          "detected"
+        ],
+        "type": "object"
+      },
       "LoginBody": {
         "additionalProperties": false,
         "properties": {
@@ -296,6 +318,77 @@
         "required": [
           "global",
           "environments"
+        ],
+        "type": "object"
+      },
+      "ProbeResult": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "engineName": {
+            "type": "string"
+          },
+          "engineVersion": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "kernelVersion": {
+            "type": "string"
+          },
+          "memTotal": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "ncpu": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "negotiatedApi": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "osType": {
+            "type": "string"
+          },
+          "probedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "storageDriver": {
+            "type": "string"
+          },
+          "supported": {
+            "type": "boolean"
+          },
+          "swarmNodeState": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reachable",
+          "supported",
+          "probedAt"
         ],
         "type": "object"
       },
@@ -586,6 +679,45 @@
         "summary": "Get the instance name, whether setup is needed and the remember-me length",
         "tags": [
           "setup"
+        ]
+      }
+    },
+    "/api/local-host": {
+      "get": {
+        "description": "Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.write because it is the context for adding the host.",
+        "operationId": "getLocalHost",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalHostBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Detect the Docker engine on this server's own host",
+        "tags": [
+          "environments"
         ]
       }
     },
