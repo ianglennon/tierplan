@@ -47,13 +47,22 @@ export const tokenSchema = z
   .min(1, { error: KEY.tokenRequired })
   .max(MAX_TOKEN_LENGTH, { error: KEY.tokenInvalid });
 
+export const tokenFormSchema = z.object({ token: tokenSchema });
+export type TokenValues = z.output<typeof tokenFormSchema>;
+
+// lowerAscii lower-cases A to Z only, never Unicode, so what the username field
+// shows on blur is exactly what the schema and the server go on to check.
+export function lowerAscii(s: string): string {
+  return s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+}
+
 // D-35: 3 to 32 of a-z, 0-9, dot, dash, underscore, not case-sensitive. The
 // characters are checked as typed and only then lower-cased by ASCII range, so
 // a Unicode lookalike (the Kelvin sign) is refused instead of folding to "k".
 const usernameSchema = z
   .string()
   .regex(new RegExp(`^[A-Za-z0-9._-]{3,${MAX_USERNAME_LENGTH}}$`), { error: KEY.username })
-  .transform((s) => s.replace(/[A-Z]/g, (c) => c.toLowerCase()));
+  .transform(lowerAscii);
 
 export const adminSchema = z
   .object({
@@ -95,6 +104,7 @@ export const instanceSchema = z.object({
   publicUrl: z.string().trim().refine(isPublicUrl, { error: KEY.publicUrl }),
 });
 
+export type InstanceInput = z.input<typeof instanceSchema>;
 export type InstanceValues = z.output<typeof instanceSchema>;
 
 // Which step owns which field. The key order is the order the fields appear on
