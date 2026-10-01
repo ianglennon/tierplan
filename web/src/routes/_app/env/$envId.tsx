@@ -36,6 +36,14 @@ function useNow(): number {
   return now;
 }
 
+// PageTitle sets the tab title while a full-page state is showing. It is a
+// component, not a hook call in the layout, because the layout's effect would
+// run after the page's own and overwrite its title.
+function PageTitle({ page }: { page: string }) {
+  useDocumentTitle(page);
+  return null;
+}
+
 // Attempted is the "Attempted {relative time}" line under a full-page state
 // after Retry ran and the problem is still there, so the user can see it ran.
 function Attempted({ at }: { at: number }) {
@@ -85,35 +93,34 @@ function EnvironmentLayout() {
 
   const problem = summary.error instanceof EnvironmentProblemError ? summary.error : undefined;
   const failure = problem?.failure;
-
-  let heading: string | undefined;
-  if (failure === "offline") heading = t("dashboard.fullPage.offline.heading");
-  if (failure === "unsupported") {
-    heading =
-      problem?.engine?.name?.toLowerCase().includes("podman") || problem?.reason === "podman"
-        ? t("dashboard.fullPage.unsupported.podmanHeading")
-        : t("dashboard.fullPage.unsupported.heading");
-  }
-  if (failure === "not_found") heading = t("common.notFound.heading");
-  useDocumentTitle(
-    heading ?? (failure === "forbidden" ? t("common.noPermission.heading") : undefined),
-  );
+  const engine = problem?.engine;
+  const podman = engine?.name?.toLowerCase().includes("podman") || problem?.reason === "podman";
 
   // A failing environment never breaks the shell or other routes (D-26): only
   // this environment's own pages are replaced by a full-page state.
-  if (failure === "forbidden") return <NoPermission />;
+  if (failure === "forbidden") {
+    return (
+      <>
+        <PageTitle page={t("common.noPermission.heading")} />
+        <NoPermission />
+      </>
+    );
+  }
   if (failure === "not_found") {
     return (
-      <FullPageState
-        icon={FileQuestion}
-        heading={t("common.notFound.heading")}
-        body={t("common.notFound.body")}
-        action={
-          <Button asChild>
-            <Link to="/">{t("common.notFound.action")}</Link>
-          </Button>
-        }
-      />
+      <>
+        <PageTitle page={t("common.notFound.heading")} />
+        <FullPageState
+          icon={FileQuestion}
+          heading={t("common.notFound.heading")}
+          body={t("common.notFound.body")}
+          action={
+            <Button asChild>
+              <Link to="/">{t("common.notFound.action")}</Link>
+            </Button>
+          }
+        />
+      </>
     );
   }
   if (failure === "offline" || failure === "unsupported") {
@@ -127,44 +134,54 @@ function EnvironmentLayout() {
     const footnote = lastTry === undefined ? undefined : <Attempted at={lastTry} />;
 
     if (failure === "offline") {
+      const heading = t("dashboard.fullPage.offline.heading");
       const time = formatClock(problem?.since);
       return (
-        <FullPageState
-          icon={ServerOff}
-          heading={t("dashboard.fullPage.offline.heading")}
-          body={
-            time
-              ? t("dashboard.fullPage.offline.body", { name, time })
-              : t("dashboard.fullPage.offline.bodyNoTime", { name })
-          }
-          action={action}
-          footnote={footnote}
-        />
+        <>
+          <PageTitle page={heading} />
+          <FullPageState
+            icon={ServerOff}
+            heading={heading}
+            body={
+              time
+                ? t("dashboard.fullPage.offline.body", { name, time })
+                : t("dashboard.fullPage.offline.bodyNoTime", { name })
+            }
+            action={action}
+            footnote={footnote}
+          />
+        </>
       );
     }
 
-    const engine = problem?.engine;
-    const podman = engine?.name?.toLowerCase().includes("podman") || problem?.reason === "podman";
+    const heading = podman
+      ? t("dashboard.fullPage.unsupported.podmanHeading")
+      : t("dashboard.fullPage.unsupported.heading");
     const facts = {
       engine: engine?.name ?? t("dashboard.fullPage.unsupported.engineFallback"),
       version: engine?.version ?? "—",
       api: engine?.apiVersion ?? "—",
     };
+    // Only a too-old API has the "below the minimum" wording. Rootless and
+    // Docker Desktop engines are unsupported for other reasons.
     const tooOld = problem?.reason === undefined || problem.reason === "api_too_old";
     return (
-      <FullPageState
-        icon={ServerCrash}
-        heading={heading ?? t("dashboard.fullPage.unsupported.heading")}
-        body={
-          podman
-            ? t("dashboard.fullPage.unsupported.podmanBody")
-            : tooOld
-              ? t("dashboard.fullPage.unsupported.body", facts)
-              : t("dashboard.fullPage.unsupported.bodyOther", facts)
-        }
-        action={action}
-        footnote={footnote}
-      />
+      <>
+        <PageTitle page={heading} />
+        <FullPageState
+          icon={ServerCrash}
+          heading={heading}
+          body={
+            podman
+              ? t("dashboard.fullPage.unsupported.podmanBody")
+              : tooOld
+                ? t("dashboard.fullPage.unsupported.body", facts)
+                : t("dashboard.fullPage.unsupported.bodyOther", facts)
+          }
+          action={action}
+          footnote={footnote}
+        />
+      </>
     );
   }
   return <Outlet />;

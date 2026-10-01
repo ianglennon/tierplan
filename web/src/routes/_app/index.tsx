@@ -2,10 +2,11 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Navigate, redirect } from "@tanstack/react-router";
 import { Server } from "lucide-react";
 
-import { api } from "@/api/client";
+import { environmentsQuery } from "@/api/environments";
+import { queryClient } from "@/api/query-client";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -19,21 +20,11 @@ import { LocalHostPanel } from "@/features/environments/local-host-panel";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
-// The ["environments"] query: every environment the caller may read. The panel
-// invalidates it after adding the local host.
-const environmentsQuery = {
-  queryKey: ["environments"],
-  queryFn: async () => {
-    const { data } = await api.GET("/api/environments");
-    if (!data) throw new Error("GET /api/environments failed");
-    return data;
-  },
-};
-
 // The signed-in landing page. With no environment there is nothing to show but
 // where to start (D-08): the opt-in for this host, or the command that mounts
-// the Docker socket. Plan 19 sends users to their first environment when there
-// is one.
+// the Docker socket. With one, the user goes to its dashboard: the route's
+// beforeLoad does it on arrival, and the Navigate below does it when the list
+// fills while this page is open (the opt-in just added the host).
 function Home() {
   const t = useT();
   useDocumentTitle(t("shell.home.tabTitle"));
@@ -50,7 +41,8 @@ function Home() {
   // Nothing until the list has answered, so the empty state never flashes up
   // for someone who has environments.
   if (!environments.data) return null;
-  if ((environments.data.items ?? []).length > 0) return null;
+  const first = (environments.data.items ?? [])[0];
+  if (first) return <Navigate to="/env/$envId" params={{ envId: first.id }} replace />;
 
   return (
     <div className="mx-auto flex w-full max-w-120 flex-col gap-6">
@@ -77,5 +69,24 @@ function Home() {
 }
 
 export const Route = createFileRoute("/_app/")({
+  // A signed-in user with an environment lands on its dashboard (ENV-07). A
+  // list that cannot be read falls through to the page, which says so.
+  beforeLoad: async () => {
+    let first: string | undefined;
+    try {
+      // A short staleTime: the list is read again when it is older than that,
+      // so a host that was removed does not send the user back to a missing
+      // dashboard.
+      const list = await queryClient.fetchQuery({
+        ...environmentsQuery,
+        staleTime: 5_000,
+        retry: false,
+      });
+      first = list.items?.[0]?.id;
+    } catch {
+      return;
+    }
+    if (first) throw redirect({ to: "/env/$envId", params: { envId: first } });
+  },
   component: Home,
 });

@@ -6,9 +6,9 @@ import { Link, useParams } from "@tanstack/react-router";
 import { Check, ChevronsUpDown, Server, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
+import { environmentsQuery } from "@/api/environments";
 import { StatusDot, useHealthLabel } from "@/components/status-dot";
-import { Badge } from "@/components/ui/badge";
+import { TypeBadge } from "@/components/type-badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,18 +25,6 @@ import {
 } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useT } from "@/i18n/use-t";
-
-// TypeBadge is the neutral outline badge naming what an environment is. It
-// never truncates, and it is left out until the engine has answered.
-export function TypeBadge({ type }: { type: EnvironmentItem["type"] }) {
-  const t = useT();
-  if (!type) return null;
-  return (
-    <Badge variant="outline" className="shrink-0">
-      {t(`env.type.${type}`)}
-    </Badge>
-  );
-}
 
 // EnvSwitcher is the sidebar header (D-54): always shown, even with one
 // environment. The trigger holds the selected environment's name (cut with a

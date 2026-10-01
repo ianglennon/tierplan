@@ -125,13 +125,14 @@ describe("/welcome (wizard step 4)", () => {
     expect(posts()).toEqual([]);
   });
 
-  it("adds the host with the session's CSRF token on Manage this host, then goes home", async () => {
+  it("adds the host with the session's CSRF token on Manage this host, then lands on its dashboard", async () => {
     const router = renderAt("/welcome");
     await screen.findByRole("heading", { name: "Manage this Docker host?" });
 
     fireEvent.click(screen.getByRole("button", { name: "Manage this host" }));
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    // Home sends a user who has an environment to its dashboard (plan 19).
+    await waitFor(() => expect(router.state.location.pathname).toBe("/env/e1"));
     expect(posts()).toEqual([
       { path: "/api/environments", method: "POST", csrf: "csrf-1", body: { kind: "local" } },
     ]);
