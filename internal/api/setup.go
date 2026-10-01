@@ -18,6 +18,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 )
@@ -41,13 +42,24 @@ const (
 // Plan 10 writes it when setup completes.
 const settingInstanceName = "instance_name"
 
+// SetupAuditor is what the setup routes need from the audit writer: Record for
+// attempts that change nothing, and RecordTx so the completion's audit entry
+// commits or rolls back with the account it describes. *audit.Writer
+// implements it.
+type SetupAuditor interface {
+	httpx.Auditor
+	RecordTx(ctx context.Context, tx *sql.Tx, e audit.Entry) error
+}
+
 // SetupDeps are the dependencies of the setup routes.
 type SetupDeps struct {
-	Gate    *auth.SetupGate
-	Limiter *auth.IPLimiter
-	Audit   httpx.Auditor
-	Store   *store.Store
-	Config  config.Config
+	Gate     *auth.SetupGate
+	Limiter  *auth.IPLimiter
+	Audit    SetupAuditor
+	Store    *store.Store
+	Config   config.Config
+	Instance *instance.Instance
+	Sessions *auth.Sessions
 	// SPA serves the single-page app for GET /setup while setup is needed.
 	SPA http.Handler
 	// Hostname supplies the default instance name. Nil means os.Hostname.

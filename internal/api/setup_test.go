@@ -21,6 +21,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/instance"
+	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
@@ -31,12 +33,15 @@ import (
 const testClientAddr = "203.0.113.9:40000"
 
 type setupFixture struct {
-	h     http.Handler
-	st    *store.Store
-	gate  *auth.SetupGate
-	token string
-	logs  *bytes.Buffer
-	clk   *fakeClock
+	h        http.Handler
+	st       *store.Store
+	gate     *auth.SetupGate
+	token    string
+	logs     *bytes.Buffer
+	clk      *fakeClock
+	inst     *instance.Instance
+	sessions *auth.Sessions
+	dataDir  string
 }
 
 type fakeClock struct{ t time.Time }
@@ -44,6 +49,13 @@ type fakeClock struct{ t time.Time }
 func (c *fakeClock) now() time.Time { return c.t }
 
 func newSetupFixture(t *testing.T, cfg config.Config) *setupFixture {
+	t.Helper()
+	return newSetupFixtureWith(t, cfg, func(w *audit.Writer) api.SetupAuditor { return w })
+}
+
+// newSetupFixtureWith lets a test wrap the audit writer the setup routes use,
+// for example to make the completion's audit write fail.
+func newSetupFixtureWith(t *testing.T, cfg config.Config, wrap func(*audit.Writer) api.SetupAuditor) *setupFixture {
 	t.Helper()
 	st := storetest.New(t)
 	logs := &bytes.Buffer{}
@@ -55,6 +67,14 @@ func newSetupFixture(t *testing.T, cfg config.Config) *setupFixture {
 		t.Fatal(err)
 	}
 	aud := audit.NewWriter(st, v, log, nil)
+	if err := rbac.SeedAdminRole(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := instance.Load(context.Background(), st, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := auth.NewSessions(st, v, 12*time.Hour, 30*24*time.Hour, nil)
 
 	dataDir := t.TempDir()
 	gate := auth.NewSetupGate(st, dataDir, slog.New(slog.DiscardHandler))
@@ -66,13 +86,15 @@ func newSetupFixture(t *testing.T, cfg config.Config) *setupFixture {
 	clk := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	site := fstest.MapFS{"index.html": {Data: []byte(indexHTML)}}
 	spa := webui.Handler(site)
-	r := httpx.New(httpx.Options{Fallback: spa, Auditor: aud, Logger: log})
+	r := httpx.New(httpx.Options{Fallback: spa, Auditor: aud, Logger: log, PublicOrigin: inst.PublicOrigin})
 	api.RegisterSetup(r, api.SetupDeps{
 		Gate:     gate,
 		Limiter:  auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, clk.now),
-		Audit:    aud,
+		Audit:    wrap(aud),
 		Store:    st,
 		Config:   cfg,
+		Instance: inst,
+		Sessions: sessions,
 		SPA:      spa,
 		Hostname: func() (string, error) { return "swarm-mgr-1", nil },
 		Log:      log,
@@ -80,7 +102,7 @@ func newSetupFixture(t *testing.T, cfg config.Config) *setupFixture {
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
 	}
-	return &setupFixture{h: r.Handler(), st: st, gate: gate, token: token, logs: logs, clk: clk}
+	return &setupFixture{h: r.Handler(), st: st, gate: gate, token: token, logs: logs, clk: clk, inst: inst, sessions: sessions, dataDir: dataDir}
 }
 
 func (f *setupFixture) post(t *testing.T, body string) *httptest.ResponseRecorder {
@@ -161,9 +183,7 @@ func TestSetupInstanceIsPublicAndReportsNeedsSetupOnAFreshStore(t *testing.T) {
 func TestSetupInstanceReportsTheStoredNameAfterSetup(t *testing.T) {
 	f := newSetupFixture(t, config.Config{SessionRememberLifetime: 24 * time.Hour})
 	f.addUser(t)
-	if err := f.st.Q.UpsertSetting(context.Background(), sqlc.UpsertSettingParams{Key: "instance_name", Value: "Home lab", UpdatedAt: 1}); err != nil {
-		t.Fatal(err)
-	}
+	f.inst.Apply("Home lab", "")
 	rec := f.get(t, "/api/instance")
 	var got struct {
 		InstanceName string `json:"instanceName"`
