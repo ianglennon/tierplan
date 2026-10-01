@@ -1,0 +1,11 @@
+# Local-only planning and agent files (not tracked)
+.planning/
+.claude/
+CLAUDE.md
+.gsd/
+/bin/
+/web/node_modules/
+/web/dist/*
+!/web/dist/.gitkeep
+/.devdata/
+/coverage/

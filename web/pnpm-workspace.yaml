@@ -1,0 +1,5 @@
+minimumReleaseAgeExclude:
+  - vite@8.3.2
+peerDependencyRules:
+  allowedVersions:
+    typescript: "6"
