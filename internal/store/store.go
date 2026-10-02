@@ -16,7 +16,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 
@@ -89,11 +92,31 @@ func Open(ctx context.Context, dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("open database for reading: %w", err)
 	}
 
+	restrictFiles(abs)
+
 	return &Store{
 		Write: write, Read: read,
 		Q: sqlc.New(write), RQ: sqlc.New(read),
 		Path: abs,
 	}, nil
+}
+
+// databaseFileMode is the mode of the database and its WAL and SHM files. The
+// threat model promises 0600 (a bind-mounted /data is visible to every local
+// user of the host), and SQLite gives the -wal and -shm sidecars the mode of
+// the database file, so narrowing the three on open covers files that an
+// older build or a permissive umask created.
+const databaseFileMode fs.FileMode = 0o600
+
+// restrictFiles chmods the database and its sidecars to databaseFileMode.
+// A file that does not exist is skipped. Any other failure is logged and does
+// not stop startup, so an unusual file system (one without chmod) still runs.
+func restrictFiles(dbPath string) {
+	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if err := os.Chmod(p, databaseFileMode); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			slog.Warn("could not restrict the database file to mode 600", "path", p, "error", err)
+		}
+	}
 }
 
 func openPool(absPath, query string) (*sql.DB, error) {

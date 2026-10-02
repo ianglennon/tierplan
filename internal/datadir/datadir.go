@@ -7,6 +7,7 @@ package datadir
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -31,6 +32,8 @@ type Options struct {
 	// LookupMount returns the mount entry whose mount point is exactly path, or
 	// nil when there is none. Default: moby/sys/mountinfo.
 	LookupMount func(path string) (*mountinfo.Info, error)
+	// Chmod narrows the directory mode. Default: os.Chmod.
+	Chmod func(string, os.FileMode) error
 }
 
 // Prepare creates path (mode 0750) if it is missing, proves it is writable and
@@ -48,6 +51,9 @@ func Prepare(path string, opts Options) (Info, error) {
 	if opts.LookupMount == nil {
 		opts.LookupMount = lookupMount
 	}
+	if opts.Chmod == nil {
+		opts.Chmod = os.Chmod
+	}
 
 	if err := os.MkdirAll(path, 0o750); err != nil {
 		return Info{}, fmt.Errorf("create data directory %s: %w", path, err)
@@ -55,6 +61,8 @@ func Prepare(path string, opts Options) (Info, error) {
 	if err := CheckWritable(path); err != nil {
 		return Info{}, err
 	}
+
+	narrow(path, opts.Chmod)
 
 	info := Info{Path: path, Persisted: true}
 	if !opts.InContainer() {
@@ -76,6 +84,27 @@ func Prepare(path string, opts Options) (Info, error) {
 		info.Persisted, info.Reason = false, m.FSType
 	}
 	return info, nil
+}
+
+// narrow removes group-write and every other-permission bit from the directory
+// (0755 and 0777 become 0750, 0700 is untouched), so local users on the host
+// cannot list or read what Bayplan keeps there. When the mode cannot be changed
+// (a file system without chmod, a directory owned by someone else) Bayplan
+// starts anyway and warns, because refusing to start would turn a hardening
+// step into an outage.
+func narrow(path string, chmod func(string, os.FileMode) error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	perm := st.Mode().Perm()
+	if perm&0o027 == 0 {
+		return
+	}
+	if err := chmod(path, perm&^0o027); err != nil {
+		slog.Warn("data directory is readable beyond its owner and group; run chmod 750 on it",
+			"path", path, "mode", fmt.Sprintf("%04o", perm), "error", err)
+	}
 }
 
 // CheckWritable proves the directory accepts a new file by creating and
