@@ -27,6 +27,10 @@ const (
 	// defaultMaxStreams is how many event streams one user may hold open at
 	// once, however many tabs they have (T-01-87).
 	defaultMaxStreams = 8
+	// defaultMaxStreamLifetime is the longest one stream lives. Whatever the
+	// re-checks missed, the browser's reconnect then goes through the full
+	// policy (WR-02).
+	defaultMaxStreamLifetime = time.Hour
 	// recentEventsLimit is how many events the polling fallback returns.
 	recentEventsLimit = 50
 )
@@ -48,6 +52,9 @@ type EventsDeps struct {
 	Heartbeat time.Duration
 	// MaxStreamsPerUser caps concurrent streams per user. Zero means 8.
 	MaxStreamsPerUser int
+	// MaxLifetime is the longest one stream stays open. Zero means one hour;
+	// tests shorten it.
+	MaxLifetime time.Duration
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -133,6 +140,9 @@ func RegisterEvents(r *httpx.Router, d EventsDeps) {
 	if d.MaxStreamsPerUser <= 0 {
 		d.MaxStreamsPerUser = defaultMaxStreams
 	}
+	if d.MaxLifetime <= 0 {
+		d.MaxLifetime = defaultMaxStreamLifetime
+	}
 	need := rbac.Requirement{Perm: rbac.PermEnvironmentsRead, Scope: rbac.ScopeEnvironment}
 
 	httpx.Register(r, huma.Operation{
@@ -160,8 +170,16 @@ func RegisterEvents(r *httpx.Router, d EventsDeps) {
 
 // serveEventStream is the SSE handler: the buffered backlog, then live events,
 // with a heartbeat while nothing happens, until the client leaves, the hub
-// closes the subscription or a write fails. The policy has already run, so the
+// closes the subscription, a write fails, the stream has lived MaxLifetime or
+// a heartbeat finds it no longer authorised. The policy has already run, so the
 // principal and environment are on the context.
+//
+// The policy ran once, when the stream opened, so every heartbeat runs it again
+// through httpx.StillAuthorized: a sign-out, a password change that ends other
+// sessions, idle expiry, a disabled user, a removed or disabled environment and
+// a withdrawn permission all end the stream within one heartbeat (WR-02). The
+// browser's EventSource then reconnects through the full policy and a revoked
+// session gets a 401, which the SPA treats as a signed-out session.
 func serveEventStream(w http.ResponseWriter, req *http.Request, d EventsDeps, lim *streamLimiter) {
 	ctx := req.Context()
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
@@ -227,9 +245,15 @@ func serveEventStream(w http.ResponseWriter, req *http.Request, d EventsDeps, li
 
 	beat := time.NewTicker(d.Heartbeat)
 	defer beat.Stop()
+	// A stream never outlives MaxLifetime: ending it is how the browser comes
+	// back through the whole policy even if a re-check was somehow missed.
+	life := time.NewTimer(d.MaxLifetime)
+	defer life.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-life.C:
 			return
 		case row, open := <-ch:
 			if !open {
@@ -239,6 +263,9 @@ func serveEventStream(w http.ResponseWriter, req *http.Request, d EventsDeps, li
 				return
 			}
 		case <-beat.C:
+			if !httpx.StillAuthorized(ctx) {
+				return
+			}
 			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil || rc.Flush() != nil {
 				return
 			}

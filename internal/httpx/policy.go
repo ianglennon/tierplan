@@ -30,6 +30,16 @@ type Authenticator interface {
 	Authenticate(r *http.Request) (*rbac.Principal, error)
 }
 
+// SessionRechecker is implemented by an Authenticator that can re-validate an
+// already-authenticated principal without a request and without extending the
+// session (no last-seen touch, no deletes). Long-lived routes (server-sent
+// events now, WebSockets later) use it through StillAuthorized, so they end when
+// the session, its user or its permission is revoked rather than at the next
+// request that never comes.
+type SessionRechecker interface {
+	Recheck(ctx context.Context, p *rbac.Principal) (bool, error)
+}
+
 // AnonymousAuthenticator authenticates nobody. The server uses it until the
 // session-backed authenticator exists (plan 12).
 type AnonymousAuthenticator struct{}
@@ -79,6 +89,7 @@ type (
 	principalKey struct{}
 	envKey       struct{}
 	clientKey    struct{}
+	recheckKey   struct{}
 )
 
 // client is what the clientIP middleware learned about the TCP peer.
@@ -100,6 +111,66 @@ func PrincipalFrom(ctx context.Context) *rbac.Principal {
 func EnvFrom(ctx context.Context) *Env {
 	e, _ := ctx.Value(envKey{}).(*Env)
 	return e
+}
+
+// StillAuthorized re-runs the policy that let a Guarded request in, against the
+// state of the world now: the session behind the principal must still be valid
+// (when the Authenticator is a SessionRechecker), an environment-scoped route's
+// environment must still exist and be enabled, and the Checker must still allow
+// the requirement. A long-lived handler calls it periodically and returns when
+// it is false; the client's reconnect then goes through the full policy and gets
+// a 401 or 403. It writes nothing to the response, audits nothing and never
+// extends the session. Any failure of a lookup counts as false, so a stream
+// fails closed. On a context that did not come through Guarded it is true,
+// because there is nothing to re-check.
+func StillAuthorized(ctx context.Context) bool {
+	fn, ok := ctx.Value(recheckKey{}).(func(context.Context) bool)
+	if !ok {
+		return true
+	}
+	return fn(ctx)
+}
+
+// recheck builds the closure Guarded stores for StillAuthorized: the same three
+// checks authorize makes, for this principal, requirement and environment.
+func (r *Router) recheck(route string, p *rbac.Principal, need rbac.Requirement, envID string) func(context.Context) bool {
+	return func(ctx context.Context) bool {
+		deny := func(why string, err error) bool {
+			if err != nil {
+				r.opts.Logger.Warn("a long-lived stream is no longer authorised", "route", route, "why", why, "error", err)
+			}
+			return false
+		}
+		if rc, ok := r.opts.Authenticator.(SessionRechecker); ok {
+			valid, err := rc.Recheck(ctx, p)
+			if err != nil || !valid {
+				return deny("session", err)
+			}
+		}
+		if need.Perm != "" && need.Scope == rbac.ScopeEnvironment {
+			e, err := r.opts.EnvResolver.Resolve(ctx, envID)
+			if err != nil || !e.Enabled {
+				return deny("environment", ignoreEnvState(err))
+			}
+		}
+		if r.opts.Checker == nil {
+			return deny("no checker", nil)
+		}
+		d := r.opts.Checker.Check(ctx, p, need, envID)
+		if d.Err != nil || !d.Allowed {
+			return deny("permission", d.Err)
+		}
+		return true
+	}
+}
+
+// ignoreEnvState hides the expected "gone" and "disabled" outcomes from the
+// warning, which is for lookups that failed.
+func ignoreEnvState(err error) error {
+	if errors.Is(err, ErrEnvNotFound) || errors.Is(err, ErrEnvDisabled) {
+		return nil
+	}
+	return err
 }
 
 // ClientIP returns the client address the audit log records: the TCP peer, or
@@ -454,6 +525,8 @@ func (r *Router) Guarded(method, path string, need rbac.Requirement, h http.Hand
 		if env != nil {
 			ctx = context.WithValue(ctx, envKey{}, env)
 		}
+		// So a long-lived handler can re-validate what authorised it (WR-02).
+		ctx = context.WithValue(ctx, recheckKey{}, r.recheck(method+" "+path, p, need, envID))
 		h.ServeHTTP(w, req.WithContext(ctx))
 	}))
 }

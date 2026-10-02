@@ -325,6 +325,11 @@ func TestEventStreamSendsTheHeadersTheBacklogAndThenLiveFrames(t *testing.T) {
 	if got := h.Get("Content-Encoding"); got != "" {
 		t.Errorf("Content-Encoding = %q, want none: a compressed stream is held back by the compressor (Pitfall 8)", got)
 	}
+	fr1, e1 := c.mustNext(t)
+	fr2, e2 := c.mustNext(t)
+	// Read after the first frames arrive: the handler flushes the open response
+	// just after WriteHeader, which is when openStream returns, so reading
+	// earlier races with it.
 	c.mu.Lock()
 	deadlines, flushes := append([]time.Time(nil), c.deadlines...), c.flushes
 	c.mu.Unlock()
@@ -334,9 +339,6 @@ func TestEventStreamSendsTheHeadersTheBacklogAndThenLiveFrames(t *testing.T) {
 	if flushes == 0 {
 		t.Error("the response was never flushed, so the browser would not see the stream open")
 	}
-
-	fr1, e1 := c.mustNext(t)
-	fr2, e2 := c.mustNext(t)
 	if e1.ActorID != "c-a" || e2.ActorID != "n-b" {
 		t.Fatalf("backlog = %s then %s, want c-a then n-b (oldest first)", e1.ActorID, e2.ActorID)
 	}
