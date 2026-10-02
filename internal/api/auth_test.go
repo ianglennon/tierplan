@@ -120,7 +120,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	checker := rbac.NewChecker(f.st)
 	opts := httpx.Options{
 		Checker:       checker,
-		Authenticator: auth.NewAuthenticator(f.st, authIdle, f.clk.now),
+		Authenticator: auth.NewAuthenticator(f.st, authIdle, f.inst.Secure, f.clk.now),
 		Auditor:       f.aud,
 		MutationGuard: auth.NewCSRFGuard(f.sess),
 		PublicOrigin:  f.inst.PublicOrigin,
@@ -658,6 +658,44 @@ func TestMeWithAGarbageOrForeignCookieIs401(t *testing.T) {
 		if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me", cookie: v}); rec.Code != http.StatusUnauthorized {
 			t.Errorf("cookie %.12q: %d, want 401", v, rec.Code)
 		}
+	}
+}
+
+func TestAnHTTPSInstanceIgnoresABareSessionCookie(t *testing.T) {
+	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example"})
+	raw, _ := f.signIn(t, "admin", false)
+	me := func(name string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.RemoteAddr = authIP + ":40000"
+		req.AddCookie(&http.Cookie{Name: name, Value: raw}) //nolint:gosec // a request cookie as a browser sends it
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := me("bayplan_session"); got != http.StatusUnauthorized {
+		t.Fatalf("a bare cookie on https: %d, want 401 (WR-01)", got)
+	}
+	if got := me("__Host-bayplan_session"); got != http.StatusOK {
+		t.Fatalf("the __Host- cookie on https: %d, want 200", got)
+	}
+}
+
+func TestAPlainHTTPInstanceIgnoresAHostPrefixedCookie(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	raw, _ := f.signIn(t, "admin", false)
+	me := func(name string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.RemoteAddr = authIP + ":40000"
+		req.AddCookie(&http.Cookie{Name: name, Value: raw}) //nolint:gosec // a request cookie as a browser sends it
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := me("__Host-bayplan_session"); got != http.StatusUnauthorized {
+		t.Fatalf("a __Host- cookie on plain http: %d, want 401", got)
+	}
+	if got := me("bayplan_session"); got != http.StatusOK {
+		t.Fatalf("the bare cookie on plain http: %d, want 200", got)
 	}
 }
 

@@ -591,10 +591,31 @@ func TestLogoutWithoutASessionIsRefused(t *testing.T) {
 
 // --- Authenticator ---------------------------------------------------------
 
+// authenticator is the authenticator of an https instance: only the
+// __Host- cookie is read. authenticatorFor picks the scheme.
 func (f *loginFixture) authenticator() interface {
 	Authenticate(*http.Request) (*rbac.Principal, error)
 } {
-	return auth.NewAuthenticator(f.st, testIdle, f.clk.now)
+	return f.authenticatorFor(true)
+}
+
+func (f *loginFixture) authenticatorFor(secure bool) interface {
+	Authenticate(*http.Request) (*rbac.Principal, error)
+} {
+	return auth.NewAuthenticator(f.st, testIdle, func() bool { return secure }, f.clk.now)
+}
+
+// rechecker is what httpx.SessionRechecker asks of the authenticator.
+type rechecker interface {
+	Recheck(ctx context.Context, p *rbac.Principal) (bool, error)
+}
+
+func (f *loginFixture) rechecker() rechecker {
+	r, ok := f.authenticatorFor(true).(rechecker)
+	if !ok {
+		panic("the authenticator has no Recheck")
+	}
+	return r
 }
 
 func addCookie(req *http.Request, name, value string) {
@@ -613,8 +634,9 @@ func TestAuthenticateFreshSessionReturnsThePrincipal(t *testing.T) {
 	f := newLoginFixture(t)
 	f.addUser(t, "admin")
 	res := f.mustLogin(t, "admin", false)
-	for _, name := range []string{auth.CookieName(true), auth.CookieName(false)} {
-		p, err := f.authenticator().Authenticate(cookieRequest(name, res.RawSessionID))
+	for _, secure := range []bool{true, false} {
+		name := auth.CookieName(secure)
+		p, err := f.authenticatorFor(secure).Authenticate(cookieRequest(name, res.RawSessionID))
 		if err != nil || p == nil {
 			t.Fatalf("cookie %s: %v, %v", name, p, err)
 		}
@@ -736,28 +758,110 @@ func TestAuthenticateDisabledUserIsAnonymous(t *testing.T) {
 	}
 }
 
-func TestAuthenticatePrefersTheHostPrefixedCookie(t *testing.T) {
+func TestAuthenticateReadsOnlyTheCookieOfTheConfiguredScheme(t *testing.T) {
 	f := newLoginFixture(t)
 	f.addUser(t, "admin")
 	f.addUser(t, "other")
 	good := f.mustLogin(t, "admin", false)
 	planted := f.mustLogin(t, "other", false)
 
+	// https: the __Host- cookie is the only one believed (WR-01, D-12).
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	addCookie(req, auth.CookieName(false), planted.RawSessionID)
 	addCookie(req, auth.CookieName(true), good.RawSessionID)
-	p, err := f.authenticator().Authenticate(req)
+	p, err := f.authenticatorFor(true).Authenticate(req)
 	if err != nil || p == nil || p.Name != "admin" {
-		t.Fatalf("both cookies present: %+v, %v; want the __Host- one (admin)", p, err)
+		t.Fatalf("both cookies present on https: %+v, %v; want the __Host- one (admin)", p, err)
 	}
 
-	// A bare cookie never overrides a __Host- cookie that does not resolve.
+	// A bare cookie never stands in for a __Host- cookie that is missing or bad.
+	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	addCookie(req, auth.CookieName(false), planted.RawSessionID)
+	if p, err := f.authenticatorFor(true).Authenticate(req); err != nil || p != nil {
+		t.Fatalf("a bare cookie authenticated on https: %+v, %v", p, err)
+	}
 	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	addCookie(req, auth.CookieName(true), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	addCookie(req, auth.CookieName(false), planted.RawSessionID)
-	if p, err := f.authenticator().Authenticate(req); err != nil || p != nil {
+	if p, err := f.authenticatorFor(true).Authenticate(req); err != nil || p != nil {
 		t.Fatalf("a bad __Host- cookie fell through to the bare one: %+v, %v", p, err)
 	}
+
+	// plain http: only the bare cookie is read.
+	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	addCookie(req, auth.CookieName(true), good.RawSessionID)
+	if p, err := f.authenticatorFor(false).Authenticate(req); err != nil || p != nil {
+		t.Fatalf("a __Host- cookie authenticated on plain http: %+v, %v", p, err)
+	}
+
+	// a nil scheme func means plain http.
+	nilSecure := auth.NewAuthenticator(f.st, testIdle, nil, f.clk.now)
+	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	addCookie(req, auth.CookieName(false), good.RawSessionID)
+	if p, err := nilSecure.Authenticate(req); err != nil || p == nil {
+		t.Fatalf("nil secure func did not read the bare cookie: %+v, %v", p, err)
+	}
+}
+
+func TestRecheckFollowsTheSessionWithoutTouchingIt(t *testing.T) {
+	ctx := context.Background()
+	f := newLoginFixture(t)
+	f.addUser(t, "admin")
+	res := f.mustLogin(t, "admin", false)
+	p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(true), res.RawSessionID))
+	if err != nil || p == nil {
+		t.Fatalf("authenticate: %v, %v", p, err)
+	}
+	rc := f.rechecker()
+	mustRecheck := func(want bool, why string, pr *rbac.Principal) {
+		t.Helper()
+		got, err := rc.Recheck(ctx, pr)
+		if err != nil || got != want {
+			t.Fatalf("%s: Recheck = %v, %v; want %v", why, got, err, want)
+		}
+	}
+	mustRecheck(true, "a live session", p)
+
+	// Past the touch interval a request would write last_seen_at; Recheck must not.
+	row, _ := f.sessionRow(t, res.IDHash)
+	f.clk.advance(5 * time.Minute)
+	mustRecheck(true, "a live session five minutes later", p)
+	after, ok := f.sessionRow(t, res.IDHash)
+	if !ok || after.LastSeenAt != row.LastSeenAt {
+		t.Fatalf("Recheck touched the session: last_seen_at %d -> %d", row.LastSeenAt, after.LastSeenAt)
+	}
+
+	// Idle expiry: false, and the row is left for the cleanup to remove.
+	f.clk.advance(testIdle + time.Second)
+	mustRecheck(false, "an idle-expired session", p)
+	if _, ok := f.sessionRow(t, res.IDHash); !ok {
+		t.Fatal("Recheck deleted an expired session row")
+	}
+
+	// A principal for another user, a nil one and one with no session.
+	other := *p
+	other.ID = "id-someone-else"
+	f.clk.advance(-(testIdle + time.Second + 5*time.Minute)) // back to a live session
+	mustRecheck(true, "the clock back inside the window", p)
+	mustRecheck(false, "a principal of another user", &other)
+	mustRecheck(false, "a nil principal", nil)
+	mustRecheck(false, "a principal with no session hash", &rbac.Principal{Type: rbac.PrincipalUser, ID: p.ID, Name: p.Name})
+
+	// A disabled user.
+	if _, err := f.st.Write.Exec(`UPDATE users SET disabled = 1 WHERE username = 'admin'`); err != nil {
+		t.Fatal(err)
+	}
+	mustRecheck(false, "a disabled user", p)
+	if _, err := f.st.Write.Exec(`UPDATE users SET disabled = 0 WHERE username = 'admin'`); err != nil {
+		t.Fatal(err)
+	}
+	mustRecheck(true, "the user enabled again", p)
+
+	// The session row deleted (sign-out, password change, cleanup).
+	if _, err := f.st.Write.Exec(`DELETE FROM sessions`); err != nil {
+		t.Fatal(err)
+	}
+	mustRecheck(false, "a deleted session", p)
 }
 
 // --- CSRF guard ------------------------------------------------------------
