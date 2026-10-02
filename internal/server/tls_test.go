@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/tls"
@@ -34,14 +35,28 @@ func selfSignedConfig(t *testing.T) config.Config {
 // leafOf parses the certificate a TLS config serves.
 func leafOf(t *testing.T, c *tls.Config) *x509.Certificate {
 	t.Helper()
-	if c == nil || len(c.Certificates) != 1 {
-		t.Fatalf("config = %+v, want exactly one certificate", c)
+	if c == nil || c.GetCertificate == nil {
+		t.Fatalf("config = %+v, want one that serves its certificate through GetCertificate", c)
 	}
-	leaf, err := x509.ParseCertificate(c.Certificates[0].Certificate[0])
+	// A hello with no server name is the case a static Certificates list would
+	// have answered without ever calling GetCertificate.
+	cert, err := c.GetCertificate(&tls.ClientHelloInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
 		t.Fatal(err)
 	}
 	return leaf
+}
+
+// setHostname makes the machine host name the one given for the test.
+func setHostname(t *testing.T, name string, err error) {
+	t.Helper()
+	old := osHostname
+	osHostname = func() (string, error) { return name, err }
+	t.Cleanup(func() { osHostname = old })
 }
 
 func ipStrings(ips []net.IP) []string {
@@ -98,7 +113,7 @@ func TestTLSSelfSignedWritesTheSANSetAndAPrivateKey(t *testing.T) {
 			t.Errorf("DNS SANs %v lack %q", leaf.DNSNames, name)
 		}
 	}
-	if host, _ := os.Hostname(); host != "" && !slices.Contains(leaf.DNSNames, strings.ToLower(host)) {
+	if host, _ := os.Hostname(); host != "" && !looksLikeContainerID(strings.ToLower(host)) && !slices.Contains(leaf.DNSNames, strings.ToLower(host)) {
 		t.Errorf("DNS SANs %v lack the hostname %q", leaf.DNSNames, host)
 	}
 	if ips := ipStrings(leaf.IPAddresses); !slices.Equal(ips, []string{"127.0.0.1", "::1"}) {
@@ -299,7 +314,7 @@ func TestHealthcheckWorksAgainstTheServersOwnSelfSignedTLS(t *testing.T) {
 		t.Fatal("a plain-HTTP healthcheck against a TLS listener should fail")
 	}
 
-	// A real client sees HSTS and the certificate, and the server logs its fingerprint.
+	// A real client sees the certificate, and the server logs its fingerprint.
 	pool := x509.NewCertPool()
 	pool.AddCert(leafOf(t, srv.tlsConfig))
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost", MinVersion: tls.VersionTLS12}}}
@@ -308,7 +323,199 @@ func TestHealthcheckWorksAgainstTheServersOwnSelfSignedTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if got := resp.Header.Get("Strict-Transport-Security"); got != "max-age=31536000" {
-		t.Errorf("Strict-Transport-Security = %q, want max-age=31536000", got)
+	// The generated certificate is never pinned with HSTS (WR-09).
+	if got := resp.Header.Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("Strict-Transport-Security = %q with the self-signed certificate, want none", got)
+	}
+}
+
+func TestTLSSelfSignedLeavesAContainerIDHostnameOut(t *testing.T) {
+	setHostname(t, "3f2a9c1b7d4e", nil)
+	got, err := TLSConfig(selfSignedConfig(t), "", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := leafOf(t, got).DNSNames; slices.Contains(names, "3f2a9c1b7d4e") {
+		t.Errorf("DNS SANs %v hold the container ID, which changes on every recreation", names)
+	}
+
+	full := strings.Repeat("ab12", 16)
+	setHostname(t, full, nil)
+	got, err = TLSConfig(selfSignedConfig(t), "", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := leafOf(t, got).DNSNames; slices.Contains(names, full) {
+		t.Errorf("DNS SANs %v hold the 64-hex container ID", names)
+	}
+
+	setHostname(t, "nas01", nil)
+	got, err = TLSConfig(selfSignedConfig(t), "", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := leafOf(t, got).DNSNames; !slices.Contains(names, "nas01") {
+		t.Errorf("DNS SANs %v lack the machine host name nas01", names)
+	}
+}
+
+func TestLooksLikeContainerID(t *testing.T) {
+	for host, want := range map[string]bool{
+		"3f2a9c1b7d4e":                  true,
+		strings.Repeat("0f", 32):        true,
+		"nas01":                         false,
+		"3f2a9c1b7d4":                   false, // 11 digits
+		"3f2a9c1b7d4e0":                 false, // 13 digits
+		"3f2a9c1b7d4g":                  false, // not hex
+		"3F2A9C1B7D4E":                  false, // Docker writes lower case
+		"build-3f2a9c1b7d4e.example.io": false,
+		"":                              false,
+	} {
+		if got := looksLikeContainerID(host); got != want {
+			t.Errorf("looksLikeContainerID(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+func TestTLSSelfSignedIsKeptWhenTheContainerIsRecreated(t *testing.T) {
+	cfg := selfSignedConfig(t)
+	setHostname(t, "aaaaaaaaaaaa", nil)
+	first, err := TLSConfig(cfg, "https://bayplan.example.com", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setHostname(t, "bbbbbbbbbbbb", nil)
+	second, err := TLSConfig(cfg, "https://bayplan.example.com", nowFn(fixedNow.Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint(first) != fingerprint(second) || fingerprint(first) == "" {
+		t.Fatal("recreating the container changed the certificate, which would lock a browser out")
+	}
+}
+
+func TestTLSSelfSignedIsKeptWhenItCoversMoreThanIsWanted(t *testing.T) {
+	cfg := selfSignedConfig(t)
+	setHostname(t, "nas01", nil)
+	first, err := TLSConfig(cfg, "", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, hostname := range map[string]func(){
+		"a failing host name lookup": func() { setHostname(t, "", errors.New("no hostname")) },
+		"a container ID host name":   func() { setHostname(t, "cccccccccccc", nil) },
+	} {
+		hostname()
+		again, err := TLSConfig(cfg, "", nowFn(fixedNow.Add(time.Hour)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fingerprint(again) != fingerprint(first) {
+			t.Errorf("%s: a certificate that covers every wanted name was replaced", name)
+		}
+	}
+}
+
+// movingClock is a clock a test advances.
+type movingClock struct{ t time.Time }
+
+func (c *movingClock) now() time.Time { return c.t }
+
+func TestTLSSelfSignedIsRenewedWhileRunning(t *testing.T) {
+	clk := &movingClock{t: fixedNow}
+	got, err := TLSConfig(selfSignedConfig(t), "", clk.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := leafOf(t, got)
+
+	// Well inside the year: the same certificate is served.
+	clk.t = fixedNow.Add(24 * time.Hour)
+	if leafOf(t, got).SerialNumber.Cmp(first.SerialNumber) != 0 {
+		t.Fatal("the certificate was replaced a day after it was made")
+	}
+
+	// 25 days before it expires, with the process still running.
+	clk.t = fixedNow.Add(340 * 24 * time.Hour)
+	renewed := leafOf(t, got)
+	if !renewed.NotAfter.After(first.NotAfter) {
+		t.Fatalf("NotAfter = %v after renewal, want later than %v", renewed.NotAfter, first.NotAfter)
+	}
+	if renewed.SerialNumber.Cmp(first.SerialNumber) == 0 {
+		t.Error("the serial number did not change, so nothing was regenerated")
+	}
+}
+
+// writePair stores a fresh self-signed pair at the given paths and returns its
+// leaf. The two files are what an operator's certificate renewal replaces.
+func writePair(t *testing.T, crt, key string, host string) *x509.Certificate {
+	t.Helper()
+	src := config.Config{DataDir: t.TempDir(), TLSSelfSigned: true}
+	got, err := TLSConfig(src, "https://"+host, nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for from, to := range map[string]string{
+		filepath.Join(src.DataDir, "tls", "selfsigned.crt"): crt,
+		filepath.Join(src.DataDir, "tls", "selfsigned.key"): key,
+	} {
+		b, err := os.ReadFile(from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(to, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return leafOf(t, got)
+}
+
+func TestTLSSuppliedCertificateIsReloadedWhenTheFilesChange(t *testing.T) {
+	dir := t.TempDir()
+	crt, key := filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
+	a := writePair(t, crt, key, "a.example.com")
+
+	clk := &movingClock{t: fixedNow}
+	got, err := TLSConfig(config.Config{DataDir: t.TempDir(), TLSCertFile: crt, TLSKeyFile: key}, "", clk.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leafOf(t, got).SerialNumber.Cmp(a.SerialNumber) != 0 {
+		t.Fatal("pair A is not the one served")
+	}
+
+	b := writePair(t, crt, key, "b.example.com")
+	// Within the reload interval nothing is re-read.
+	clk.t = fixedNow.Add(10 * time.Second)
+	if leafOf(t, got).SerialNumber.Cmp(a.SerialNumber) != 0 {
+		t.Error("the files were re-read inside the reload interval")
+	}
+	clk.t = fixedNow.Add(2 * time.Minute)
+	if leafOf(t, got).SerialNumber.Cmp(b.SerialNumber) != 0 {
+		t.Fatal("pair B was not picked up after the files were replaced")
+	}
+
+	// A half-written or broken replacement must not take the site down.
+	for _, f := range []string{crt, key} {
+		if err := os.WriteFile(f, []byte("garbage"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clk.t = fixedNow.Add(5 * time.Minute)
+	if leafOf(t, got).SerialNumber.Cmp(b.SerialNumber) != 0 {
+		t.Fatal("a broken replacement displaced the working certificate")
+	}
+}
+
+func TestTLSCertificateIsServedWhenTheClientSendsNoServerName(t *testing.T) {
+	// Go uses a static Certificates list in preference to GetCertificate when
+	// the client sends no SNI (a connection to an IP address), which would
+	// silently pin that client to the first certificate for ever.
+	got, err := TLSConfig(selfSignedConfig(t), "", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Certificates) != 0 {
+		t.Errorf("Certificates holds %d entries; it must stay empty so GetCertificate always answers", len(got.Certificates))
 	}
 }

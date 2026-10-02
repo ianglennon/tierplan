@@ -98,6 +98,12 @@ type names struct {
 	ips []string // sorted canonical text, unique
 }
 
+// osHostname is the machine host name; a test replaces it.
+var osHostname = os.Hostname
+
+// looksLikeContainerID is a stub until the GREEN step.
+func looksLikeContainerID(string) bool { return false }
+
 func wantedNames(publicURL string) names {
 	dns := map[string]bool{"localhost": true}
 	ips := map[string]bool{"127.0.0.1": true, "::1": true}
@@ -112,7 +118,7 @@ func wantedNames(publicURL string) names {
 		}
 		dns[host] = true
 	}
-	if h, err := os.Hostname(); err == nil {
+	if h, err := osHostname(); err == nil {
 		add(h)
 	}
 	if u, err := url.Parse(publicURL); err == nil {

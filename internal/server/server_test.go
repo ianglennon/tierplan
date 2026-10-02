@@ -6,6 +6,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -688,5 +690,53 @@ func TestBuildAggregatesAnAnonymousDenialFloodAndKeepsSignInWorking(t *testing.T
 	if n, err := strconv.Atoi(det["suppressed"]); err != nil || n < 150 || n > 180 {
 		// 200 refusals less the burst of 20, less at most a few refills on a slow machine.
 		t.Fatalf("suppressed = %q, want about 180", det["suppressed"])
+	}
+}
+
+// hstsOf serves one request through the built server's handler and returns the
+// Strict-Transport-Security header, for a request that arrived over TLS or not.
+func hstsOf(t *testing.T, env map[string]string, overTLS bool) string {
+	t.Helper()
+	env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+	srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	if overTLS {
+		req.TLS = &tls.ConnectionState{}
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	return rec.Header().Get("Strict-Transport-Security")
+}
+
+func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
+	// A browser that pinned the generated certificate could not click through
+	// a regenerated one (WR-09), so the header is withheld in that mode.
+	if got := hstsOf(t, map[string]string{"BAYPLAN_TLS_SELF_SIGNED": "true"}, true); got != "" {
+		t.Errorf("self-signed: Strict-Transport-Security = %q, want none", got)
+	}
+	if got := hstsOf(t, map[string]string{"BAYPLAN_TLS_SELF_SIGNED": "true", "BAYPLAN_PUBLIC_URL": "https://bayplan.example"}, true); got != "" {
+		t.Errorf("self-signed with an https public URL: Strict-Transport-Security = %q, want none", got)
+	}
+
+	// A supplied certificate is the operator's own: HSTS is sent (D-37).
+	src := t.TempDir()
+	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	supplied := map[string]string{
+		"BAYPLAN_TLS_CERT_FILE": filepath.Join(src, "tls", "selfsigned.crt"),
+		"BAYPLAN_TLS_KEY_FILE":  filepath.Join(src, "tls", "selfsigned.key"),
+	}
+	if got := hstsOf(t, supplied, true); got != "max-age=31536000" {
+		t.Errorf("supplied certificate: Strict-Transport-Security = %q, want max-age=31536000", got)
+	}
+
+	// TLS ended in front of Bayplan: the request is plain but the public URL is https.
+	if got := hstsOf(t, map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.example"}, false); got != "max-age=31536000" {
+		t.Errorf("https public URL behind a proxy: Strict-Transport-Security = %q, want max-age=31536000", got)
 	}
 }
