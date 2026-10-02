@@ -83,3 +83,72 @@ func TestIPLimiterActiveEntryIsNotEvicted(t *testing.T) {
 		t.Fatalf("Len = %d, want 1", l.Len())
 	}
 }
+
+func TestIPLimiterSharesOneBudgetPerIPv6Slash64(t *testing.T) {
+	c := newClock()
+	l := auth.NewIPLimiter(time.Hour, 1, 10*time.Minute, c.now)
+	if !l.Allow("2001:db8:1:2::a") {
+		t.Fatal("first address in the /64 denied")
+	}
+	if l.Allow("2001:db8:1:2::b") {
+		t.Fatal("second address in the same /64 allowed, want the shared budget spent")
+	}
+	if !l.Allow("2001:db8:1:3::a") {
+		t.Fatal("an address in another /64 must have its own budget")
+	}
+}
+
+func TestIPLimiterIPv4MappedSharesTheIPv4Budget(t *testing.T) {
+	c := newClock()
+	l := auth.NewIPLimiter(time.Hour, 1, 10*time.Minute, c.now)
+	if !l.Allow("::ffff:192.0.2.1") {
+		t.Fatal("mapped address denied")
+	}
+	if l.Allow("192.0.2.1") {
+		t.Fatal("the plain IPv4 form allowed, want the mapped form's budget shared")
+	}
+	if !l.Allow("192.0.2.2") {
+		t.Fatal("a different IPv4 address must have its own budget")
+	}
+}
+
+func TestIPLimiterNonAddressKeysAreUnchanged(t *testing.T) {
+	c := newClock()
+	l := auth.NewIPLimiter(time.Hour, 1, 10*time.Minute, c.now)
+	if !l.Allow("id-admin") || !l.Allow("id-other") {
+		t.Fatal("user IDs must have separate budgets")
+	}
+	if l.Allow("id-admin") {
+		t.Fatal("a user ID's own budget must still run out")
+	}
+}
+
+func TestIPLimiterCapRefusesNewKeysWhenFullAndSweepsIdleOnes(t *testing.T) {
+	c := newClock()
+	l := auth.NewIPLimiter(time.Hour, 1, 10*time.Minute, c.now)
+	if got := l.MaxEntries(); got != 65536 {
+		t.Fatalf("default cap = %d, want 65536", got)
+	}
+	l.SetMaxEntries(3)
+	for _, k := range []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"} {
+		if !l.Allow(k) {
+			t.Fatalf("%s denied while the table had room", k)
+		}
+	}
+	if l.Allow("203.0.113.4") {
+		t.Fatal("a new key was accepted into a full table")
+	}
+	if got := l.Len(); got != 3 {
+		t.Fatalf("Len = %d, want 3 (the table must not grow)", got)
+	}
+	if l.Allow("203.0.113.1") {
+		t.Fatal("an existing key must keep its own (spent) budget")
+	}
+	c.advance(11 * time.Minute)
+	if !l.Allow("203.0.113.4") {
+		t.Fatal("a new key refused although the idle entries could be swept")
+	}
+	if got := l.Len(); got != 1 {
+		t.Fatalf("Len after the sweep = %d, want 1", got)
+	}
+}
