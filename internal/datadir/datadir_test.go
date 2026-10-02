@@ -4,8 +4,12 @@
 package datadir_test
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/moby/sys/mountinfo"
@@ -105,5 +109,51 @@ func TestDefaultsRunOutsideAContainerWithoutPanicking(t *testing.T) {
 	// Zero Options use the real /.dockerenv and mountinfo lookups.
 	if _, err := datadir.Prepare(t.TempDir(), datadir.Options{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPrepareNarrowsABroadDataDirectory(t *testing.T) {
+	for _, tc := range []struct{ from, want os.FileMode }{
+		{0o755, 0o750}, {0o777, 0o750}, {0o700, 0o700},
+	} {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, tc.from); err != nil { //nolint:gosec // a broad directory is the case under test
+			t.Fatal(err)
+		}
+		if _, err := datadir.Prepare(dir, opts(false, nil)); err != nil {
+			t.Fatal(err)
+		}
+		st, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := st.Mode().Perm(); perm != tc.want {
+			t.Errorf("%o became %o, want %o", tc.from, perm, tc.want)
+		}
+	}
+}
+
+func TestPrepareWarnsAndContinuesWhenItCannotNarrowTheMode(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // a broad directory is the case under test
+		t.Fatal(err)
+	}
+	o := opts(false, nil)
+	o.Chmod = func(string, os.FileMode) error { return errors.New("operation not permitted") }
+	info, err := datadir.Prepare(dir, o)
+	if err != nil {
+		t.Fatalf("Prepare must continue, got %v", err)
+	}
+	if !info.Persisted {
+		t.Errorf("info = %+v, want persisted", info)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, dir) || !strings.Contains(out, "755") {
+		t.Errorf("warning must name the path and the mode, got %q", out)
 	}
 }

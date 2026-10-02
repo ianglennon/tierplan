@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -342,5 +343,48 @@ func TestFailedMigrationNamesSnapshotAndRollsBack(t *testing.T) {
 	}
 	if _, err := s.Write.ExecContext(ctx, "INSERT INTO half (id) VALUES (1)"); err == nil {
 		t.Error("the failed migration must be rolled back, but table half exists")
+	}
+}
+
+func TestOpenMakesTheDatabaseFilesPrivate(t *testing.T) {
+	// Not parallel: the process umask is global.
+	old := syscall.Umask(0o022)
+	t.Cleanup(func() { syscall.Umask(old) })
+
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // a broad directory is the case under test
+		t.Fatal(err)
+	}
+	s := open(t, dir)
+	if _, err := s.Write.ExecContext(context.Background(), "CREATE TABLE probe (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{store.DatabaseFile, store.DatabaseFile + "-wal", store.DatabaseFile + "-shm"} {
+		st, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if perm := st.Mode().Perm(); perm != 0o600 {
+			t.Errorf("%s mode = %o, want 600", name, perm)
+		}
+	}
+}
+
+func TestOpenTightensADatabaseLeftReadableByAnOlderBuild(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, store.DatabaseFile)
+	if err := os.WriteFile(path, nil, 0o644); err != nil { //nolint:gosec // the legacy mode is the case under test
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil { //nolint:gosec // defeat the umask
+		t.Fatal(err)
+	}
+	_ = open(t, dir)
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := st.Mode().Perm(); perm != 0o600 {
+		t.Errorf("mode = %o, want 600", perm)
 	}
 }
