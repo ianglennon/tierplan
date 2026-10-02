@@ -10,6 +10,9 @@
 # socket-group detection and the privilege drop to UID 1000 (D-17), which a unit
 # test cannot reach. `make e2e` builds bayplan:e2e, brings this up and runs
 # Playwright against it.
+#
+# The run claims the instance with a known password and Bayplan controls a
+# privileged dind daemon, so the port is published on 127.0.0.1 only.
 name: bayplan-e2e
 
 services:
@@ -38,7 +41,10 @@ services:
       - sock:/shared
       - data:/data
     ports:
-      - "${BAYPLAN_E2E_PORT:-7480}:7480"
+      # Loopback only (WR-12): the run claims this instance with a known admin
+      # password and Bayplan controls a privileged dind daemon, so nothing on the
+      # LAN may reach it.
+      - "127.0.0.1:${BAYPLAN_E2E_PORT:-7480}:7480"
     depends_on:
       dind:
         condition: service_healthy

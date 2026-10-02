@@ -10,9 +10,12 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 // `make e2e` publishes the container on 7480, the port Bayplan serves on by
-// default. BAYPLAN_E2E_PORT moves it when something else holds 7480.
+// default, on 127.0.0.1 only (WR-12). BAYPLAN_E2E_PORT moves it when something
+// else holds 7480.
 export const PORT = process.env.BAYPLAN_E2E_PORT ?? "7480";
-export const BASE_URL = `http://localhost:${PORT}`;
+// Docker publishes IPv4 loopback only, and "localhost" may resolve to ::1 first.
+// The public URL the wizard pre-fills follows the browser origin.
+export const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 export const COMPOSE_FILE = resolve(HERE, "../compose.yaml");
 
