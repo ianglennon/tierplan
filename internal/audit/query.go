@@ -5,17 +5,29 @@ package audit
 
 import (
 	"context"
-	"errors"
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 )
 
-// errNotImplemented is the RED-phase stub.
-var errNotImplemented = errors.New("audit: not implemented")
+// Paging limits. A page of the viewer is 50 entries and never more than 100;
+// exports read the same query in larger batches so memory stays flat however
+// many entries match.
+const (
+	defaultPageSize = 50
+	maxPageSize     = 100
+	exportBatchSize = 500
+)
 
-// Filter narrows the audit log. The zero value matches every entry.
+// Filter narrows the audit log. The zero value matches every entry. Actor is an
+// exact match on the stored actor name, Actions matches any of the listed
+// action keys, and From and To are inclusive bounds on the entry time.
 type Filter struct {
 	Actor   string
 	Actions []string
@@ -23,7 +35,9 @@ type Filter struct {
 	To      time.Time
 }
 
-// Row is one audit entry as read.
+// Row is one audit entry as read: who (actor), what (action, target), where
+// (environment, IP, user agent), when, and the result. It deliberately has no
+// field for the tamper-evidence chain, so no read path can leak one (D-39).
 type Row struct {
 	Seq        int64             `json:"seq"`
 	ID         string            `json:"id"`
@@ -41,20 +55,185 @@ type Row struct {
 	Details    map[string]string `json:"details"`
 }
 
-// Query is the RED-phase stub.
-func Query(_ context.Context, _ *store.Store, _ Filter, _ int64, _ int) ([]Row, int64, error) {
-	return nil, 0, errNotImplemented
+// params turns f into query parameters for one page.
+func (f Filter) params(cursor int64, limit int) (sqlc.ListAuditPageParams, error) {
+	actions := f.Actions
+	if actions == nil {
+		actions = []string{}
+	}
+	enc, err := json.Marshal(actions)
+	if err != nil {
+		return sqlc.ListAuditPageParams{}, fmt.Errorf("audit: encode actions: %w", err)
+	}
+	p := sqlc.ListAuditPageParams{Actor: f.Actor, Actions: string(enc), Cursor: cursor, Lim: int64(limit)}
+	if !f.From.IsZero() {
+		p.FromTs = f.From.UTC().UnixNano()
+	}
+	if !f.To.IsZero() {
+		p.ToTs = f.To.UTC().UnixNano()
+	}
+	return p, nil
 }
 
-// Actors is the RED-phase stub.
-func Actors(_ context.Context, _ *store.Store) ([]string, error) { return nil, errNotImplemented }
-
-// ExportCSV is the RED-phase stub.
-func ExportCSV(_ context.Context, _ *store.Store, _ Filter, _ io.Writer) error {
-	return errNotImplemented
+// page reads up to limit entries older than cursor (0 means from the newest),
+// newest first. Entries are ordered by insertion sequence, never by time, so
+// entries that share a timestamp keep a deterministic order and a cursor never
+// repeats or skips one.
+func page(ctx context.Context, s *store.Store, f Filter, cursor int64, limit int) ([]Row, error) {
+	p, err := f.params(cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	recs, err := s.RQ.ListAuditPage(ctx, p)
+	if err != nil {
+		return nil, fmt.Errorf("audit: list entries: %w", err)
+	}
+	rows := make([]Row, len(recs))
+	for i, r := range recs {
+		rows[i] = toRow(r)
+	}
+	return rows, nil
 }
 
-// ExportJSON is the RED-phase stub.
-func ExportJSON(_ context.Context, _ *store.Store, _ Filter, _ io.Writer) error {
-	return errNotImplemented
+func toRow(r sqlc.AuditLog) Row {
+	details := map[string]string{}
+	if err := json.Unmarshal([]byte(r.Details), &details); err != nil || details == nil {
+		details = map[string]string{}
+	}
+	return Row{
+		Seq: r.Seq, ID: r.ID, Time: time.Unix(0, r.Ts).UTC(),
+		ActorType: r.ActorType, ActorName: r.ActorName,
+		Action: r.Action, TargetType: r.TargetType, TargetID: r.TargetID, EnvID: r.EnvID.String,
+		Result: r.Result, Reason: r.Reason, IP: r.Ip, UserAgent: r.UserAgent, Details: details,
+	}
+}
+
+// Query returns one page of entries matching f, newest first. cursor is the
+// next value of the previous page, or 0 for the first page; limit is clamped to
+// 1..100 and defaults to 50. next is the sequence to pass as the cursor for the
+// following page, or 0 when there is none: one extra entry is read to know, so
+// a log that is an exact multiple of the page size does not end in an empty page.
+func Query(ctx context.Context, s *store.Store, f Filter, cursor int64, limit int) (rows []Row, next int64, err error) {
+	switch {
+	case limit <= 0:
+		limit = defaultPageSize
+	case limit > maxPageSize:
+		limit = maxPageSize
+	}
+	rows, err = page(ctx, s, f, cursor, limit+1)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(rows) > limit {
+		rows = rows[:limit]
+		next = rows[limit-1].Seq
+	}
+	return rows, next, nil
+}
+
+// Actors returns the distinct actor names in the log, sorted, at most 200. It
+// feeds the user filter.
+func Actors(ctx context.Context, s *store.Store) ([]string, error) {
+	names, err := s.RQ.ListAuditActors(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("audit: list actors: %w", err)
+	}
+	if names == nil {
+		names = []string{}
+	}
+	return names, nil
+}
+
+// each calls fn for every entry matching f, newest first, reading in batches.
+func each(ctx context.Context, s *store.Store, f Filter, fn func(Row) error) error {
+	var cursor int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rows, err := page(ctx, s, f, cursor, exportBatchSize)
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			if err := fn(r); err != nil {
+				return err
+			}
+		}
+		if len(rows) < exportBatchSize {
+			return nil
+		}
+		cursor = rows[len(rows)-1].Seq
+	}
+}
+
+// csvHeader is the first row of every CSV export.
+var csvHeader = []string{
+	"id", "time", "actor_type", "actor", "action", "target_type", "target",
+	"environment", "result", "reason", "ip", "user_agent", "details",
+}
+
+// csvSafe stops a spreadsheet from running a cell as a formula. Fields such as
+// the user agent and the username of a failed sign-in are chosen by whoever
+// made the request, and an admin opens the export in a spreadsheet, so a cell
+// that starts with =, +, -, @, a tab or a carriage return gets a single quote in
+// front (RESEARCH Pitfall 19, T-01-97).
+func csvSafe(cell string) string {
+	if cell != "" && strings.ContainsRune("=+-@\t\r", rune(cell[0])) {
+		return "'" + cell
+	}
+	return cell
+}
+
+// ExportCSV writes every entry matching f, newest first, as RFC 4180 CSV with a
+// header row. Every cell passes through csvSafe.
+func ExportCSV(ctx context.Context, s *store.Store, f Filter, w io.Writer) error {
+	cw := csv.NewWriter(w)
+	rec := make([]string, len(csvHeader))
+	if err := cw.Write(csvHeader); err != nil {
+		return err
+	}
+	err := each(ctx, s, f, func(r Row) error {
+		details, err := json.Marshal(r.Details)
+		if err != nil {
+			return fmt.Errorf("audit: encode details: %w", err)
+		}
+		cells := []string{
+			r.ID, r.Time.Format(time.RFC3339Nano), r.ActorType, r.ActorName, r.Action,
+			r.TargetType, r.TargetID, r.EnvID, r.Result, r.Reason, r.IP, r.UserAgent, string(details),
+		}
+		for i, c := range cells {
+			rec[i] = csvSafe(c)
+		}
+		return cw.Write(rec)
+	})
+	if err != nil {
+		return err
+	}
+	cw.Flush()
+	return cw.Error()
+}
+
+// ExportJSON writes every entry matching f, newest first, as one JSON array,
+// streamed one object at a time.
+func ExportJSON(ctx context.Context, s *store.Store, f Filter, w io.Writer) error {
+	if _, err := io.WriteString(w, "["); err != nil {
+		return err
+	}
+	first := true
+	enc := json.NewEncoder(w)
+	err := each(ctx, s, f, func(r Row) error {
+		if !first {
+			if _, err := io.WriteString(w, ","); err != nil {
+				return err
+			}
+		}
+		first = false
+		return enc.Encode(r)
+	})
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, "]\n")
+	return err
 }
