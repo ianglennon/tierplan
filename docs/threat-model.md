@@ -66,7 +66,7 @@ These are known, accepted for Phase 1, and not hidden.
 5. **Everything an admin can do, an attacker with an admin session can do (the headline).** Phase 1 has one built-in role, admin, and no second factor. Bayplan limits damage with short idle timeouts, lockout and an audit trail; it cannot make an admin session less powerful than the socket it holds.
 6. **Single-instance by design.** There is one SQLite writer and no high availability. A compromised or lost instance is recovered from backups.
 7. **Inline styles are allowed by the CSP (T-01-63).** A style-injection bug would be easier to exploit than under a fully strict policy. Script injection stays blocked.
-8. **Audit growth from scanners (T-01-35) and large exports (T-01-100)** are accepted: every denied read is audited, retention bounds the size, and exports stream from a read connection in batches.
+8. **Audit growth from scanners (T-01-35) and large exports (T-01-100)** are accepted: every denied read is audited, retention bounds the size, and exports stream from a read connection in batches. Repeated anonymous refusals from one address (denied routes, setup attempts after setup, rate-limited sign-ins) are written individually up to a per-address budget, 20 at once and then 10 a minute, and the rest as one summary entry per minute with a count, so a flood cannot starve the single database writer and every refusal is still recorded. Failed sign-ins that reach the account checks and wrong setup tokens are always written one row each.
 9. **The CI end-to-end job runs a privileged Docker-in-Docker container (T-01-115)** on an ephemeral hosted runner with no secrets.
 
 ## Reporting a problem

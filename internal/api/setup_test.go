@@ -42,6 +42,8 @@ type setupFixture struct {
 	inst     *instance.Instance
 	sessions *auth.Sessions
 	dataDir  string
+	// throttle is the AnonAudit throttle when the fixture was built with one.
+	throttle *auth.AuditThrottle
 }
 
 type fakeClock struct{ t time.Time }
@@ -56,6 +58,13 @@ func newSetupFixture(t *testing.T, cfg config.Config) *setupFixture {
 // newSetupFixtureWith lets a test wrap the audit writer the setup routes use,
 // for example to make the completion's audit write fail.
 func newSetupFixtureWith(t *testing.T, cfg config.Config, wrap func(*audit.Writer) api.SetupAuditor) *setupFixture {
+	t.Helper()
+	return newSetupFixtureThrottled(t, cfg, wrap, 0)
+}
+
+// newSetupFixtureThrottled also puts an AuditThrottle with the given per-address
+// burst in SetupDeps.AnonAudit; a burst of 0 leaves AnonAudit nil.
+func newSetupFixtureThrottled(t *testing.T, cfg config.Config, wrap func(*audit.Writer) api.SetupAuditor, anonBurst int) *setupFixture {
 	t.Helper()
 	st := storetest.New(t)
 	logs := &bytes.Buffer{}
@@ -87,22 +96,29 @@ func newSetupFixtureWith(t *testing.T, cfg config.Config, wrap func(*audit.Write
 	site := fstest.MapFS{"index.html": {Data: []byte(indexHTML)}}
 	spa := webui.Handler(site)
 	r := httpx.New(httpx.Options{Fallback: spa, Auditor: aud, Logger: log, PublicOrigin: inst.PublicOrigin})
+	var throttle *auth.AuditThrottle
+	var anonAudit httpx.Auditor
+	if anonBurst > 0 {
+		throttle = auth.NewAuditThrottle(aud, auth.NewIPLimiter(time.Hour, anonBurst, 10*time.Minute, clk.now), log, clk.now)
+		anonAudit = throttle
+	}
 	api.RegisterSetup(r, api.SetupDeps{
-		Gate:     gate,
-		Limiter:  auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, clk.now),
-		Audit:    wrap(aud),
-		Store:    st,
-		Config:   cfg,
-		Instance: inst,
-		Sessions: sessions,
-		SPA:      spa,
-		Hostname: func() (string, error) { return "swarm-mgr-1", nil },
-		Log:      log,
+		AnonAudit: anonAudit,
+		Gate:      gate,
+		Limiter:   auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, clk.now),
+		Audit:     wrap(aud),
+		Store:     st,
+		Config:    cfg,
+		Instance:  inst,
+		Sessions:  sessions,
+		SPA:       spa,
+		Hostname:  func() (string, error) { return "swarm-mgr-1", nil },
+		Log:       log,
 	})
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
 	}
-	return &setupFixture{h: r.Handler(), st: st, gate: gate, token: token, logs: logs, clk: clk, inst: inst, sessions: sessions, dataDir: dataDir}
+	return &setupFixture{h: r.Handler(), st: st, gate: gate, token: token, logs: logs, clk: clk, inst: inst, sessions: sessions, dataDir: dataDir, throttle: throttle}
 }
 
 func (f *setupFixture) post(t *testing.T, body string) *httptest.ResponseRecorder {
@@ -336,6 +352,44 @@ func TestSetupTokenAfterAUserExistsIs409AndAudited(t *testing.T) {
 	}
 	if err := json.Unmarshal(f.get(t, "/api/instance").Body.Bytes(), &inst); err != nil || inst.NeedsSetup {
 		t.Fatalf("GET /api/instance needsSetup = %v (err %v), want false", inst.NeedsSetup, err)
+	}
+}
+
+func TestSetupTokenFloodAfterSetupIsAnsweredButAuditedOnceWithACount(t *testing.T) {
+	f := newSetupFixtureThrottled(t, config.Config{}, func(w *audit.Writer) api.SetupAuditor { return w }, 3)
+	f.addUser(t)
+
+	for i := range 50 {
+		rec := f.postToken(t, "not-the-token")
+		if rec.Code != http.StatusConflict || problemType(t, rec) != "setup_complete" {
+			t.Fatalf("request %d: got %d %s, want 409 setup_complete", i, rec.Code, rec.Body)
+		}
+	}
+	denied := func() []sqlc.AuditLog {
+		var out []sqlc.AuditLog
+		for _, r := range f.auditRows(t) {
+			if r.Action == audit.ActionSetupAttemptDenied {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	if got := len(denied()); got != 3 {
+		t.Fatalf("setup.attempt_denied rows = %d, want the burst of 3", got)
+	}
+	if err := f.throttle.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rows := denied()
+	if len(rows) != 4 {
+		t.Fatalf("setup.attempt_denied rows after Flush = %d, want 4", len(rows))
+	}
+	var det map[string]string
+	if err := json.Unmarshal([]byte(rows[3].Details), &det); err != nil || det["suppressed"] != "47" {
+		t.Fatalf("summary details = %q (%v), want suppressed 47", rows[3].Details, err)
+	}
+	if strings.Contains(rows[3].Details, "not-the-token") {
+		t.Fatal("a submitted token reached the audit log")
 	}
 }
 

@@ -67,13 +67,20 @@ type SetupAuditor interface {
 
 // SetupDeps are the dependencies of the setup routes.
 type SetupDeps struct {
-	Gate     *auth.SetupGate
-	Limiter  *auth.IPLimiter
-	Audit    SetupAuditor
-	Store    *store.Store
-	Config   config.Config
-	Instance *instance.Instance
-	Sessions *auth.Sessions
+	Gate    *auth.SetupGate
+	Limiter *auth.IPLimiter
+	Audit   SetupAuditor
+	// AnonAudit records the refusals an anonymous caller can repeat without
+	// limit: the 409 after setup is done and the 429 from the address limiter.
+	// It is normally an auth.AuditThrottle, so a flood of them cannot starve the
+	// single database writer while every refusal is still counted (WR-04). Nil
+	// means Audit. The 401 for a wrong token always goes to Audit: it sits behind
+	// the limiter, and each wrong token is its own row (D-05).
+	AnonAudit httpx.Auditor
+	Store     *store.Store
+	Config    config.Config
+	Instance  *instance.Instance
+	Sessions  *auth.Sessions
 	// SPA serves the single-page app for GET /setup while setup is needed.
 	SPA http.Handler
 	// Hostname supplies the default instance name. Nil means os.Hostname.
@@ -251,8 +258,8 @@ func RegisterSetup(r *httpx.Router, d SetupDeps) {
 // echoed (T-01-39).
 func (d SetupDeps) checkAccess(ctx context.Context, userAgent, token string) error {
 	ip := httpx.ClientIP(ctx)
-	record := func(action string, result audit.Result, reason string) error {
-		return d.Audit.Record(ctx, audit.Entry{
+	record := func(rec httpx.Auditor, action string, result audit.Result, reason string) error {
+		return rec.Record(ctx, audit.Entry{
 			Actor:      audit.Actor{Type: audit.ActorAnonymous},
 			Action:     action,
 			TargetType: "setup",
@@ -261,6 +268,10 @@ func (d SetupDeps) checkAccess(ctx context.Context, userAgent, token string) err
 			IP:         ip,
 			UserAgent:  userAgent,
 		})
+	}
+	var anon httpx.Auditor = d.Audit
+	if d.AnonAudit != nil {
+		anon = d.AnonAudit
 	}
 	fail := func(err error) error {
 		d.Log.Error("could not audit a setup attempt; refusing", "error", err)
@@ -273,7 +284,7 @@ func (d SetupDeps) checkAccess(ctx context.Context, userAgent, token string) err
 		return huma.Error500InternalServerError("internal error")
 	}
 	if !needs {
-		if err := record(audit.ActionSetupAttemptDenied, audit.ResultDenied, problemSetupComplete); err != nil {
+		if err := record(anon, audit.ActionSetupAttemptDenied, audit.ResultDenied, problemSetupComplete); err != nil {
 			return fail(err)
 		}
 		return httpx.Problem(http.StatusConflict, problemSetupComplete, "Setup is already complete.")
@@ -281,7 +292,7 @@ func (d SetupDeps) checkAccess(ctx context.Context, userAgent, token string) err
 
 	if !d.Limiter.Allow(ip) {
 		d.Log.Warn("setup token attempts rate limited", "ip", ip)
-		if err := record(audit.ActionSetupTokenFailed, audit.ResultFailure, reasonRateLimited); err != nil {
+		if err := record(anon, audit.ActionSetupTokenFailed, audit.ResultFailure, reasonRateLimited); err != nil {
 			return fail(err)
 		}
 		return httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many attempts. Wait a minute and try again.")
@@ -289,7 +300,7 @@ func (d SetupDeps) checkAccess(ctx context.Context, userAgent, token string) err
 
 	if !d.Gate.Verify(token) {
 		d.Log.Warn("wrong setup token", "ip", ip)
-		if err := record(audit.ActionSetupTokenFailed, audit.ResultFailure, reasonInvalidToken); err != nil {
+		if err := record(d.Audit, audit.ActionSetupTokenFailed, audit.ResultFailure, reasonInvalidToken); err != nil {
 			return fail(err)
 		}
 		return httpx.Problem(http.StatusUnauthorized, problemInvalidSetupToken, "That setup token isn't valid.")

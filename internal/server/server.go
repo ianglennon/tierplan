@@ -228,6 +228,15 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	login := auth.NewLogin(st, sessions, aud, cfg.LoginMaxFailures, cfg.LoginLockout,
 		auth.NewIPLimiter(2*time.Second, 10, 10*time.Minute, nil), log, nil)
 
+	// Refusals an anonymous client can repeat for free (a denied route, a setup
+	// attempt after setup, a rate-limited sign-in) would each take the single
+	// write connection and could starve signed-in users (WR-04). Each address
+	// gets 20 audit rows at once, then 10 a minute; the rest are counted and
+	// written as one summary row per key a minute, so every refusal is still
+	// recorded (D-49, T-01-35). Signed-in actors pass straight through.
+	anonAudit := auth.NewAuditThrottle(aud, auth.NewIPLimiter(6*time.Second, 20, 10*time.Minute, nil), log, nil)
+	login.SetAnonymousAuditor(anonAudit)
+
 	// The environment registry and its health monitors. Nothing is added here:
 	// the local host becomes an environment only when an admin asks (D-19).
 	// Bayplan's own container was identified before the privilege drop and is
@@ -249,7 +258,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Checker:        checker,
 		Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, nil),
 		EnvResolver:    envSvc,
-		Auditor:        aud,
+		Auditor:        anonAudit,
 		MutationGuard:  auth.NewCSRFGuard(sessions),
 		TrustedProxies: cfg.TrustedProxies,
 		PublicOrigin:   inst.PublicOrigin,
@@ -260,14 +269,15 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	}, api.SystemDeps{Ready: ready}, api.SetupDeps{
 		Gate: gate,
 		// 5 attempts at once, then one every 12 seconds, per client address (D-05).
-		Limiter:  auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
-		Audit:    aud,
-		Store:    st,
-		Config:   cfg,
-		Instance: inst,
-		Sessions: sessions,
-		SPA:      spa,
-		Log:      log,
+		Limiter:   auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
+		Audit:     aud,
+		AnonAudit: anonAudit,
+		Store:     st,
+		Config:    cfg,
+		Instance:  inst,
+		Sessions:  sessions,
+		SPA:       spa,
+		Log:       log,
 	}, api.AuthDeps{
 		Login:    login,
 		Sessions: sessions,
@@ -323,6 +333,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	srv.background.Go(func() { audit.RunNightly(bg, srv.audit, cfg.AuditRetentionDays, log) })
 	// Expired sessions are refused on lookup; this hourly sweep only keeps the table small.
 	srv.background.Go(func() { auth.RunSessionCleanup(bg, st, cfg.SessionIdleTimeout, nil) })
+	// Suppressed anonymous refusals are written every minute, and once more when
+	// bg ends, which is before Close shuts the database.
+	srv.background.Go(func() { anonAudit.Run(bg, time.Minute) })
 	// Monitoring resumes for the environments an admin already added. The
 	// monitors live as long as bg, and Close waits for them.
 	if err := envSvc.StartAll(bg); err != nil {

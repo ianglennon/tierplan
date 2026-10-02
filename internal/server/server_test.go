@@ -617,3 +617,76 @@ func TestBuildTakesTheSelfContainerIDFromTheOption(t *testing.T) {
 		t.Fatalf("SelfContainerID = %q without the option, want empty", got)
 	}
 }
+
+// WR-04: an anonymous flood must not hold the single write connection, and every
+// refusal must still be accounted for.
+func TestBuildAggregatesAnAnonymousDenialFloodAndKeepsSignInWorking(t *testing.T) {
+	dir := t.TempDir() + "/data"
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = srv.Close()
+		}
+	})
+
+	count := func(s *store.Store, action string) (n int) {
+		t.Helper()
+		if err := s.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = ?`, action).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	for i := range 200 {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.RemoteAddr = "198.51.100.7:40000"
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("request %d: /api/me = %d, want 401", i, rec.Code)
+		}
+	}
+	if got := count(srv.Store(), audit.ActionPermissionDenied); got > 20 {
+		t.Fatalf("permission.denied rows during the flood = %d, want at most 20", got)
+	}
+
+	// A different address signs in while the flood's address is over budget.
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"username":"nobody","password":"not a real password"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.9:40000"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("sign-in from another address = %d, want 401", rec.Code)
+	}
+	if got := count(srv.Store(), audit.ActionAuthLoginFailed); got != 1 {
+		t.Fatalf("auth.login_failed rows = %d, want the failed sign-in written at once", got)
+	}
+
+	// Closing flushes the pending count before the database closes.
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+	st, err := store.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	var details string
+	if err := st.Read.QueryRow(`SELECT details FROM audit_log WHERE action = ? ORDER BY seq DESC LIMIT 1`, audit.ActionPermissionDenied).Scan(&details); err != nil {
+		t.Fatal(err)
+	}
+	var det map[string]string
+	if err := json.Unmarshal([]byte(details), &det); err != nil || det["suppressed"] == "" {
+		t.Fatalf("last permission.denied details = %q (%v), want a summary with a suppressed count", details, err)
+	}
+	if n, err := strconv.Atoi(det["suppressed"]); err != nil || n < 150 || n > 180 {
+		// 200 refusals less the burst of 20, less at most a few refills on a slow machine.
+		t.Fatalf("suppressed = %q, want about 180", det["suppressed"])
+	}
+}
