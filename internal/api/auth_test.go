@@ -74,6 +74,11 @@ type authFixture struct {
 	// snaps, when set with envSvc, is the snapshot cache behind the summary and
 	// list routes (plan 18).
 	snaps *envs.Snapshots
+	// hub, when set with envSvc, is the events hub behind the events routes
+	// (plan 21); eventsHeartbeat and eventsMaxStreams tune them for a test.
+	hub              *envs.Hub
+	eventsHeartbeat  time.Duration
+	eventsMaxStreams int
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -130,6 +135,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{Envs: f.envSvc, Checker: checker, Log: log})
 	if f.envSvc != nil && f.snaps != nil {
 		api.RegisterDashboard(r, api.DashboardDeps{Snapshots: f.snaps, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+	}
+	if f.envSvc != nil && f.hub != nil {
+		api.RegisterEvents(r, api.EventsDeps{Hub: f.hub, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, Log: log})
 	}
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
