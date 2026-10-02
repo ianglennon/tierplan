@@ -161,10 +161,16 @@ func decodeKey(s string) ([]byte, error) {
 	return key, nil
 }
 
+// linkFile is os.Link; a test replaces it to stand in for a file system
+// without hard links.
+var linkFile = os.Link
+
 // writeKeyFile writes the key atomically: a 0600 temporary file in the same
 // directory, hard-linked into place so an existing file is never replaced. It
 // reports false when the file already exists. Where hard links are not
-// available it falls back to a rename.
+// available it creates the file with O_CREATE|O_EXCL instead, which also never
+// replaces an existing file: an existing master key is never overwritten by
+// either path, because losing it makes every stored secret unreadable (WR-05).
 func writeKeyFile(path string, key []byte) (created bool, err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -193,17 +199,42 @@ func writeKeyFile(path string, key []byte) (created bool, err error) {
 		return false, fmt.Errorf("write key file: %w", err)
 	}
 
-	if err := os.Link(tmpName, path); err != nil {
+	if err := linkFile(tmpName, path); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return false, nil
 		}
-		if rerr := os.Rename(tmpName, path); rerr != nil {
-			return false, fmt.Errorf("install key file %s: %w", path, rerr)
-		}
+		return writeKeyFileExclusively(path, key)
 	}
 	if d, err := os.Open(dir); err == nil { //nolint:gosec // dir is the operator data directory
 		_ = d.Sync()
 		_ = d.Close()
+	}
+	return true, nil
+}
+
+// writeKeyFileExclusively is the fallback for a file system without hard
+// links. O_EXCL makes the create itself the race: exactly one process creates
+// the file, and the others see fs.ErrExist and use the winner's key.
+func writeKeyFileExclusively(path string, key []byte) (created bool, err error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, keyFileMode) //nolint:gosec // path is the operator data directory
+	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("create key file %s: %w", path, err)
+	}
+	_, werr := f.WriteString(base64.StdEncoding.EncodeToString(key) + "\n")
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		// Remove only the file this call just created, so no half-written key
+		// is left for the next start to trip over.
+		_ = os.Remove(path)
+		return false, fmt.Errorf("write key file %s: %w", path, werr)
 	}
 	return true, nil
 }
