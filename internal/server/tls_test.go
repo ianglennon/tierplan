@@ -5,11 +5,11 @@ package server
 
 import (
 	"context"
-	"errors"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"

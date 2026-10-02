@@ -265,7 +265,14 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Logger:         log,
 		// Strict-Transport-Security when the request came over TLS or the
 		// public URL is https, which also covers a TLS-terminating proxy (D-37).
-		HSTS: func(r *http.Request) bool { return r.TLS != nil || inst.Secure() },
+		// Not for Bayplan's own self-signed certificate: a browser pinned to it
+		// could not click through a regenerated one (WR-09).
+		HSTS: func(r *http.Request) bool {
+			if r.TLS != nil {
+				return !cfg.TLSSelfSigned
+			}
+			return inst.Secure()
+		},
 	}, api.SystemDeps{Ready: ready}, api.SetupDeps{
 		Gate: gate,
 		// 5 attempts at once, then one every 12 seconds, per client address (D-05).
