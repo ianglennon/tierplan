@@ -33,9 +33,10 @@ gen:
 	go run ./cmd/bayplan openapi > openapi.json
 	pnpm -C web exec openapi-typescript ../openapi.json -o src/api/schema.d.ts
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
+	node scripts/gen-notices.mjs
 
 gen-check: gen
-	git diff --exit-code -- openapi.json web/src/api/schema.d.ts internal/store/sqlc
+	git diff --exit-code -- openapi.json web/src/api/schema.d.ts internal/store/sqlc web/public/third-party-notices.json
 
 test:
 	go test ./... -race -count=1
