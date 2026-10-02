@@ -71,7 +71,7 @@ type Server struct {
 // NewRouter wires every operation. It takes plain dependencies so the
 // `openapi` subcommand can build the same handlers without a database or a
 // socket.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, dashboard api.DashboardDeps, events api.EventsDeps) *httpx.Router {
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, auditDeps api.AuditDeps) *httpx.Router {
 	r := httpx.New(opts)
 	api.RegisterSystem(r, sys)
 	api.RegisterSetup(r, setup)
@@ -81,6 +81,7 @@ func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, auth
 	api.RegisterEnvironments(r, environments)
 	api.RegisterDashboard(r, dashboard)
 	api.RegisterEvents(r, events)
+	api.RegisterAudit(r, auditDeps)
 	return r
 }
 
@@ -240,7 +241,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
 		api.EnvironmentsDeps{Envs: envSvc, Checker: checker, Log: log},
 		api.DashboardDeps{Snapshots: snapshots, SelfContainerID: selfID, Log: log},
-		api.EventsDeps{Hub: hub, Log: log})
+		api.EventsDeps{Hub: hub, Log: log},
+		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		hub.Close()

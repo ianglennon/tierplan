@@ -79,6 +79,8 @@ type authFixture struct {
 	hub              *envs.Hub
 	eventsHeartbeat  time.Duration
 	eventsMaxStreams int
+	// auditRetention feeds GET /api/audit (plan 24).
+	auditRetention int
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -139,6 +141,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	if f.envSvc != nil && f.hub != nil {
 		api.RegisterEvents(r, api.EventsDeps{Hub: f.hub, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, Log: log})
 	}
+	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Log: log})
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
 	}

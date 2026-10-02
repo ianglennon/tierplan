@@ -4,6 +4,66 @@
  */
 
 export interface paths {
+    "/api/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List audit entries
+         * @description Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. Needs audit.read.
+         */
+        get: operations["listAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audit/actors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the actor names in the audit log
+         * @description The distinct actor names seen, sorted, at most 200, for the user filter. Needs audit.read.
+         */
+        get: operations["listAuditActors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audit/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export the audit log as CSV or JSON
+         * @description Streams every entry matching the filters, newest first, as a download named bayplan-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are reads and are not audited. Needs audit.read.
+         */
+        get: operations["exportAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/login": {
         parameters: {
             query?: never;
@@ -414,6 +474,51 @@ export interface components {
             kind: "local";
             /** @description 1 to 64 characters; defaults to the hostname the daemon reports */
             name?: string;
+        };
+        AuditEntryDTO: {
+            /** @description A stable action key such as auth.login */
+            action: string;
+            /** @description The actor's name. For a failed sign-in by an unknown user this is anonymous and the attempted name is in target */
+            actor: string;
+            /** @enum {string} */
+            actorType: "user" | "system" | "anonymous";
+            details: {
+                [key: string]: string;
+            };
+            /** @description The environment ID, or null when the action was not about one */
+            environment: string | null;
+            id: string;
+            ip: string;
+            reason: string;
+            /** @enum {string} */
+            result: "success" | "failure" | "denied";
+            /**
+             * Format: int64
+             * @description The insertion sequence; entries are ordered by it, newest first
+             */
+            seq: number;
+            target: string;
+            targetType: string;
+            /**
+             * Format: date-time
+             * @description When it happened, in UTC
+             */
+            time: string;
+            userAgent: string;
+        };
+        AuditListBody: {
+            /** @description Newest first */
+            items: components["schemas"]["AuditEntryDTO"][] | null;
+            /**
+             * Format: int64
+             * @description Pass as cursor to get the next page; null when there are no more entries
+             */
+            nextCursor: number | null;
+            /**
+             * Format: int64
+             * @description How many days entries are kept; 0 means forever
+             */
+            retentionDays: number;
         };
         ChangePasswordBody: {
             /** @description The CSRF token of the new session, sent as X-CSRF-Token on every mutating request */
@@ -948,6 +1053,121 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAudit: {
+        parameters: {
+            query?: {
+                /** @description Only entries by this actor, matched exactly against the actor name */
+                user?: string;
+                /** @description Only entries of these action types; repeat the parameter to give several */
+                action?: string[] | null;
+                /** @description Only entries at or after this time (RFC 3339) */
+                from?: string;
+                /** @description Only entries at or before this time (RFC 3339) */
+                to?: string;
+                /** @description The nextCursor of the previous page; leave out for the newest entries */
+                cursor?: number;
+                /** @description Entries per page; 50 by default, at most 100 (larger values are clamped) */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listAuditActors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    exportAudit: {
+        parameters: {
+            query?: {
+                /** @description Only entries by this actor, matched exactly against the actor name */
+                user?: string;
+                /** @description Only entries of these action types; repeat the parameter to give several */
+                action?: string[] | null;
+                /** @description Only entries at or after this time (RFC 3339) */
+                from?: string;
+                /** @description Only entries at or before this time (RFC 3339) */
+                to?: string;
+                /** @description csv or json */
+                format?: "csv" | "json";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The export */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                    "text/csv": string;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     login: {
         parameters: {
             query?: never;

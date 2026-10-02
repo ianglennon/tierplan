@@ -26,6 +26,127 @@
         ],
         "type": "object"
       },
+      "AuditEntryDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "A stable action key such as auth.login",
+            "type": "string"
+          },
+          "actor": {
+            "description": "The actor's name. For a failed sign-in by an unknown user this is anonymous and the attempted name is in target",
+            "type": "string"
+          },
+          "actorType": {
+            "enum": [
+              "user",
+              "system",
+              "anonymous"
+            ],
+            "type": "string"
+          },
+          "details": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "environment": {
+            "description": "The environment ID, or null when the action was not about one",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "success",
+              "failure",
+              "denied"
+            ],
+            "type": "string"
+          },
+          "seq": {
+            "description": "The insertion sequence; entries are ordered by it, newest first",
+            "format": "int64",
+            "type": "integer"
+          },
+          "target": {
+            "type": "string"
+          },
+          "targetType": {
+            "type": "string"
+          },
+          "time": {
+            "description": "When it happened, in UTC",
+            "format": "date-time",
+            "type": "string"
+          },
+          "userAgent": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "seq",
+          "time",
+          "actorType",
+          "actor",
+          "action",
+          "targetType",
+          "target",
+          "environment",
+          "result",
+          "reason",
+          "ip",
+          "userAgent",
+          "details"
+        ],
+        "type": "object"
+      },
+      "AuditListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Newest first",
+            "items": {
+              "$ref": "#/components/schemas/AuditEntryDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "nextCursor": {
+            "description": "Pass as cursor to get the next page; null when there are no more entries",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "retentionDays": {
+            "description": "How many days entries are kept; 0 means forever",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor",
+          "retentionDays"
+        ],
+        "type": "object"
+      },
       "ChangePasswordBody": {
         "additionalProperties": false,
         "properties": {
@@ -1338,6 +1459,280 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/audit": {
+      "get": {
+        "description": "Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. Needs audit.read.",
+        "operationId": "listAudit",
+        "parameters": [
+          {
+            "description": "Only entries by this actor, matched exactly against the actor name",
+            "explode": false,
+            "in": "query",
+            "name": "user",
+            "schema": {
+              "description": "Only entries by this actor, matched exactly against the actor name",
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only entries of these action types; repeat the parameter to give several",
+            "explode": true,
+            "in": "query",
+            "name": "action",
+            "schema": {
+              "description": "Only entries of these action types; repeat the parameter to give several",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 50,
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Only entries at or after this time (RFC 3339)",
+            "explode": false,
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "description": "Only entries at or after this time (RFC 3339)",
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only entries at or before this time (RFC 3339)",
+            "explode": false,
+            "in": "query",
+            "name": "to",
+            "schema": {
+              "description": "Only entries at or before this time (RFC 3339)",
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The nextCursor of the previous page; leave out for the newest entries",
+            "explode": false,
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "description": "The nextCursor of the previous page; leave out for the newest entries",
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Entries per page; 50 by default, at most 100 (larger values are clamped)",
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "description": "Entries per page; 50 by default, at most 100 (larger values are clamped)",
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List audit entries",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/audit/actors": {
+      "get": {
+        "description": "The distinct actor names seen, sorted, at most 200, for the user filter. Needs audit.read.",
+        "operationId": "listAuditActors",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the actor names in the audit log",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/audit/export": {
+      "get": {
+        "description": "Streams every entry matching the filters, newest first, as a download named bayplan-audit-\u003cUTC timestamp\u003e.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are reads and are not audited. Needs audit.read.",
+        "operationId": "exportAudit",
+        "parameters": [
+          {
+            "description": "Only entries by this actor, matched exactly against the actor name",
+            "explode": false,
+            "in": "query",
+            "name": "user",
+            "schema": {
+              "description": "Only entries by this actor, matched exactly against the actor name",
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only entries of these action types; repeat the parameter to give several",
+            "explode": true,
+            "in": "query",
+            "name": "action",
+            "schema": {
+              "description": "Only entries of these action types; repeat the parameter to give several",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 50,
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Only entries at or after this time (RFC 3339)",
+            "explode": false,
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "description": "Only entries at or after this time (RFC 3339)",
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only entries at or before this time (RFC 3339)",
+            "explode": false,
+            "in": "query",
+            "name": "to",
+            "schema": {
+              "description": "Only entries at or before this time (RFC 3339)",
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "csv or json",
+            "explode": false,
+            "in": "query",
+            "name": "format",
+            "schema": {
+              "default": "csv",
+              "description": "csv or json",
+              "enum": [
+                "csv",
+                "json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The export",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Export the audit log as CSV or JSON",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/auth/login": {
       "post": {
         "description": "Starts a server-side session and sets its cookie. Every failure, whether the user is unknown, the password is wrong, the account is locked or disabled or the address is rate limited, answers 401 invalid_credentials with the same body (D-30). A session the browser already holds is ended first.",
