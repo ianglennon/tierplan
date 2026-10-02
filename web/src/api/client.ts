@@ -30,6 +30,12 @@ export function setUnauthorizedHandler(fn: ((path: string) => void) | null): voi
   onUnauthorized = fn;
 }
 
+// getUnauthorizedHandler returns the handler now armed, so a caller that
+// disarms it for a moment (sign-out) can put the same one back.
+export function getUnauthorizedHandler(): ((path: string) => void) | null {
+  return onUnauthorized;
+}
+
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 // A 401 from these calls is an answer, not an expired session: a wrong

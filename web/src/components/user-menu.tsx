@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { useRouter } from "@tanstack/react-router";
 import { KeyRound, LogOut } from "lucide-react";
 import { useRef, useState } from "react";
 
-import { api, setCsrfToken, setUnauthorizedHandler } from "@/api/client";
-import { queryClient } from "@/api/query-client";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ChangePasswordDialog } from "@/features/account/change-password-dialog";
+import { useSignOut } from "@/features/account/sign-out";
 import { useT } from "@/i18n/use-t";
 import { getTheme, setTheme, type ThemeMode } from "@/lib/theme";
 
@@ -43,7 +41,7 @@ const THEMES: ReadonlyArray<{ mode: ThemeMode; key: string }> = [
 // theme choice, Change password (D-34) and Log out (AUTH-03, D-63).
 export function UserMenu({ username, role }: UserMenuProps) {
   const t = useT();
-  const router = useRouter();
+  const signOut = useSignOut();
   const [theme, setThemeState] = useState<ThemeMode>(getTheme);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -53,22 +51,6 @@ export function UserMenu({ username, role }: UserMenuProps) {
     if (!mode) return;
     setTheme(mode);
     setThemeState(mode);
-  }
-
-  async function logout() {
-    // The sign-out is deliberate, so a 401 on the way must not show the
-    // "session expired" notice.
-    setUnauthorizedHandler(null);
-    try {
-      await api.POST("/api/auth/logout");
-    } catch {
-      // Leave anyway. If the session survived, /login sends the browser back in.
-    }
-    setCsrfToken(null);
-    await router.navigate({ to: "/login", replace: true });
-    // Only now that the signed-in pages are gone: nothing they fetched stays
-    // behind for the next person at this browser.
-    queryClient.clear();
   }
 
   return (
@@ -114,7 +96,7 @@ export function UserMenu({ username, role }: UserMenuProps) {
             ))}
           </DropdownMenuRadioGroup>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={logout}>
+          <DropdownMenuItem onSelect={() => void signOut()}>
             <LogOut aria-hidden="true" />
             {t("shell.userMenu.logout")}
           </DropdownMenuItem>
