@@ -80,7 +80,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 SPDX-FileCopyrightText: 2026 The Bayplan Authors
 ```
 
-`make spdx` fails on a file without them. Exempt: generated files (`Code generated ... DO NOT EDIT.`, `web/src/api/schema.d.ts`, `web/src/routeTree.gen.ts`, `internal/store/sqlc/`), the test fixtures in `scripts/testdata/`, and the **shadcn components** in `web/src/components/ui/`. Those are MIT-licensed code written elsewhere; they keep MIT attribution in the third-party notices (`make gen` regenerates `web/public/third-party-notices.json`, which Settings > About shows) rather than our header.
+`make spdx` fails on a file without them. Only these are exempt: generated files (`Code generated ... DO NOT EDIT.`, `web/src/api/schema.d.ts`, `web/src/routeTree.gen.ts`, `internal/store/sqlc/`) and the deliberately header-less fail-first fixture `scripts/testdata/spdx/missing.go`. Nothing else is exempt, including copied-in third-party code.
+
+Components copied in with `shadcn add` (into `web/src/components/ui/`) must get these three lines at the top before you commit, next to the step that rewrites their `cn` import to `@/lib/utils`:
+
+```
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2023 shadcn. Derived from shadcn/ui (https://github.com/shadcn-ui/ui), used under the MIT licence; see the third-party notices.
+```
+
+A leading comment before a `"use client"` directive is fine. The third line keeps the MIT attribution; the MIT notice for shadcn/ui is also listed in the third-party notices (`make gen` regenerates `web/public/third-party-notices.json`, which Settings > About shows).
 
 ## Dependency licences
 
