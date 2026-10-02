@@ -165,6 +165,23 @@ describe("Settings layout", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/general"));
   });
 
+  it("opens the Environments tab from /settings for a user with only environments.write (WR-19)", async () => {
+    me = { ...ADMIN, permissions: { global: ["environments.write"], environments: {} } };
+    const router = renderAt("/settings");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/environments"));
+    expect(await main().findByText("lab-1")).toBeTruthy();
+    expect(screen.queryByText("You don't have permission to view this page")).toBeNull();
+    expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
+  });
+
+  it("sends a user with neither permission from /settings to the dashboard (WR-19)", async () => {
+    me = VIEWER;
+    environments = [];
+    const router = renderAt("/settings");
+    await screen.findByText("No environments yet");
+    expect(router.state.location.pathname).toBe("/");
+  });
+
   it("renders no permission without environments.write, and asks the server for nothing", async () => {
     me = VIEWER;
     renderAt("/settings/environments");
