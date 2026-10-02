@@ -3,7 +3,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { formatAbsolute, formatBytes, formatClock, formatRelative } from "@/lib/format";
+import {
+  formatAbsolute,
+  formatAbsoluteUtc,
+  formatBytes,
+  formatClock,
+  formatRelative,
+} from "@/lib/format";
 
 // A translate stand-in that shows which key and count the formatter asked for,
 // so the thresholds are tested without the English copy.
@@ -97,5 +103,18 @@ describe("formatClock", () => {
     expect(formatClock("2026-10-01T14:05:00Z")).toMatch(/\d{1,2}:\d{2}/);
     expect(formatClock(undefined)).toBeUndefined();
     expect(formatClock("nope")).toBeUndefined();
+  });
+});
+
+describe("formatAbsoluteUtc", () => {
+  it("shows the moment in UTC whatever the browser zone is, with the zone named", () => {
+    const out = formatAbsoluteUtc("2026-10-01T04:30:05Z");
+    expect(out).toContain("04:30:05");
+    expect(out).toContain("UTC");
+  });
+
+  it("is empty for a missing or unreadable time", () => {
+    expect(formatAbsoluteUtc(undefined)).toBe("");
+    expect(formatAbsoluteUtc("nope")).toBe("");
   });
 });

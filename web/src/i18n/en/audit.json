@@ -23,11 +23,13 @@
       "actionCount_other": "{{count}} actions",
       "range": "Time range",
       "clear": "Clear filters",
-      "customFrom": "From",
-      "customTo": "To",
       "customSummary": "{{from}} to {{to}}",
       "customOpenEnded": "Pick days",
-      "customDialog": "Choose the first and last day. Both days are included."
+      "customDialog": "Choose the first and last day. Both days are included.",
+      "userList": "Known users",
+      "actionList": "Actions to show",
+      "customLabel": "Custom range",
+      "noUsers": "No matching users"
     },
     "ranges": {
       "1h": "Last hour",
@@ -50,7 +52,8 @@
       "target": "Target",
       "environment": "Environment",
       "result": "Result",
-      "ip": "IP address"
+      "ip": "IP address",
+      "details": "Details"
     },
     "results": {
       "success": "Success",

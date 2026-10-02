@@ -53,6 +53,23 @@ export function formatAbsolute(iso: string | undefined): string {
   }).format(date);
 }
 
+// formatAbsoluteUtc is the same moment as formatAbsolute but in UTC, with "UTC"
+// as the zone name, for the audit log's detail rows (D-66: stored in UTC).
+export function formatAbsoluteUtc(iso: string | undefined): string {
+  const date = parse(iso);
+  if (!date) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZone: "UTC",
+    timeZoneName: "short",
+  }).format(date);
+}
+
 // formatClock is the HH:MM of an RFC 3339 time in the browser's own locale and
 // 24-hour or 12-hour habit (D-66). It returns undefined for a missing or
 // unreadable time so callers can fall back to wording without a time.

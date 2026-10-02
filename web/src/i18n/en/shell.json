@@ -20,6 +20,7 @@
       "images": "Images",
       "volumes": "Volumes",
       "networks": "Networks",
+      "audit": "Audit",
       "settings": "Settings"
     },
     "userMenu": {

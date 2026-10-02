@@ -61,7 +61,7 @@ const day = z.string().regex(DAY).optional().catch(undefined);
 export const auditSearchSchema = z.object({
   user: text,
   action: actions,
-  range: z.enum(RANGES).catch(DEFAULT_RANGE),
+  range: z.enum(RANGES).default(DEFAULT_RANGE).catch(DEFAULT_RANGE),
   from: day,
   to: day,
 });
@@ -99,6 +99,20 @@ function localDay(value: string | undefined): { y: number; m: number; d: number 
     return undefined;
   }
   return { y, m, d };
+}
+
+// formatDay writes a Date as the YYYY-MM-DD of its day in the browser's time
+// zone, which is how the custom range sits in the URL.
+export function formatDay(date: Date): string {
+  const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+  return `${pad(date.getFullYear(), 4)}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// parseDay is the local midnight of a YYYY-MM-DD day, for the calendar to show
+// as selected. It is undefined for text that is not a real calendar day.
+export function parseDay(value: string | undefined): Date | undefined {
+  const day = localDay(value);
+  return day ? new Date(day.y, day.m - 1, day.d) : undefined;
 }
 
 // rangeFor is the from and to the API takes, as UTC ISO strings. A preset

@@ -8,8 +8,10 @@ import {
   actionLabel,
   auditSearchSchema,
   exportUrl,
+  formatDay,
   KNOWN_ACTIONS,
   listParams,
+  parseDay,
   rangeFor,
 } from "./filters";
 
@@ -137,5 +139,20 @@ describe("exportUrl and listParams", () => {
     const list = new URLSearchParams(listParams({ range: "all" }, NOW));
     expect(list.has("cursor")).toBe(false);
     expect(list.has("limit")).toBe(false);
+  });
+});
+
+describe("formatDay and parseDay", () => {
+  it("write and read a calendar day of the browser's time zone", () => {
+    const date = new Date(2026, 8, 3, 15, 30);
+    expect(formatDay(date)).toBe("2026-09-03");
+    expect(parseDay("2026-09-03")).toEqual(new Date(2026, 8, 3));
+    expect(parseDay(formatDay(date))).toEqual(new Date(2026, 8, 3));
+  });
+
+  it("read nothing from a missing or impossible day", () => {
+    expect(parseDay(undefined)).toBeUndefined();
+    expect(parseDay("2026-13-01")).toBeUndefined();
+    expect(parseDay("not a day")).toBeUndefined();
   });
 });

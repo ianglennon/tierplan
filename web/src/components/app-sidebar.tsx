@@ -2,7 +2,15 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Link, useParams } from "@tanstack/react-router";
-import { Container, HardDrive, Layers, LayoutDashboard, Network, Settings } from "lucide-react";
+import {
+  Container,
+  HardDrive,
+  Layers,
+  LayoutDashboard,
+  Network,
+  ScrollText,
+  Settings,
+} from "lucide-react";
 
 import { EnvSwitcher } from "@/components/env-switcher";
 import {
@@ -72,6 +80,8 @@ export function AppSidebar() {
   const canReadSettings = usePermission("settings.read");
   const canManageEnvironments = usePermission("environments.write");
   const canSettings = canReadSettings || canManageEnvironments;
+  // Audit is global and admin only in this phase (D-43).
+  const canAudit = usePermission("audit.read");
 
   return (
     <Sidebar
@@ -121,11 +131,19 @@ export function AppSidebar() {
           </SidebarGroup>
         ) : null}
       </SidebarContent>
-      {/* Audit is added by plan 25, once its route exists for the typed link to
-          point at. */}
       <SidebarGroup className="mt-auto">
         <SidebarGroupContent>
           <SidebarMenu>
+            {canAudit ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild tooltip={t("shell.nav.audit")} className="max-md:h-11">
+                  <Link to="/audit" activeProps={{ "aria-current": "page", "data-active": true }}>
+                    <ScrollText aria-hidden="true" />
+                    <span>{t("shell.nav.audit")}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
             {canSettings ? (
               <SidebarMenuItem>
                 <SidebarMenuButton
