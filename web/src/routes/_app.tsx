@@ -57,19 +57,23 @@ function AppLayout() {
   const [open, setOpen] = useState(getSidebarOpen);
 
   // A 401 on any later signed-in request means the session ended (expired,
-  // revoked or signed out elsewhere): drop what is cached for it and go to
-  // sign-in, which brings the browser back to this page afterwards. One-shot,
-  // so a burst of failing requests navigates once.
+  // revoked or signed out elsewhere): go to sign-in, which brings the browser
+  // back to this page afterwards, and then drop everything the session cached
+  // so nothing from it survives for the next person (WR-15). One-shot, so a
+  // burst of failing requests navigates once.
   useEffect(() => {
     setUnauthorizedHandler((path) => {
       setUnauthorizedHandler(null);
       setCsrfToken(null);
-      queryClient.removeQueries({ queryKey: meQueryOptions.queryKey });
-      void router.navigate({
-        to: "/login",
-        search: { next: path === "/" ? undefined : path, expired: true },
-        replace: true,
-      });
+      void router
+        .navigate({
+          to: "/login",
+          search: { next: path === "/" ? undefined : path, expired: true },
+          replace: true,
+        })
+        // Clear only once the signed-in pages are gone (the same order as the
+        // user menu's logout), so no observer refetches into the cleared cache.
+        .then(() => queryClient.clear());
     });
     return () => setUnauthorizedHandler(null);
   }, [router]);
@@ -101,7 +105,7 @@ export const Route = createFileRoute("/_app")({
   // to the wizard first, and a visitor without a session goes to sign-in with
   // the page they asked for remembered in `next`.
   beforeLoad: async ({ location }) => {
-    const instance = await loadInstance();
+    const instance = await loadInstance(30_000);
     if (instance.needsSetup) throw redirect({ to: "/setup" });
     try {
       await queryClient.ensureQueryData(meQueryOptions);

@@ -79,9 +79,10 @@ function LoginPage() {
         return;
       }
       setCsrfToken(data.csrfToken);
-      // /api/me carries the permissions sign-in does not, so drop the old
-      // answer and let the app shell load it again.
-      queryClient.removeQueries({ queryKey: meQueryOptions.queryKey });
+      // Whatever a previous user's session cached must not be shown to this
+      // one (WR-15). This also drops the old /api/me answer, so the app shell
+      // loads the permissions that sign-in does not carry.
+      queryClient.clear();
       router.history.push(safeNext(next));
     } catch {
       setErrorKey("common.errors.unreachable");
