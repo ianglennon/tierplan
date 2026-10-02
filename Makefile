@@ -126,6 +126,7 @@ GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 # does (SPA, ldflags, trimpath) and runs its version subcommand. Needs no Docker.
 release-check:
 	$(GORELEASER) check
+	@mkdir -p bin
 	$(GORELEASER) build --snapshot --clean --single-target --output bin/bayplan-release
 	@v="$$(bin/bayplan-release version)"; echo "$$v"; \
 	case "$$v" in \
