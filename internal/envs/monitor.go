@@ -101,6 +101,15 @@ type Monitor struct {
 	entries map[string]*entry
 	wg      sync.WaitGroup
 	live    atomic.Int64
+	// watchers are told when an environment starts or stops being monitored
+	// (the events hub, plan 21). They are called after the monitor's lock is
+	// released, so a callback may call back into the monitor.
+	watchers []watcher
+}
+
+// watcher is a pair of callbacks for the lifecycle of monitored environments.
+type watcher struct {
+	started, stopped func(envID string)
 }
 
 // NewMonitor returns an empty Monitor. now and sleep default to the real
@@ -134,10 +143,37 @@ func realSleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// watch registers callbacks for environments that start and stop being
+// monitored. started runs after a Start that began a new loop, stopped after
+// Stop or StopAll ended one.
+func (m *Monitor) watch(started, stopped func(envID string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.watchers = append(m.watchers, watcher{started: started, stopped: stopped})
+}
+
+func (m *Monitor) currentWatchers() []watcher {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]watcher(nil), m.watchers...)
+}
+
 // Start begins monitoring envID through t, with its first probe at once. The
 // loop ends when ctx ends or Stop is called. Starting an environment that is
 // already monitored does nothing, so there is exactly one loop per environment.
 func (m *Monitor) Start(ctx context.Context, envID string, t engine.Transport) error {
+	began, err := m.start(ctx, envID, t)
+	if err != nil || !began {
+		return err
+	}
+	for _, w := range m.currentWatchers() {
+		w.started(envID)
+	}
+	return nil
+}
+
+// start is Start without the watchers; began reports whether a loop was started.
+func (m *Monitor) start(ctx context.Context, envID string, t engine.Transport) (began bool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if old, ok := m.entries[envID]; ok {
@@ -147,12 +183,12 @@ func (m *Monitor) Start(ctx context.Context, envID string, t engine.Transport) e
 			_ = old.client.Close()
 			delete(m.entries, envID)
 		default:
-			return nil
+			return false, nil
 		}
 	}
 	cli, err := dockerx.New(t)
 	if err != nil {
-		return fmt.Errorf("monitor %s: %w", envID, err)
+		return false, fmt.Errorf("monitor %s: %w", envID, err)
 	}
 	lctx, cancel := context.WithCancel(ctx)
 	e := &entry{
@@ -171,7 +207,7 @@ func (m *Monitor) Start(ctx context.Context, envID string, t engine.Transport) e
 		defer close(e.done)
 		m.run(lctx, envID, e)
 	}()
-	return nil
+	return true, nil
 }
 
 // Stop ends monitoring envID and waits for its loop to exit. It does nothing
@@ -183,6 +219,9 @@ func (m *Monitor) Stop(envID string) {
 	m.mu.Unlock()
 	if ok {
 		m.stop(e)
+		for _, w := range m.currentWatchers() {
+			w.stopped(envID)
+		}
 	}
 }
 
@@ -191,13 +230,20 @@ func (m *Monitor) Stop(envID string) {
 func (m *Monitor) StopAll() {
 	m.mu.Lock()
 	all := make([]*entry, 0, len(m.entries))
+	ids := make([]string, 0, len(m.entries))
 	for id, e := range m.entries {
 		all = append(all, e)
+		ids = append(ids, id)
 		delete(m.entries, id)
 	}
 	m.mu.Unlock()
 	for _, e := range all {
 		m.stop(e)
+	}
+	for _, id := range ids {
+		for _, w := range m.currentWatchers() {
+			w.stopped(id)
+		}
 	}
 }
 

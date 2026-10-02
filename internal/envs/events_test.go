@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,18 +118,6 @@ func actors(rows []dockerx.EventRow) []string {
 	return out
 }
 
-func sameStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func TestHubFirstSubscriberGetsTheBackfillAsBacklogThenLiveEvents(t *testing.T) {
 	now := time.Now()
 	r := newHubRig(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
@@ -139,7 +128,7 @@ func TestHubFirstSubscriberGetsTheBackfillAsBacklogThenLiveEvents(t *testing.T) 
 	r.waitRecent(t, 2)
 
 	backlog, ch, _ := r.subscribe(t)
-	if got := actors(backlog); !sameStrings(got, []string{"c-a", "c-b"}) {
+	if got := actors(backlog); !slices.Equal(got, []string{"c-a", "c-b"}) {
 		t.Fatalf("backlog = %v, want the last hour's events oldest first, without the 2 hour old one", got)
 	}
 	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "c-live"})
@@ -165,7 +154,7 @@ func TestHubSecondSubscriberGetsTheSameBacklogWithoutASecondDaemonRequest(t *tes
 
 	first, _, _ := r.subscribe(t)
 	second, _, _ := r.subscribe(t)
-	if !sameStrings(actors(first), []string{"c-a"}) || !sameStrings(actors(second), actors(first)) {
+	if !slices.Equal(actors(first), []string{"c-a"}) || !slices.Equal(actors(second), actors(first)) {
 		t.Errorf("backlogs = %v and %v", actors(first), actors(second))
 	}
 	// Starting it again, as the monitor does when an environment is restarted,
@@ -211,7 +200,7 @@ func TestHubRecentIsNewestFirstAndLimited(t *testing.T) {
 		r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: fmt.Sprintf("c%d", i)})
 	}
 	r.waitRecent(t, 5)
-	if got := actors(r.hub.Recent(hubEnv, 3)); !sameStrings(got, []string{"c4", "c3", "c2"}) {
+	if got := actors(r.hub.Recent(hubEnv, 3)); !slices.Equal(got, []string{"c4", "c3", "c2"}) {
 		t.Errorf("Recent(3) = %v, want the newest three, newest first", got)
 	}
 	if got := r.hub.Recent(hubEnv, 0); len(got) != 0 {
@@ -247,7 +236,7 @@ func TestHubAfterADropResumesFromTheLastEventAndShowsItOnce(t *testing.T) {
 	if got := r.fake.EventQueries()[1].Get("since"); got != want {
 		t.Errorf("the reconnect asked since=%q, want the last event's time %q", got, want)
 	}
-	if got := actors(r.hub.Recent(hubEnv, 10)); !sameStrings(got, []string{"c-n1", "c-n"}) {
+	if got := actors(r.hub.Recent(hubEnv, 10)); !slices.Equal(got, []string{"c-n1", "c-n"}) {
 		t.Errorf("the buffer holds %v, want each event once", got)
 	}
 }
@@ -284,14 +273,14 @@ func TestHubKeepsArrivalOrderForEventsWithTheSameTimestamp(t *testing.T) {
 	for range 3 {
 		live = append(live, recvEvent(t, ch).ActorID)
 	}
-	if !sameStrings(live, []string{"zeta", "alpha", "mid"}) {
+	if !slices.Equal(live, []string{"zeta", "alpha", "mid"}) {
 		t.Errorf("live order = %v, want arrival order", live)
 	}
 	backlog, _, _ := r.subscribe(t)
-	if !sameStrings(actors(backlog), []string{"zeta", "alpha", "mid"}) {
+	if !slices.Equal(actors(backlog), []string{"zeta", "alpha", "mid"}) {
 		t.Errorf("backlog order = %v, want arrival order", actors(backlog))
 	}
-	if got := actors(r.hub.Recent(hubEnv, 3)); !sameStrings(got, []string{"mid", "alpha", "zeta"}) {
+	if got := actors(r.hub.Recent(hubEnv, 3)); !slices.Equal(got, []string{"mid", "alpha", "zeta"}) {
 		t.Errorf("Recent = %v, want the reverse of arrival", got)
 	}
 }
@@ -306,7 +295,7 @@ func TestHubDropsExecAndHealthNoiseBeforeTheBuffer(t *testing.T) {
 	if ev := recvEvent(t, ch); ev.ActorID != "kept" {
 		t.Errorf("first event = %+v, want the kept one", ev)
 	}
-	if got := actors(r.hub.Recent(hubEnv, 10)); !sameStrings(got, []string{"kept"}) {
+	if got := actors(r.hub.Recent(hubEnv, 10)); !slices.Equal(got, []string{"kept"}) {
 		t.Errorf("the buffer holds %v, want only the kept event", got)
 	}
 }
@@ -406,7 +395,7 @@ func TestHubSurvivesTheDaemonGoingDownAndComingBack(t *testing.T) {
 	if ev := recvEvent(t, ch); ev.ActorID != "c-after" {
 		t.Errorf("after the restart the next event is %+v, want c-after", ev)
 	}
-	if got := actors(r.hub.Recent(hubEnv, 10)); !sameStrings(got, []string{"c-after", "c-before"}) {
+	if got := actors(r.hub.Recent(hubEnv, 10)); !slices.Equal(got, []string{"c-after", "c-before"}) {
 		t.Errorf("the buffer holds %v, want both events", got)
 	}
 }
