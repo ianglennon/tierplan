@@ -115,8 +115,10 @@ func writeOpenAPI(w io.Writer) error {
 }
 
 // noDataDir lists the commands that never read the data directory. They still
-// drop privileges, but Drop neither creates nor chowns /data for them.
-var noDataDir = map[string]bool{"version": true, "openapi": true, "help": true, "completion": true}
+// drop privileges, but Drop neither creates nor chowns /data for them. The
+// healthcheck is among them: the image runs it as root every 30 seconds, and
+// it only probes /healthz (WR-08).
+var noDataDir = map[string]bool{"version": true, "openapi": true, "help": true, "completion": true, "healthcheck": true}
 
 // dropPrivileges reads Bayplan's own container ID and then, when started as
 // root, joins the Docker socket's group, fixes /data and becomes UID and GID
@@ -124,9 +126,16 @@ var noDataDir = map[string]bool{"version": true, "openapi": true, "help": true, 
 // and some /proc/self entries stop being readable (RESEARCH A9, D-27).
 func dropPrivileges(cmd *cobra.Command) (selfID string, err error) {
 	selfID = envs.ReadSelfContainerID()
+	if _, err := privdrop.Drop(dropOptions(cmd)); err != nil {
+		return "", err
+	}
+	return selfID, nil
+}
 
-	// A configuration error is reported by the command itself. The drop does
-	// not wait for it: the process must not stay root because a flag is wrong.
+// dropOptions builds what the privilege drop needs from the configuration.
+// A configuration error is reported by the command itself. The drop does not
+// wait for it: the process must not stay root because a flag is wrong.
+func dropOptions(cmd *cobra.Command) privdrop.Options {
 	var opts privdrop.Options
 	if cfg, cerr := loadConfig(cmd); cerr == nil {
 		if !noDataDir[cmd.Name()] {
@@ -138,10 +147,7 @@ func dropPrivileges(cmd *cobra.Command) (selfID string, err error) {
 			opts.SocketPath = sock
 		}
 	}
-	if _, err := privdrop.Drop(opts); err != nil {
-		return "", err
-	}
-	return selfID, nil
+	return opts
 }
 
 func runServe(cmd *cobra.Command, selfID string) error {

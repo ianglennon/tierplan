@@ -353,3 +353,37 @@ func TestDropReturnsAnErrorWhenChownFails(t *testing.T) {
 		}
 	}
 }
+
+// chownInRoot is the production Chown. As an unprivileged user a chown to the
+// caller's own identity succeeds, which is enough to prove the calls are valid
+// for both a plain entry and the data directory itself.
+func TestChownInRootAcceptsAnEntryAndTheRootDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	for _, name := range []string{"f", "."} {
+		if err := chownInRoot(root, name, os.Getuid(), os.Getgid()); err != nil {
+			t.Errorf("chownInRoot(%q): %v", name, err)
+		}
+	}
+	if err := chownInRoot(root, "../escape", os.Getuid(), os.Getgid()); err == nil {
+		t.Error("a name that leaves the root must be refused")
+	}
+}
+
+func TestOwnerOfReadsTheRealOwner(t *testing.T) {
+	fi, err := os.Stat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, gid, ok := ownerOf(".", fi)
+	if !ok || int(uid) != os.Getuid() || int(gid) != os.Getgid() {
+		t.Errorf("ownerOf = %d, %d, %v; want %d, %d", uid, gid, ok, os.Getuid(), os.Getgid())
+	}
+}

@@ -15,7 +15,9 @@ package privdrop
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"syscall"
 )
@@ -45,11 +47,20 @@ type Options struct {
 	// GIDOverride is BAYPLAN_DOCKER_GID and wins over the socket's group.
 	GIDOverride *int
 
-	Geteuid   func() int
-	Stat      func(string) (os.FileInfo, error)
-	Lchown    func(string, int, int) error
-	ReadDir   func(string) ([]os.DirEntry, error)
-	MkdirAll  func(string, os.FileMode) error
+	Geteuid func() int
+	// Stat is used to find the Docker socket's group only.
+	Stat     func(string) (os.FileInfo, error)
+	MkdirAll func(string, os.FileMode) error
+	// Chown gives name, relative to the data directory, to uid:gid without
+	// following a final symbolic link. r is the os.Root of the data directory,
+	// so the path can never leave it. "." is the data directory itself.
+	Chown func(r *os.Root, name string, uid, gid int) error
+	// Owner reports who owns the entry that fi describes; name is relative to
+	// the data directory. ok is false when the owner cannot be read, which is
+	// treated as "needs fixing".
+	Owner func(name string, fi fs.FileInfo) (uid, gid uint32, ok bool)
+	// Umask sets the file creation mask and returns the old one.
+	Umask     func(int) int
 	Setgroups func([]int) error
 	Setgid    func(int) error
 	Setuid    func(int) error
@@ -70,14 +81,17 @@ func (o *Options) defaults() {
 	if o.Stat == nil {
 		o.Stat = os.Stat
 	}
-	if o.Lchown == nil {
-		o.Lchown = os.Lchown
-	}
-	if o.ReadDir == nil {
-		o.ReadDir = os.ReadDir
-	}
 	if o.MkdirAll == nil {
 		o.MkdirAll = os.MkdirAll
+	}
+	if o.Chown == nil {
+		o.Chown = chownInRoot
+	}
+	if o.Owner == nil {
+		o.Owner = ownerOf
+	}
+	if o.Umask == nil {
+		o.Umask = syscall.Umask
 	}
 	if o.Setgroups == nil {
 		o.Setgroups = syscall.Setgroups
@@ -91,7 +105,7 @@ func (o *Options) defaults() {
 }
 
 // Drop does nothing unless the effective user is root. As root it fixes the
-// data directory's ownership, then sets the supplementary groups to the Docker
+// data directory's ownership, sets umask 077, then sets the supplementary groups to the Docker
 // socket's group (or none), the GID to 1000 and the UID to 1000, in that order:
 // setuid last, because an unprivileged process can no longer change its groups.
 // It returns an error, and the caller must exit, if any step fails or the
@@ -122,6 +136,11 @@ func Drop(o Options) (Result, error) {
 		}
 	}
 
+	// Every file the process creates after the drop (the database and its
+	// SQLite sidecars, backups, the key file) is private to UID 1000, whatever
+	// umask the container runtime started it with (WR-07).
+	o.Umask(0o077)
+
 	groups := []int{}
 	if socketGID != NoGroup {
 		groups = []int{socketGID}
@@ -143,52 +162,59 @@ func Drop(o Options) (Result, error) {
 
 // fixOwnership creates the data directory when it is missing and gives
 // UID:GID 1000 to it, to its direct entries and to the entries of backups/
-// and tls/. Entries that are already right are not touched. Symbolic links are
-// never followed.
+// and tls/. Entries that are already right are not touched.
+//
+// The walk runs as root inside a directory the unprivileged server can write
+// to, so it goes through an os.Root: no path it handles can leave the data
+// directory, an entry's type is read again at the moment the walk decides to
+// descend into it, and a symbolic link is chowned itself and never entered
+// (WR-08, T-01-108). A data directory that is itself a symbolic link is
+// resolved first, so its real target is the one that is fixed.
 func fixOwnership(o Options) error {
-	fi, err := o.Stat(o.DataDir)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
+	dir, err := filepath.EvalSymlinks(o.DataDir)
+	if errors.Is(err, fs.ErrNotExist) {
 		if err := o.MkdirAll(o.DataDir, 0o750); err != nil {
 			return fmt.Errorf("create the data directory %s: %w", o.DataDir, err)
 		}
-		if fi, err = o.Stat(o.DataDir); err != nil {
-			return fmt.Errorf("data directory %s: %w", o.DataDir, err)
-		}
-	case err != nil:
+		dir, err = filepath.EvalSymlinks(o.DataDir)
+	}
+	if err != nil {
 		return fmt.Errorf("data directory %s: %w", o.DataDir, err)
 	}
-	if err := chownIfNeeded(o, o.DataDir, fi); err != nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("open the data directory %s: %w", dir, err)
+	}
+	defer func() { _ = root.Close() }()
+
+	if err := chownEntry(o, root, ".", dir); err != nil {
 		return err
 	}
+	return walk(o, root, ".", dir, true)
+}
 
-	entries, err := o.ReadDir(o.DataDir)
+// walk fixes the entries of rel (a name relative to the data directory). When
+// descend is true, entries that really are the backups or tls directories are
+// walked one level further.
+func walk(o Options, root *os.Root, rel, dir string, descend bool) error {
+	names, err := listDir(root, rel)
 	if err != nil {
-		return fmt.Errorf("read the data directory %s: %w", o.DataDir, err)
+		return fmt.Errorf("read %s: %w", filepath.Join(dir, rel), err)
 	}
-	for _, e := range entries {
-		path := filepath.Join(o.DataDir, e.Name())
-		info, err := e.Info()
+	for _, n := range names {
+		name := path.Join(rel, n)
+		full := filepath.Join(dir, filepath.FromSlash(name))
+		// Re-read the type now, not from the listing: a directory the
+		// server swapped for a link since then is a link here.
+		fi, err := root.Lstat(name)
 		if err != nil {
-			return fmt.Errorf("inspect %s: %w", path, err)
+			return fmt.Errorf("inspect %s: %w", full, err)
 		}
-		if err := chownIfNeeded(o, path, info); err != nil {
+		if err := chownIfNeeded(o, root, name, full, fi); err != nil {
 			return err
 		}
-		if !e.IsDir() || !subdirs[e.Name()] {
-			continue
-		}
-		inner, err := o.ReadDir(path)
-		if err != nil {
-			return fmt.Errorf("read %s: %w", path, err)
-		}
-		for _, ie := range inner {
-			innerPath := filepath.Join(path, ie.Name())
-			innerInfo, err := ie.Info()
-			if err != nil {
-				return fmt.Errorf("inspect %s: %w", innerPath, err)
-			}
-			if err := chownIfNeeded(o, innerPath, innerInfo); err != nil {
+		if descend && fi.IsDir() && rel == "." && subdirs[n] {
+			if err := walk(o, root, name, dir, false); err != nil {
 				return err
 			}
 		}
@@ -196,12 +222,68 @@ func fixOwnership(o Options) error {
 	return nil
 }
 
-func chownIfNeeded(o Options, path string, fi os.FileInfo) error {
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid == UID && st.Gid == GID {
+// listDir returns the names inside rel without following a link out of root.
+func listDir(root *os.Root, rel string) ([]string, error) {
+	sub, err := root.OpenRoot(rel)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sub.Close() }()
+	f, err := sub.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	entries, err := f.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names, nil
+}
+
+// chownEntry reads name's owner through the root and fixes it when needed.
+func chownEntry(o Options, root *os.Root, name, full string) error {
+	fi, err := root.Lstat(name)
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", full, err)
+	}
+	return chownIfNeeded(o, root, name, full, fi)
+}
+
+func chownIfNeeded(o Options, root *os.Root, name, full string, fi fs.FileInfo) error {
+	if uid, gid, ok := o.Owner(name, fi); ok && uid == UID && gid == GID {
 		return nil
 	}
-	if err := o.Lchown(path, UID, GID); err != nil {
-		return fmt.Errorf("give %s to %d:%d: %w", path, UID, GID, err)
+	if err := o.Chown(root, name, UID, GID); err != nil {
+		return fmt.Errorf("give %s to %d:%d: %w", full, UID, GID, err)
 	}
 	return nil
+}
+
+// ownerOf reads the owner from the file system's own record.
+func ownerOf(_ string, fi fs.FileInfo) (uid, gid uint32, ok bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, false
+	}
+	return st.Uid, st.Gid, true
+}
+
+// chownInRoot is the real Chown: Lchown through the root, so a final link is
+// changed itself. The data directory ("."), which a root cannot name for
+// Lchown, is changed through a descriptor opened inside the root.
+func chownInRoot(r *os.Root, name string, uid, gid int) error {
+	if name != "." {
+		return r.Lchown(name, uid, gid)
+	}
+	f, err := r.Open(".")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	return f.Chown(uid, gid)
 }
