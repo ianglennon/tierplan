@@ -186,6 +186,21 @@ describe("/login", () => {
     expect(login?.body).toEqual({ username: "admin", password: "pw", remember: true });
   });
 
+  it("empties the whole query cache on a successful sign-in", async () => {
+    stubApi({});
+    const router = renderAt("/login?next=%2Fsomewhere");
+    await screen.findByLabelText("Username");
+    // What a previous user's session left behind (WR-15).
+    queryClient.setQueryData(["environments"], { items: [{ id: "e1" }] });
+    queryClient.setQueryData(["audit", {}], { items: [] });
+    await fill("admin", "pw");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/somewhere"));
+    expect(queryClient.getQueryData(["environments"])).toBeUndefined();
+    expect(queryClient.getQueryData(["audit", {}])).toBeUndefined();
+    expect(queryClient.getQueryData(["me"])).toBeUndefined();
+  });
+
   it.each(["https%3A%2F%2Fevil.example%2F", "%2F%2Fevil.example", "%2F%5Cevil.example"])(
     "ignores an unsafe next (%s) and goes to /",
     async (next) => {

@@ -236,11 +236,50 @@ describe("expired session", () => {
     const router = renderAt("/");
     await screen.findByText("No environments yet");
     meStatus = 401;
+    // Whatever the ended session cached, wherever it lives (WR-15).
+    queryClient.setQueryData(["environments"], { items: [{ id: "e1" }] });
+    queryClient.setQueryData(["settings"], { general: {} });
+    queryClient.setQueryData(["env", "e1", "containers"], { items: [] });
     window.history.pushState({}, "", "/somewhere?x=1");
     await api.GET("/api/me");
     await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
     expect(router.state.location.search).toMatchObject({ next: "/somewhere?x=1", expired: true });
     expect(await screen.findByText("Your session expired. Sign in again.")).toBeTruthy();
+    // Nothing from the ended session survives for the next person.
+    await waitFor(() => expect(queryClient.getQueryData(["environments"])).toBeUndefined());
+    expect(queryClient.getQueryData(["settings"])).toBeUndefined();
+    expect(queryClient.getQueryData(["env", "e1", "containers"])).toBeUndefined();
+    expect(queryClient.getQueryData(["me"])).toBeUndefined();
     window.history.pushState({}, "", "/");
+  });
+});
+
+describe("instance answer reuse (WR-18)", () => {
+  const instanceCalls = () => sent.filter((s) => s.path === "/api/instance").length;
+
+  it("does not refetch /api/instance on navigation between signed-in pages within 30 s", async () => {
+    const router = renderAt("/");
+    await screen.findByText("No environments yet");
+    const before = instanceCalls();
+    expect(before).toBeGreaterThan(0);
+
+    await router.navigate({ to: "/audit" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/audit"));
+    await router.navigate({ to: "/" });
+    await screen.findByText("No environments yet");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(instanceCalls()).toBe(before);
+  });
+
+  it("still fetches it fresh for the /login guard", async () => {
+    meStatus = 401;
+    renderAt("/login");
+    await screen.findByLabelText("Username");
+    const first = instanceCalls();
+    cleanup();
+    renderAt("/login");
+    await screen.findByLabelText("Username");
+    expect(instanceCalls()).toBeGreaterThan(first);
   });
 });
