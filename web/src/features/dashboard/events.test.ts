@@ -1,0 +1,367 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { components } from "@/api/schema";
+import {
+  createEventsConnection,
+  type EventsSnapshot,
+  type EventSourceLike,
+  type FeedState,
+  invalidationKeys,
+  mergeEvents,
+} from "@/features/dashboard/events";
+
+type EventDTO = components["schemas"]["EventDTO"];
+
+function ev(id: string, time: string, over: Partial<EventDTO> = {}): EventDTO {
+  return {
+    id,
+    time,
+    type: "container",
+    action: "start",
+    actorId: `actor-${id}`,
+    name: `name-${id}`,
+    attributes: {},
+    ...over,
+  };
+}
+
+// A browser EventSource that tests drive by hand.
+class FakeSource implements EventSourceLike {
+  static instances: FakeSource[] = [];
+  readyState = 0;
+  closed = false;
+  private listeners = new Map<string, Array<(event: Event) => void>>();
+
+  constructor(readonly url: string) {
+    FakeSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: (event: Event) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  close(): void {
+    this.closed = true;
+    this.readyState = 2;
+  }
+
+  private emit(type: string, event: Event): void {
+    for (const l of this.listeners.get(type) ?? []) l(event);
+  }
+
+  open(): void {
+    this.readyState = 1;
+    this.emit("open", new Event("open"));
+  }
+
+  // The browser retries by itself (readyState 0) unless the response was not
+  // a usable event stream (readyState 2).
+  fail(final = false): void {
+    this.readyState = final ? 2 : 0;
+    this.emit("error", new Event("error"));
+  }
+
+  send(event: EventDTO): void {
+    this.emit("docker", new MessageEvent("docker", { data: JSON.stringify(event) }));
+  }
+}
+
+const flush = () => vi.advanceTimersByTimeAsync(0);
+
+function connect(fetchRecent: () => Promise<EventDTO[]>) {
+  FakeSource.instances = [];
+  const snapshots: EventsSnapshot[] = [];
+  const invalidated: Array<readonly unknown[]> = [];
+  const connection = createEventsConnection({
+    envId: "e1",
+    fetchRecent,
+    createSource: (url) => new FakeSource(url),
+    invalidate: (key) => invalidated.push(key),
+    onChange: (s) => snapshots.push(s),
+  });
+  const states = (): FeedState[] =>
+    snapshots.map((s) => s.state).filter((s, i, all) => i === 0 || s !== all[i - 1]);
+  const last = () => snapshots[snapshots.length - 1] as EventsSnapshot;
+  return {
+    connection,
+    snapshots,
+    invalidated,
+    states,
+    last,
+    source: () => FakeSource.instances[0],
+  };
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("mergeEvents", () => {
+  it("returns newest first, drops repeated ids and keeps at most the cap", () => {
+    const existing = [
+      ev("c", "2026-10-02T10:00:03Z"),
+      ev("b", "2026-10-02T10:00:02Z"),
+      ev("a", "2026-10-02T10:00:01Z"),
+    ];
+    // Arrival order: oldest first. "b" is already known.
+    const incoming = [ev("b", "2026-10-02T10:00:02Z"), ev("d", "2026-10-02T10:00:04Z")];
+    expect(mergeEvents(existing, incoming, 50).map((e) => e.id)).toEqual(["d", "c", "b", "a"]);
+    expect(mergeEvents(existing, incoming, 2).map((e) => e.id)).toEqual(["d", "c"]);
+
+    const many = Array.from({ length: 80 }, (_, i) =>
+      ev(
+        `n${i}`,
+        `2026-10-02T10:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}Z`,
+      ),
+    );
+    const merged = mergeEvents([], many, 50);
+    expect(merged).toHaveLength(50);
+    expect(merged[0]?.id).toBe("n79");
+    expect(merged[49]?.id).toBe("n30");
+  });
+
+  it("keeps arrival order for events with the same time, the later arrival on top", () => {
+    const t = "2026-10-02T10:00:00Z";
+    const first = mergeEvents([], [ev("x", t), ev("y", t)], 50);
+    expect(first.map((e) => e.id)).toEqual(["y", "x"]);
+    const next = mergeEvents(first, [ev("z", t)], 50);
+    expect(next.map((e) => e.id)).toEqual(["z", "y", "x"]);
+  });
+
+  it("orders by sub-second time even when the fraction has a different length", () => {
+    const merged = mergeEvents(
+      [],
+      [
+        ev("early", "2026-10-02T10:00:00.5Z"),
+        ev("late", "2026-10-02T10:00:00.123456789Z"),
+        ev("later", "2026-10-02T10:00:01Z"),
+      ],
+      50,
+    );
+    // .5 is later than .123456789, and 01Z is later than both.
+    expect(merged.map((e) => e.id)).toEqual(["later", "early", "late"]);
+  });
+
+  it("does not change its inputs", () => {
+    const existing = [ev("a", "2026-10-02T10:00:01Z")];
+    const incoming = [ev("b", "2026-10-02T10:00:02Z")];
+    mergeEvents(existing, incoming, 50);
+    expect(existing).toHaveLength(1);
+    expect(incoming).toHaveLength(1);
+  });
+});
+
+describe("invalidationKeys", () => {
+  it("maps each event type to the summary and its own list", () => {
+    const summary = ["env", "e1", "summary"];
+    expect(invalidationKeys("container", "e1")).toEqual([summary, ["env", "e1", "containers"]]);
+    expect(invalidationKeys("image", "e1")).toEqual([summary, ["env", "e1", "images"]]);
+    expect(invalidationKeys("network", "e1")).toEqual([summary, ["env", "e1", "networks"]]);
+    expect(invalidationKeys("volume", "e1")).toEqual([summary, ["env", "e1", "volumes"]]);
+  });
+});
+
+describe("createEventsConnection", () => {
+  it("loads, opens the stream on the guarded route and goes live", async () => {
+    const c = connect(() => Promise.resolve([ev("a", "2026-10-02T10:00:01Z")]));
+    expect(c.states()).toEqual([]);
+    c.connection.start();
+    expect(c.source()?.url).toBe("/api/env/e1/events/stream");
+    expect(c.last().state).toBe("loading");
+    expect(c.last().ready).toBe(false);
+    await flush();
+    expect(c.last().ready).toBe(true);
+    expect(c.last().events.map((e) => e.id)).toEqual(["a"]);
+    c.source()?.open();
+    expect(c.last().state).toBe("live");
+  });
+
+  it("goes reconnecting on an error, back to live on reopen, and to polling after 3 errors in 30 seconds", async () => {
+    const fetchRecent = vi.fn(() => Promise.resolve([] as EventDTO[]));
+    const c = connect(fetchRecent);
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeSource;
+    source.open();
+    source.fail();
+    expect(c.last().state).toBe("reconnecting");
+    source.open();
+    expect(c.last().state).toBe("live");
+
+    // The first error is still inside the window, so these are errors 2 and 3.
+    await vi.advanceTimersByTimeAsync(5_000);
+    source.fail();
+    expect(c.last().state).toBe("reconnecting");
+    await vi.advanceTimersByTimeAsync(5_000);
+    source.fail();
+    expect(c.last().state).toBe("polling");
+    expect(source.closed).toBe(true);
+
+    // Polling reads GET /events every 30 seconds and never shows Live again.
+    expect(fetchRecent).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchRecent).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchRecent).toHaveBeenCalledTimes(3);
+    const after = c.states().slice(c.states().indexOf("polling"));
+    expect(after).toEqual(["polling"]);
+    expect(FakeSource.instances).toHaveLength(1);
+  });
+
+  it("does not fall back when the errors are more than 30 seconds apart", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeSource;
+    source.open();
+    source.fail();
+    await vi.advanceTimersByTimeAsync(20_000);
+    source.fail();
+    await vi.advanceTimersByTimeAsync(20_000);
+    source.fail();
+    expect(c.last().state).toBe("reconnecting");
+    expect(source.closed).toBe(false);
+  });
+
+  it("polls straight away when the browser gives up on the stream", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeSource;
+    source.fail(true);
+    expect(c.last().state).toBe("polling");
+    expect(source.closed).toBe(true);
+  });
+
+  it("shows an event that came from both the load and the stream once", async () => {
+    const shared = ev("dup", "2026-10-02T10:00:05Z");
+    const c = connect(() => Promise.resolve([shared]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeSource;
+    source.open();
+    source.send(shared);
+    source.send(ev("new", "2026-10-02T10:00:06Z"));
+    expect(c.last().events.map((e) => e.id)).toEqual(["new", "dup"]);
+    // The same frame again after a reconnect.
+    source.fail();
+    source.open();
+    source.send(shared);
+    expect(c.last().events.map((e) => e.id)).toEqual(["new", "dup"]);
+  });
+
+  it("invalidates the matching queries for a new event, at most once a second per key", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeSource;
+    source.open();
+
+    source.send(ev("1", "2026-10-02T10:00:01Z", { type: "container" }));
+    expect(c.invalidated).toEqual([
+      ["env", "e1", "summary"],
+      ["env", "e1", "containers"],
+    ]);
+
+    // A burst inside the second collapses into one trailing refetch.
+    source.send(ev("2", "2026-10-02T10:00:01Z", { type: "container" }));
+    source.send(ev("3", "2026-10-02T10:00:01Z", { type: "container" }));
+    source.send(ev("4", "2026-10-02T10:00:01Z", { type: "volume" }));
+    expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(1);
+    expect(c.invalidated.filter((k) => k[2] === "volumes")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(2);
+    expect(c.invalidated.filter((k) => k[2] === "summary")).toHaveLength(2);
+
+    // Nothing more once the window is quiet.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(2);
+  });
+
+  it("does not invalidate for an event it already has", async () => {
+    const known = ev("k", "2026-10-02T10:00:01Z");
+    const c = connect(() => Promise.resolve([known]));
+    c.connection.start();
+    await flush();
+    (c.source() as FakeSource).open();
+    (c.source() as FakeSource).send(known);
+    expect(c.invalidated).toEqual([]);
+  });
+
+  it("reports a failed load as an error and recovers on reload", async () => {
+    let fail = true;
+    const fetchRecent = vi.fn(() =>
+      fail ? Promise.reject(new Error("boom")) : Promise.resolve([ev("a", "2026-10-02T10:00:01Z")]),
+    );
+    const c = connect(fetchRecent);
+    c.connection.start();
+    await flush();
+    expect(c.last().state).toBe("error");
+    expect(c.last().ready).toBe(false);
+
+    fail = false;
+    c.connection.reload();
+    expect(c.last().state).toBe("loading");
+    await flush();
+    expect(c.last().ready).toBe(true);
+    expect(c.last().events).toHaveLength(1);
+    expect(c.last().state).not.toBe("error");
+  });
+
+  it("keeps showing events when a later poll fails", async () => {
+    let fail = false;
+    const fetchRecent = vi.fn(() =>
+      fail ? Promise.reject(new Error("boom")) : Promise.resolve([ev("a", "2026-10-02T10:00:01Z")]),
+    );
+    const c = connect(fetchRecent);
+    c.connection.start();
+    await flush();
+    (c.source() as FakeSource).fail(true);
+    fail = true;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(c.last().state).toBe("polling");
+    expect(c.last().events).toHaveLength(1);
+  });
+
+  it("closes the stream and stops polling and timers on close", async () => {
+    const fetchRecent = vi.fn(() => Promise.resolve([] as EventDTO[]));
+    const c = connect(fetchRecent);
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeSource;
+    source.open();
+    source.send(ev("1", "2026-10-02T10:00:01Z"));
+    source.send(ev("2", "2026-10-02T10:00:02Z"));
+    c.connection.close();
+    expect(source.closed).toBe(true);
+    const before = {
+      calls: fetchRecent.mock.calls.length,
+      inv: c.invalidated.length,
+      snaps: c.snapshots.length,
+    };
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetchRecent.mock.calls.length).toBe(before.calls);
+    expect(c.invalidated.length).toBe(before.inv);
+    expect(c.snapshots.length).toBe(before.snaps);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ignores a load that finishes after close", async () => {
+    let resolve: (v: EventDTO[]) => void = () => {};
+    const c = connect(() => new Promise<EventDTO[]>((r) => (resolve = r)));
+    c.connection.start();
+    c.connection.close();
+    const n = c.snapshots.length;
+    resolve([ev("a", "2026-10-02T10:00:01Z")]);
+    await flush();
+    expect(c.snapshots.length).toBe(n);
+  });
+});
