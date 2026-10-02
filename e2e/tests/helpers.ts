@@ -15,6 +15,12 @@ export function compose(...args: string[]): string {
   });
 }
 
+// docker runs the docker CLI on the machine running the suite, against the
+// engine that hosts the Compose stack (not the dind one Bayplan manages).
+export function docker(...args: string[]): string {
+  return execFileSync("docker", args, { encoding: "utf8", timeout: 60_000 }).trim();
+}
+
 // setupToken reads the first-run token the way a self-hoster does:
 // `docker exec <container> bayplan setup-token`. The command runs as root in the
 // container, so it also proves the CLI drops privileges and leaves /data usable

@@ -11,7 +11,7 @@ import { BASE_URL as baseURL } from "./tests/env";
 // one before it. A failure early on skips the rest, which is what a broken
 // setup deserves.
 const chromium = { ...devices["Desktop Chrome"], baseURL };
-const order = ["setup-and-login", "dashboard", "audit", "version"] as const;
+const order = ["setup-and-login", "dashboard", "audit", "version", "settings"] as const;
 
 export default defineConfig({
   testDir: "./tests",

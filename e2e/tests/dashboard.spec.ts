@@ -8,7 +8,7 @@
 import type { Page } from "@playwright/test";
 
 import { AUTH_STATE } from "./env";
-import { dind, dindCount, expect, test } from "./helpers";
+import { compose, dind, dindCount, docker, expect, test } from "./helpers";
 
 test.use({ storageState: AUTH_STATE });
 
@@ -96,4 +96,19 @@ test("the tiles equal the engine's counts and a new network appears live", async
     await expect(page.getByRole("heading", { name: list.title, level: 1 })).toBeVisible();
     await expect(page.getByText(countText(list.n, list.noun), { exact: true })).toBeVisible();
   }
+});
+
+test("Bayplan reads its own container ID from inside the container", async ({ page }) => {
+  const envId = await envIdOf(page);
+  const res = await page.request.get(`/api/env/${envId}/summary`);
+  expect(res.ok()).toBe(true);
+  const summary = (await res.json()) as { selfContainerId?: string };
+
+  // What the engine hosting the stack calls Bayplan's container, against what
+  // Bayplan read from /proc/self/mountinfo inside it (coverage D5, RESEARCH A2).
+  const fullId = docker("inspect", "-f", "{{.Id}}", compose("ps", "-q", "bayplan").trim());
+  expect(fullId).toMatch(/^[0-9a-f]{64}$/);
+  expect(summary.selfContainerId, "selfContainerId").toBeTruthy();
+  expect(summary.selfContainerId?.length).toBeGreaterThanOrEqual(12);
+  expect(fullId.startsWith(summary.selfContainerId ?? "x")).toBe(true);
 });
