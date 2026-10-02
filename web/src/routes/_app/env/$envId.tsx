@@ -16,6 +16,7 @@ import { FullPageState, NoPermission } from "@/components/full-page-state";
 import { useNow } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { EnvEventsProvider } from "@/features/dashboard/events";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatClock, formatRelative } from "@/lib/format";
@@ -169,7 +170,15 @@ function EnvironmentLayout() {
       </>
     );
   }
-  return <Outlet />;
+  // Only an environment that is not offline, unsupported, missing or forbidden
+  // gets here, so the one events subscription is opened for an environment
+  // that can answer. It sits around the whole outlet so the dashboard's feed
+  // and every list view share it (D-57).
+  return (
+    <EnvEventsProvider envId={envId}>
+      <Outlet />
+    </EnvEventsProvider>
+  );
 }
 
 export const Route = createFileRoute("/_app/env/$envId")({

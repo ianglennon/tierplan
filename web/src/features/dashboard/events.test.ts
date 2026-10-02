@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "@/api/schema";
 import {
   createEventsConnection,
-  type EventsSnapshot,
   type EventSourceLike,
+  type EventsSnapshot,
   type FeedState,
   invalidationKeys,
   mergeEvents,
@@ -228,6 +228,25 @@ describe("createEventsConnection", () => {
     source.fail();
     expect(c.last().state).toBe("reconnecting");
     expect(source.closed).toBe(false);
+  });
+
+  it("polls instead when there is no EventSource to open", async () => {
+    const fetchRecent = vi.fn(() => Promise.resolve([] as EventDTO[]));
+    const snapshots: EventsSnapshot[] = [];
+    createEventsConnection({
+      envId: "e1",
+      fetchRecent,
+      createSource: () => {
+        throw new ReferenceError("EventSource is not defined");
+      },
+      invalidate: () => {},
+      onChange: (s) => snapshots.push(s),
+    }).start();
+    await flush();
+    expect(snapshots.at(-1)?.state).toBe("polling");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchRecent).toHaveBeenCalledTimes(2);
+    expect(snapshots.some((s) => s.state === "live")).toBe(false);
   });
 
   it("polls straight away when the browser gives up on the stream", async () => {
