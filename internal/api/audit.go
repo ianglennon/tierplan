@@ -82,7 +82,7 @@ type AuditEntryDTO struct {
 	Seq        int64             `json:"seq" doc:"The insertion sequence; entries are ordered by it, newest first"`
 	Time       string            `json:"time" format:"date-time" doc:"When it happened, in UTC"`
 	ActorType  string            `json:"actorType" enum:"user,system,anonymous"`
-	Actor      string            `json:"actor" doc:"The actor's name. For a failed sign-in by an unknown user this is anonymous and the attempted name is in target"`
+	Actor      string            `json:"actor" doc:"The actor's name. For a failed sign-in this is anonymous; the target is the matched account's username, or (unknown user) when none matched"`
 	Action     string            `json:"action" doc:"A stable action key such as auth.login"`
 	TargetType string            `json:"targetType"`
 	Target     string            `json:"target"`

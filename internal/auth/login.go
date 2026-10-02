@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -40,9 +39,20 @@ const (
 	reasonBadPassword = "bad_password"
 )
 
-// maxAttemptedName caps the attempted username recorded for an unknown user, so
-// a flood of long names cannot bloat the audit log.
-const maxAttemptedName = 64
+// What a refused sign-in records as its target when no stored username can be
+// named. The submitted name is never stored or logged unless it is the stored
+// username of a real account: a value typed into the username box is often a
+// password, and the audit log, its exports and the container log must not hold
+// credentials (CR-01, D-39).
+const (
+	// targetUnknownUser stands for every refusal where no account matched, a
+	// malformed name or an unknown one. The audit entry keeps only the length of
+	// what was typed, as the name_chars detail.
+	targetUnknownUser = "(unknown user)"
+	// targetNotChecked stands for a refusal by the per-address limiter, which
+	// runs before any lookup, so nothing was matched or even parsed.
+	targetNotChecked = "(not checked)"
+)
 
 // LoginInput is one sign-in attempt.
 type LoginInput struct {
@@ -99,6 +109,12 @@ func NewLogin(s *store.Store, sess *Sessions, w *audit.Writer, maxFailures int, 
 // session. Every refusal is ErrInvalidCredentials: any other error is a failure
 // of the store or the audit log, which the caller reports as a server error.
 //
+// A refusal is audited as auth.login_failed. Its target is the stored username
+// of the account the attempt matched, or the fixed targetUnknownUser (no account
+// matched; only the length of the typed name is kept) or targetNotChecked (the
+// per-address limit refused it first). The typed name is never recorded
+// otherwise, because it may be a password (CR-01).
+//
 // The checks run in a fixed order. The per-address limit comes first and
 // costs nothing. An unknown, disabled or locked account pays one dummy argon2id
 // verification, so it cannot be told from a wrong password by timing (D-30). A
@@ -108,13 +124,10 @@ func NewLogin(s *store.Store, sess *Sessions, w *audit.Writer, maxFailures int, 
 func (l *Login) Login(ctx context.Context, in LoginInput) (LoginResult, error) {
 	now := l.now()
 	name, nameErr := NormalizeUsername(in.Username)
-	attempted := name
-	if nameErr != nil {
-		attempted = capString(in.Username, maxAttemptedName)
-	}
+	nameChars := strconv.Itoa(utf8.RuneCountInString(in.Username))
 
 	if l.ipLimiter != nil && !l.ipLimiter.Allow(in.IP) {
-		return LoginResult{}, l.refuse(ctx, in, attempted, reasonRateLimited, "")
+		return LoginResult{}, l.refuse(ctx, in, targetNotChecked, reasonRateLimited, "", "")
 	}
 
 	var u sqlc.User
@@ -131,13 +144,13 @@ func (l *Login) Login(ctx context.Context, in LoginInput) (LoginResult, error) {
 	switch {
 	case nameErr != nil:
 		l.dummy(in.Password)
-		return LoginResult{}, l.refuse(ctx, in, attempted, reasonUnknownUser, "")
+		return LoginResult{}, l.refuse(ctx, in, targetUnknownUser, reasonUnknownUser, "", nameChars)
 	case u.Disabled != 0:
 		l.dummy(in.Password)
-		return LoginResult{}, l.refuse(ctx, in, attempted, reasonDisabled, u.ID)
+		return LoginResult{}, l.refuse(ctx, in, u.Username, reasonDisabled, u.ID, "")
 	case u.LockedUntil.Valid && u.LockedUntil.Int64 > now.UTC().UnixNano():
 		l.dummy(in.Password)
-		return LoginResult{}, l.refuse(ctx, in, attempted, reasonLocked, u.ID)
+		return LoginResult{}, l.refuse(ctx, in, u.Username, reasonLocked, u.ID, "")
 	}
 
 	ok, err := VerifyPassword(in.Password, u.PasswordHash)
@@ -148,32 +161,39 @@ func (l *Login) Login(ctx context.Context, in LoginInput) (LoginResult, error) {
 		ok = false
 	}
 	if !ok {
-		return LoginResult{}, l.badPassword(ctx, in, attempted, u)
+		return LoginResult{}, l.badPassword(ctx, in, u)
 	}
 	return l.succeed(ctx, in, u)
 }
 
 // refuse records a refusal that changes no state and returns the one error.
-func (l *Login) refuse(ctx context.Context, in LoginInput, attempted, reason, userID string) error {
-	if err := l.aud.Record(ctx, l.failureEntry(in, attempted, reason, userID)); err != nil {
+// target is a stored username or one of the fixed placeholders, never raw input.
+func (l *Login) refuse(ctx context.Context, in LoginInput, target, reason, userID, nameChars string) error {
+	if err := l.aud.Record(ctx, l.failureEntry(in, target, reason, userID, nameChars)); err != nil {
 		return fmt.Errorf("auth: audit failed sign-in: %w", err)
 	}
 	return ErrInvalidCredentials
 }
 
-func (l *Login) failureEntry(in LoginInput, attempted, reason, userID string) audit.Entry {
+// failureEntry builds the auth.login_failed entry. Its details name the account
+// when one matched (user_id) and otherwise hold only how many characters were
+// typed (name_chars), so no client input is stored (CR-01).
+func (l *Login) failureEntry(in LoginInput, target, reason, userID, nameChars string) audit.Entry {
 	e := audit.Entry{
 		Actor:      audit.Actor{Type: audit.ActorAnonymous},
 		Action:     audit.ActionAuthLoginFailed,
 		TargetType: "user",
-		TargetID:   attempted,
+		TargetID:   target,
 		Result:     audit.ResultFailure,
 		Reason:     reason,
 		IP:         in.IP,
 		UserAgent:  in.UserAgent,
 	}
-	if userID != "" {
+	switch {
+	case userID != "":
 		e.Details = map[string]string{"user_id": userID}
+	case nameChars != "":
+		e.Details = map[string]string{"name_chars": nameChars}
 	}
 	return e
 }
@@ -181,7 +201,7 @@ func (l *Login) failureEntry(in LoginInput, attempted, reason, userID string) au
 // badPassword counts a wrong password and, when it is the one that reaches the
 // limit, locks the account, all in one write transaction with the audit entries
 // so the count, the lock and the log agree.
-func (l *Login) badPassword(ctx context.Context, in LoginInput, attempted string, u sqlc.User) error {
+func (l *Login) badPassword(ctx context.Context, in LoginInput, u sqlc.User) error {
 	now := l.now().UTC()
 	tx, err := l.st.Write.BeginTx(ctx, nil)
 	if err != nil {
@@ -201,7 +221,7 @@ func (l *Login) badPassword(ctx context.Context, in LoginInput, attempted string
 	if err != nil {
 		return fmt.Errorf("auth: count failure: %w", err)
 	}
-	if err := l.aud.RecordTx(ctx, tx, l.failureEntry(in, attempted, reasonBadPassword, u.ID)); err != nil {
+	if err := l.aud.RecordTx(ctx, tx, l.failureEntry(in, u.Username, reasonBadPassword, u.ID, "")); err != nil {
 		return fmt.Errorf("auth: audit failed sign-in: %w", err)
 	}
 	var lockedUntil time.Time
@@ -346,17 +366,4 @@ func Unlock(ctx context.Context, s *store.Store, w *audit.Writer, username strin
 		return fmt.Errorf("auth: commit: %w", err)
 	}
 	return nil
-}
-
-// capString cuts s to at most n bytes on a character boundary, after making it
-// valid UTF-8.
-func capString(s string, n int) string {
-	s = strings.ToValidUTF8(s, "�")
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
 }

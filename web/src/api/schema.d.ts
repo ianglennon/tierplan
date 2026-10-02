@@ -502,7 +502,7 @@ export interface components {
         AuditEntryDTO: {
             /** @description A stable action key such as auth.login */
             action: string;
-            /** @description The actor's name. For a failed sign-in by an unknown user this is anonymous and the attempted name is in target */
+            /** @description The actor's name. For a failed sign-in this is anonymous; the target is the matched account's username, or (unknown user) when none matched */
             actor: string;
             /** @enum {string} */
             actorType: "user" | "system" | "anonymous";
