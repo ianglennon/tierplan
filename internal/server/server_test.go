@@ -550,9 +550,16 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 	done := make(chan error, 1)
 	go func() { done <- srv.serve(sctx, ln) }()
 
+	// No keep-alives: a pooled client can dial a spare connection while the
+	// login connection is on its way back to the pool, and Shutdown waits up to
+	// 5s for a connection that never sent a request, which is not the stream
+	// this test is about.
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	t.Cleanup(client.CloseIdleConnections)
+
 	loginReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/auth/login", strings.NewReader(`{"username":"admin","password":"`+password+`"}`))
 	loginReq.Header.Set("Content-Type", "application/json")
-	loginResp, err := http.DefaultClient.Do(loginReq)
+	loginResp, err := client.Do(loginReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +570,7 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/env/"+added.ID+"/events/stream", nil)
 	req.AddCookie(loginResp.Cookies()[0])
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
