@@ -12,11 +12,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
@@ -349,8 +351,66 @@ func TestLoginUnknownUserPaysExactlyOneDummyVerifyAndIsAudited(t *testing.T) {
 		t.Fatalf("auth.login_failed entries = %d, want 1", len(entries))
 	}
 	e := entries[0]
-	if e.ActorType != "anonymous" || e.TargetType != "user" || e.TargetID != "nobody" || e.Reason != "unknown_user" || e.Result != "failure" || e.IP != loginIP || e.UserAgent != loginUA {
+	if e.ActorType != "anonymous" || e.TargetType != "user" || e.TargetID != "(unknown user)" || e.Reason != "unknown_user" || e.Result != "failure" || e.IP != loginIP || e.UserAgent != loginUA {
 		t.Fatalf("entry = %+v", e)
+	}
+}
+
+// What a refused sign-in records as its target is the stored username of an
+// account that matched, or a fixed placeholder. Never the typed string, which is
+// often a password (CR-01, D-39).
+func TestLoginRecordsOnlyAKnownAccountNameAsTheTarget(t *testing.T) {
+	long := strings.Repeat("x", 500)
+	for _, tc := range []string{"nobody", "Tr0ub4dor&3 hunter", "hunter2hunter2", long} {
+		f := newLoginFixture(t)
+		f.addUser(t, "admin")
+		if _, err := f.attempt(tc, "wrong wrong wrong"); !errors.Is(err, auth.ErrInvalidCredentials) {
+			t.Fatalf("username %q: %v", tc, err)
+		}
+		e := f.audits(t, audit.ActionAuthLoginFailed)
+		if len(e) != 1 {
+			t.Fatalf("username %q: %d entries, want 1", tc, len(e))
+		}
+		if e[0].TargetID != "(unknown user)" || e[0].Reason != "unknown_user" {
+			t.Errorf("username %q: entry = %+v, want target (unknown user) and reason unknown_user", tc, e[0])
+		}
+		if want := `"name_chars":"` + strconv.Itoa(utf8.RuneCountInString(tc)) + `"`; !strings.Contains(e[0].Details, want) {
+			t.Errorf("username %q: details = %s, want %s", tc, e[0].Details, want)
+		}
+		if strings.Contains(e[0].Details, "user_id") {
+			t.Errorf("username %q: details = %s name an account that does not exist", tc, e[0].Details)
+		}
+		if strings.Contains(f.logs.String(), tc) {
+			t.Errorf("username %q reached the container log", tc)
+		}
+	}
+
+	// An account that exists keeps its stored name and ID, whatever case was typed.
+	f := newLoginFixture(t)
+	f.addUser(t, "admin")
+	if _, err := f.attempt("Admin", "wrong wrong wrong"); !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatal(err)
+	}
+	e := f.audits(t, audit.ActionAuthLoginFailed)
+	if len(e) != 1 || e[0].TargetID != "admin" || e[0].Reason != "bad_password" ||
+		!strings.Contains(e[0].Details, `"user_id":"id-admin"`) || strings.Contains(e[0].Details, "name_chars") {
+		t.Fatalf("entries = %+v, want target admin, reason bad_password, the user ID and no name_chars", e)
+	}
+}
+
+func TestLoginRefusedByTheAddressLimitRecordsNoNameAtAll(t *testing.T) {
+	f := newLoginFixture(t)
+	f.addUser(t, "admin")
+	tight := auth.NewIPLimiter(time.Hour, 1, time.Hour, f.clk.now)
+	lg := auth.NewLogin(f.st, f.sess, f.aud, maxFailures, lockout, tight, slog.New(slog.DiscardHandler), f.clk.now)
+	_ = tight.Allow("198.51.100.1") // spend the single token
+	in := auth.LoginInput{Username: "Tr0ub4dor&3 hunter", Password: "wrong wrong wrong", IP: "198.51.100.1", UserAgent: loginUA}
+	if _, err := lg.Login(context.Background(), in); !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatal(err)
+	}
+	e := f.audits(t, audit.ActionAuthLoginFailed)
+	if len(e) != 1 || e[0].TargetID != "(not checked)" || e[0].Reason != "rate_limited" || strings.Contains(e[0].Details, in.Username) {
+		t.Fatalf("entries = %+v, want target (not checked) and reason rate_limited", e)
 	}
 }
 
@@ -366,8 +426,8 @@ func TestLoginMalformedUsernameIsTreatedAsUnknown(t *testing.T) {
 		}
 	}
 	for _, e := range f.audits(t, audit.ActionAuthLoginFailed) {
-		if e.Reason != "unknown_user" || len(e.TargetID) > 64 {
-			t.Fatalf("entry %+v: want reason unknown_user and a target of at most 64 bytes", e)
+		if e.Reason != "unknown_user" || e.TargetID != "(unknown user)" {
+			t.Fatalf("entry %+v: want reason unknown_user and the fixed target (unknown user)", e)
 		}
 	}
 }
@@ -463,6 +523,8 @@ func TestLoginNeverWritesThePasswordToTheAuditLogOrTheLog(t *testing.T) {
 	const secret = "s3cret-attempt-value-123"
 	_, _ = f.attempt("admin", secret)
 	_, _ = f.attempt("nobody", secret)
+	// The secret typed into the username box, as people do (CR-01).
+	_, _ = f.attemptFrom(secret, loginPassword, loginIP, false, nil)
 	for range maxFailures {
 		_, _ = f.attempt("admin", secret)
 	}
@@ -470,8 +532,8 @@ func TestLoginNeverWritesThePasswordToTheAuditLogOrTheLog(t *testing.T) {
 		t.Fatal("an attempted password reached the log")
 	}
 	var hits int
-	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE details LIKE ? OR reason LIKE ? OR target_id LIKE ?`,
-		"%"+secret+"%", "%"+secret+"%", "%"+secret+"%").Scan(&hits); err != nil {
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE details LIKE ?1 OR reason LIKE ?1 OR target_id LIKE ?1 OR actor_name LIKE ?1`,
+		"%"+secret+"%").Scan(&hits); err != nil {
 		t.Fatal(err)
 	}
 	if hits != 0 {

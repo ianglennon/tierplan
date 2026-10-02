@@ -501,6 +501,61 @@ func TestLoginNeverEchoesOrLogsThePassword(t *testing.T) {
 	}
 }
 
+// A password typed into the username box is stored nowhere (CR-01, D-39,
+// AUTH-08): not in the table, the list, either export or the container log. The
+// third string is a valid-looking name, so only "no account matched" can keep it
+// out.
+func TestLoginWithAPasswordTypedAsTheUsernameLeavesNoTraceInTheAuditLogItsExportsOrTheLog(t *testing.T) {
+	f := newAuditFix(t)
+	typed := []string{"Tr0ub4dor&3 hunter", "correct horse battery staple!", "hunter2hunter2"}
+	for _, name := range typed {
+		rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody(name, "wrong wrong wrong", false)})
+		if rec.Code != http.StatusUnauthorized || problemType(t, rec) != "invalid_credentials" {
+			t.Fatalf("username %q: status = %d, type %q: %s; want the one 401 invalid_credentials", name, rec.Code, problemType(t, rec), rec.Body)
+		}
+	}
+
+	bodies := map[string]string{}
+	for label, path := range map[string]string{
+		"list":        "/api/audit?action=auth.login_failed",
+		"export csv":  "/api/audit/export?format=csv",
+		"export json": "/api/audit/export?format=json",
+	} {
+		rec := f.get(t, path, f.cookie)
+		if rec.code != http.StatusOK {
+			t.Fatalf("GET %s: status = %d: %s", path, rec.code, rec.body)
+		}
+		bodies[label] = rec.body
+	}
+	bodies["container log"] = f.logs.String()
+	for _, name := range typed {
+		for label, body := range bodies {
+			if strings.Contains(body, name) {
+				t.Errorf("the typed string %q appears in the %s", name, label)
+			}
+		}
+		var hits int
+		if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log
+			WHERE target_id LIKE ?1 OR details LIKE ?1 OR reason LIKE ?1 OR actor_name LIKE ?1 OR actor_id LIKE ?1`,
+			"%"+name+"%").Scan(&hits); err != nil {
+			t.Fatal(err)
+		}
+		if hits != 0 {
+			t.Errorf("the typed string %q is in %d audit_log rows", name, hits)
+		}
+	}
+
+	failed := f.audits(t, audit.ActionAuthLoginFailed)
+	if len(failed) != len(typed) {
+		t.Fatalf("auth.login_failed entries = %d, want %d", len(failed), len(typed))
+	}
+	for _, e := range failed {
+		if e.TargetID != "(unknown user)" || e.Reason != "unknown_user" {
+			t.Errorf("entry = %+v, want target (unknown user) and reason unknown_user", e)
+		}
+	}
+}
+
 func TestLoginRejectsAnOversizedBodyFieldsWithoutTouchingTheAccount(t *testing.T) {
 	f := newAuthFixture(t, config.Config{})
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody(strings.Repeat("x", 65), goodPassword, false)})
