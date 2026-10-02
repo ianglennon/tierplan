@@ -9,7 +9,6 @@ import { loadInstance } from "@/api/instance";
 import { queryClient } from "@/api/query-client";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider, SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
-import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UserMenu } from "@/components/user-menu";
 import { VersionFooter } from "@/components/version-footer";
@@ -93,7 +92,6 @@ function AppLayout() {
         <AppSidebar />
         <ShellBody />
       </SidebarProvider>
-      <Toaster />
     </TooltipProvider>
   );
 }
