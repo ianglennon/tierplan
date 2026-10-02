@@ -4,6 +4,7 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
+import audit from "./en/audit.json";
 import auth from "./en/auth.json";
 import common from "./en/common.json";
 import dashboard from "./en/dashboard.json";
@@ -20,6 +21,7 @@ import shell from "./en/shell.json";
 // the i18next _one and _other suffixes.
 export const resources = {
   en: {
+    audit,
     auth,
     common,
     dashboard,

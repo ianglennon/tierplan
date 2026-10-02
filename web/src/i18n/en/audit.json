@@ -1,0 +1,120 @@
+{
+  "audit": {
+    "tabTitle": "Audit log",
+    "title": "Audit log",
+    "retention_one": "Entries are kept for {{count}} day.",
+    "retention_other": "Entries are kept for {{count}} days.",
+    "retentionForever": "Entries are kept forever.",
+    "integrity": {
+      "before": "Verify integrity with",
+      "command": "bayplan audit verify",
+      "after": "inside the container."
+    },
+    "filters": {
+      "label": "Filters",
+      "user": "User",
+      "userPlaceholder": "Any user",
+      "userSearch": "Type a user name",
+      "userUse": "Use \"{{name}}\"",
+      "userAny": "Any user",
+      "action": "Action",
+      "actionAny": "Any action",
+      "actionCount_one": "{{count}} action",
+      "actionCount_other": "{{count}} actions",
+      "range": "Time range",
+      "clear": "Clear filters",
+      "customFrom": "From",
+      "customTo": "To",
+      "customSummary": "{{from}} to {{to}}",
+      "customOpenEnded": "Pick days",
+      "customDialog": "Choose the first and last day. Both days are included."
+    },
+    "ranges": {
+      "1h": "Last hour",
+      "24h": "Last 24 hours",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days",
+      "all": "All time",
+      "custom": "Custom range…"
+    },
+    "export": {
+      "menu": "Export",
+      "csv": "Export CSV",
+      "json": "Export JSON",
+      "help": "Exports the entries that match the current filters."
+    },
+    "columns": {
+      "time": "Time",
+      "user": "User",
+      "action": "Action",
+      "target": "Target",
+      "environment": "Environment",
+      "result": "Result",
+      "ip": "IP address"
+    },
+    "results": {
+      "success": "Success",
+      "failure": "Failure",
+      "denied": "Denied"
+    },
+    "actions": {
+      "auth": {
+        "login": "Signed in",
+        "login_failed": "Failed sign-in",
+        "logout": "Signed out",
+        "locked": "Account locked",
+        "unlocked": "Unlocked account",
+        "password_changed": "Changed password"
+      },
+      "setup": {
+        "token_failed": "Wrong setup token",
+        "completed": "Completed setup",
+        "attempt_denied": "Setup attempted after completion"
+      },
+      "settings": {
+        "updated": "Updated settings"
+      },
+      "environment": {
+        "added": "Added environment",
+        "renamed": "Renamed environment",
+        "removed": "Removed environment"
+      },
+      "warning": {
+        "acknowledged": "Acknowledged warning"
+      },
+      "audit": {
+        "pruned": "Pruned audit log"
+      },
+      "permission": {
+        "denied": "Permission denied"
+      }
+    },
+    "anonymous": "Anonymous",
+    "none": "—",
+    "empty": {
+      "title": "No audit entries match these filters.",
+      "body": "Try a wider time range or clear the filters.",
+      "clear": "Clear filters"
+    },
+    "error": {
+      "title": "Couldn't load the audit log.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry"
+    },
+    "loadMore": "Load more",
+    "details": {
+      "show": "Show details for {{action}}",
+      "hide": "Hide details for {{action}}",
+      "utc": "Time (UTC)",
+      "local": "Time (local)",
+      "actionKey": "Action key",
+      "target": "Target",
+      "targetType": "Target type",
+      "userAgent": "User agent",
+      "ip": "IP address",
+      "reason": "Reason",
+      "extra": "Details",
+      "id": "Entry ID"
+    }
+  }
+}
