@@ -740,3 +740,126 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 		t.Errorf("https public URL behind a proxy: Strict-Transport-Security = %q, want max-age=31536000", got)
 	}
 }
+
+// healthyOn serves a 200 on ln and returns its port.
+func healthyOn(t *testing.T, ln net.Listener) string {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	_ = ts.Listener.Close()
+	ts.Listener = ln
+	ts.Start()
+	t.Cleanup(ts.Close)
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
+	// WR-10, D-86: a container bound to one interface answers there and not on
+	// 127.0.0.1, and the probe used to dial only 127.0.0.1.
+	t.Run("a concrete IPv4 address", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.2:0")
+		if err != nil {
+			t.Skipf("cannot bind 127.0.0.2: %v", err)
+		}
+		port := healthyOn(t, ln)
+		if err := Healthcheck(context.Background(), "127.0.0.2:"+port, false); err != nil {
+			t.Errorf("Healthcheck on the address the server is bound to: %v", err)
+		}
+	})
+	t.Run("a concrete IPv6 address", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "[::1]:0")
+		if err != nil {
+			t.Skipf("no IPv6 loopback: %v", err)
+		}
+		port := healthyOn(t, ln)
+		if err := Healthcheck(context.Background(), "[::1]:"+port, false); err != nil {
+			t.Errorf("Healthcheck on [::1]: %v", err)
+		}
+	})
+	t.Run("wildcard hosts dial loopback", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := healthyOn(t, ln)
+		for _, listen := range []string{":" + port, "0.0.0.0:" + port, "[::]:" + port} {
+			if err := Healthcheck(context.Background(), listen, false); err != nil {
+				t.Errorf("Healthcheck(%q): %v", listen, err)
+			}
+		}
+	})
+}
+
+func shortReadTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := readTimeout
+	readTimeout = d
+	t.Cleanup(func() { readTimeout = old })
+}
+
+func serveForTest(t *testing.T, h http.Handler) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newHTTPServer(h, nil)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return ln.Addr().String()
+}
+
+func TestServerCutsOffARequestBodyThatNeverArrives(t *testing.T) {
+	// WR-14, T-01-17: headers arrived in time, the promised body never does.
+	// ReadHeaderTimeout no longer applies, so only ReadTimeout ends this.
+	shortReadTimeout(t, 200*time.Millisecond)
+	addr := serveForTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusRequestTimeout)
+	}))
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.Write([]byte("POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 512)
+	if _, err := conn.Read(buf); err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			t.Fatal("the server was still waiting for the body after 2s; there is no read timeout")
+		}
+		// The connection being closed is also a cut-off.
+	}
+}
+
+func TestAStreamingResponseOutlivesTheReadTimeout(t *testing.T) {
+	// The events feed is a bodyless GET that stays open for hours. Go clears
+	// the read deadline once such a request is being served, so ReadTimeout
+	// must not end it.
+	shortReadTimeout(t, 200*time.Millisecond)
+	const chunks = 10
+	addr := serveForTest(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fl := w.(http.Flusher)
+		for range chunks {
+			_, _ = w.Write([]byte("x"))
+			fl.Flush()
+			time.Sleep(100 * time.Millisecond)
+		}
+	}))
+	resp, err := http.Get("http://" + addr + "/stream") //nolint:noctx // test against a loopback listener
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil || len(b) != chunks {
+		t.Fatalf("read %d of %d chunks, err %v: the stream was cut off by the read timeout", len(b), chunks, err)
+	}
+}

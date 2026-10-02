@@ -43,6 +43,14 @@ const (
 	shutdownTimeout   = 10 * time.Second
 )
 
+// readTimeout is a variable so an internal test can shorten it.
+var readTimeout = 30 * time.Second
+
+// newHTTPServer is a stub until the GREEN step.
+func newHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout, TLSConfig: tlsCfg}
+}
+
 // Server is the assembled application.
 type Server struct {
 	cfg     config.Config
