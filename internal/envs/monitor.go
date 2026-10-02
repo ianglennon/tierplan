@@ -203,8 +203,11 @@ func (m *Monitor) start(ctx context.Context, envID string, t engine.Transport) (
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		defer m.live.Add(-1)
 		defer close(e.done)
+		// Deferred last, so it runs first: loopCount must already be down when
+		// done closes and Stop returns, or a caller that counts right after Stop
+		// still sees the loop it just waited for.
+		defer m.live.Add(-1)
 		m.run(lctx, envID, e)
 	}()
 	return true, nil
