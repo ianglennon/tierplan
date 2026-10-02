@@ -105,7 +105,7 @@ describe("Log out outside the signed-in shell (W-3, AUTH-03)", () => {
   it("offers Log out on /welcome and signs out with the CSRF token", async () => {
     const router = renderAt("/welcome");
     expect(await screen.findByText("Signed in as admin")).toBeTruthy();
-    expect(sourceLinks()).toHaveLength(1);
+    await waitFor(() => expect(sourceLinks()).toHaveLength(1));
     fireEvent.click(screen.getByRole("button", { name: "Log out" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
     const logout = calls.find((c) => c.path === "/api/auth/logout");
@@ -118,7 +118,7 @@ describe("Log out outside the signed-in shell (W-3, AUTH-03)", () => {
     const router = renderAt("/no-such-page");
     expect(await screen.findByText("Page not found")).toBeTruthy();
     expect(await screen.findByText("Signed in as admin")).toBeTruthy();
-    expect(sourceLinks()).toHaveLength(1);
+    await waitFor(() => expect(sourceLinks()).toHaveLength(1));
     fireEvent.click(screen.getByRole("button", { name: "Log out" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
     expect(calls.some((c) => c.path === "/api/auth/logout")).toBe(true);
@@ -133,7 +133,7 @@ describe("Log out outside the signed-in shell (W-3, AUTH-03)", () => {
     expect(screen.queryByText(/Signed in as/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Log out" })).toBeNull();
     expect(router.state.location.pathname).toBe("/no-such-page");
-    expect(sourceLinks()).toHaveLength(1);
+    await waitFor(() => expect(sourceLinks()).toHaveLength(1));
   });
 
   it("adds no signed-in bar to /login and no /api/me request of its own", async () => {
@@ -145,6 +145,6 @@ describe("Log out outside the signed-in shell (W-3, AUTH-03)", () => {
     expect(screen.queryByRole("button", { name: "Log out" })).toBeNull();
     // The sign-in guard's own check is the only one.
     expect(calls.filter((c) => c.path === "/api/me")).toHaveLength(1);
-    expect(sourceLinks()).toHaveLength(1);
+    await waitFor(() => expect(sourceLinks()).toHaveLength(1));
   });
 });

@@ -16,11 +16,12 @@ import {
 } from "@/components/ui/empty";
 
 // NotFound is rendered for any client route that does not exist. It sits in
-// AuthLayout so it works before sign-in too (UI-SPEC "Not found").
+// AuthLayout so it works before sign-in too (UI-SPEC "Not found"); a signed-in
+// user also gets Log out there.
 export function NotFound() {
   const { t } = useTranslation();
   return (
-    <AuthLayout title={t("common.brand.wordmark")}>
+    <AuthLayout title={t("common.brand.wordmark")} showSignOut>
       <Empty className="border-0 p-0">
         <EmptyHeader>
           <EmptyMedia variant="icon">

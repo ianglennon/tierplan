@@ -11,6 +11,10 @@
     "plainHttp": {
       "warning": "This connection isn't encrypted. Passwords you type here can be read on the network."
     },
+    "signedIn": {
+      "as": "Signed in as {{username}}",
+      "logout": "Log out"
+    },
     "errors": {
       "unreachable": "Can't reach Bayplan. Check your connection and try again.",
       "retry": "Retry"

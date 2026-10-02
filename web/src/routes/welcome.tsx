@@ -26,7 +26,7 @@ function WelcomePage() {
   useDocumentTitle(t("env.welcome.tabTitle"));
   // The wordmark, as on the earlier steps, and the stepper at step 4 of 4.
   return (
-    <AuthLayout title={t("common.brand.wordmark")} wide>
+    <AuthLayout title={t("common.brand.wordmark")} wide showSignOut>
       <WizardStepper current={4} />
       <LocalHostPanel mode="wizard" onDone={() => void navigate({ to: "/", replace: true })} />
     </AuthLayout>
