@@ -895,3 +895,75 @@ func TestEventRowIDIsStableAndTellsEventsApart(t *testing.T) {
 		t.Errorf("distinct events share an ID: %v", first)
 	}
 }
+
+func TestProbeIsNotDelayedByASlowSnapshot(t *testing.T) {
+	// WR-06: a snapshot used to hold the client lock for its whole run, so a
+	// probe that started meanwhile waited for it, timed out and reported a
+	// healthy engine offline.
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListDelay: 2 * time.Second})
+	cli := newClient(t, fake)
+
+	sctx, scancel := context.WithCancel(context.Background())
+	defer scancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := cli.Snapshot(sctx, false)
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	pctx, pcancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer pcancel()
+	start := time.Now()
+	res, err := cli.Probe(pctx)
+	if err != nil || !res.Supported {
+		t.Fatalf("Probe during a slow snapshot: Supported=%v err=%v", res.Supported, err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Probe took %s while a snapshot ran, want well under 1s", d)
+	}
+	scancel()
+	<-done
+}
+
+func TestASnapshotOnTheOldClientSurvivesARenegotiation(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListDelay: 500 * time.Millisecond})
+	cli := newClient(t, fake)
+
+	type result struct {
+		snap dockerx.Snapshot
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		snap, err := cli.Snapshot(context.Background(), false)
+		done <- result{snap, err}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	// Probe swaps in a freshly negotiated client and closes the old one.
+	if _, err := cli.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("the snapshot that began before the renegotiation failed: %v", r.err)
+	}
+}
+
+func TestAProbeWaitingForAnotherGivesUpWhenItsContextEnds(t *testing.T) {
+	// Probes are serialised, and a queued one must be abandonable.
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	cli := newClient(t, fake)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+			defer cancel()
+			_, _ = cli.Probe(ctx)
+		})
+	}
+	wg.Wait()
+	if res, err := cli.Probe(context.Background()); err != nil || !res.Reachable {
+		t.Fatalf("Probe after abandoned probes: %+v, %v", res, err)
+	}
+}

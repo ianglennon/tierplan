@@ -636,3 +636,41 @@ func TestDetectSelfContainerID(t *testing.T) {
 		})
 	}
 }
+
+func TestASlowSnapshotNeitherFlapsTheEngineNorDelaysStop(t *testing.T) {
+	// WR-06 (D-26): a snapshot holding the client lock made the next probe wait
+	// past its timeout, so a healthy engine with a slow container list went
+	// offline, and Stop waited for the snapshot to finish.
+	// The delay outlasts the sampling window, so Stop meets a snapshot that is
+	// still running.
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListDelay: 3 * time.Second})
+	m := NewMonitor(slog.New(slog.DiscardHandler), nil, func(context.Context, time.Duration) error { return nil })
+	m.probeTimeout = 300 * time.Millisecond
+	if err := m.Start(context.Background(), "e", fake); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.StopAll)
+	eventually(t, "online", func() bool { return m.Status("e").State == StateOnline })
+
+	cli, _, err := m.Client("e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx, scancel := context.WithCancel(context.Background())
+	defer scancel()
+	go func() { _, _ = cli.Snapshot(sctx, false) }()
+
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if st := m.Status("e").State; st != StateOnline {
+			t.Fatalf("state = %s while a slow snapshot ran, want online", st)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	start := time.Now()
+	m.Stop("e")
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Errorf("Stop took %s with a snapshot in flight, want under 500ms", d)
+	}
+}
