@@ -127,7 +127,11 @@ GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 release-check:
 	$(GORELEASER) check
 	$(GORELEASER) build --snapshot --clean --single-target --output bin/bayplan-release
-	bin/bayplan-release version
+	@v="$$(bin/bayplan-release version)"; echo "$$v"; \
+	case "$$v" in \
+	  v[0-9]*) ;; \
+	  *) echo "release-check: the release binary reports '$$v', expected a version that starts with v and a number" >&2; exit 1 ;; \
+	esac
 
 # The release image for this machine's engine, built exactly as a release builds
 # it but not pushed, signed or SBOM'd. Needs Docker with buildx.

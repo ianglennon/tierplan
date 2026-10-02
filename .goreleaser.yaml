@@ -30,7 +30,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
-      - -X github.com/ianglennon/bayplan/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/ianglennon/bayplan/internal/buildinfo.Version=v{{ .Version }}
       - -X github.com/ianglennon/bayplan/internal/buildinfo.Commit={{ .FullCommit }}
       - -X github.com/ianglennon/bayplan/internal/buildinfo.SourceURL=https://github.com/ianglennon/bayplan
 
