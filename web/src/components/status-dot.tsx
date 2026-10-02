@@ -3,7 +3,7 @@
 
 import type { EnvironmentStatus, HealthState } from "@/api/environments";
 import { useT } from "@/i18n/use-t";
-import { formatClock } from "@/lib/clock";
+import { formatClock } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // The status colours are for health only (UI-SPEC Color): online, unsupported

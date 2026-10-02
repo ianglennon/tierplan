@@ -4,7 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 import { FileQuestion, ServerCrash, ServerOff } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   EnvironmentProblemError,
@@ -13,11 +13,12 @@ import {
   summaryQuery,
 } from "@/api/environments";
 import { FullPageState, NoPermission } from "@/components/full-page-state";
+import { useNow } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
-import { formatClock } from "@/lib/clock";
+import { formatClock, formatRelative } from "@/lib/format";
 
 // How Retry waits for the answer. The reconnect request only asks the health
 // monitor to probe now (202), so the summary is read again a few times until
@@ -25,16 +26,6 @@ import { formatClock } from "@/lib/clock";
 export const retryTiming = { polls: 4, delayMs: 600 };
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-// useNow ticks every 30 seconds so "Attempted 2 min ago" stays true.
-function useNow(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(id);
-  }, []);
-  return now;
-}
 
 // PageTitle sets the tab title while a full-page state is showing. It is a
 // component, not a hook call in the layout, because the layout's effect would
@@ -49,13 +40,7 @@ function PageTitle({ page }: { page: string }) {
 function Attempted({ at }: { at: number }) {
   const t = useT();
   const now = useNow();
-  const minutes = Math.max(0, Math.floor((now - at) / 60_000));
-  const when =
-    minutes < 1
-      ? t("dashboard.fullPage.time.justNow")
-      : minutes < 60
-        ? t("dashboard.fullPage.time.minutesAgo", { count: minutes })
-        : t("dashboard.fullPage.time.hoursAgo", { count: Math.floor(minutes / 60) });
+  const when = formatRelative(new Date(at).toISOString(), new Date(now), t);
   return <>{t("dashboard.fullPage.attempted", { when })}</>;
 }
 

@@ -33,11 +33,6 @@
       "retry": "Retry",
       "retrying": "Retrying…",
       "attempted": "Attempted {{when}}",
-      "time": {
-        "justNow": "just now",
-        "minutesAgo": "{{count}} min ago",
-        "hoursAgo": "{{count}} h ago"
-      },
       "offline": {
         "heading": "Docker isn't reachable",
         "body": "Bayplan lost its connection to {{name}} at {{time}}. Check that /var/run/docker.sock is mounted into the Bayplan container and that the Docker daemon is running.",
@@ -50,6 +45,83 @@
         "podmanHeading": "Podman isn't supported",
         "podmanBody": "Bayplan manages Docker Engine only.",
         "engineFallback": "This engine"
+      }
+    },
+    "time": {
+      "justNow": "just now",
+      "minutesAgo": "{{count}} min ago",
+      "hoursAgo": "{{count}} h ago",
+      "daysAgo": "{{count}} d ago",
+      "missing": "—"
+    },
+    "lists": {
+      "emptyBody": "Nothing to show on {{name}} right now.",
+      "errorBody": "Docker may be unreachable. Try again.",
+      "retry": "Retry",
+      "cap": "Showing the first 500 of {{total, number}}.",
+      "untagged": "<none>",
+      "containers": {
+        "title": "Containers",
+        "count_one": "{{count, number}} container",
+        "count_other": "{{count, number}} containers",
+        "empty": "No containers",
+        "error": "Couldn't load containers.",
+        "columns": {
+          "name": "Name",
+          "state": "State",
+          "image": "Image",
+          "created": "Created",
+          "status": "Status",
+          "ports": "Ports"
+        }
+      },
+      "images": {
+        "title": "Images",
+        "count_one": "{{count, number}} image",
+        "count_other": "{{count, number}} images",
+        "empty": "No images",
+        "error": "Couldn't load images.",
+        "columns": {
+          "repository": "Repository:tag",
+          "id": "Image ID",
+          "size": "Size",
+          "created": "Created"
+        }
+      },
+      "volumes": {
+        "title": "Volumes",
+        "count_one": "{{count, number}} volume",
+        "count_other": "{{count, number}} volumes",
+        "empty": "No volumes",
+        "error": "Couldn't load volumes.",
+        "columns": {
+          "name": "Name",
+          "driver": "Driver",
+          "created": "Created"
+        }
+      },
+      "networks": {
+        "title": "Networks",
+        "count_one": "{{count, number}} network",
+        "count_other": "{{count, number}} networks",
+        "empty": "No networks",
+        "error": "Couldn't load networks.",
+        "columns": {
+          "name": "Name",
+          "driver": "Driver",
+          "scope": "Scope",
+          "subnet": "Subnet",
+          "created": "Created"
+        }
+      },
+      "states": {
+        "running": "Running",
+        "restarting": "Restarting",
+        "paused": "Paused",
+        "removing": "Removing",
+        "dead": "Dead",
+        "exited": "Exited",
+        "created": "Created"
       }
     }
   }
