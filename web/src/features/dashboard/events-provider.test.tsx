@@ -6,32 +6,9 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EnvEventsProvider, useEnvEvents } from "@/features/dashboard/events";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 
-const instances: Array<{
-  url: string;
-  closed: boolean;
-  fire: (type: string, data?: string) => void;
-}> = [];
-
-class StubEventSource {
-  readyState = 0;
-  closed = false;
-  private listeners = new Map<string, Array<(e: Event) => void>>();
-  constructor(readonly url: string) {
-    instances.push(this);
-  }
-  addEventListener(type: string, fn: (e: Event) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
-  }
-  close() {
-    this.closed = true;
-  }
-  fire(type: string, data?: string) {
-    if (type === "open") this.readyState = 1;
-    const event = data === undefined ? new Event(type) : new MessageEvent(type, { data });
-    for (const fn of this.listeners.get(type) ?? []) fn(event);
-  }
-}
+const instances = () => FakeEventSource.instances;
 
 function Probe() {
   const { events, state } = useEnvEvents();
@@ -53,8 +30,8 @@ function mount(envId: string, client: QueryClient) {
 }
 
 beforeEach(() => {
-  instances.length = 0;
-  vi.stubGlobal("EventSource", StubEventSource);
+  FakeEventSource.reset();
+  vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => Response.json({ items: [] })),
@@ -71,23 +48,20 @@ describe("EnvEventsProvider", () => {
     const client = new QueryClient();
     const invalidate = vi.spyOn(client, "invalidateQueries");
     render(mount("e1", client));
-    expect(instances).toHaveLength(1);
-    expect(instances[0]?.url).toBe("/api/env/e1/events/stream");
+    expect(instances()).toHaveLength(1);
+    expect(instances()[0]?.url).toBe("/api/env/e1/events/stream");
 
     await act(async () => {
-      instances[0]?.fire("open");
-      instances[0]?.fire(
-        "docker",
-        JSON.stringify({
-          id: "1",
-          time: "2026-10-02T10:00:00Z",
-          type: "volume",
-          action: "create",
-          actorId: "t1",
-          name: "t1",
-          attributes: {},
-        }),
-      );
+      instances()[0]?.open();
+      instances()[0]?.send({
+        id: "1",
+        time: "2026-10-02T10:00:00Z",
+        type: "volume",
+        action: "create",
+        actorId: "t1",
+        name: "t1",
+        attributes: {},
+      });
     });
     expect(await screen.findByText("live:t1")).toBeTruthy();
     const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
@@ -99,10 +73,30 @@ describe("EnvEventsProvider", () => {
     const client = new QueryClient();
     const view = render(mount("e1", client));
     view.rerender(mount("e2", client));
-    expect(instances).toHaveLength(2);
-    expect(instances[0]?.closed).toBe(true);
-    expect(instances[1]?.url).toBe("/api/env/e2/events/stream");
+    expect(instances()).toHaveLength(2);
+    expect(instances()[0]?.closed).toBe(true);
+    expect(instances()[1]?.url).toBe("/api/env/e2/events/stream");
     view.unmount();
-    expect(instances[1]?.closed).toBe(true);
+    expect(instances()[1]?.closed).toBe(true);
+  });
+
+  it("opens nothing until it is enabled", () => {
+    const client = new QueryClient();
+    const view = render(
+      <QueryClientProvider client={client}>
+        <EnvEventsProvider envId="e1" enabled={false}>
+          <Probe />
+        </EnvEventsProvider>
+      </QueryClientProvider>,
+    );
+    expect(instances()).toHaveLength(0);
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <EnvEventsProvider envId="e1" enabled>
+          <Probe />
+        </EnvEventsProvider>
+      </QueryClientProvider>,
+    );
+    expect(instances()).toHaveLength(1);
   });
 });

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { SUMMARY_REFETCH_MS, summaryQuery } from "@/api/environments";
 import { queryClient } from "@/api/query-client";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 
@@ -79,6 +80,7 @@ function stubApi() {
       }
       if (path === "/api/environments") return environments();
       if (path === "/api/env/e1/summary") return summary();
+      if (path === "/api/env/e1/events") return Response.json({ items: [] });
       return Response.json({}, { status: 404 });
     }),
   );
@@ -280,5 +282,55 @@ describe("dashboard", () => {
     renderAt("/env/e1");
     const link = await screen.findByRole("link", { name: "Dashboard" });
     expect(link.getAttribute("aria-current")).toBe("page");
+  });
+});
+
+describe("events feed (ENV-07, D-57)", () => {
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  it("shows the feed next to the engine card and refreshes the counts when a container event arrives", async () => {
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "Lab host" });
+    expect(await screen.findByText("Recent events")).toBeTruthy();
+    expect(screen.getByText("Docker engine")).toBeTruthy();
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    expect(FakeEventSource.instances[0]?.url).toBe("/api/env/e1/events/stream");
+    expect(within(tile("Containers")).getByText("7")).toBeTruthy();
+
+    summary = () =>
+      Response.json({
+        ...SUMMARY,
+        counts: { ...SUMMARY.counts, containers: 8, containersRunning: 6 },
+      });
+    const before = sent.filter((p) => p === "/api/env/e1/summary").length;
+    FakeEventSource.instances[0]?.open();
+    FakeEventSource.instances[0]?.send({
+      id: "ev1",
+      time: "2026-10-02T10:00:00Z",
+      type: "container",
+      action: "start",
+      actorId: "abc",
+      name: "web-1",
+      attributes: { image: "nginx" },
+    });
+
+    await waitFor(() => expect(within(tile("Containers")).getByText("8")).toBeTruthy());
+    expect(sent.filter((p) => p === "/api/env/e1/summary").length).toBeGreaterThan(before);
+    expect(screen.getByText("Container start")).toBeTruthy();
+    expect(screen.getByText("Live")).toBeTruthy();
+  });
+
+  it("opens no stream for an environment that is offline", async () => {
+    summary = () =>
+      Response.json(
+        { type: "environment_offline", title: "x", status: 503, reason: "unreachable" },
+        { status: 503 },
+      );
+    renderAt("/env/e1");
+    await screen.findByText("Docker isn't reachable");
+    expect(FakeEventSource.instances).toHaveLength(0);
   });
 });

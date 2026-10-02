@@ -24,6 +24,27 @@
       "memoryValue": "{{value}} GiB",
       "missing": "—"
     },
+    "events": {
+      "title": "Recent events",
+      "filterLabel": "Filter events by type",
+      "filters": {
+        "all": "All",
+        "container": "Container",
+        "image": "Image",
+        "network": "Network",
+        "volume": "Volume"
+      },
+      "live": "Live",
+      "reconnecting": "Reconnecting…",
+      "rowTitle": "{{type}} {{action}}",
+      "exitCode": "exit code {{code}}",
+      "empty": "No events in the last hour",
+      "emptyBody": "New events appear here as they happen.",
+      "noMatch": "No matching events",
+      "noMatchBody": "Try another type.",
+      "error": "Couldn't load recent events.",
+      "retry": "Retry"
+    },
     "error": {
       "heading": "Couldn't load the dashboard.",
       "body": "Docker may be unreachable. Try again.",

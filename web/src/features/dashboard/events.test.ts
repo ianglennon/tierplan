@@ -6,12 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "@/api/schema";
 import {
   createEventsConnection,
-  type EventSourceLike,
   type EventsSnapshot,
   type FeedState,
   invalidationKeys,
   mergeEvents,
 } from "@/features/dashboard/events";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 
 type EventDTO = components["schemas"]["EventDTO"];
 
@@ -28,57 +28,16 @@ function ev(id: string, time: string, over: Partial<EventDTO> = {}): EventDTO {
   };
 }
 
-// A browser EventSource that tests drive by hand.
-class FakeSource implements EventSourceLike {
-  static instances: FakeSource[] = [];
-  readyState = 0;
-  closed = false;
-  private listeners = new Map<string, Array<(event: Event) => void>>();
-
-  constructor(readonly url: string) {
-    FakeSource.instances.push(this);
-  }
-
-  addEventListener(type: string, listener: (event: Event) => void): void {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
-  }
-
-  close(): void {
-    this.closed = true;
-    this.readyState = 2;
-  }
-
-  private emit(type: string, event: Event): void {
-    for (const l of this.listeners.get(type) ?? []) l(event);
-  }
-
-  open(): void {
-    this.readyState = 1;
-    this.emit("open", new Event("open"));
-  }
-
-  // The browser retries by itself (readyState 0) unless the response was not
-  // a usable event stream (readyState 2).
-  fail(final = false): void {
-    this.readyState = final ? 2 : 0;
-    this.emit("error", new Event("error"));
-  }
-
-  send(event: EventDTO): void {
-    this.emit("docker", new MessageEvent("docker", { data: JSON.stringify(event) }));
-  }
-}
-
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
 function connect(fetchRecent: () => Promise<EventDTO[]>) {
-  FakeSource.instances = [];
+  FakeEventSource.instances = [];
   const snapshots: EventsSnapshot[] = [];
   const invalidated: Array<readonly unknown[]> = [];
   const connection = createEventsConnection({
     envId: "e1",
     fetchRecent,
-    createSource: (url) => new FakeSource(url),
+    createSource: (url) => new FakeEventSource(url),
     invalidate: (key) => invalidated.push(key),
     onChange: (s) => snapshots.push(s),
   });
@@ -91,7 +50,7 @@ function connect(fetchRecent: () => Promise<EventDTO[]>) {
     invalidated,
     states,
     last,
-    source: () => FakeSource.instances[0],
+    source: () => FakeEventSource.instances[0],
   };
 }
 
@@ -188,7 +147,7 @@ describe("createEventsConnection", () => {
     const c = connect(fetchRecent);
     c.connection.start();
     await flush();
-    const source = c.source() as FakeSource;
+    const source = c.source() as FakeEventSource;
     source.open();
     source.fail();
     expect(c.last().state).toBe("reconnecting");
@@ -212,14 +171,14 @@ describe("createEventsConnection", () => {
     expect(fetchRecent).toHaveBeenCalledTimes(3);
     const after = c.states().slice(c.states().indexOf("polling"));
     expect(after).toEqual(["polling"]);
-    expect(FakeSource.instances).toHaveLength(1);
+    expect(FakeEventSource.instances).toHaveLength(1);
   });
 
   it("does not fall back when the errors are more than 30 seconds apart", async () => {
     const c = connect(() => Promise.resolve([]));
     c.connection.start();
     await flush();
-    const source = c.source() as FakeSource;
+    const source = c.source() as FakeEventSource;
     source.open();
     source.fail();
     await vi.advanceTimersByTimeAsync(20_000);
@@ -253,7 +212,7 @@ describe("createEventsConnection", () => {
     const c = connect(() => Promise.resolve([]));
     c.connection.start();
     await flush();
-    const source = c.source() as FakeSource;
+    const source = c.source() as FakeEventSource;
     source.fail(true);
     expect(c.last().state).toBe("polling");
     expect(source.closed).toBe(true);
@@ -264,7 +223,7 @@ describe("createEventsConnection", () => {
     const c = connect(() => Promise.resolve([shared]));
     c.connection.start();
     await flush();
-    const source = c.source() as FakeSource;
+    const source = c.source() as FakeEventSource;
     source.open();
     source.send(shared);
     source.send(ev("new", "2026-10-02T10:00:06Z"));
@@ -280,7 +239,7 @@ describe("createEventsConnection", () => {
     const c = connect(() => Promise.resolve([]));
     c.connection.start();
     await flush();
-    const source = c.source() as FakeSource;
+    const source = c.source() as FakeEventSource;
     source.open();
 
     source.send(ev("1", "2026-10-02T10:00:01Z", { type: "container" }));
@@ -310,8 +269,8 @@ describe("createEventsConnection", () => {
     const c = connect(() => Promise.resolve([known]));
     c.connection.start();
     await flush();
-    (c.source() as FakeSource).open();
-    (c.source() as FakeSource).send(known);
+    (c.source() as FakeEventSource).open();
+    (c.source() as FakeEventSource).send(known);
     expect(c.invalidated).toEqual([]);
   });
 
@@ -343,7 +302,7 @@ describe("createEventsConnection", () => {
     const c = connect(fetchRecent);
     c.connection.start();
     await flush();
-    (c.source() as FakeSource).fail(true);
+    (c.source() as FakeEventSource).fail(true);
     fail = true;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(c.last().state).toBe("polling");
@@ -355,7 +314,7 @@ describe("createEventsConnection", () => {
     const c = connect(fetchRecent);
     c.connection.start();
     await flush();
-    const source = c.source() as FakeSource;
+    const source = c.source() as FakeEventSource;
     source.open();
     source.send(ev("1", "2026-10-02T10:00:01Z"));
     source.send(ev("2", "2026-10-02T10:00:02Z"));

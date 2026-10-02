@@ -13,12 +13,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { EngineCard } from "@/features/dashboard/engine-card";
+import { EventsFeed } from "@/features/dashboard/events-feed";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // Dashboard is the environment's home (D-55): header, the worker notice on a
-// swarm worker, the count tiles and the engine card. It reads the same
-// ["env", envId, "summary"] query as the layout, so there is one request; the
+// swarm worker, the count tiles, the engine card and the events feed. It reads
+// the same ["env", envId, "summary"] query as the layout, so there is one request; the
 // layout has already turned offline, unsupported, missing and forbidden
 // environments into full-page states, so what reaches here is data, a load in
 // progress, or a failure that is not one of those.
@@ -134,9 +135,9 @@ function Dashboard() {
         ) : null}
       </section>
 
-      {/* Plan 22 puts the events feed in the right column. */}
       <div className="grid gap-6 lg:grid-cols-[1fr_2fr]">
         <EngineCard engine={data?.engine} loading={loading} />
+        <EventsFeed />
       </div>
     </div>
   );

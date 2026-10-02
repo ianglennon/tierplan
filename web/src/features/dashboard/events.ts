@@ -335,19 +335,23 @@ const EventsContext = createContext<EnvEvents | undefined>(undefined);
 
 interface EnvEventsProviderProps {
   envId: string;
+  // False until the environment is known to answer, so no stream is opened
+  // for one that is offline. The children stay mounted either way.
+  enabled?: boolean;
   children: ReactNode;
 }
 
 // EnvEventsProvider holds the one events subscription of an open environment,
 // so the dashboard's feed and every list view share it. It closes everything
 // when the environment changes or the page goes away.
-export function EnvEventsProvider({ envId, children }: EnvEventsProviderProps) {
+export function EnvEventsProvider({ envId, enabled = true, children }: EnvEventsProviderProps) {
   const queryClient = useQueryClient();
   const [snapshot, setSnapshot] = useState<EventsSnapshot>(INITIAL);
   const [connection, setConnection] = useState<EventsConnection | undefined>();
 
   useEffect(() => {
     setSnapshot(INITIAL);
+    if (!enabled) return;
     const next = createEventsConnection({
       envId,
       fetchRecent: () => fetchRecentEvents(envId),
@@ -360,7 +364,7 @@ export function EnvEventsProvider({ envId, children }: EnvEventsProviderProps) {
       next.close();
       setConnection(undefined);
     };
-  }, [envId, queryClient]);
+  }, [envId, enabled, queryClient]);
 
   const value = useMemo<EnvEvents>(
     () => ({ ...snapshot, retry: () => connection?.reload() }),

@@ -171,11 +171,11 @@ function EnvironmentLayout() {
     );
   }
   // Only an environment that is not offline, unsupported, missing or forbidden
-  // gets here, so the one events subscription is opened for an environment
-  // that can answer. It sits around the whole outlet so the dashboard's feed
-  // and every list view share it (D-57).
+  // gets here. The events subscription opens once the summary has answered,
+  // so none is opened for an environment that cannot, and it sits around the
+  // whole outlet so the dashboard's feed and every list view share it (D-57).
   return (
-    <EnvEventsProvider envId={envId}>
+    <EnvEventsProvider envId={envId} enabled={summary.data !== undefined}>
       <Outlet />
     </EnvEventsProvider>
   );
