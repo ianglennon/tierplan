@@ -130,6 +130,33 @@ func (q *Queries) LastAuditHMAC(ctx context.Context) ([]byte, error) {
 	return hmac, err
 }
 
+const listAuditActors = `-- name: ListAuditActors :many
+SELECT DISTINCT actor_name FROM audit_log ORDER BY actor_name LIMIT 200
+`
+
+func (q *Queries) ListAuditActors(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditActors)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var actor_name string
+		if err := rows.Scan(&actor_name); err != nil {
+			return nil, err
+		}
+		items = append(items, actor_name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditForVerify = `-- name: ListAuditForVerify :many
 SELECT seq, id, ts, actor_type, actor_id, actor_name, "action", target_type, target_id, env_id, result, reason, ip, user_agent, details, key_id, prev_hmac, hmac FROM audit_log WHERE seq > ? ORDER BY seq ASC LIMIT ?
 `
@@ -141,6 +168,78 @@ type ListAuditForVerifyParams struct {
 
 func (q *Queries) ListAuditForVerify(ctx context.Context, arg ListAuditForVerifyParams) ([]AuditLog, error) {
 	rows, err := q.db.QueryContext(ctx, listAuditForVerify, arg.Seq, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.Seq,
+			&i.ID,
+			&i.Ts,
+			&i.ActorType,
+			&i.ActorID,
+			&i.ActorName,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.EnvID,
+			&i.Result,
+			&i.Reason,
+			&i.Ip,
+			&i.UserAgent,
+			&i.Details,
+			&i.KeyID,
+			&i.PrevHmac,
+			&i.Hmac,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditPage = `-- name: ListAuditPage :many
+SELECT seq, id, ts, actor_type, actor_id, actor_name, "action", target_type, target_id, env_id, result, reason, ip, user_agent, details, key_id, prev_hmac, hmac FROM audit_log
+WHERE (CAST(?1 AS TEXT) = '' OR actor_name = ?1)
+  AND (json_array_length(?2) = 0 OR action IN (SELECT value FROM json_each(?2)))
+  AND (CAST(?3 AS INTEGER) = 0 OR ts >= ?3)
+  AND (CAST(?4 AS INTEGER) = 0 OR ts <= ?4)
+  AND (CAST(?5 AS INTEGER) = 0 OR seq < ?5)
+ORDER BY seq DESC
+LIMIT ?6
+`
+
+type ListAuditPageParams struct {
+	Actor   string
+	Actions interface{}
+	FromTs  int64
+	ToTs    int64
+	Cursor  int64
+	Lim     int64
+}
+
+// actions is a JSON array of action keys, not sqlc.slice: sqlc numbers a slice
+// placeholder as an anonymous "?" among numbered ones, which collides as soon as
+// two actions are given.
+func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([]AuditLog, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditPage,
+		arg.Actor,
+		arg.Actions,
+		arg.FromTs,
+		arg.ToTs,
+		arg.Cursor,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -25,3 +25,19 @@ DELETE FROM audit_log WHERE seq <= ?;
 
 -- name: GetAuditBySeq :one
 SELECT * FROM audit_log WHERE seq = ?;
+
+-- name: ListAuditPage :many
+-- actions is a JSON array of action keys, not sqlc.slice: sqlc numbers a slice
+-- placeholder as an anonymous "?" among numbered ones, which collides as soon as
+-- two actions are given.
+SELECT * FROM audit_log
+WHERE (CAST(sqlc.arg(actor) AS TEXT) = '' OR actor_name = sqlc.arg(actor))
+  AND (json_array_length(sqlc.arg(actions)) = 0 OR action IN (SELECT value FROM json_each(sqlc.arg(actions))))
+  AND (CAST(sqlc.arg(from_ts) AS INTEGER) = 0 OR ts >= sqlc.arg(from_ts))
+  AND (CAST(sqlc.arg(to_ts) AS INTEGER) = 0 OR ts <= sqlc.arg(to_ts))
+  AND (CAST(sqlc.arg(cursor) AS INTEGER) = 0 OR seq < sqlc.arg(cursor))
+ORDER BY seq DESC
+LIMIT sqlc.arg(lim);
+
+-- name: ListAuditActors :many
+SELECT DISTINCT actor_name FROM audit_log ORDER BY actor_name LIMIT 200;
