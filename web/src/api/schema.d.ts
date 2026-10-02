@@ -357,7 +357,7 @@ export interface paths {
         put?: never;
         /**
          * Change the signed-in user's own password
-         * @description Needs the current password. On success every session of the user ends, this one included, and a new session starts: its cookie is set and its CSRF token returned (D-32, D-34). A wrong current password or a new password that breaks the policy answers 422 with a stable code per field. Audited as auth.password_changed.
+         * @description Needs the current password. On success every session of the user ends, this one included, and a new session starts: its cookie is set and its CSRF token returned (D-32, D-34). A wrong current password or a new password that breaks the policy answers 422 with a stable code per field. Attempts are throttled per user and the refusal is 429 rate_limited. Audited as auth.password_changed.
          */
         post: operations["changePassword"];
         delete?: never;

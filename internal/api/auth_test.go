@@ -65,6 +65,8 @@ type authFixture struct {
 	// environment-keyed vault.
 	dataInfo  datadir.Info
 	acctVault *vault.Vault
+	// pwLimiter is the per-user throttle on POST /api/me/password; nil means none.
+	pwLimiter *auth.IPLimiter
 	// localHost feeds GET /api/local-host (plan 15).
 	localHost api.LocalHostDeps
 	// envSvc, when set, is the environment registry behind the environment
@@ -131,7 +133,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterAuth(r, api.AuthDeps{Login: login, Sessions: f.sess, Instance: f.inst, Store: f.st, Checker: checker, Log: log})
 	api.RegisterAccount(r, api.AccountDeps{
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
-		DataDir: f.dataInfo, Vault: f.acctVault, Log: log,
+		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Log: log,
 	})
 	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Log: log})
 	api.RegisterLocalHost(r, f.localHost)

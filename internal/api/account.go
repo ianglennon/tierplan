@@ -62,6 +62,10 @@ type AccountDeps struct {
 	DataDir datadir.Info
 	// Vault drives the key_backup warning.
 	Vault *vault.Vault
+	// Limiter throttles POST /api/me/password per user ID, right and wrong
+	// attempts alike, so a stolen session cannot guess the current password at
+	// the speed of the hash alone (T-01-60). Nil means no throttle.
+	Limiter *auth.IPLimiter
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -132,7 +136,8 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 		Summary:     "Change the signed-in user's own password",
 		Description: "Needs the current password. On success every session of the user ends, this one included, and a new " +
 			"session starts: its cookie is set and its CSRF token returned (D-32, D-34). A wrong current password or a new " +
-			"password that breaks the policy answers 422 with a stable code per field. Audited as auth.password_changed.",
+			"password that breaks the policy answers 422 with a stable code per field. Attempts are throttled per user and the " +
+			"refusal is 429 rate_limited. Audited as auth.password_changed.",
 		Tags: []string{"auth"},
 	}, rbac.SelfService, func(ctx context.Context, in *ChangePasswordInput) (*ChangePasswordOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -140,6 +145,24 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
 		ip := httpx.ClientIP(ctx)
+
+		// Before the lookup and the hash: a refused attempt costs almost nothing.
+		if d.Limiter != nil && !d.Limiter.Allow(p.ID) {
+			d.Log.Warn("password change attempts rate limited", "user_id", p.ID, "ip", ip)
+			if err := d.Audit.Record(ctx, audit.Entry{
+				Actor:      p.AuditActor(),
+				Action:     audit.ActionAuthPasswordChanged,
+				TargetType: "user",
+				TargetID:   p.ID,
+				Result:     audit.ResultDenied,
+				Reason:     reasonRateLimited,
+				IP:         ip,
+				UserAgent:  in.UserAgent,
+			}); err != nil {
+				return nil, internal("audit refused password change", err)
+			}
+			return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many attempts. Wait a minute and try again.")
+		}
 
 		u, err := d.Store.RQ.GetUserByID(ctx, p.ID)
 		if err != nil {

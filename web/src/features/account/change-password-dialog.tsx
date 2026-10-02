@@ -41,6 +41,7 @@ const KEY = {
   currentIncorrect: "shell.account.changePassword.errors.currentIncorrect",
   server: "common.mutationFailed",
   unreachable: "common.errors.unreachable",
+  rateLimited: "setup.errors.rateLimited",
 } as const;
 
 const changePasswordSchema = z
@@ -192,6 +193,11 @@ function ChangePasswordForm({ onDone, onCancel, onPendingChange }: FormProps) {
       const known = SERVER_CODES[f.message];
       return known ? [known] : [];
     });
+    if (problem.status === 429) {
+      // The per-user throttle on attempts (T-01-60): the wizard's wording says it.
+      setFormError(KEY.rateLimited);
+      return;
+    }
     if (problem.status !== 422 || routed.length === 0) {
       setFormError(KEY.server);
       return;

@@ -181,6 +181,18 @@ describe("ChangePasswordDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
+  it("says to wait when the server throttles the attempts", async () => {
+    answer = () =>
+      Response.json({ status: 429, type: "rate_limited", detail: "x" }, { status: 429 });
+    const onOpenChange = renderDialog();
+    fill("old password here", GOOD);
+    submit();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Too many attempts. Wait a minute and try again.",
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   it("shows the unreachable message when the request itself fails", async () => {
     answer = () => {
       throw new TypeError("network");

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
@@ -152,6 +153,54 @@ func TestChangePasswordWithAWrongCurrentPasswordChangesNothing(t *testing.T) {
 	entries := f.audits(t, "auth.password_changed")
 	if len(entries) != 1 || entries[0].Result != "failure" || entries[0].Reason != "current_password_incorrect" {
 		t.Fatalf("audit = %+v, want one failure entry so guessing is visible", entries)
+	}
+}
+
+func TestChangePasswordIsThrottledPerUserEvenForTheRightPassword(t *testing.T) {
+	// A stolen session must not be able to guess the current password at the
+	// speed of the hash alone (01-14 hand-off, T-01-60). The budget is per user,
+	// so it is spent by right and wrong attempts alike, and it refills with time.
+	f := newAuthFixture(t, config.Config{})
+	f.pwLimiter = auth.NewIPLimiter(time.Minute, 3, 10*time.Minute, f.clk.now)
+	f.h = f.build(t)
+	f.addUser(t, "bob", false)
+	cookie, csrf := f.signIn(t, "admin", false)
+
+	for i := range 3 {
+		rec := f.changePassword(t, cookie, csrf, "not the password", newGoodPassword)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("attempt %d = %d, want 422 while the budget lasts: %s", i+1, rec.Code, rec.Body)
+		}
+	}
+	rec := f.changePassword(t, cookie, csrf, goodPassword, newGoodPassword)
+	if rec.Code != http.StatusTooManyRequests || problemType(t, rec) != "rate_limited" {
+		t.Fatalf("4th attempt = %d %s, want 429 rate_limited even with the right password", rec.Code, rec.Body)
+	}
+	if f.meStatus(t, cookie) != http.StatusOK {
+		t.Fatal("a throttled attempt ended the session")
+	}
+	if ok := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", goodPassword, false)}); ok.Code != http.StatusOK {
+		t.Fatalf("the password changed although the attempt was refused: %d", ok.Code)
+	}
+
+	entries := f.audits(t, "auth.password_changed")
+	if len(entries) != 4 {
+		t.Fatalf("audit has %d entries, want the 3 failures and the refusal", len(entries))
+	}
+	if last := entries[len(entries)-1]; last.Result != "denied" || last.Reason != "rate_limited" {
+		t.Errorf("last audit entry = %+v, want denied / rate_limited", last)
+	}
+
+	// Another user's budget is separate.
+	bobCookie, bobCSRF := f.signIn(t, "bob", false)
+	if rec := f.changePassword(t, bobCookie, bobCSRF, "not the password", newGoodPassword); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("another user's attempt = %d, want 422: %s", rec.Code, rec.Body)
+	}
+
+	// A minute later one attempt is back, and the right password goes through.
+	f.clk.t = f.clk.t.Add(time.Minute)
+	if rec := f.changePassword(t, cookie, csrf, goodPassword, newGoodPassword); rec.Code != http.StatusOK {
+		t.Fatalf("after the refill = %d, want 200: %s", rec.Code, rec.Body)
 	}
 }
 
