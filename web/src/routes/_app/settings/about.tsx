@@ -138,7 +138,7 @@ function Notices() {
   return (
     <section className="flex flex-col gap-3" aria-labelledby="third-party-notices-heading">
       <div className="flex flex-col gap-1">
-        <h2 id="third-party-notices-heading" className="text-lg font-semibold">
+        <h2 id="third-party-notices-heading" className="text-base font-semibold">
           {t("settings.about.notices.heading")}
         </h2>
         <p className="text-xs text-muted-foreground">{t("settings.about.notices.description")}</p>

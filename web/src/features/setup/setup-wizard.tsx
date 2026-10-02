@@ -297,7 +297,7 @@ export function SetupWizard() {
         <h2
           ref={headingRef}
           tabIndex={-1}
-          className="text-lg leading-tight font-medium outline-none"
+          className="text-base leading-tight font-medium outline-none"
         >
           {t(heading)}
         </h2>

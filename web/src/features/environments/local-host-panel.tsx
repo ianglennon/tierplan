@@ -122,7 +122,7 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
   );
 
   const heading = (key: string) => (
-    <h2 ref={headingRef} tabIndex={-1} className="text-lg leading-tight font-medium outline-none">
+    <h2 ref={headingRef} tabIndex={-1} className="text-base leading-tight font-medium outline-none">
       {t(key)}
     </h2>
   );
