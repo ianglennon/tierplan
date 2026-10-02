@@ -408,21 +408,18 @@ func TestHubDropsASlowSubscriberInsteadOfBlockingTheOthers(t *testing.T) {
 
 	base := time.Now().UnixNano()
 	const total = 150
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for i := range total {
-			ev := recvEvent(t, fast)
-			if want := fmt.Sprintf("c%03d", i); ev.ActorID != want {
-				t.Errorf("fast subscriber event %d = %s, want %s", i, ev.ActorID, want)
-				return
-			}
-		}
-	}()
+	// Lock-step: the fast subscriber takes each event before the next one is
+	// published, so it can never fall 64 events behind, however busy the machine
+	// is. Publishing the burst while a goroutine raced to read it let a loaded
+	// runner starve that goroutine until the hub dropped the fast subscriber too.
+	// The slow one never reads, so it fills up and is dropped by the 65th event.
 	for i := range total {
 		r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: fmt.Sprintf("c%03d", i), TimeNano: base + int64(i)})
+		ev := recvEvent(t, fast)
+		if want := fmt.Sprintf("c%03d", i); ev.ActorID != want {
+			t.Fatalf("fast subscriber event %d = %s, want %s", i, ev.ActorID, want)
+		}
 	}
-	<-done
 
 	// The slow channel holds its buffer of 64 and is then closed.
 	got := 0
