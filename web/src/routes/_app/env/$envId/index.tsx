@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { EngineCard } from "@/features/dashboard/engine-card";
-import { useDocumentTitle } from "@/hooks/use-me";
+import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // Dashboard is the environment's home (D-55): header, the worker notice on a
@@ -29,6 +29,14 @@ function Dashboard() {
   const healthLabel = useHealthLabel();
   const summary = useQuery(summaryQuery(envId));
   const environments = useQuery(environmentsQuery);
+  // A tile links to its list only for a user who may read it, so no tile leads
+  // to a "no permission" page (the list routes also check, and the server
+  // answers 403, D-48).
+  const canContainers = usePermission("containers.read", envId);
+  const canImages = usePermission("images.read", envId);
+  const canVolumes = usePermission("volumes.read", envId);
+  const canNetworks = usePermission("networks.read", envId);
+  const params = { envId };
 
   const data = summary.data;
   const listed = environments.data?.items?.find((e) => e.id === envId);
@@ -89,24 +97,32 @@ function Dashboard() {
                 })
               : undefined
           }
+          to={canContainers ? "/env/$envId/containers" : undefined}
+          params={params}
           loading={loading}
           error={failed}
         />
         <CountTile
           label={t("dashboard.tiles.images")}
           value={counts?.images}
+          to={canImages ? "/env/$envId/images" : undefined}
+          params={params}
           loading={loading}
           error={failed}
         />
         <CountTile
           label={t("dashboard.tiles.volumes")}
           value={counts?.volumes}
+          to={canVolumes ? "/env/$envId/volumes" : undefined}
+          params={params}
           loading={loading}
           error={failed}
         />
         <CountTile
           label={t("dashboard.tiles.networks")}
           value={counts?.networks}
+          to={canNetworks ? "/env/$envId/networks" : undefined}
+          params={params}
           loading={loading}
           error={failed}
         />

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Link, useParams } from "@tanstack/react-router";
-import { LayoutDashboard } from "lucide-react";
+import { Container, HardDrive, Layers, LayoutDashboard, Network } from "lucide-react";
 
 import { EnvSwitcher } from "@/components/env-switcher";
 import {
@@ -11,6 +11,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -18,6 +19,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { VersionFooter } from "@/components/version-footer";
+import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // AppSidebar is the left navigation (D-53): the environment switcher on top,
@@ -28,6 +30,37 @@ import { useT } from "@/i18n/use-t";
 // The version footer is in the sidebar only while the sidebar is expanded or
 // its mobile drawer is open. Otherwise the app layout renders it at the bottom
 // of the page, so exactly one is visible at every size and state (PLAT-05).
+// The Resources group (D-56, UI-SPEC interpretation 2): the four read-only
+// lists of the selected environment, each shown only to a user who may read it.
+const RESOURCE_ITEMS = [
+  { key: "containers", perm: "containers.read", to: "/env/$envId/containers", icon: Container },
+  { key: "images", perm: "images.read", to: "/env/$envId/images", icon: Layers },
+  { key: "volumes", perm: "volumes.read", to: "/env/$envId/volumes", icon: HardDrive },
+  { key: "networks", perm: "networks.read", to: "/env/$envId/networks", icon: Network },
+] as const;
+
+function ResourceItem({ envId, item }: { envId: string; item: (typeof RESOURCE_ITEMS)[number] }) {
+  const t = useT();
+  const allowed = usePermission(item.perm, envId);
+  if (!allowed) return null;
+  const Icon = item.icon;
+  const label = t(`shell.nav.${item.key}`);
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild tooltip={label} className="max-md:h-11">
+        <Link
+          to={item.to}
+          params={{ envId }}
+          activeProps={{ "aria-current": "page", "data-active": true }}
+        >
+          <Icon aria-hidden="true" />
+          <span>{label}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
 export function AppSidebar() {
   const t = useT();
   const { state, isMobile } = useSidebar();
@@ -44,7 +77,6 @@ export function AppSidebar() {
       <SidebarHeader className="h-12 justify-center border-b border-sidebar-border p-2">
         <EnvSwitcher />
       </SidebarHeader>
-      {/* Plan 20 adds the environment's Resources group below Dashboard. */}
       <SidebarContent>
         {envId ? (
           <SidebarGroup>
@@ -67,6 +99,18 @@ export function AppSidebar() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ) : null}
+        {envId ? (
+          <SidebarGroup>
+            <SidebarGroupLabel>{t("shell.nav.resources")}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {RESOURCE_ITEMS.map((item) => (
+                  <ResourceItem key={item.key} envId={envId} item={item} />
+                ))}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

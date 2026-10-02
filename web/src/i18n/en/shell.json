@@ -14,7 +14,12 @@
       "menu": "Switch environment"
     },
     "nav": {
-      "dashboard": "Dashboard"
+      "dashboard": "Dashboard",
+      "resources": "Resources",
+      "containers": "Containers",
+      "images": "Images",
+      "volumes": "Volumes",
+      "networks": "Networks"
     },
     "userMenu": {
       "trigger": "User menu",

@@ -16,6 +16,10 @@ import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppEnvEnvIdRouteImport } from './routes/_app/env/$envId'
 import { Route as AppEnvEnvIdIndexRouteImport } from './routes/_app/env/$envId/index'
+import { Route as AppEnvEnvIdContainersRouteImport } from './routes/_app/env/$envId/containers'
+import { Route as AppEnvEnvIdImagesRouteImport } from './routes/_app/env/$envId/images'
+import { Route as AppEnvEnvIdNetworksRouteImport } from './routes/_app/env/$envId/networks'
+import { Route as AppEnvEnvIdVolumesRouteImport } from './routes/_app/env/$envId/volumes'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -51,6 +55,26 @@ const AppEnvEnvIdIndexRoute = AppEnvEnvIdIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppEnvEnvIdRoute,
 } as any)
+const AppEnvEnvIdContainersRoute = AppEnvEnvIdContainersRouteImport.update({
+  id: '/containers',
+  path: '/containers',
+  getParentRoute: () => AppEnvEnvIdRoute,
+} as any)
+const AppEnvEnvIdImagesRoute = AppEnvEnvIdImagesRouteImport.update({
+  id: '/images',
+  path: '/images',
+  getParentRoute: () => AppEnvEnvIdRoute,
+} as any)
+const AppEnvEnvIdNetworksRoute = AppEnvEnvIdNetworksRouteImport.update({
+  id: '/networks',
+  path: '/networks',
+  getParentRoute: () => AppEnvEnvIdRoute,
+} as any)
+const AppEnvEnvIdVolumesRoute = AppEnvEnvIdVolumesRouteImport.update({
+  id: '/volumes',
+  path: '/volumes',
+  getParentRoute: () => AppEnvEnvIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -58,6 +82,10 @@ export interface FileRoutesByFullPath {
   '/setup': typeof SetupRoute
   '/welcome': typeof WelcomeRoute
   '/env/$envId': typeof AppEnvEnvIdRouteWithChildren
+  '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
+  '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
+  '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
+  '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
   '/env/$envId/': typeof AppEnvEnvIdIndexRoute
 }
 export interface FileRoutesByTo {
@@ -65,6 +93,10 @@ export interface FileRoutesByTo {
   '/setup': typeof SetupRoute
   '/welcome': typeof WelcomeRoute
   '/': typeof AppIndexRoute
+  '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
+  '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
+  '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
+  '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
   '/env/$envId': typeof AppEnvEnvIdIndexRoute
 }
 export interface FileRoutesById {
@@ -75,14 +107,36 @@ export interface FileRoutesById {
   '/welcome': typeof WelcomeRoute
   '/_app/': typeof AppIndexRoute
   '/_app/env/$envId': typeof AppEnvEnvIdRouteWithChildren
+  '/_app/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
+  '/_app/env/$envId/images': typeof AppEnvEnvIdImagesRoute
+  '/_app/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
+  '/_app/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
   '/_app/env/$envId/': typeof AppEnvEnvIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/login' | '/setup' | '/welcome' | '/env/$envId' | '/env/$envId/'
+    | '/'
+    | '/login'
+    | '/setup'
+    | '/welcome'
+    | '/env/$envId'
+    | '/env/$envId/containers'
+    | '/env/$envId/images'
+    | '/env/$envId/networks'
+    | '/env/$envId/volumes'
+    | '/env/$envId/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/login' | '/setup' | '/welcome' | '/' | '/env/$envId'
+  to:
+    | '/login'
+    | '/setup'
+    | '/welcome'
+    | '/'
+    | '/env/$envId/containers'
+    | '/env/$envId/images'
+    | '/env/$envId/networks'
+    | '/env/$envId/volumes'
+    | '/env/$envId'
   id:
     | '__root__'
     | '/_app'
@@ -91,6 +145,10 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/_app/'
     | '/_app/env/$envId'
+    | '/_app/env/$envId/containers'
+    | '/_app/env/$envId/images'
+    | '/_app/env/$envId/networks'
+    | '/_app/env/$envId/volumes'
     | '/_app/env/$envId/'
   fileRoutesById: FileRoutesById
 }
@@ -152,14 +210,50 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdIndexRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
+    '/_app/env/$envId/containers': {
+      id: '/_app/env/$envId/containers'
+      path: '/containers'
+      fullPath: '/env/$envId/containers'
+      preLoaderRoute: typeof AppEnvEnvIdContainersRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
+    '/_app/env/$envId/images': {
+      id: '/_app/env/$envId/images'
+      path: '/images'
+      fullPath: '/env/$envId/images'
+      preLoaderRoute: typeof AppEnvEnvIdImagesRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
+    '/_app/env/$envId/networks': {
+      id: '/_app/env/$envId/networks'
+      path: '/networks'
+      fullPath: '/env/$envId/networks'
+      preLoaderRoute: typeof AppEnvEnvIdNetworksRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
+    '/_app/env/$envId/volumes': {
+      id: '/_app/env/$envId/volumes'
+      path: '/volumes'
+      fullPath: '/env/$envId/volumes'
+      preLoaderRoute: typeof AppEnvEnvIdVolumesRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
   }
 }
 
 interface AppEnvEnvIdRouteChildren {
+  AppEnvEnvIdContainersRoute: typeof AppEnvEnvIdContainersRoute
+  AppEnvEnvIdImagesRoute: typeof AppEnvEnvIdImagesRoute
+  AppEnvEnvIdNetworksRoute: typeof AppEnvEnvIdNetworksRoute
+  AppEnvEnvIdVolumesRoute: typeof AppEnvEnvIdVolumesRoute
   AppEnvEnvIdIndexRoute: typeof AppEnvEnvIdIndexRoute
 }
 
 const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
+  AppEnvEnvIdContainersRoute: AppEnvEnvIdContainersRoute,
+  AppEnvEnvIdImagesRoute: AppEnvEnvIdImagesRoute,
+  AppEnvEnvIdNetworksRoute: AppEnvEnvIdNetworksRoute,
+  AppEnvEnvIdVolumesRoute: AppEnvEnvIdVolumesRoute,
   AppEnvEnvIdIndexRoute: AppEnvEnvIdIndexRoute,
 }
 
