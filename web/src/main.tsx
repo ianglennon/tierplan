@@ -6,6 +6,9 @@ import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+// Before anything that builds a schema: see the file for why.
+import "@/lib/zod-config";
+
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./index.css";
