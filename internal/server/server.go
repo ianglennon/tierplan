@@ -35,20 +35,32 @@ import (
 )
 
 const (
-	// readHeaderTimeout and idleTimeout bound slow clients (T-01-17, Pitfall 8).
-	// There is deliberately no global WriteTimeout: the SSE events stream
-	// (plan 21) lives for hours and clears its own write deadline.
+	// readHeaderTimeout, readTimeout and idleTimeout bound slow clients
+	// (T-01-17, Pitfall 8). There is deliberately no global WriteTimeout: the
+	// SSE events stream (plan 21) lives for hours and clears its own write
+	// deadline.
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 10 * time.Second
 )
 
-// readTimeout is a variable so an internal test can shorten it.
+// readTimeout bounds reading a whole request, headers and body, so a client
+// that sends the headers and then withholds the body is cut off (WR-14,
+// T-01-17). Go clears the read deadline once a request with no body is being
+// served, so a long-lived response such as the events stream is unaffected.
+// It is a variable so an internal test can shorten it.
 var readTimeout = 30 * time.Second
 
-// newHTTPServer is a stub until the GREEN step.
+// newHTTPServer returns the http.Server Bayplan serves with. huma already caps
+// JSON bodies (MaxBodyBytes), so no MaxBytesReader is added here.
 func newHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
-	return &http.Server{Handler: h, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout, TLSConfig: tlsCfg}
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
+		TLSConfig:         tlsCfg,
+	}
 }
 
 // Server is the assembled application.
@@ -421,12 +433,7 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) serve(ctx context.Context, ln net.Listener) error {
-	srv := &http.Server{
-		Handler:           s.Handler(),
-		ReadHeaderTimeout: readHeaderTimeout,
-		IdleTimeout:       idleTimeout,
-		TLSConfig:         s.tlsConfig,
-	}
+	srv := newHTTPServer(s.Handler(), s.tlsConfig)
 	// Shutdown waits for open requests, and an events stream never ends by
 	// itself. Closing the hub ends every stream, so a restart is not held up for
 	// the whole shutdown timeout by a browser that has the feed open.

@@ -846,7 +846,7 @@ func TestAStreamingResponseOutlivesTheReadTimeout(t *testing.T) {
 	shortReadTimeout(t, 200*time.Millisecond)
 	const chunks = 10
 	addr := serveForTest(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fl := w.(http.Flusher)
+		fl, _ := w.(http.Flusher)
 		for range chunks {
 			_, _ = w.Write([]byte("x"))
 			fl.Flush()

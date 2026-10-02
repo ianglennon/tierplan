@@ -459,11 +459,11 @@ func writePair(t *testing.T, crt, key string, host string) *x509.Certificate {
 		filepath.Join(src.DataDir, "tls", "selfsigned.crt"): crt,
 		filepath.Join(src.DataDir, "tls", "selfsigned.key"): key,
 	} {
-		b, err := os.ReadFile(from)
+		b, err := os.ReadFile(from) //nolint:gosec // a path inside the test's temporary directory
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(to, b, 0o600); err != nil {
+		if err := os.WriteFile(to, b, 0o600); err != nil { //nolint:gosec // a path inside the test's temporary directory
 			t.Fatal(err)
 		}
 	}

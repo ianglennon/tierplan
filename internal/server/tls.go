@@ -200,8 +200,8 @@ func newSuppliedSource(certFile, keyFile string, now func() time.Time) (*certSou
 // readPair is the content of the two files, joined, or "" for one that cannot
 // be read. Comparing content is exact where a modification time can tie.
 func readPair(certFile, keyFile string) string {
-	c, err1 := os.ReadFile(certFile)
-	k, err2 := os.ReadFile(keyFile)
+	c, err1 := os.ReadFile(certFile) //nolint:gosec // the operator-configured certificate path, read to detect a replaced pair
+	k, err2 := os.ReadFile(keyFile)  //nolint:gosec // the operator-configured key path, read to detect a replaced pair
 	if err1 != nil || err2 != nil {
 		return ""
 	}
