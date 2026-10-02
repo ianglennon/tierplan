@@ -7,27 +7,24 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/buildinfo"
+	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/engine"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/webui"
-	"github.com/ianglennon/bayplan/web"
+	"github.com/ianglennon/bayplan/internal/privdrop"
+	"github.com/ianglennon/bayplan/internal/server"
 )
-
-// defaultListen is the default listen address (D-10).
-const defaultListen = ":7480"
 
 func main() {
 	if err := newRoot().Execute(); err != nil {
@@ -36,17 +33,15 @@ func main() {
 }
 
 func newRoot() *cobra.Command {
-	listen := envOr("BAYPLAN_LISTEN", defaultListen)
+	// selfID is Bayplan's own container ID, read before the privilege drop.
+	var selfID string
 
 	serve := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the Bayplan server",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runServe(cmd.Context(), listen)
-		},
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runServe(cmd, selfID) },
 	}
-	serve.Flags().StringVar(&listen, "listen", listen, "address to listen on (env BAYPLAN_LISTEN)")
 
 	root := &cobra.Command{
 		Use:           "bayplan",
@@ -54,15 +49,36 @@ func newRoot() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: false,
-		// The default action is serve.
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runServe(cmd.Context(), listen)
+		// Runs before every subcommand, so `docker exec <c> bayplan user unlock`
+		// is as unprivileged as the server (D-17, RESEARCH A8).
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			var err error
+			selfID, err = dropPrivileges(cmd)
+			return err
 		},
+		// The default action is serve.
+		RunE: func(cmd *cobra.Command, _ []string) error { return runServe(cmd, selfID) },
 	}
-	root.Flags().StringVar(&listen, "listen", listen, "address to listen on (env BAYPLAN_LISTEN)")
+	// Every setting is also a flag; precedence is in internal/config (D-11).
+	config.BindFlags(root.PersistentFlags())
 
 	root.AddCommand(
 		serve,
+		newAuditCmd(),
+		newSetupTokenCmd(),
+		newUserCmd(),
+		&cobra.Command{
+			Use:   "healthcheck",
+			Short: "Exit 0 if the local server answers /healthz, else 1 (for the container HEALTHCHECK)",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				cfg, err := loadConfig(cmd)
+				if err != nil {
+					return err
+				}
+				return server.Healthcheck(cmd.Context(), cfg.Listen, server.TLSEnabled(cfg))
+			},
+		},
 		&cobra.Command{
 			Use:   "openapi",
 			Short: "Print the OpenAPI 3.1 document as JSON",
@@ -83,16 +99,14 @@ func newRoot() *cobra.Command {
 	return root
 }
 
-// buildRouter wires every operation. It takes no dependencies so `openapi` can
-// build the same handlers without a database or a socket.
-func buildRouter(fallback http.Handler) *httpx.Router {
-	r := httpx.New(httpx.Options{Fallback: fallback})
-	api.RegisterSystem(r)
-	return r
+func loadConfig(cmd *cobra.Command) (config.Config, error) {
+	return config.Load(cmd.Flags(), os.Getenv, os.ReadFile)
 }
 
+// writeOpenAPI needs no configuration, data directory or socket: it builds the
+// router with no dependencies.
 func writeOpenAPI(w io.Writer) error {
-	doc, err := json.MarshalIndent(buildRouter(nil).API().OpenAPI(), "", "  ")
+	doc, err := json.MarshalIndent(server.NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.AuditDeps{}, api.SettingsDeps{}).API().OpenAPI(), "", "  ")
 	if err != nil {
 		return err
 	}
@@ -100,41 +114,60 @@ func writeOpenAPI(w io.Writer) error {
 	return err
 }
 
-func runServe(ctx context.Context, listen string) error {
+// noDataDir lists the commands that never read the data directory. They still
+// drop privileges, but Drop neither creates nor chowns /data for them. The
+// healthcheck is among them: the image runs it as root every 30 seconds, and
+// it only probes /healthz (WR-08).
+var noDataDir = map[string]bool{"version": true, "openapi": true, "help": true, "completion": true, "healthcheck": true}
+
+// dropPrivileges reads Bayplan's own container ID and then, when started as
+// root, joins the Docker socket's group, fixes /data and becomes UID and GID
+// 1000. The order matters: after the user change the process is non-dumpable
+// and some /proc/self entries stop being readable (RESEARCH A9, D-27).
+func dropPrivileges(cmd *cobra.Command) (selfID string, err error) {
+	selfID = envs.ReadSelfContainerID()
+	if _, err := privdrop.Drop(dropOptions(cmd)); err != nil {
+		return "", err
+	}
+	return selfID, nil
+}
+
+// dropOptions builds what the privilege drop needs from the configuration.
+// A configuration error is reported by the command itself. The drop does not
+// wait for it: the process must not stay root because a flag is wrong.
+func dropOptions(cmd *cobra.Command) privdrop.Options {
+	var opts privdrop.Options
+	if cfg, cerr := loadConfig(cmd); cerr == nil {
+		if !noDataDir[cmd.Name()] {
+			opts.DataDir = cfg.DataDir
+		}
+		opts.GIDOverride = cfg.DockerGID
+		// An unsupported DOCKER_HOST is reported by the server; no socket group is joined for it.
+		if sock, perr := engine.ParseDockerHost(cfg.DockerHost); perr == nil {
+			opts.SocketPath = sock
+		}
+	}
+	return opts
+}
+
+func runServe(cmd *cobra.Command, selfID string) error {
+	cfg, err := loadConfig(cmd)
+	if err != nil {
+		return err
+	}
+	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	slog.SetDefault(log)
+
+	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	router := buildRouter(webui.Handler(web.FS()))
-	srv := &http.Server{
-		Addr:              listen,
-		Handler:           router.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-
-	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
-	slog.Info("bayplan listening", "addr", listen, "version", buildinfo.Get().Display)
-
-	select {
-	case err := <-errc:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
+	srv, err := server.Build(ctx, cfg, log, server.WithSelfContainerID(selfID))
+	if err != nil {
 		return err
-	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return srv.Shutdown(shutdown)
 	}
-}
-
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
+	return srv.Run(ctx)
 }

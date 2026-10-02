@@ -1,0 +1,335 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+package api
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"log/slog"
+	"net/http"
+	"path/filepath"
+	"strconv"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/auth"
+	"github.com/ianglennon/bayplan/internal/datadir"
+	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/instance"
+	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/internal/vault"
+)
+
+// Field error codes of POST /api/me/password. password_too_short and
+// password_common are shared with the setup wizard; the SPA maps each to its
+// UI-SPEC message.
+const codeCurrentPasswordIncorrect = "current_password_incorrect" //nolint:gosec // a stable error code, not a credential
+
+// Reasons recorded with a refused password change.
+const reasonCurrentPasswordIncorrect = "current_password_incorrect" //nolint:gosec // an audit reason, not a credential
+
+// Warning IDs returned by GET /api/warnings. The plain-HTTP warning is not
+// here: only the browser knows how it reached the server.
+const (
+	warningDataNotPersisted = "data_not_persisted"
+	warningKeyBackup        = "key_backup"
+)
+
+const (
+	// settingKeyBackupAck holds the UTC nanoseconds at which an admin said they
+	// had backed up the generated encryption key.
+	settingKeyBackupAck = "key_backup_ack"
+	// keySourceFile is vault.KeySource() for a key that Bayplan generated into
+	// the data directory, the only key it can lose with the container.
+	keySourceFile = "file"
+	// targetKeyBackup is the audit target of that acknowledgement.
+	targetKeyBackup = "key_backup"
+)
+
+// AccountDeps are the dependencies of the account and warnings routes.
+type AccountDeps struct {
+	Sessions *auth.Sessions
+	Instance *instance.Instance
+	Store    *store.Store
+	Audit    *audit.Writer
+	// DataDir drives the data_not_persisted warning.
+	DataDir datadir.Info
+	// Vault drives the key_backup warning.
+	Vault *vault.Vault
+	// Limiter throttles POST /api/me/password per user ID, right and wrong
+	// attempts alike, so a stolen session cannot guess the current password at
+	// the speed of the hash alone (T-01-60). Nil means no throttle.
+	Limiter *auth.IPLimiter
+	// Log receives server-side failures. Nil means slog.Default().
+	Log *slog.Logger
+}
+
+// ChangePasswordInput is a password change. The length caps bound what the
+// server reads; the policy is checked after the current password.
+type ChangePasswordInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		CurrentPassword string `json:"currentPassword" maxLength:"1024" doc:"The password the account has now"`
+		NewPassword     string `json:"newPassword" maxLength:"1024" doc:"The new password; at least 12 characters, not a common password and not containing the username"`
+	}
+}
+
+// ChangePasswordBody is the new session's CSRF token.
+type ChangePasswordBody struct {
+	CSRFToken string `json:"csrfToken" doc:"The CSRF token of the new session, sent as X-CSRF-Token on every mutating request"`
+}
+
+// ChangePasswordOutput carries the new session cookie with the body.
+type ChangePasswordOutput struct {
+	SetCookie    http.Cookie `header:"Set-Cookie"`
+	CacheControl string      `header:"Cache-Control"`
+	Body         ChangePasswordBody
+}
+
+// WarningBody is one instance warning that needs an admin's attention.
+type WarningBody struct {
+	ID      string `json:"id" enum:"data_not_persisted,key_backup" doc:"Which warning this is"`
+	Reason  string `json:"reason,omitempty" doc:"For data_not_persisted: why the data directory is not persisted"`
+	KeyPath string `json:"keyPath,omitempty" doc:"For key_backup: where the generated encryption key is stored"`
+}
+
+// WarningsBody lists the warnings that apply right now.
+type WarningsBody struct {
+	Items []WarningBody `json:"items" doc:"Only the warnings that apply; empty when there are none"`
+}
+
+// WarningsOutput wraps WarningsBody for huma.
+type WarningsOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         WarningsBody
+}
+
+// AcknowledgeKeyBackupInput is the acknowledgement of the key backup reminder. It has no body.
+type AcknowledgeKeyBackupInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// RegisterAccount registers the signed-in user's own password change and the
+// instance warnings. Changing your own password is self-service (D-44); the
+// warnings reveal deployment details, so they need the settings permissions.
+func RegisterAccount(r *httpx.Router, d AccountDeps) {
+	if d.Log == nil {
+		d.Log = slog.Default()
+	}
+	internal := func(what string, err error) error {
+		d.Log.Error("account request failed", "step", what, "error", err)
+		return huma.Error500InternalServerError("internal error")
+	}
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "changePassword",
+		Method:      http.MethodPost,
+		Path:        "/api/me/password",
+		Summary:     "Change the signed-in user's own password",
+		Description: "Needs the current password. On success every session of the user ends, this one included, and a new " +
+			"session starts: its cookie is set and its CSRF token returned (D-32, D-34). A wrong current password or a new " +
+			"password that breaks the policy answers 422 with a stable code per field. Attempts are throttled per user and the " +
+			"refusal is 429 rate_limited. Audited as auth.password_changed.",
+		Tags: []string{"auth"},
+	}, rbac.SelfService, func(ctx context.Context, in *ChangePasswordInput) (*ChangePasswordOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil || len(p.SessionIDHash) == 0 {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		ip := httpx.ClientIP(ctx)
+
+		// Before the lookup and the hash: a refused attempt costs almost nothing.
+		if d.Limiter != nil && !d.Limiter.Allow(p.ID) {
+			d.Log.Warn("password change attempts rate limited", "user_id", p.ID, "ip", ip)
+			if err := d.Audit.Record(ctx, audit.Entry{
+				Actor:      p.AuditActor(),
+				Action:     audit.ActionAuthPasswordChanged,
+				TargetType: "user",
+				TargetID:   p.ID,
+				Result:     audit.ResultDenied,
+				Reason:     reasonRateLimited,
+				IP:         ip,
+				UserAgent:  in.UserAgent,
+			}); err != nil {
+				return nil, internal("audit refused password change", err)
+			}
+			return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many attempts. Wait a minute and try again.")
+		}
+
+		u, err := d.Store.RQ.GetUserByID(ctx, p.ID)
+		if err != nil {
+			return nil, internal("look up user", err)
+		}
+		var problems []*huma.ErrorDetail
+		add := func(location, code string) {
+			problems = append(problems, &huma.ErrorDetail{Location: location, Message: code})
+		}
+		ok, err := auth.VerifyPassword(in.Body.CurrentPassword, u.PasswordHash)
+		if err != nil {
+			// An unreadable stored hash is a data problem, not a way past the check.
+			d.Log.Error("stored password hash is unreadable", "user_id", u.ID, "error", err)
+			ok = false
+		}
+		if !ok {
+			add("body.currentPassword", codeCurrentPasswordIncorrect)
+		}
+		switch err := auth.ValidatePassword(in.Body.NewPassword, u.Username); {
+		case errors.Is(err, auth.ErrPasswordTooShort):
+			add("body.newPassword", codePasswordTooShort)
+		case errors.Is(err, auth.ErrPasswordCommon):
+			add("body.newPassword", codePasswordCommon)
+		}
+		if len(problems) > 0 {
+			if !ok {
+				// Guessing the current password from a session is worth seeing in the log (T-01-60).
+				if err := d.Audit.Record(ctx, audit.Entry{
+					Actor:      p.AuditActor(),
+					Action:     audit.ActionAuthPasswordChanged,
+					TargetType: "user",
+					TargetID:   u.ID,
+					Result:     audit.ResultFailure,
+					Reason:     reasonCurrentPasswordIncorrect,
+					IP:         ip,
+					UserAgent:  in.UserAgent,
+				}); err != nil {
+					return nil, internal("audit refused password change", err)
+				}
+			}
+			return nil, &huma.ErrorModel{
+				Type:   problemValidationFailed,
+				Title:  http.StatusText(http.StatusUnprocessableEntity),
+				Status: http.StatusUnprocessableEntity,
+				Detail: "validation failed",
+				Errors: problems,
+			}
+		}
+
+		// Hashing is slow and memory-hungry: do it before taking the write
+		// connection, so other writers are not held up behind it.
+		hash, err := auth.HashPassword(in.Body.NewPassword)
+		if err != nil {
+			return nil, internal("hash password", err)
+		}
+		cur, err := d.Store.RQ.GetSessionByHash(ctx, p.SessionIDHash)
+		if err != nil {
+			return nil, internal("look up session", err)
+		}
+		remember := cur.Remember != 0
+
+		tx, err := d.Store.Write.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, internal("begin", err)
+		}
+		defer func() { _ = tx.Rollback() }() // a no-op once committed
+		q := d.Store.Q.WithTx(tx)
+
+		now := time.Now().UTC().UnixNano()
+		if err := q.UpdatePassword(ctx, sqlc.UpdatePasswordParams{PasswordHash: hash, PasswordChangedAt: now, UpdatedAt: now, ID: u.ID}); err != nil {
+			return nil, internal("update password", err)
+		}
+		// No session is kept: this one ends too, and the new one below replaces it (D-32).
+		// The empty hash matches no row, so every session of the user goes.
+		if err := q.DeleteUserSessionsExcept(ctx, sqlc.DeleteUserSessionsExceptParams{UserID: u.ID, IDHash: []byte{}}); err != nil {
+			return nil, internal("end sessions", err)
+		}
+		raw, idHash, err := d.Sessions.CreateTx(ctx, tx, u.ID, remember, ip, in.UserAgent)
+		if err != nil {
+			return nil, internal("create session", err)
+		}
+		if err := d.Audit.RecordTx(ctx, tx, audit.Entry{
+			Actor:      p.AuditActor(),
+			Action:     audit.ActionAuthPasswordChanged,
+			TargetType: "user",
+			TargetID:   u.ID,
+			Result:     audit.ResultSuccess,
+			IP:         ip,
+			UserAgent:  in.UserAgent,
+		}); err != nil {
+			return nil, internal("audit password change", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, internal("commit", err)
+		}
+		return &ChangePasswordOutput{
+			SetCookie:    d.Sessions.Cookie(raw, remember, d.Instance.Secure()),
+			CacheControl: "no-store",
+			Body:         ChangePasswordBody{CSRFToken: d.Sessions.CSRFToken(idHash)},
+		}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listWarnings",
+		Method:      http.MethodGet,
+		Path:        "/api/warnings",
+		Summary:     "List the instance warnings that need an admin's attention",
+		Description: "Includes data_not_persisted while the data directory would be lost with the container, and key_backup " +
+			"while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). " +
+			"The plain-HTTP warning is the browser's to compute and is not listed.",
+		Tags: []string{"settings"},
+	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*WarningsOutput, error) {
+		items := []WarningBody{}
+		if !d.DataDir.Persisted {
+			items = append(items, WarningBody{ID: warningDataNotPersisted, Reason: d.DataDir.Reason})
+		}
+		if d.Vault != nil && d.Vault.KeySource() == keySourceFile {
+			_, err := d.Store.RQ.GetSetting(ctx, settingKeyBackupAck)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				items = append(items, WarningBody{ID: warningKeyBackup, KeyPath: filepath.Join(d.DataDir.Path, vault.KeyFile)})
+			case err != nil:
+				return nil, internal("read key backup acknowledgement", err)
+			}
+		}
+		return &WarningsOutput{CacheControl: "no-store", Body: WarningsBody{Items: items}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "acknowledgeKeyBackup",
+		Method:        http.MethodPost,
+		Path:          "/api/warnings/key-backup/ack",
+		Summary:       "Acknowledge the encryption key backup reminder",
+		Description:   "Records, once for the whole instance, that the generated encryption key has been backed up, and audits it as warning.acknowledged.",
+		DefaultStatus: http.StatusNoContent,
+		Tags:          []string{"settings"},
+	}, rbac.Requirement{Perm: rbac.PermSettingsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AcknowledgeKeyBackupInput) (*struct{}, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		tx, err := d.Store.Write.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, internal("begin", err)
+		}
+		defer func() { _ = tx.Rollback() }() // a no-op once committed
+
+		now := time.Now().UTC().UnixNano()
+		if err := d.Store.Q.WithTx(tx).UpsertSetting(ctx, sqlc.UpsertSettingParams{
+			Key: settingKeyBackupAck, Value: strconv.FormatInt(now, 10), UpdatedAt: now,
+		}); err != nil {
+			return nil, internal("store acknowledgement", err)
+		}
+		if err := d.Audit.RecordTx(ctx, tx, audit.Entry{
+			Actor:      p.AuditActor(),
+			Action:     audit.ActionWarningAcknowledged,
+			TargetType: targetKeyBackup,
+			TargetID:   targetKeyBackup,
+			Result:     audit.ResultSuccess,
+			IP:         httpx.ClientIP(ctx),
+			UserAgent:  in.UserAgent,
+		}); err != nil {
+			return nil, internal("audit acknowledgement", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, internal("commit", err)
+		}
+		return nil, nil
+	})
+}

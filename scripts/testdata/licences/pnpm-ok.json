@@ -1,0 +1,35 @@
+{
+  "MIT": [
+    {
+      "name": "fixture-mit",
+      "versions": ["1.0.0"],
+      "paths": ["/nowhere/node_modules/fixture-mit"],
+      "license": "MIT",
+      "author": "Fixture",
+      "homepage": "https://example.invalid/",
+      "description": "Allowed."
+    }
+  ],
+  "Apache-2.0": [
+    {
+      "name": "fixture-apache",
+      "versions": ["2.0.0"],
+      "paths": ["/nowhere/node_modules/fixture-apache"],
+      "license": "Apache-2.0",
+      "author": "Fixture",
+      "homepage": "https://example.invalid/",
+      "description": "Allowed."
+    }
+  ],
+  "(MIT OR GPL-2.0-only)": [
+    {
+      "name": "fixture-dual",
+      "versions": ["3.0.0"],
+      "paths": ["/nowhere/node_modules/fixture-dual"],
+      "license": "(MIT OR GPL-2.0-only)",
+      "author": "Fixture",
+      "homepage": "https://example.invalid/",
+      "description": "OR expression: one allowed branch is enough."
+    }
+  ]
+}

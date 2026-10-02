@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+#
+# The end-to-end topology (D-80, RESEARCH Pattern 11): the freshly built image
+# under test, managing a docker:29-dind daemon through a unix socket that the
+# two containers share. Bayplan runs on the host's Docker and manages the dind
+# daemon, so its own container is not inside the managed engine.
+#
+# It exercises the real unix socket, the DOCKER_HOST override (D-21), the
+# socket-group detection and the privilege drop to UID 1000 (D-17), which a unit
+# test cannot reach. `make e2e` builds bayplan:e2e, brings this up and runs
+# Playwright against it.
+#
+# The run claims the instance with a known password and Bayplan controls a
+# privileged dind daemon, so the port is published on 127.0.0.1 only.
+name: bayplan-e2e
+
+services:
+  dind:
+    image: docker:29-dind
+    privileged: true
+    environment:
+      # Plain unix socket, no TLS. The dind entrypoint serves whatever unix://
+      # path DOCKER_HOST names, and the docker CLI in the healthcheck uses it too.
+      DOCKER_TLS_CERTDIR: ""
+      DOCKER_HOST: unix:///shared/docker.sock
+    volumes:
+      - sock:/shared
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 2s
+
+  bayplan:
+    image: bayplan:e2e
+    environment:
+      DOCKER_HOST: unix:///shared/docker.sock
+    volumes:
+      - sock:/shared
+      - data:/data
+    ports:
+      # Loopback only (WR-12): the run claims this instance with a known admin
+      # password and Bayplan controls a privileged dind daemon, so nothing on the
+      # LAN may reach it.
+      - "127.0.0.1:${BAYPLAN_E2E_PORT:-7480}:7480"
+    depends_on:
+      dind:
+        condition: service_healthy
+
+volumes:
+  sock:
+  data:

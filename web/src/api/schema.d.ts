@@ -4,6 +4,429 @@
  */
 
 export interface paths {
+    "/api/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List audit entries
+         * @description Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. Needs audit.read.
+         */
+        get: operations["listAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audit/actors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the actor names in the audit log
+         * @description The distinct actor names seen, sorted, at most 200, for the user filter. Needs audit.read.
+         */
+        get: operations["listAuditActors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audit/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export the audit log as CSV or JSON
+         * @description Streams every entry matching the filters, newest first, as a download named bayplan-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are reads and are not audited. Needs audit.read.
+         */
+        get: operations["exportAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in with a username and password
+         * @description Starts a server-side session and sets its cookie. Every failure, whether the user is unknown, the password is wrong, the account is locked or disabled or the address is rate limited, answers 401 invalid_credentials with the same body (D-30). A session the browser already holds is ended first.
+         */
+        post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out of this browser
+         * @description Ends only the session this request was made with and clears its cookie. The user's other devices stay signed in (D-33).
+         */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/containers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the containers of an environment
+         * @description Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         */
+        get: operations["listContainers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The recent Docker events of an environment
+         * @description The newest 50 container, image, network and volume events Bayplan has seen on this environment, newest first, for clients that cannot hold a stream open. Events are kept in memory only: the list is empty after a restart until Docker reports something, apart from what the daemon still remembers from the last hour. The live version of this list is a server-sent events stream with the same event data.
+         */
+        get: operations["listRecentEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the images of an environment
+         * @description Newest first. An untagged image is listed as <none>. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         */
+        get: operations["listImages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/networks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the networks of an environment
+         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         */
+        get: operations["listNetworks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/reconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry the connection to an environment now
+         * @description Asks the health monitor to probe the engine immediately instead of waiting for its next retry, and returns the status as it is now; poll the environment for the result. The probe renegotiates the API version.
+         */
+        post: operations["reconnectEnvironment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The dashboard of an environment
+         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         */
+        get: operations["getEnvironmentSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/volumes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the volumes of an environment
+         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         */
+        get: operations["listVolumes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the environments the signed-in user may see
+         * @description Each environment comes with the health monitor's status. An environment the caller does not hold environments.read for is left out, so the list never reveals what the caller cannot open.
+         */
+        get: operations["listEnvironments"];
+        put?: never;
+        /**
+         * Add the Docker host Bayplan runs on as an environment
+         * @description The admin's explicit opt-in to managing this host (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists; 422 invalid_name. The name defaults to the hostname the daemon reports. Audited as environment.added.
+         */
+        post: operations["addEnvironment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove an environment
+         * @description Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched (D-20). Audited as environment.removed.
+         */
+        delete: operations["removeEnvironment"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename an environment
+         * @description 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.
+         */
+        patch: operations["renameEnvironment"];
+        trace?: never;
+    };
+    "/api/instance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the instance name, whether setup is needed and the remember-me length */
+        get: operations["getInstance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-host": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Detect the Docker engine on this server's own host
+         * @description Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.write because it is the context for adding the host.
+         */
+        get: operations["getLocalHost"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the signed-in user, their CSRF token and their effective permissions */
+        get: operations["getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change the signed-in user's own password
+         * @description Needs the current password. On success every session of the user ends, this one included, and a new session starts: its cookie is set and its CSRF token returned (D-32, D-34). A wrong current password or a new password that breaks the policy answers 422 with a stable code per field. Attempts are throttled per user and the refusal is 429 rate_limited. Audited as auth.password_changed.
+         */
+        post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the instance name and public URL
+         * @description publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04).
+         */
+        get: operations["getSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the instance name or the public URL
+         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked and changes nothing. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is audited as settings.updated with the old and new value of every changed field.
+         */
+        patch: operations["updateSettings"];
+        trace?: never;
+    };
+    "/api/setup/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create the first admin, store the instance settings and sign in
+         * @description Needs the setup token. Runs once: it creates the admin, assigns the global admin role, stores the instance name and public URL, starts a session and audits setup.completed in one transaction, then consumes the token. A second call answers 409 setup_complete.
+         */
+        post: operations["completeSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check the setup token and return the step 3 defaults */
+        post: operations["verifySetupToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/version": {
         parameters: {
             query?: never;
@@ -21,10 +444,291 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the instance warnings that need an admin's attention
+         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The plain-HTTP warning is the browser's to compute and is not listed.
+         */
+        get: operations["listWarnings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/warnings/key-backup/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge the encryption key backup reminder
+         * @description Records, once for the whole instance, that the generated encryption key has been backed up, and audits it as warning.acknowledged.
+         */
+        post: operations["acknowledgeKeyBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AddEnvironmentInputBody: {
+            /** @description Add the host even though its engine is not supported; it is stored and shown as unsupported */
+            allowUnsupported?: boolean;
+            /**
+             * @description local is the only kind in this release: the Docker socket on this server's own host
+             * @enum {string}
+             */
+            kind: "local";
+            /** @description 1 to 64 characters; defaults to the hostname the daemon reports */
+            name?: string;
+        };
+        AuditEntryDTO: {
+            /** @description A stable action key such as auth.login */
+            action: string;
+            /** @description The actor's name. For a failed sign-in this is anonymous; the target is the matched account's username, or (unknown user) when none matched */
+            actor: string;
+            /** @enum {string} */
+            actorType: "user" | "system" | "anonymous";
+            details: {
+                [key: string]: string;
+            };
+            /** @description The environment ID, or null when the action was not about one */
+            environment: string | null;
+            id: string;
+            ip: string;
+            reason: string;
+            /** @enum {string} */
+            result: "success" | "failure" | "denied";
+            /**
+             * Format: int64
+             * @description The insertion sequence; entries are ordered by it, newest first
+             */
+            seq: number;
+            target: string;
+            targetType: string;
+            /**
+             * Format: date-time
+             * @description When it happened, in UTC
+             */
+            time: string;
+            userAgent: string;
+        };
+        AuditListBody: {
+            /** @description Newest first */
+            items: components["schemas"]["AuditEntryDTO"][] | null;
+            /**
+             * Format: int64
+             * @description Pass as cursor to get the next page; null when there are no more entries
+             */
+            nextCursor: number | null;
+            /**
+             * Format: int64
+             * @description How many days entries are kept; 0 means forever
+             */
+            retentionDays: number;
+        };
+        ChangePasswordBody: {
+            /** @description The CSRF token of the new session, sent as X-CSRF-Token on every mutating request */
+            csrfToken: string;
+        };
+        ChangePasswordInputBody: {
+            /** @description The password the account has now */
+            currentPassword: string;
+            /** @description The new password; at least 12 characters, not a common password and not containing the username */
+            newPassword: string;
+        };
+        CompleteSetupBody: {
+            /** @description Sent as X-CSRF-Token on every mutating request */
+            csrfToken: string;
+            /** @description The stored instance name */
+            instanceName: string;
+            /** @description The public URL in effect */
+            publicUrl: string;
+            /** @description True when BAYPLAN_PUBLIC_URL fixed the public URL and the submitted one was ignored */
+            publicUrlLocked: boolean;
+            /** @description The admin account that was created */
+            user: components["schemas"]["SetupUserBody"];
+        };
+        CompleteSetupInputBody: {
+            /** @description Display name, 1 to 64 characters */
+            instanceName: string;
+            /** @description At least 12 characters, not on the common-password list and not containing the username */
+            password: string;
+            /** @description The address people use to reach Bayplan; ignored when BAYPLAN_PUBLIC_URL fixes it */
+            publicUrl: string;
+            /** @description The setup token printed in the container log */
+            token: string;
+            /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
+            username: string;
+        };
+        ContainerItem: {
+            /** Format: date-time */
+            created?: string;
+            /** @description The full container ID */
+            id: string;
+            /** @description The image the container was created from */
+            image: string;
+            /** @description True for the container Bayplan itself runs in (D-27) */
+            isSelf: boolean;
+            /** @description The container name without the leading slash */
+            name: string;
+            /** @description Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published */
+            ports: string[] | null;
+            /**
+             * @description The container state
+             * @enum {string}
+             */
+            state: "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead";
+            /** @description The engine's status text, for example Up 3 hours */
+            status: string;
+        };
+        ContainerListBody: {
+            /** @description At most 500 rows */
+            items: components["schemas"]["ContainerItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many there are, whatever the cap
+             */
+            total: number;
+            /** @description True when total is more than the rows returned */
+            truncated: boolean;
+        };
+        EnvironmentBody: {
+            /** Format: date-time */
+            createdAt: string;
+            enabled: boolean;
+            engine: components["schemas"]["EnvironmentEngineBody"];
+            /** @description The environment ID, used in /api/env/{envId}/... */
+            id: string;
+            /** @description True for the Docker host Bayplan itself runs on */
+            isSelfHost: boolean;
+            /**
+             * @description local: the Docker socket on the host Bayplan runs on
+             * @enum {string}
+             */
+            kind: "local";
+            /** @description The display name; defaults to the daemon's hostname */
+            name: string;
+            status: components["schemas"]["EnvironmentStatusBody"];
+            /**
+             * @description What the engine is; absent until it has answered
+             * @enum {string}
+             */
+            type?: "swarm-manager" | "swarm-worker" | "standalone";
+        };
+        EnvironmentEngineBody: {
+            /** @description The newest Engine API version the daemon speaks */
+            apiVersion?: string;
+            /** @description For example Docker Engine */
+            name?: string;
+            /** @description The API version Bayplan uses with it */
+            negotiatedApi?: string;
+            /** @description The engine version */
+            version?: string;
+        };
+        EnvironmentListBody: {
+            items: components["schemas"]["EnvironmentBody"][] | null;
+        };
+        EnvironmentProblem: {
+            /**
+             * @description A human-readable explanation specific to this occurrence of the problem.
+             * @example Property foo is required but is missing.
+             */
+            detail?: string;
+            /** @description environment_unsupported: the engine that was found */
+            engine?: components["schemas"]["EnvironmentProblemEngine"];
+            /** @description Optional list of individual error details */
+            errors?: components["schemas"]["ErrorDetail"][] | null;
+            /**
+             * Format: uri
+             * @description A URI reference that identifies the specific occurrence of the problem.
+             * @example https://example.com/error-log/abc123
+             */
+            instance?: string;
+            /** @description Why, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop */
+            reason?: string;
+            /**
+             * Format: date-time
+             * @description environment_offline: when the engine first stopped answering
+             */
+            since?: string;
+            /**
+             * Format: int64
+             * @description HTTP status code
+             * @example 400
+             */
+            status?: number;
+            /**
+             * @description A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
+             * @example Bad Request
+             */
+            title?: string;
+            /**
+             * Format: uri
+             * @description A URI reference to human-readable documentation for the error.
+             * @default about:blank
+             * @example https://example.com/errors/example
+             */
+            type: string;
+        };
+        EnvironmentProblemEngine: {
+            /** @description The newest Engine API version the daemon speaks */
+            apiVersion?: string;
+            /** @description For example Docker Engine or Podman */
+            name?: string;
+            /** @description The engine version */
+            version?: string;
+        };
+        EnvironmentStatusBody: {
+            /**
+             * Format: date-time
+             * @description When the most recent probe finished
+             */
+            lastAttempt?: string;
+            /** @description Why it is offline or unsupported, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop */
+            reason?: string;
+            /**
+             * Format: date-time
+             * @description When the environment entered this state; for offline, the first failed probe
+             */
+            since?: string;
+            /**
+             * @description online: the engine answers and is supported. offline: it does not answer. unsupported: it answers but Bayplan does not manage it. unknown: not probed yet
+             * @enum {string}
+             */
+            state: "unknown" | "online" | "offline" | "unsupported";
+        };
+        EnvironmentSummaryBody: {
+            counts: components["schemas"]["SummaryCountsBody"];
+            engine: components["schemas"]["SummaryEngineBody"];
+            environment: components["schemas"]["SummaryEnvironmentBody"];
+            /**
+             * Format: date-time
+             * @description When the counts were read from Docker; they are cached for a few seconds
+             */
+            fetchedAt: string;
+            /** @description True on a swarm worker, which can show only its own containers, images, volumes and networks (D-24) */
+            isWorker: boolean;
+            /** @description The ID of Bayplan's own container, when it can tell (D-27) */
+            selfContainerId?: string;
+        };
         ErrorDetail: {
             /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
             location?: string;
@@ -66,6 +770,274 @@ export interface components {
              */
             type: string;
         };
+        EventDTO: {
+            /** @description What happened, for example start, die, pull, connect or create */
+            action: string;
+            /** @description The ID of the container, image, network or volume */
+            actorId: string;
+            /** @description Only name, image and exitCode, when the event had them */
+            attributes: {
+                [key: string]: string;
+            };
+            /** @description A stable ID for the event; the SSE frame id, and what a repeated event is recognised by */
+            id: string;
+            /** @description The container, image, network or volume name; empty when Docker gave none */
+            name: string;
+            /**
+             * Format: date-time
+             * @description When it happened, in UTC, with sub-second precision
+             */
+            time: string;
+            /**
+             * @description What kind of object it is about
+             * @enum {string}
+             */
+            type: "container" | "image" | "network" | "volume";
+        };
+        EventListBody: {
+            /** @description At most 50 events, newest first */
+            items: components["schemas"]["EventDTO"][] | null;
+        };
+        ImageItem: {
+            /** Format: date-time */
+            created?: string;
+            /** @description The full image ID */
+            id: string;
+            /** @description repository:tag for each tag, or ["<none>"] for an untagged image */
+            repoTags: string[] | null;
+            /** @description The first 12 characters of the ID, without the sha256: prefix */
+            shortId: string;
+            /**
+             * Format: int64
+             * @description Size in bytes
+             */
+            size: number;
+        };
+        ImageListBody: {
+            /** @description At most 500 rows */
+            items: components["schemas"]["ImageItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many there are, whatever the cap
+             */
+            total: number;
+            /** @description True when total is more than the rows returned */
+            truncated: boolean;
+        };
+        InstanceBody: {
+            /** @description Display name of this instance, empty before setup */
+            instanceName: string;
+            /** @description True while no admin exists and the setup wizard is open */
+            needsSetup: boolean;
+            /**
+             * Format: int64
+             * @description Days a 'keep me signed in' session lasts
+             */
+            rememberDays: number;
+        };
+        LocalHostBody: {
+            /** @description Whether a unix socket exists at that path */
+            detected: boolean;
+            /** @description Whether this host is already an environment (D-19) */
+            managed: boolean;
+            /** @description The ID of the container Bayplan runs in, when it can tell (D-27) */
+            ownContainerId?: string;
+            /** @description What the engine behind the socket reported; absent when no socket exists */
+            probe?: components["schemas"]["ProbeResult"];
+            /** @description The Docker socket path Bayplan was configured with */
+            socketPath: string;
+        };
+        LoginBody: {
+            /** @description Sent as X-CSRF-Token on every mutating request */
+            csrfToken: string;
+            /** @description The signed-in user */
+            user: components["schemas"]["UserBody"];
+        };
+        LoginInputBody: {
+            /** @description The account password */
+            password: string;
+            /** @description Keep this browser signed in for the remember lifetime instead of until it has been idle for the idle timeout */
+            remember?: boolean;
+            /** @description The account name; matched case-insensitively */
+            username: string;
+        };
+        MeBody: {
+            /** @description Sent as X-CSRF-Token on every mutating request */
+            csrfToken: string;
+            /** @description Effective permissions of the signed-in user */
+            permissions: components["schemas"]["PermissionsBody"];
+            /** @description The signed-in user */
+            user: components["schemas"]["UserBody"];
+        };
+        NetworkItem: {
+            /** Format: date-time */
+            created?: string;
+            driver: string;
+            id: string;
+            name: string;
+            /** @description local, or swarm for a cluster-wide network */
+            scope: string;
+            /** @description The IPAM subnets in CIDR notation; empty when the network has none */
+            subnets: string[] | null;
+        };
+        NetworkListBody: {
+            /** @description At most 500 rows */
+            items: components["schemas"]["NetworkItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many there are, whatever the cap
+             */
+            total: number;
+            /** @description True when total is more than the rows returned */
+            truncated: boolean;
+        };
+        PermissionsBody: {
+            /** @description Permissions per environment ID; the key * holds those that apply to every environment */
+            environments: {
+                [key: string]: string[] | null;
+            };
+            /** @description Installation-wide permissions */
+            global: string[] | null;
+        };
+        ProbeResult: {
+            apiVersion?: string;
+            arch?: string;
+            detail?: string;
+            engineName?: string;
+            engineVersion?: string;
+            hostname?: string;
+            kernelVersion?: string;
+            /** Format: int64 */
+            memTotal?: number;
+            /** Format: int64 */
+            ncpu?: number;
+            negotiatedApi?: string;
+            os?: string;
+            osType?: string;
+            /** Format: date-time */
+            probedAt: string;
+            reachable: boolean;
+            reason?: string;
+            storageDriver?: string;
+            supported: boolean;
+            swarmNodeState?: string;
+            type?: string;
+        };
+        RenameEnvironmentInputBody: {
+            /** @description The new name, 1 to 64 characters */
+            name: string;
+        };
+        SettingsBody: {
+            /** @description The name shown in the header, tab titles and the sign-in page */
+            instanceName: string;
+            /** @description The URL users reach Bayplan at; drives the Origin check and the cookie Secure flag */
+            publicUrl: string;
+            /** @description True when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL */
+            publicUrlLocked: boolean;
+        };
+        SetupDefaultsBody: {
+            /** @description The server's hostname */
+            defaultInstanceName: string;
+            /** @description The configured public URL, empty when none is set */
+            publicUrl: string;
+            /** @description True when BAYPLAN_PUBLIC_URL fixes the public URL */
+            publicUrlLocked: boolean;
+        };
+        SetupUserBody: {
+            /** @description The user's ID */
+            id: string;
+            /** @description The user's global role */
+            role: string;
+            /** @description The lower-cased username */
+            username: string;
+        };
+        SummaryCountsBody: {
+            /**
+             * Format: int64
+             * @description All containers, stopped ones included
+             */
+            containers: number;
+            /**
+             * Format: int64
+             * @description Containers in state running
+             */
+            containersRunning: number;
+            /**
+             * Format: int64
+             * @description Containers in any other state, including created, paused and exited
+             */
+            containersStopped: number;
+            /** Format: int64 */
+            images: number;
+            /** Format: int64 */
+            networks: number;
+            /**
+             * Format: int64
+             * @description Swarm nodes; present on swarm managers only
+             */
+            nodes?: number;
+            /**
+             * Format: int64
+             * @description Swarm services; present on swarm managers only
+             */
+            services?: number;
+            /** Format: int64 */
+            volumes: number;
+        };
+        SummaryEngineBody: {
+            /** @description The newest Engine API version the daemon speaks */
+            apiVersion?: string;
+            /** @description The CPU architecture, for example amd64 */
+            arch?: string;
+            /**
+             * Format: int64
+             * @description Total memory in bytes
+             */
+            memTotal: number;
+            /** @description For example Docker Engine */
+            name?: string;
+            /**
+             * Format: int64
+             * @description The number of CPUs
+             */
+            ncpu: number;
+            /** @description The operating system, for example linux */
+            os?: string;
+            /** @description The storage driver, for example overlayfs */
+            storageDriver?: string;
+            /** @description The engine version */
+            version?: string;
+        };
+        SummaryEnvironmentBody: {
+            /** @description The environment ID */
+            id: string;
+            /** @description The display name */
+            name: string;
+            status: components["schemas"]["EnvironmentStatusBody"];
+            /**
+             * @description What the engine is
+             * @enum {string}
+             */
+            type?: "swarm-manager" | "swarm-worker" | "standalone";
+        };
+        UpdateSettingsInputBody: {
+            /** @description New instance name, 1 to 64 characters */
+            instanceName?: string;
+            /** @description New public URL, an absolute http or https URL. Refused with 409 public_url_locked while BAYPLAN_PUBLIC_URL is set */
+            publicUrl?: string;
+        };
+        UserBody: {
+            /** @description The user's ID */
+            id: string;
+            /** @description The user's global role, empty when they have none */
+            role: string;
+            /** @description The lower-cased username */
+            username: string;
+        };
+        VerifySetupTokenInputBody: {
+            /** @description The setup token printed in the container log */
+            token: string;
+        };
         VersionBody: {
             /** @description Full source commit, empty when unknown */
             commit: string;
@@ -78,6 +1050,38 @@ export interface components {
             /** @description Release version, or dev for an untagged build */
             version: string;
         };
+        VolumeItem: {
+            /** Format: date-time */
+            created?: string;
+            driver: string;
+            name: string;
+        };
+        VolumeListBody: {
+            /** @description At most 500 rows */
+            items: components["schemas"]["VolumeItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many there are, whatever the cap
+             */
+            total: number;
+            /** @description True when total is more than the rows returned */
+            truncated: boolean;
+        };
+        WarningBody: {
+            /**
+             * @description Which warning this is
+             * @enum {string}
+             */
+            id: "data_not_persisted" | "key_backup";
+            /** @description For key_backup: where the generated encryption key is stored */
+            keyPath?: string;
+            /** @description For data_not_persisted: why the data directory is not persisted */
+            reason?: string;
+        };
+        WarningsBody: {
+            /** @description Only the warnings that apply; empty when there are none */
+            items: components["schemas"]["WarningBody"][] | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -87,6 +1091,848 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAudit: {
+        parameters: {
+            query?: {
+                /** @description Only entries by this actor, matched exactly against the actor name */
+                user?: string;
+                /** @description Only entries of these action types; repeat the parameter to give several */
+                action?: string[] | null;
+                /** @description Only entries at or after this time (RFC 3339) */
+                from?: string;
+                /** @description Only entries at or before this time (RFC 3339) */
+                to?: string;
+                /** @description The nextCursor of the previous page; leave out for the newest entries */
+                cursor?: number;
+                /** @description Entries per page; 50 by default, at most 100 (larger values are clamped) */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listAuditActors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    exportAudit: {
+        parameters: {
+            query?: {
+                /** @description Only entries by this actor, matched exactly against the actor name */
+                user?: string;
+                /** @description Only entries of these action types; repeat the parameter to give several */
+                action?: string[] | null;
+                /** @description Only entries at or after this time (RFC 3339) */
+                from?: string;
+                /** @description Only entries at or before this time (RFC 3339) */
+                to?: string;
+                /** @description csv or json */
+                format?: "csv" | "json";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The export */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                    "text/csv": string;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    "Cache-Control"?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listContainers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerListBody"];
+                };
+            };
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    listRecentEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listImages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageListBody"];
+                };
+            };
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    listNetworks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkListBody"];
+                };
+            };
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    reconnectEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getEnvironmentSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentSummaryBody"];
+                };
+            };
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    listVolumes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeListBody"];
+                };
+            };
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    listEnvironments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    addEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddEnvironmentInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    renameEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameEnvironmentInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getLocalHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalHostBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    changePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangePasswordBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSettingsInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    completeSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteSetupInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompleteSetupBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    verifySetupToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifySetupTokenInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getVersion: {
         parameters: {
             query?: never;
@@ -104,6 +1950,63 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["VersionBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listWarnings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarningsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    acknowledgeKeyBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

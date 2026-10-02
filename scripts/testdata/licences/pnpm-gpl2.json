@@ -1,0 +1,13 @@
+{
+  "GPL-2.0-only": [
+    {
+      "name": "seeded-gpl2-package",
+      "versions": ["1.0.0"],
+      "paths": ["/nowhere/node_modules/seeded-gpl2-package"],
+      "license": "GPL-2.0-only",
+      "author": "Fixture",
+      "homepage": "https://example.invalid/",
+      "description": "Seeded violation: GPL-2.0-only is outside the D-70 allowlist."
+    }
+  ]
+}

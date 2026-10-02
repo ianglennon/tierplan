@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -29,8 +30,31 @@ type VersionOutput struct {
 	Body VersionBody
 }
 
-// RegisterSystem registers the unauthenticated system operations.
-func RegisterSystem(r *httpx.Router) {
+// SystemDeps are the dependencies of the system routes.
+type SystemDeps struct {
+	// Ready returns nil when the server can do useful work: the data directory
+	// is prepared and writable (plan 06 adds the database). Nil means always ready.
+	Ready func(context.Context) error
+}
+
+// RegisterSystem registers the unauthenticated system operations: the version
+// operation, and the /healthz and /readyz probes as exempt plain routes.
+func RegisterSystem(r *httpx.Router, deps SystemDeps) {
+	r.Exempt(http.MethodGet, "/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		writeProbe(w, http.StatusOK, "ok")
+	})
+	r.Exempt(http.MethodGet, "/readyz", func(w http.ResponseWriter, req *http.Request) {
+		if deps.Ready != nil {
+			if err := deps.Ready(req.Context()); err != nil {
+				// The reason goes to the log, never to the caller (D-86).
+				slog.Warn("readiness check failed", "error", err)
+				writeProbe(w, http.StatusServiceUnavailable, "not ready")
+				return
+			}
+		}
+		writeProbe(w, http.StatusOK, "ready")
+	})
+
 	httpx.Register(r, huma.Operation{
 		OperationID: "getVersion",
 		Method:      http.MethodGet,
@@ -47,4 +71,13 @@ func RegisterSystem(r *httpx.Router) {
 			SourceTreeURL: info.SourceTreeURL,
 		}}, nil
 	})
+}
+
+// writeProbe writes a fixed plain-text body: no version, path or error detail
+// (D-86, T-01-16).
+func writeProbe(w http.ResponseWriter, status int, body string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
 }

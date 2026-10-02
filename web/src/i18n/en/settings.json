@@ -1,0 +1,85 @@
+{
+  "settings": {
+    "title": "Settings",
+    "tabsLabel": "Settings sections",
+    "tabs": {
+      "general": "General",
+      "environments": "Environments",
+      "about": "About"
+    },
+    "saved": "Settings saved.",
+    "general": {
+      "tabTitle": "General",
+      "loading": "Loading settings…",
+      "loadFailed": "Couldn't load the settings.",
+      "retry": "Try again",
+      "readOnly": "You can view these settings but not change them.",
+      "submit": "Save settings",
+      "pending": "Saving…",
+      "confirm": {
+        "title": "Change the public URL?",
+        "body": "You're using Bayplan at {{origin}}. If the new address doesn't match how you reach Bayplan, you may be signed out and requests can be blocked.",
+        "cancel": "Cancel",
+        "confirm": "Change public URL"
+      }
+    },
+    "environments": {
+      "tabTitle": "Environments",
+      "loading": "Loading environments…",
+      "loadFailed": "Couldn't load the environments.",
+      "retry": "Try again",
+      "engine": "Engine",
+      "engineMissing": "—",
+      "rename": "Rename",
+      "renameAria": "Rename {{name}}",
+      "remove": "Remove host",
+      "removeAria": "Remove host {{name}}"
+    },
+    "about": {
+      "tabTitle": "About",
+      "loading": "Loading version…",
+      "loadFailed": "Couldn't load the version.",
+      "retry": "Try again",
+      "version": "Version",
+      "commit": "Commit",
+      "commitAria": "Commit {{sha}} source tree (opens in a new tab)",
+      "commitUnknown": "Unknown",
+      "licence": "Licence",
+      "source": "Source",
+      "notices": {
+        "heading": "Third-party notices",
+        "description": "Bayplan includes the open source software below, each under its own licence.",
+        "region": "Third-party notices list",
+        "package": "Package",
+        "version": "Version",
+        "licence": "Licence",
+        "loading": "Loading third-party notices…",
+        "loadFailed": "Couldn't load the third-party notices.",
+        "retry": "Try again"
+      }
+    },
+    "rename": {
+      "title": "Rename environment",
+      "description": "Choose how this environment is named across Bayplan.",
+      "name": {
+        "label": "Name",
+        "helper": "Up to 64 characters."
+      },
+      "cancel": "Cancel",
+      "submit": "Rename environment",
+      "pending": "Renaming…",
+      "errors": {
+        "required": "Enter a name.",
+        "tooLong": "Use 64 characters or fewer.",
+        "invalid": "Enter a name of 1 to 64 characters."
+      }
+    },
+    "removeConfirm": {
+      "title": "Remove {{name}}?",
+      "body": "Bayplan will stop managing this host. Containers, images, volumes and networks on it are not changed. You can add it again in Settings.",
+      "cancel": "Cancel",
+      "confirm": "Remove host",
+      "pending": "Removing…"
+    }
+  }
+}

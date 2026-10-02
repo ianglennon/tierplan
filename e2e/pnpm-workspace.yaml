@@ -1,0 +1,7 @@
+# Same supply-chain guard as web/ (T-01-08): refuse any package version
+# published less than 24 hours ago (unit: minutes). The one direct dependency
+# approved at 01-01 Task 1 is exempt.
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - "@playwright/test@1.63.0"
+  - typescript@6.0.3

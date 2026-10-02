@@ -1,0 +1,84 @@
+{
+  "shell": {
+    "skipLink": "Skip to content",
+    "toggleSidebar": "Toggle sidebar",
+    "sidebar": {
+      "title": "Navigation",
+      "description": "Main navigation for Bayplan."
+    },
+    "switcher": {
+      "none": "No environment",
+      "manage": "Manage environments",
+      "loadFailed": "Couldn't load environments",
+      "label": "Environment",
+      "menu": "Switch environment"
+    },
+    "nav": {
+      "dashboard": "Dashboard",
+      "resources": "Resources",
+      "containers": "Containers",
+      "images": "Images",
+      "volumes": "Volumes",
+      "networks": "Networks",
+      "audit": "Audit",
+      "settings": "Settings"
+    },
+    "userMenu": {
+      "trigger": "User menu",
+      "roleAdmin": "Admin",
+      "changePassword": "Change password",
+      "theme": "Theme",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System",
+      "logout": "Log out"
+    },
+    "home": {
+      "tabTitle": "Home"
+    },
+    "account": {
+      "changePassword": {
+        "title": "Change password",
+        "description": "Enter your current password, then choose a new one.",
+        "current": {
+          "label": "Current password"
+        },
+        "new": {
+          "label": "New password",
+          "helper": "At least 12 characters. A long passphrase works well."
+        },
+        "confirm": {
+          "label": "Confirm new password"
+        },
+        "helper": "Other devices will be signed out.",
+        "show": "Show password",
+        "hide": "Hide password",
+        "cancel": "Cancel",
+        "submit": "Change password",
+        "pending": "Changing password…",
+        "success": "Password changed. Your other sessions were signed out.",
+        "errors": {
+          "currentRequired": "Enter your current password.",
+          "currentIncorrect": "Your current password is incorrect."
+        }
+      }
+    },
+    "warnings": {
+      "title": "Warnings",
+      "bell": "Warnings",
+      "bellCount_one": "Warnings, {{count}} item",
+      "bellCount_other": "Warnings, {{count}} items",
+      "empty": "No warnings",
+      "plainHttp": {
+        "title": "You're using Bayplan over plain HTTP.",
+        "fix": "Serve Bayplan over HTTPS or put it behind a reverse proxy"
+      },
+      "keyBackup": {
+        "title": "Back up your encryption key.",
+        "body": "Stored secrets can't be recovered without /data/bayplan.key.",
+        "ack": "I've backed it up"
+      },
+      "banner": "Data isn't being persisted. /data isn't a mounted volume, so users, sessions and the audit log are lost when this container is removed. Mount a volume at /data and restart."
+    }
+  }
+}

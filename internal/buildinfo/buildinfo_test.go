@@ -18,6 +18,7 @@ func TestResolve(t *testing.T) {
 		vcsModified bool
 		wantDisplay string
 		wantTree    string
+		wantVersion string
 		wantDirty   bool
 	}{
 		{
@@ -45,6 +46,26 @@ func TestResolve(t *testing.T) {
 			wantDisplay: "dev (unknown)", wantTree: repo,
 		},
 		{
+			name: "release tooling that strips the v is shown with it", version: "0.1.0", commit: full, source: repo,
+			wantDisplay: "v0.1.0 (abc1234)", wantTree: repo + "/tree/" + full, wantVersion: "v0.1.0",
+		},
+		{
+			name: "prerelease without a v is shown with it", version: "1.2.3-rc.1", commit: full, source: repo,
+			wantDisplay: "v1.2.3-rc.1 (abc1234)", wantTree: repo + "/tree/" + full, wantVersion: "v1.2.3-rc.1",
+		},
+		{
+			name: "snapshot suffix keeps the v", version: "0.1.1-SNAPSHOT-abc1234", commit: full, source: repo,
+			wantDisplay: "v0.1.1-SNAPSHOT-abc1234 (abc1234)", wantTree: repo + "/tree/" + full, wantVersion: "v0.1.1-SNAPSHOT-abc1234",
+		},
+		{
+			name: "edge is not a number and is unchanged", version: "edge", commit: full, source: repo,
+			wantDisplay: "edge (abc1234)", wantTree: repo + "/tree/" + full, wantVersion: "edge",
+		},
+		{
+			name: "dev is unchanged", version: "dev", commit: full, source: repo,
+			wantDisplay: "dev (abc1234)", wantTree: repo + "/tree/" + full, wantVersion: "dev",
+		},
+		{
 			name: "ldflags commit wins over vcs info", commit: full, source: repo, vcsRev: "ffffffffffff", vcsModified: true,
 			wantDisplay: "dev (abc1234)", wantTree: repo + "/tree/" + full,
 		},
@@ -54,6 +75,9 @@ func TestResolve(t *testing.T) {
 			got := resolve(tc.version, tc.commit, tc.source, tc.vcsRev, tc.vcsModified)
 			if got.Display != tc.wantDisplay {
 				t.Errorf("Display = %q, want %q", got.Display, tc.wantDisplay)
+			}
+			if tc.wantVersion != "" && got.Version != tc.wantVersion {
+				t.Errorf("Version = %q, want %q", got.Version, tc.wantVersion)
 			}
 			if got.SourceTreeURL != tc.wantTree {
 				t.Errorf("SourceTreeURL = %q, want %q", got.SourceTreeURL, tc.wantTree)

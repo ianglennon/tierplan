@@ -1,0 +1,10 @@
+# The build context for the release image is the goreleaser dist output, but a
+# hand-run `docker build .` must not send the repository's local-only files.
+.git
+.planning
+.claude
+CLAUDE.md
+.gsd
+web/node_modules
+.devdata
+bin

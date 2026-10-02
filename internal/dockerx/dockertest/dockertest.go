@@ -1,0 +1,777 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+// Package dockertest holds the test helpers for code that talks to Docker
+// through internal/dockerx: a fake daemon that speaks just enough of the Engine
+// API over a real unix socket (so the real client code runs unchanged), and
+// helpers that find or start a real engine for the integration tests.
+//
+// It lives under internal/dockerx so the depguard rule that keeps the moby
+// client inside that tree still holds. Nothing in the product imports it.
+package dockertest
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/ianglennon/bayplan/internal/engine"
+)
+
+const (
+	// EnvDockerHost names the variable that points the integration tests at an
+	// engine that is already running, such as the CI dind service.
+	EnvDockerHost = "BAYPLAN_TEST_DOCKER_HOST"
+	// EnvEngine names the variable that picks the dind major version.
+	EnvEngine = "BAYPLAN_TEST_ENGINE"
+
+	defaultEngine = "29"
+	dindPort      = "2375/tcp"
+)
+
+// Component is one entry of the /version Components list.
+type Component struct {
+	Name    string
+	Version string
+}
+
+// FakeConfig describes the engine a FakeDaemon pretends to be. Zero values
+// become the defaults noted on each field.
+type FakeConfig struct {
+	// APIVersion is the daemon's maximum API version. Default "1.52".
+	APIVersion string
+	// MinAPIVersion is the oldest API version it still serves. Default "1.12",
+	// which is old enough that no client request is refused as too old.
+	MinAPIVersion string
+	// OSType is the OSType ping header. Default "linux".
+	OSType string
+	// Version is the engine version. Default "29.1.0".
+	Version string
+	// PlatformName is the /version Platform.Name. Default "Docker Engine - Community".
+	PlatformName string
+	// Components replaces the default Engine component, for example to
+	// present a Podman engine.
+	Components []Component
+	// Hostname is Info.Name. Default "fake-node".
+	Hostname string
+	// OperatingSystem is Info.OperatingSystem. Default "Ubuntu 26.04 LTS".
+	OperatingSystem string
+	// SecurityOptions is Info.SecurityOptions.
+	SecurityOptions []string
+	// SwarmState is Info.Swarm.LocalNodeState. Default "inactive".
+	SwarmState string
+	// SwarmControl is Info.Swarm.ControlAvailable.
+	SwarmControl bool
+	// FailInfo makes /info answer 500, for the partial-failure path.
+	FailInfo bool
+
+	// Containers, Images, Volumes and Networks are what the list endpoints
+	// answer. Nil means an empty engine: the fake answers an empty list, never
+	// an error.
+	Containers []FakeContainer
+	Images     []FakeImage
+	Volumes    []FakeVolume
+	Networks   []FakeNetwork
+	// Nodes and Services are how many swarm nodes and services /nodes and
+	// /services list. A fake that is not a swarm manager answers both with the
+	// 503 a real worker gives, so a client that asks anyway fails loudly.
+	Nodes, Services int
+	// ListDelay is how long /containers/json takes to answer, so a test can
+	// make concurrent callers overlap.
+	ListDelay time.Duration
+	// Events is the history the daemon has buffered when it starts, oldest
+	// first, as /events replays it to a client that passes since.
+	Events []FakeEvent
+}
+
+// FakeEvent is one event of the fake daemon's /events stream. A zero TimeNano
+// means the moment the event is published.
+type FakeEvent struct {
+	Type    string
+	Action  string
+	ActorID string
+	// Attributes are sent as they are, so a test can prove which ones Bayplan
+	// drops.
+	Attributes map[string]string
+	TimeNano   int64
+}
+
+// eventBuffer is how many events a real daemon keeps for a client that asks
+// for history with since (RESEARCH Pitfall 7).
+const eventBuffer = 256
+
+// eventSub is one open /events stream.
+type eventSub struct {
+	ch       chan FakeEvent
+	drop     chan struct{}
+	dropOnce sync.Once
+}
+
+// FakeContainer is one entry of /containers/json. Labels and Mounts exist so a
+// test can prove they never reach a Bayplan response.
+type FakeContainer struct {
+	ID      string
+	Names   []string
+	Image   string
+	State   string
+	Status  string
+	Created int64
+	Ports   []FakePort
+	Labels  map[string]string
+	Mounts  []string
+}
+
+// FakePort is one published or exposed container port. IP is empty for a port
+// that is not published.
+type FakePort struct {
+	IP      string
+	Private uint16
+	Public  uint16
+	Type    string
+}
+
+// FakeImage is one entry of /images/json. An untagged image has no RepoTags.
+type FakeImage struct {
+	ID       string
+	RepoTags []string
+	Size     int64
+	Created  int64
+	Labels   map[string]string
+}
+
+// FakeVolume is one entry of /volumes. CreatedAt is RFC 3339, or empty.
+type FakeVolume struct {
+	Name      string
+	Driver    string
+	CreatedAt string
+	Labels    map[string]string
+}
+
+// FakeNetwork is one entry of /networks.
+type FakeNetwork struct {
+	ID      string
+	Name    string
+	Driver  string
+	Scope   string
+	Subnets []string
+	Created time.Time
+}
+
+func (c FakeConfig) withDefaults() FakeConfig {
+	def := func(s *string, v string) {
+		if *s == "" {
+			*s = v
+		}
+	}
+	def(&c.APIVersion, "1.52")
+	def(&c.MinAPIVersion, "1.12")
+	def(&c.OSType, "linux")
+	def(&c.Version, "29.1.0")
+	def(&c.PlatformName, "Docker Engine - Community")
+	def(&c.Hostname, "fake-node")
+	def(&c.OperatingSystem, "Ubuntu 26.04 LTS")
+	def(&c.SwarmState, "inactive")
+	if len(c.Components) == 0 {
+		c.Components = []Component{{Name: "Engine", Version: c.Version}}
+	}
+	return c
+}
+
+// Fake is a running fake daemon. It is an engine.Transport that dials its own
+// unix socket, and it records every request path it served.
+type Fake struct {
+	path string
+
+	mu       sync.Mutex
+	cfg      FakeConfig
+	requests []string
+	srv      *httptest.Server // nil while the daemon is stopped
+
+	// evMu guards the events history, the open streams and the queries seen.
+	evMu      sync.Mutex
+	evHistory []FakeEvent
+	evSubs    map[*eventSub]struct{}
+	evQueries []url.Values
+}
+
+var versionPrefix = regexp.MustCompile(`^/v(\d+)\.(\d+)(/.*)$`)
+
+// FakeDaemon starts a fake daemon on a unix socket and returns the transport
+// that reaches it. The socket lives in a short temporary directory because
+// unix socket paths are limited to about 100 bytes.
+func FakeDaemon(t testing.TB, cfg FakeConfig) engine.Transport {
+	t.Helper()
+	return NewFake(t, cfg)
+}
+
+// NewFake is FakeDaemon with the concrete type, so a test can read the
+// requests it served and change what it reports.
+func NewFake(t testing.TB, cfg FakeConfig) *Fake {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "bpfd")
+	if err != nil {
+		t.Fatalf("make the fake daemon directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults(), evSubs: map[*eventSub]struct{}{}}
+	f.evHistory = append(f.evHistory, cfg.Events...)
+	if err := f.listen(); err != nil {
+		t.Fatalf("listen on the fake daemon socket: %v", err)
+	}
+	t.Cleanup(f.Stop)
+	return f
+}
+
+// listen starts serving on the fake's socket path.
+func (f *Fake) listen() error {
+	ln, err := net.Listen("unix", f.path)
+	if err != nil {
+		return err
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(f.serve))
+	srv.Listener = ln
+	srv.Start()
+	f.mu.Lock()
+	f.srv = srv
+	f.mu.Unlock()
+	return nil
+}
+
+// Stop takes the daemon down: the socket is closed and removed, so a client
+// sees "no such file" or "connection refused" as it would with a stopped
+// engine. It is safe to call twice. Restart brings the daemon back on the same
+// path, with whatever configuration it has then.
+func (f *Fake) Stop() {
+	f.mu.Lock()
+	srv := f.srv
+	f.srv = nil
+	f.mu.Unlock()
+	if srv != nil {
+		// An open /events stream would keep Close waiting.
+		f.DropEventStreams()
+		srv.Close()
+	}
+}
+
+// Restart starts the daemon again on the same socket path after Stop. It does
+// nothing if the daemon is already running.
+func (f *Fake) Restart(t testing.TB) {
+	t.Helper()
+	f.mu.Lock()
+	running := f.srv != nil
+	f.mu.Unlock()
+	if running {
+		return
+	}
+	if err := f.listen(); err != nil {
+		t.Fatalf("restart the fake daemon: %v", err)
+	}
+}
+
+// SetAPIVersion changes the maximum API version the daemon reports from now
+// on, as an engine upgraded while it was stopped.
+func (f *Fake) SetAPIVersion(v string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cfg.APIVersion = v
+}
+
+// SocketPath is the path of the fake's unix socket.
+func (f *Fake) SocketPath() string { return f.path }
+
+// DialContext implements engine.Transport: every dial reaches the fake.
+func (f *Fake) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, "unix", f.path)
+}
+
+// Describe implements engine.Transport.
+func (f *Fake) Describe() string { return "unix://" + f.path }
+
+// Requests returns the request paths served so far, in order, as the daemon
+// saw them (including any /vX.Y prefix).
+func (f *Fake) Requests() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.requests...)
+}
+
+// Reconfigure changes what the fake reports from now on, as a daemon that was
+// upgraded or downgraded between two probes.
+func (f *Fake) Reconfigure(cfg FakeConfig) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cfg = cfg.withDefaults()
+}
+
+func (f *Fake) config() FakeConfig {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cfg
+}
+
+func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
+	cfg := f.config()
+	f.mu.Lock()
+	f.requests = append(f.requests, r.URL.Path)
+	f.mu.Unlock()
+
+	p := r.URL.Path
+	if p == "/_ping" {
+		h := w.Header()
+		h.Set("API-Version", cfg.APIVersion)
+		h.Set("OSType", cfg.OSType)
+		h.Set("Docker-Experimental", "false")
+		switch cfg.SwarmState {
+		case "active":
+			role := "worker"
+			if cfg.SwarmControl {
+				role = "manager"
+			}
+			h.Set("Swarm", "active/"+role)
+		default:
+			h.Set("Swarm", cfg.SwarmState)
+		}
+		h.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		_, _ = w.Write([]byte("OK"))
+		return
+	}
+
+	// A real daemon refuses a request whose version prefix is newer than its
+	// own maximum (or older than its minimum). The fake does too, so a client
+	// that forgot to negotiate fails here exactly as it would against Docker 23.
+	if m := versionPrefix.FindStringSubmatch(p); m != nil {
+		major, _ := strconv.Atoi(m[1])
+		minor, _ := strconv.Atoi(m[2])
+		got := fmt.Sprintf("%d.%d", major, minor)
+		switch {
+		case cmpAPI(got, cfg.APIVersion) > 0:
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"message": fmt.Sprintf("client version %s is too new. Maximum supported API version is %s", got, cfg.APIVersion)})
+			return
+		case cmpAPI(got, cfg.MinAPIVersion) < 0:
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"message": fmt.Sprintf("client version %s is too old. Minimum supported API version is %s", got, cfg.MinAPIVersion)})
+			return
+		}
+		p = m[3]
+	}
+
+	switch p {
+	case "/version":
+		comps := make([]system.ComponentVersion, 0, len(cfg.Components))
+		for _, c := range cfg.Components {
+			comps = append(comps, system.ComponentVersion{Name: c.Name, Version: c.Version})
+		}
+		writeJSON(w, http.StatusOK, system.VersionResponse{
+			Platform:      system.PlatformInfo{Name: cfg.PlatformName},
+			Version:       cfg.Version,
+			APIVersion:    cfg.APIVersion,
+			MinAPIVersion: cfg.MinAPIVersion,
+			Os:            "linux",
+			Arch:          "amd64",
+			Components:    comps,
+		})
+	case "/info":
+		if cfg.FailInfo {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "info is down"})
+			return
+		}
+		writeJSON(w, http.StatusOK, system.Info{
+			ID:              "FAKE:ID",
+			Name:            cfg.Hostname,
+			ServerVersion:   cfg.Version,
+			OperatingSystem: cfg.OperatingSystem,
+			OSType:          cfg.OSType,
+			Architecture:    "x86_64",
+			KernelVersion:   "7.0.0-fake",
+			Driver:          "overlayfs",
+			NCPU:            4,
+			MemTotal:        8 << 30,
+			SecurityOptions: cfg.SecurityOptions,
+			Swarm: swarm.Info{
+				LocalNodeState:   swarm.LocalNodeState(cfg.SwarmState),
+				ControlAvailable: cfg.SwarmControl,
+			},
+		})
+	case "/events":
+		f.serveEvents(w, r)
+	case "/containers/json":
+		if cfg.ListDelay > 0 {
+			select {
+			case <-time.After(cfg.ListDelay):
+			case <-r.Context().Done():
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, cfg.containerList(r.URL.Query().Get("all") != ""))
+	case "/images/json":
+		writeJSON(w, http.StatusOK, cfg.imageList())
+	case "/volumes":
+		writeJSON(w, http.StatusOK, cfg.volumeList())
+	case "/networks":
+		writeJSON(w, http.StatusOK, cfg.networkList())
+	case "/nodes":
+		if !cfg.swarmManager() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "This node is not a swarm manager. Use \"docker swarm init\" or \"docker swarm join\" to connect this node to swarm and try again."})
+			return
+		}
+		nodes := make([]swarm.Node, cfg.Nodes)
+		for i := range nodes {
+			nodes[i].ID = fmt.Sprintf("node%02d", i)
+		}
+		writeJSON(w, http.StatusOK, nodes)
+	case "/services":
+		if !cfg.swarmManager() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "This node is not a swarm manager. Use \"docker swarm init\" or \"docker swarm join\" to connect this node to swarm and try again."})
+			return
+		}
+		services := make([]swarm.Service, cfg.Services)
+		for i := range services {
+			services[i].ID = fmt.Sprintf("svc%02d", i)
+		}
+		writeJSON(w, http.StatusOK, services)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "page not found"})
+	}
+}
+
+func (c FakeConfig) swarmManager() bool { return c.SwarmState == "active" && c.SwarmControl }
+
+// containerList is the /containers/json answer. Without all, the way a real
+// daemon behaves, only running containers are listed.
+func (c FakeConfig) containerList(all bool) []container.Summary {
+	out := make([]container.Summary, 0, len(c.Containers))
+	for _, fc := range c.Containers {
+		if !all && fc.State != "running" {
+			continue
+		}
+		s := container.Summary{
+			ID: fc.ID, Names: fc.Names, Image: fc.Image, Created: fc.Created,
+			State: container.ContainerState(fc.State), Status: fc.Status, Labels: fc.Labels,
+		}
+		for _, p := range fc.Ports {
+			ps := container.PortSummary{PrivatePort: p.Private, PublicPort: p.Public, Type: p.Type}
+			if p.IP != "" {
+				ps.IP = netip.MustParseAddr(p.IP)
+			}
+			s.Ports = append(s.Ports, ps)
+		}
+		for _, m := range fc.Mounts {
+			s.Mounts = append(s.Mounts, container.MountPoint{Source: m, Destination: "/mnt"})
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func (c FakeConfig) imageList() []image.Summary {
+	out := make([]image.Summary, 0, len(c.Images))
+	for _, fi := range c.Images {
+		out = append(out, image.Summary{ID: fi.ID, RepoTags: fi.RepoTags, Size: fi.Size, Created: fi.Created, Labels: fi.Labels})
+	}
+	return out
+}
+
+func (c FakeConfig) volumeList() volume.ListResponse {
+	out := volume.ListResponse{Volumes: make([]volume.Volume, 0, len(c.Volumes))}
+	for _, fv := range c.Volumes {
+		out.Volumes = append(out.Volumes, volume.Volume{
+			Name: fv.Name, Driver: fv.Driver, CreatedAt: fv.CreatedAt, Labels: fv.Labels,
+			Mountpoint: "/var/lib/docker/volumes/" + fv.Name + "/_data", Scope: "local",
+		})
+	}
+	return out
+}
+
+func (c FakeConfig) networkList() []network.Summary {
+	out := make([]network.Summary, 0, len(c.Networks))
+	for _, fn := range c.Networks {
+		n := network.Summary{Network: network.Network{ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created}}
+		for _, sub := range fn.Subnets {
+			n.IPAM.Config = append(n.IPAM.Config, network.IPAMConfig{Subnet: netip.MustParsePrefix(sub)})
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// cmpAPI compares two "major.minor" versions.
+func cmpAPI(a, b string) int {
+	pa, pb := splitAPI(a), splitAPI(b)
+	for i := range pa {
+		if pa[i] != pb[i] {
+			if pa[i] < pb[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+func splitAPI(v string) [2]int {
+	maj, min, _ := strings.Cut(v, ".")
+	a, _ := strconv.Atoi(maj)
+	b, _ := strconv.Atoi(min)
+	return [2]int{a, b}
+}
+
+// DockerHost returns the address of a real engine for the integration tests:
+// BAYPLAN_TEST_DOCKER_HOST when it is set (CI points it at the dind service),
+// otherwise a docker:<BAYPLAN_TEST_ENGINE or 29>-dind container started with
+// testcontainers and removed when the test ends. It waits for the daemon by
+// polling /_ping, never by sleeping (RESEARCH Pitfall 23).
+func DockerHost(t testing.TB) string {
+	t.Helper()
+	if h := os.Getenv(EnvDockerHost); h != "" {
+		return h
+	}
+	engineMajor := os.Getenv(EnvEngine)
+	if engineMajor == "" {
+		engineMajor = defaultEngine
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "docker:" + engineMajor + "-dind",
+			ExposedPorts: []string{dindPort},
+			Env:          map[string]string{"DOCKER_TLS_CERTDIR": ""},
+			HostConfigModifier: func(hc *container.HostConfig) {
+				hc.Privileged = true
+			},
+			WaitingFor: wait.ForHTTP("/_ping").WithPort(dindPort).WithStartupTimeout(2 * time.Minute),
+		},
+		Started: true,
+	})
+	testcontainers.CleanupContainer(t, ctr)
+	if err != nil {
+		t.Fatalf("start docker:%s-dind: %v", engineMajor, err)
+	}
+	endpoint, err := ctr.PortEndpoint(ctx, dindPort, "tcp")
+	if err != nil {
+		t.Fatalf("find the dind port: %v", err)
+	}
+	return endpoint
+}
+
+// TCPTransport dials one TCP address whatever the client asks for. It exists
+// for the integration tests only: the product constructs nothing but a local
+// socket transport, so a tcp:// engine can never be reached by configuration
+// (D-21).
+type TCPTransport struct {
+	// Addr is host:port, with no scheme.
+	Addr string
+}
+
+// TCPTransportFor builds a TCPTransport from a DockerHost value such as
+// tcp://localhost:2375.
+func TCPTransportFor(host string) TCPTransport {
+	return TCPTransport{Addr: strings.TrimPrefix(host, "tcp://")}
+}
+
+// DialContext implements engine.Transport.
+func (t TCPTransport) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, "tcp", t.Addr)
+}
+
+// Describe implements engine.Transport.
+func (t TCPTransport) Describe() string { return "tcp://" + t.Addr }
+
+// RawClient returns a moby client to host, for test setup only (swarm init,
+// creating containers). It is not the product API: production code reaches
+// Docker only through dockerx.
+func RawClient(t testing.TB, host string) *client.Client {
+	t.Helper()
+	cli, err := client.New(client.WithHost(host))
+	if err != nil {
+		t.Fatalf("create the test setup client for %s: %v", host, err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	return cli
+}
+
+// PublishEvent adds an event to the daemon's buffered history and sends it to
+// every open /events stream, as the daemon does when something happens on the
+// host. A zero TimeNano is replaced with the current time.
+func (f *Fake) PublishEvent(e FakeEvent) {
+	if e.TimeNano == 0 {
+		e.TimeNano = time.Now().UnixNano()
+	}
+	f.evMu.Lock()
+	defer f.evMu.Unlock()
+	f.evHistory = append(f.evHistory, e)
+	if len(f.evHistory) > eventBuffer {
+		f.evHistory = f.evHistory[len(f.evHistory)-eventBuffer:]
+	}
+	for sub := range f.evSubs {
+		select {
+		case sub.ch <- e:
+		default: // a stream nobody reads is as good as dropped
+			sub.dropOnce.Do(func() { close(sub.drop) })
+		}
+	}
+}
+
+// ClearEvents empties the buffered history, as a daemon restart does.
+func (f *Fake) ClearEvents() {
+	f.evMu.Lock()
+	defer f.evMu.Unlock()
+	f.evHistory = nil
+}
+
+// DropEventStreams ends every open /events stream without ending the daemon,
+// as a network blip or a proxy timeout would.
+func (f *Fake) DropEventStreams() {
+	f.evMu.Lock()
+	defer f.evMu.Unlock()
+	for sub := range f.evSubs {
+		sub.dropOnce.Do(func() { close(sub.drop) })
+	}
+}
+
+// OpenEventStreams is how many /events streams are open now.
+func (f *Fake) OpenEventStreams() int {
+	f.evMu.Lock()
+	defer f.evMu.Unlock()
+	return len(f.evSubs)
+}
+
+// EventQueries returns the query string of every /events request served, in
+// order, so a test can check the since and filters a client sent.
+func (f *Fake) EventQueries() []url.Values {
+	f.evMu.Lock()
+	defer f.evMu.Unlock()
+	return append([]url.Values(nil), f.evQueries...)
+}
+
+// serveEvents answers GET /events like a daemon: the response starts at once
+// (headers flushed), history at or after since is replayed when since is given,
+// then new events follow until the client leaves or the stream is dropped.
+func (f *Fake) serveEvents(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	types := eventTypeFilter(q.Get("filters"))
+	since, hasSince := parseEventSince(q.Get("since"))
+
+	sub := &eventSub{ch: make(chan FakeEvent, 2*eventBuffer), drop: make(chan struct{})}
+	f.evMu.Lock()
+	f.evQueries = append(f.evQueries, q)
+	var replay []FakeEvent
+	if hasSince {
+		for _, e := range f.evHistory {
+			if e.TimeNano >= since {
+				replay = append(replay, e)
+			}
+		}
+	}
+	f.evSubs[sub] = struct{}{}
+	f.evMu.Unlock()
+	defer func() {
+		f.evMu.Lock()
+		delete(f.evSubs, sub)
+		f.evMu.Unlock()
+	}()
+
+	rc := http.NewResponseController(w)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if rc.Flush() != nil {
+		return
+	}
+	enc := json.NewEncoder(w)
+	send := func(e FakeEvent) bool {
+		if types != nil && !types[e.Type] {
+			return true
+		}
+		msg := events.Message{
+			Type: events.Type(e.Type), Action: events.Action(e.Action), Scope: "local",
+			Actor:    events.Actor{ID: e.ActorID, Attributes: e.Attributes},
+			Time:     e.TimeNano / int64(time.Second),
+			TimeNano: e.TimeNano,
+		}
+		return enc.Encode(msg) == nil && rc.Flush() == nil
+	}
+	for _, e := range replay {
+		if !send(e) {
+			return
+		}
+	}
+	for {
+		select {
+		case e := <-sub.ch:
+			if !send(e) {
+				return
+			}
+		case <-sub.drop:
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// eventTypeFilter reads the type terms of the filters query parameter, which is
+// JSON like {"type":{"container":true}}. Nil means no type filter.
+func eventTypeFilter(raw string) map[string]bool {
+	if raw == "" {
+		return nil
+	}
+	var f map[string]map[string]bool
+	if json.Unmarshal([]byte(raw), &f) != nil || len(f["type"]) == 0 {
+		return nil
+	}
+	return f["type"]
+}
+
+// parseEventSince reads since as unix seconds or seconds.nanoseconds and
+// returns nanoseconds.
+func parseEventSince(raw string) (int64, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	secs, frac, _ := strings.Cut(raw, ".")
+	s, err := strconv.ParseInt(secs, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	var ns int64
+	if frac != "" {
+		frac = (frac + "000000000")[:9]
+		ns, _ = strconv.ParseInt(frac, 10, 64)
+	}
+	return s*int64(time.Second) + ns, true
+}

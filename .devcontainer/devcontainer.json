@@ -1,0 +1,21 @@
+{
+  "name": "Bayplan",
+  "image": "mcr.microsoft.com/devcontainers/go:2-1.27-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "24"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "postCreateCommand": "corepack enable && make hooks && pnpm -C web install",
+  "forwardPorts": [5173, 7480],
+  "portsAttributes": {
+    "5173": { "label": "Vite dev server (open this one)" },
+    "7480": { "label": "Bayplan server" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["golang.go", "biomejs.biome"]
+    }
+  }
+}

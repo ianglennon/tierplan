@@ -82,6 +82,12 @@ func resolve(version, commit, sourceURL, vcsRevision string, vcsModified bool) I
 	if name == "" {
 		name = "dev"
 	}
+	// Release tooling commonly strips the v from a tag. The footer,
+	// /api/version and `bayplan version` must read "v0.1.0 (abc1234)" whatever
+	// packaged the binary (WR-13, D-61).
+	if name[0] >= '0' && name[0] <= '9' {
+		name = "v" + name
+	}
 
 	tree := src
 	if full != "" {

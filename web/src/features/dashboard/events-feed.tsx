@@ -1,0 +1,183 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+import { Box, HardDrive, Layers, type LucideIcon, Network } from "lucide-react";
+import { useState } from "react";
+
+import { RelativeTime } from "@/components/relative-time";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { type EventDTO, type EventType, useEnvEvents } from "@/features/dashboard/events";
+import { TruncatedText } from "@/features/resources/resource-table";
+import { useT } from "@/i18n/use-t";
+
+type Filter = "all" | EventType;
+
+const FILTERS: readonly Filter[] = ["all", "container", "image", "network", "volume"];
+
+const ICONS: Record<EventType, LucideIcon> = {
+  container: Box,
+  image: Layers,
+  network: Network,
+  volume: HardDrive,
+};
+
+// How many characters of an ID stand in for a name Docker did not give.
+const SHORT_ID = 12;
+
+// LiveChip says how the feed is connected. It shows only while the stream is
+// connected or retrying: once the feed has fallen back to polling there is no
+// chip, so it never claims freshness the feed does not have (T-01-93). The
+// pulse is off under prefers-reduced-motion.
+function LiveChip({ state }: { state: "live" | "reconnecting" }) {
+  const t = useT();
+  const live = state === "live";
+  return (
+    <output className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs">
+      <span
+        aria-hidden="true"
+        className={
+          live
+            ? "inline-block size-2 shrink-0 animate-pulse rounded-full bg-status-online motion-reduce:animate-none"
+            : "inline-block size-2 shrink-0 rounded-full bg-status-warning"
+        }
+      />
+      <span className={live ? "text-status-online-text" : "text-status-warning-text"}>
+        {live ? t("dashboard.events.live") : t("dashboard.events.reconnecting")}
+      </span>
+    </output>
+  );
+}
+
+// EventRow is one event: when, what kind, what happened, to what, and up to two
+// facts about it (image, then exit code). Names come from the daemon and are
+// rendered as text only (T-01-91).
+function EventRow({ event }: { event: EventDTO }) {
+  const t = useT();
+  const Icon = ICONS[event.type];
+  const subject = event.name || event.actorId.slice(0, SHORT_ID);
+  const exitCode = event.attributes.exitCode;
+  const attributes = [
+    event.attributes.image,
+    exitCode === undefined ? undefined : t("dashboard.events.exitCode", { code: exitCode }),
+  ].filter((a): a is string => Boolean(a));
+
+  return (
+    <li className="flex items-start gap-3 border-b py-2 last:border-b-0">
+      <span className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground">
+        <RelativeTime value={event.time} />
+      </span>
+      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <p className="text-sm font-semibold">
+          {t("dashboard.events.rowTitle", {
+            type: t(`dashboard.events.filters.${event.type}`),
+            action: event.action,
+          })}
+        </p>
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <TruncatedText mono className="max-w-full sm:max-w-64">
+            {subject}
+          </TruncatedText>
+          {attributes.map((a) => (
+            <span key={a} className="min-w-0 truncate text-xs text-muted-foreground">
+              {a}
+            </span>
+          ))}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+// EventsFeed is the dashboard's "Recent events" card (D-55, D-57): the last
+// hour best effort, then new events at the top as they happen, 50 at most.
+// Filtering is client-side over what the provider holds.
+export function EventsFeed() {
+  const t = useT();
+  const { events, state, ready, retry } = useEnvEvents();
+  const [filter, setFilter] = useState<Filter>("all");
+
+  const shown = filter === "all" ? events : events.filter((e) => e.type === filter);
+  const chip = state === "live" || state === "reconnecting" ? state : undefined;
+
+  let body: React.ReactNode;
+  if (!ready && state === "error") {
+    body = (
+      <div role="alert" className="flex flex-wrap items-center gap-3 text-sm">
+        <span>{t("dashboard.events.error")}</span>
+        <Button variant="outline" size="sm" onClick={retry}>
+          {t("dashboard.events.retry")}
+        </Button>
+      </div>
+    );
+  } else if (!ready) {
+    body = (
+      <div aria-hidden="true" className="flex flex-col gap-3">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} className="h-9 w-full" />
+        ))}
+      </div>
+    );
+  } else if (shown.length === 0) {
+    const none = events.length === 0;
+    body = (
+      <Empty className="border-0 p-6">
+        <EmptyHeader>
+          <EmptyTitle className="text-base">
+            {none ? t("dashboard.events.empty") : t("dashboard.events.noMatch")}
+          </EmptyTitle>
+          <EmptyDescription>
+            {none ? t("dashboard.events.emptyBody") : t("dashboard.events.noMatchBody")}
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  } else {
+    body = (
+      <ScrollArea className="[&_[data-slot=scroll-area-viewport]]:max-h-[480px]">
+        <ol>
+          {shown.map((e) => (
+            <EventRow key={e.id} event={e} />
+          ))}
+        </ol>
+      </ScrollArea>
+    );
+  }
+
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="text-base font-semibold">{t("dashboard.events.title")}</CardTitle>
+        <CardAction className="flex flex-wrap items-center justify-end gap-2">
+          {chip ? <LiveChip state={chip} /> : null}
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          value={filter}
+          aria-label={t("dashboard.events.filterLabel")}
+          // Deselecting the open item reports "": keep the filter instead.
+          onValueChange={(v) => {
+            if (v) setFilter(v as Filter);
+          }}
+          className="flex-wrap justify-start"
+        >
+          {FILTERS.map((f) => (
+            <ToggleGroupItem key={f} value={f} className="min-h-9">
+              {t(`dashboard.events.filters.${f}`)}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        {body}
+      </CardContent>
+    </Card>
+  );
+}

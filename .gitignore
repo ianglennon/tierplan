@@ -5,7 +5,9 @@ CLAUDE.md
 .gsd/
 /bin/
 /web/node_modules/
+/e2e/node_modules/
 /web/dist/*
 !/web/dist/.gitkeep
 /.devdata/
 /coverage/
+/dist/
