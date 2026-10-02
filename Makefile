@@ -16,7 +16,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check test test-int smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke edge-context
+.PHONY: web build gen gen-check test test-int smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke edge-context e2e e2e-image
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -149,3 +149,35 @@ edge-context:
 	cp "$$(find dist -path 'dist/edge' -prune -o -type f -name bayplan -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/bayplan
 	cp "$$(find dist -path 'dist/edge' -prune -o -type f -name bayplan -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/bayplan
 	cp Dockerfile dist/edge/Dockerfile
+
+# --- End-to-end (D-80, RESEARCH Pattern 11) ---
+# The built image under Docker Compose with a docker:29-dind sidecar, driven by
+# Playwright through setup, sign-in, the dashboard and the audit log. Needs
+# Docker with buildx and compose. Build outputs live under .devdata/, which is
+# git-ignored. BAYPLAN_E2E_PORT moves the published port off 7480.
+E2E_DIST := .devdata/dist-e2e
+E2E_COMPOSE := docker compose -f e2e/compose.yaml
+# --with-deps installs the OS libraries Chromium needs and may use sudo; drop it
+# (E2E_BROWSER_ARGS=chromium) on a machine that already has them.
+E2E_BROWSER_ARGS ?= --with-deps chromium
+
+# The image under test: a linux/amd64 binary with the SPA embedded, wrapped by
+# the release Dockerfile the way goreleaser does it ($TARGETPLATFORM/bayplan in
+# the build context), tagged bayplan:e2e and loaded into the local engine.
+e2e-image: web
+	mkdir -p $(E2E_DIST)/linux/amd64
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o $(E2E_DIST)/linux/amd64/bayplan ./cmd/bayplan
+	docker buildx build --platform linux/amd64 -f Dockerfile -t bayplan:e2e --load $(E2E_DIST)
+
+# The stack is always torn down, with its volumes, whatever the tests do, and
+# the exit status is the tests' own. A failed run prints the container logs.
+e2e: e2e-image
+	@set -e; \
+	trap '$(E2E_COMPOSE) down -v' EXIT; \
+	$(E2E_COMPOSE) up -d --wait || { $(E2E_COMPOSE) logs --no-color --tail 100; exit 1; }; \
+	pnpm -C e2e install --frozen-lockfile; \
+	pnpm -C e2e exec playwright install $(E2E_BROWSER_ARGS); \
+	status=0; \
+	pnpm -C e2e exec playwright test || status=$$?; \
+	if [ "$$status" -ne 0 ]; then $(E2E_COMPOSE) logs --no-color --tail 100 bayplan || true; fi; \
+	exit $$status
