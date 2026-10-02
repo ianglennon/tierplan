@@ -19,7 +19,10 @@ import (
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/engine"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/privdrop"
 	"github.com/ianglennon/bayplan/internal/server"
 )
 
@@ -30,11 +33,14 @@ func main() {
 }
 
 func newRoot() *cobra.Command {
+	// selfID is Bayplan's own container ID, read before the privilege drop.
+	var selfID string
+
 	serve := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the Bayplan server",
 		Args:  cobra.NoArgs,
-		RunE:  func(cmd *cobra.Command, _ []string) error { return runServe(cmd) },
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runServe(cmd, selfID) },
 	}
 
 	root := &cobra.Command{
@@ -43,8 +49,15 @@ func newRoot() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: false,
+		// Runs before every subcommand, so `docker exec <c> bayplan user unlock`
+		// is as unprivileged as the server (D-17, RESEARCH A8).
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			var err error
+			selfID, err = dropPrivileges(cmd)
+			return err
+		},
 		// The default action is serve.
-		RunE: func(cmd *cobra.Command, _ []string) error { return runServe(cmd) },
+		RunE: func(cmd *cobra.Command, _ []string) error { return runServe(cmd, selfID) },
 	}
 	// Every setting is also a flag; precedence is in internal/config (D-11).
 	config.BindFlags(root.PersistentFlags())
@@ -101,7 +114,37 @@ func writeOpenAPI(w io.Writer) error {
 	return err
 }
 
-func runServe(cmd *cobra.Command) error {
+// noDataDir lists the commands that never read the data directory. They still
+// drop privileges, but Drop neither creates nor chowns /data for them.
+var noDataDir = map[string]bool{"version": true, "openapi": true, "help": true, "completion": true}
+
+// dropPrivileges reads Bayplan's own container ID and then, when started as
+// root, joins the Docker socket's group, fixes /data and becomes UID and GID
+// 1000. The order matters: after the user change the process is non-dumpable
+// and some /proc/self entries stop being readable (RESEARCH A9, D-27).
+func dropPrivileges(cmd *cobra.Command) (selfID string, err error) {
+	selfID = envs.ReadSelfContainerID()
+
+	// A configuration error is reported by the command itself. The drop does
+	// not wait for it: the process must not stay root because a flag is wrong.
+	var opts privdrop.Options
+	if cfg, cerr := loadConfig(cmd); cerr == nil {
+		if !noDataDir[cmd.Name()] {
+			opts.DataDir = cfg.DataDir
+		}
+		opts.GIDOverride = cfg.DockerGID
+		// An unsupported DOCKER_HOST is reported by the server; no socket group is joined for it.
+		if sock, perr := engine.ParseDockerHost(cfg.DockerHost); perr == nil {
+			opts.SocketPath = sock
+		}
+	}
+	if _, err := privdrop.Drop(opts); err != nil {
+		return "", err
+	}
+	return selfID, nil
+}
+
+func runServe(cmd *cobra.Command, selfID string) error {
 	cfg, err := loadConfig(cmd)
 	if err != nil {
 		return err
@@ -116,7 +159,7 @@ func runServe(cmd *cobra.Command) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	srv, err := server.Build(ctx, cfg, log)
+	srv, err := server.Build(ctx, cfg, log, server.WithSelfContainerID(selfID))
 	if err != nil {
 		return err
 	}

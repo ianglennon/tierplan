@@ -86,11 +86,30 @@ func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, auth
 	return r
 }
 
+// Option adjusts Build.
+type Option func(*buildOptions)
+
+type buildOptions struct {
+	selfContainerID string
+}
+
+// WithSelfContainerID supplies the ID of the container Bayplan runs in. The
+// command line reads it from /proc/self/mountinfo before the privilege drop
+// (RESEARCH A9, D-27) and passes it in, so Build never probes /proc itself.
+// Without it nothing is badged "this instance".
+func WithSelfContainerID(id string) Option {
+	return func(o *buildOptions) { o.selfContainerID = id }
+}
+
 // Build prepares the data directory, loads (or on first start generates) the
 // master key, opens and migrates the database and assembles the server. It logs the effective configuration with secrets
 // redacted. A migration failure (or a database newer than this binary) is
 // returned as an error so `serve` exits non-zero before it listens (D-82, D-84).
-func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, error) {
+func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Option) (*Server, error) {
+	var bo buildOptions
+	for _, opt := range opts {
+		opt(&bo)
+	}
 	if log == nil {
 		log = slog.Default()
 	}
@@ -189,10 +208,10 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 
 	// The environment registry and its health monitors. Nothing is added here:
 	// the local host becomes an environment only when an admin asks (D-19).
-	// Bayplan's own container is identified now, while mountinfo is readable
-	// whatever user the process later runs as (RESEARCH A9).
+	// Bayplan's own container was identified before the privilege drop and is
+	// handed in with WithSelfContainerID (RESEARCH A9).
 	monitor := envs.NewMonitor(log, nil, nil)
-	selfID := envs.ReadSelfContainerID()
+	selfID := bo.selfContainerID
 	envSvc := envs.NewService(st, aud, monitor, cfg.DockerHost, selfID, nil)
 	// The dashboard counts and the four lists read one snapshot of Docker, cached
 	// for 5 seconds per environment (Pitfall 22, D-57).

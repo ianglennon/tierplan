@@ -594,3 +594,26 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 		t.Errorf("the hub still holds events after shutdown: %v", got)
 	}
 }
+
+func TestBuildTakesTheSelfContainerIDFromTheOption(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"})
+	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler), WithSelfContainerID(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	if got := srv.Environments().SelfContainerID(); got != id {
+		t.Fatalf("SelfContainerID = %q, want the ID passed to WithSelfContainerID", got)
+	}
+
+	// Without the option nothing is badged, whatever /proc says: Build no longer probes it.
+	bare, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bare.Close() })
+	if got := bare.Environments().SelfContainerID(); got != "" {
+		t.Fatalf("SelfContainerID = %q without the option, want empty", got)
+	}
+}
