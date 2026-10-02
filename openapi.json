@@ -1115,6 +1115,29 @@
         ],
         "type": "object"
       },
+      "SettingsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "instanceName": {
+            "description": "The name shown in the header, tab titles and the sign-in page",
+            "type": "string"
+          },
+          "publicUrl": {
+            "description": "The URL users reach Bayplan at; drives the Origin check and the cookie Secure flag",
+            "type": "string"
+          },
+          "publicUrlLocked": {
+            "description": "True when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "instanceName",
+          "publicUrl",
+          "publicUrlLocked"
+        ],
+        "type": "object"
+      },
       "SetupDefaultsBody": {
         "additionalProperties": false,
         "properties": {
@@ -1285,6 +1308,20 @@
           "name",
           "status"
         ],
+        "type": "object"
+      },
+      "UpdateSettingsInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "instanceName": {
+            "description": "New instance name, 1 to 64 characters",
+            "type": "string"
+          },
+          "publicUrl": {
+            "description": "New public URL, an absolute http or https URL. Refused with 409 public_url_locked while BAYPLAN_PUBLIC_URL is set",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "UserBody": {
@@ -2572,6 +2609,92 @@
         "summary": "Change the signed-in user's own password",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "description": "publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04).",
+        "operationId": "getSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get the instance name and public URL",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "description": "Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked and changes nothing. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is audited as settings.updated with the old and new value of every changed field.",
+        "operationId": "updateSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingsInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change the instance name or the public URL",
+        "tags": [
+          "settings"
         ]
       }
     },

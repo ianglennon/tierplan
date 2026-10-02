@@ -194,7 +194,7 @@ func TestPatchSettingsValidatesEveryField(t *testing.T) {
 		{"65 characters", map[string]string{"instanceName": strings.Repeat("é", 65)}, "body.instanceName", "instance_name_too_long"},
 		{"relative url", map[string]string{"publicUrl": "/bayplan"}, "body.publicUrl", "invalid_public_url"},
 		{"empty url", map[string]string{"publicUrl": ""}, "body.publicUrl", "invalid_public_url"},
-		{"url with credentials", map[string]string{"publicUrl": "https://a:b@host.example"}, "body.publicUrl", "invalid_public_url"},
+		{"url with credentials", map[string]string{"publicUrl": "https://user@host.example"}, "body.publicUrl", "invalid_public_url"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := f.patchSettings(t, cookie, csrf, c.body)

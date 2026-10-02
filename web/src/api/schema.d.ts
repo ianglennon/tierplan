@@ -366,6 +366,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the instance name and public URL
+         * @description publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04).
+         */
+        get: operations["getSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the instance name or the public URL
+         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked and changes nothing. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is audited as settings.updated with the old and new value of every changed field.
+         */
+        patch: operations["updateSettings"];
+        trace?: never;
+    };
     "/api/setup/complete": {
         parameters: {
             query?: never;
@@ -903,6 +927,14 @@ export interface components {
             /** @description The new name, 1 to 64 characters */
             name: string;
         };
+        SettingsBody: {
+            /** @description The name shown in the header, tab titles and the sign-in page */
+            instanceName: string;
+            /** @description The URL users reach Bayplan at; drives the Origin check and the cookie Secure flag */
+            publicUrl: string;
+            /** @description True when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL */
+            publicUrlLocked: boolean;
+        };
         SetupDefaultsBody: {
             /** @description The server's hostname */
             defaultInstanceName: string;
@@ -987,6 +1019,12 @@ export interface components {
              * @enum {string}
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
+        };
+        UpdateSettingsInputBody: {
+            /** @description New instance name, 1 to 64 characters */
+            instanceName?: string;
+            /** @description New public URL, an absolute http or https URL. Refused with 409 public_url_locked while BAYPLAN_PUBLIC_URL is set */
+            publicUrl?: string;
         };
         UserBody: {
             /** @description The user's ID */
@@ -1750,6 +1788,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChangePasswordBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSettingsInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsBody"];
                 };
             };
             /** @description Error */
