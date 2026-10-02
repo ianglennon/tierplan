@@ -580,3 +580,140 @@ func TestEventOpenAPIDocumentsTheRecentEndpointButNotTheStream(t *testing.T) {
 		t.Errorf("the events routes are not all guarded: %v", err)
 	}
 }
+
+// --- The stream ends when what it was authorised by goes away (WR-02) -------
+
+// waitEnded fails unless the stream's handler returns within d.
+func (c *sseConn) waitEnded(t *testing.T, d time.Duration, why string) {
+	t.Helper()
+	select {
+	case <-c.done:
+	case <-time.After(d):
+		t.Fatalf("the stream was still open %v after %s", d, why)
+	}
+}
+
+func TestEventStreamEndsWithinAHeartbeatOfSignOut(t *testing.T) {
+	f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
+	c := f.openStream(t, f.cookie, "")
+	if c.status0() != http.StatusOK {
+		t.Fatalf("status = %d", c.status0())
+	}
+	if _, err := f.st.Write.Exec(`DELETE FROM sessions`); err != nil {
+		t.Fatal(err)
+	}
+	c.waitEnded(t, time.Second, "the session was deleted")
+
+	// A reconnect goes through the whole policy and is a denied read, which the
+	// SPA already treats as a signed-out session.
+	rec := f.call(t, authReq{method: http.MethodGet, path: f.streamPath(), cookie: f.cookie})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("reconnect after sign-out: %d, want 401", rec.Code)
+	}
+	var denied int
+	for _, e := range f.audits(t, audit.ActionPermissionDenied) {
+		if e.Result == "denied" && e.Reason == "unauthenticated" {
+			denied++
+		}
+	}
+	if denied == 0 {
+		t.Fatal("the refused reconnect was not audited as a denied read")
+	}
+}
+
+func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.T) {
+	t.Run("user disabled", func(t *testing.T) {
+		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
+		c := f.openStream(t, f.cookie, "")
+		if _, err := f.st.Write.Exec(`UPDATE users SET disabled = 1`); err != nil {
+			t.Fatal(err)
+		}
+		c.waitEnded(t, time.Second, "the user was disabled")
+	})
+	t.Run("environment removed", func(t *testing.T) {
+		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
+		c := f.openStream(t, f.cookie, "")
+		actor := audit.Actor{Type: audit.ActorUser, ID: "id-admin", Name: "admin"}
+		if err := f.svc.Remove(context.Background(), actor, f.env.ID, authIP, authUA); err != nil {
+			t.Fatal(err)
+		}
+		c.waitEnded(t, time.Second, "the environment was removed")
+	})
+	t.Run("environment disabled", func(t *testing.T) {
+		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
+		c := f.openStream(t, f.cookie, "")
+		if _, err := f.st.Write.Exec(`UPDATE environments SET enabled = 0`); err != nil {
+			t.Fatal(err)
+		}
+		c.waitEnded(t, time.Second, "the environment was disabled")
+	})
+	t.Run("permission withdrawn", func(t *testing.T) {
+		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
+		c := f.openStream(t, f.cookie, "")
+		if _, err := f.st.Write.Exec(`DELETE FROM role_assignments`); err != nil {
+			t.Fatal(err)
+		}
+		c.waitEnded(t, time.Second, "the admin role was withdrawn")
+	})
+}
+
+func TestEventStreamEndsWhenTheSessionIdlesOutWithoutBeingTouched(t *testing.T) {
+	f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
+	c := f.openStream(t, f.cookie, "")
+	var seen0 int64
+	if err := f.st.Read.QueryRow(`SELECT last_seen_at FROM sessions`).Scan(&seen0); err != nil {
+		t.Fatal(err)
+	}
+	// Age the row rather than the shared fake clock, which the stream's
+	// goroutine reads: the session has been idle for 12 hours and a second.
+	if _, err := f.st.Write.Exec(`UPDATE sessions SET last_seen_at = last_seen_at - ?`, int64(authIdle+time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	seen0 -= int64(authIdle + time.Second)
+	c.waitEnded(t, time.Second, "the session idled out")
+	var seen1 int64
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*), COALESCE(MAX(last_seen_at), 0) FROM sessions`).Scan(&n, &seen1); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || seen1 != seen0 {
+		t.Fatalf("re-checking changed the session: rows %d, last_seen_at %d -> %d (D-31)", n, seen0, seen1)
+	}
+}
+
+func TestEventStreamEndsAtItsMaximumLifetime(t *testing.T) {
+	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
+	f.eventsMaxLifetime = 100 * time.Millisecond
+	f.h = f.build(t)
+	c := f.openStream(t, f.cookie, "")
+	c.waitEnded(t, time.Second, "its maximum lifetime passed")
+}
+
+func TestEventStreamKeepsRunningWhileTheSessionStaysValid(t *testing.T) {
+	f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
+	c := f.openStream(t, f.cookie, "")
+	beats := 0
+	deadline := time.After(5 * time.Second)
+	for beats < 6 {
+		select {
+		case fr, ok := <-c.frames:
+			if !ok {
+				t.Fatalf("the stream ended after %d heartbeats although nothing was revoked", beats)
+			}
+			if fr.comment == "heartbeat" {
+				beats++
+			}
+		case <-deadline:
+			t.Fatalf("only %d heartbeats arrived", beats)
+		}
+	}
+	publish(f, "c-after-beats")
+	if _, e := c.mustNext(t); e.ActorID != "c-after-beats" {
+		t.Fatalf("event after several re-checks = %+v", e)
+	}
+	select {
+	case <-c.done:
+		t.Fatal("the stream ended with a valid session")
+	default:
+	}
+}

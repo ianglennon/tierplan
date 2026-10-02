@@ -684,3 +684,92 @@ func TestOriginOf(t *testing.T) {
 		}
 	}
 }
+
+// recheckAuth is a fakeAuth whose Recheck answers from a switch the test flips.
+type recheckAuth struct {
+	fakeAuth
+	mu   sync.Mutex
+	gone bool
+	err  error
+}
+
+func (a *recheckAuth) Recheck(context.Context, *rbac.Principal) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return !a.gone && a.err == nil, a.err
+}
+
+func (a *recheckAuth) set(gone bool, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.gone, a.err = gone, err
+}
+
+func TestStillAuthorizedFollowsTheSessionTheEnvironmentAndThePermission(t *testing.T) {
+	ra := &recheckAuth{}
+	envs := fakeEnvs{"env-on": {ID: "env-on", Name: "On", Enabled: true}}
+	f := newFixture(t, func(o *Options) { o.Authenticator = ra; o.EnvResolver = envs })
+
+	var calls []bool
+	f.r.Guarded(http.MethodGet, "/api/env/{envId}/probe", rbac.Require(rbac.PermContainersRead),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, StillAuthorized(r.Context()), StillAuthorized(r.Context()))
+			_, _ = w.Write([]byte("ok"))
+		}))
+	h := f.r.Handler()
+	probe := func() []bool {
+		calls = nil
+		if rec := do(h, http.MethodGet, "/api/env/env-on/probe", as("admin-user")); rec.Code != http.StatusOK {
+			t.Fatalf("probe = %d, want 200: %s", rec.Code, rec.Body)
+		}
+		return calls
+	}
+	want := func(got []bool, v bool, why string) {
+		t.Helper()
+		if len(got) != 2 || got[0] != v || got[1] != v {
+			t.Fatalf("%s: StillAuthorized = %v, want %v twice", why, got, v)
+		}
+	}
+	want(probe(), true, "nothing changed")
+
+	// The closure re-checks live state, so flip things between the two calls.
+	flip := func(change func(f2 *fixture), why string, after bool) {
+		t.Helper()
+		var got []bool
+		f2 := newFixture(t, func(o *Options) { o.Authenticator = ra; o.EnvResolver = envs })
+		f2.r.Guarded(http.MethodGet, "/api/env/{envId}/probe", rbac.Require(rbac.PermContainersRead),
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = append(got, StillAuthorized(r.Context()))
+				change(f2)
+				got = append(got, StillAuthorized(r.Context()))
+			}))
+		if rec := do(f2.r.Handler(), http.MethodGet, "/api/env/env-on/probe", as("admin-user")); rec.Code != http.StatusOK {
+			t.Fatalf("%s: probe = %d: %s", why, rec.Code, rec.Body)
+		}
+		if len(got) != 2 || !got[0] || got[1] != after {
+			t.Fatalf("%s: StillAuthorized = %v, want true then %v", why, got, after)
+		}
+		if n := len(f2.audit.all()); n != 0 {
+			t.Fatalf("%s: re-checking audited %d entries, want none", why, n)
+		}
+		ra.set(false, nil)
+		envs["env-on"] = Env{ID: "env-on", Name: "On", Enabled: true}
+	}
+	flip(func(*fixture) { ra.set(true, nil) }, "the session is gone", false)
+	flip(func(*fixture) { ra.set(false, errors.New("store down")) }, "the recheck errors", false)
+	flip(func(*fixture) { delete(envs, "env-on") }, "the environment is removed", false)
+	flip(func(*fixture) { envs["env-on"] = Env{ID: "env-on", Name: "On", Enabled: false} }, "the environment is disabled", false)
+	flip(func(f2 *fixture) {
+		if _, err := f2.s.Write.Exec(`DELETE FROM role_assignments`); err != nil {
+			t.Fatal(err)
+		}
+	}, "the permission is withdrawn", false)
+	flip(func(*fixture) {}, "nothing changes", true)
+
+	if !StillAuthorized(context.Background()) {
+		t.Fatal("StillAuthorized on a context that did not come through Guarded must be true")
+	}
+	if n := len(f.audit.all()); n != 0 {
+		t.Fatalf("re-checking audited %d entries, want none", n)
+	}
+}
