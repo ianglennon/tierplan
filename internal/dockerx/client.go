@@ -26,11 +26,17 @@ const hostURL = "unix:///var/run/docker.sock"
 type Client struct {
 	t engine.Transport
 
-	// mu guards c. Probe renegotiates the API version, which replaces the
-	// moby client, so it takes the write lock; read-only calls added by later
-	// plans take the read lock.
+	// mu guards the c pointer and nothing else. No lock is held across network
+	// I/O: a caller copies the pointer through cur() and then talks to the
+	// engine with no lock, so a slow Snapshot can never delay a Probe, and a
+	// Probe that replaces the client never waits for a Snapshot (WR-06).
 	mu sync.RWMutex
 	c  *client.Client
+
+	// probeSem serialises probes: at most one renegotiates at a time, so they
+	// cannot race on swapping the client. It is a channel, not a mutex, so a
+	// probe that is waiting can abandon the wait when its context ends.
+	probeSem chan struct{}
 }
 
 // New builds a Client over t. It never reads DOCKER_* environment variables:
@@ -41,7 +47,7 @@ func New(t engine.Transport) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{t: t, c: c}, nil
+	return &Client{t: t, c: c, probeSem: make(chan struct{}, 1)}, nil
 }
 
 // newMoby builds a moby client over t. WithHost goes first and
@@ -57,6 +63,15 @@ func newMoby(t engine.Transport, extra ...client.Opt) (*client.Client, error) {
 		return nil, fmt.Errorf("create the docker client for %s: %w", t.Describe(), err)
 	}
 	return c, nil
+}
+
+// cur is the moby client that is current now. A caller keeps the pointer for
+// the whole of its call: a later Probe replaces the client but closes only its
+// idle connections, so a call already in flight on the old one finishes.
+func (c *Client) cur() *client.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c
 }
 
 // Close releases the idle connections of the client.

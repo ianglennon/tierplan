@@ -225,15 +225,23 @@ func apiAtLeast(v, floor string) bool {
 //     data is kept.
 //
 // An unreachable engine returns a result with Reason "unreachable" and an
-// error that names the transport. Probe holds the client's write lock, so
-// concurrent probes queue instead of racing on the shared client.
+// error that names the transport. Concurrent probes queue on probeSem instead
+// of racing on the shared client, and a queued probe gives up when its own
+// context ends. No client lock is held while the engine is asked anything, so
+// a slow Snapshot in progress does not delay a probe (WR-06).
 func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	res := ProbeResult{ProbedAt: time.Now().UTC()}
 
-	ping, err := c.c.Ping(ctx, client.PingOptions{})
+	select {
+	case c.probeSem <- struct{}{}:
+		defer func() { <-c.probeSem }()
+	case <-ctx.Done():
+		res.Reason = ReasonUnreachable
+		res.Detail = ctx.Err().Error()
+		return res, fmt.Errorf("the Docker engine at %s was not probed: %w", c.t.Describe(), ctx.Err())
+	}
+
+	ping, err := c.cur().Ping(ctx, client.PingOptions{})
 	if err != nil {
 		res.Reason = ReasonUnreachable
 		res.Detail = err.Error()
@@ -260,8 +268,13 @@ func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
 			_ = fresh.Close()
 			return failProbe(res, fmt.Errorf("negotiate the API version with %s: %w", c.t.Describe(), err))
 		}
-		_ = c.c.Close()
+		c.mu.Lock()
+		old := c.c
 		c.c = fresh
+		c.mu.Unlock()
+		// Closing drops only idle connections, so a Snapshot still running on
+		// the old client finishes.
+		_ = old.Close()
 		res.NegotiatedAPI = fresh.ClientVersion()
 
 		sv, err := fresh.ServerVersion(ctx, client.ServerVersionOptions{})

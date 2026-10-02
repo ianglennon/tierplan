@@ -94,24 +94,23 @@ type Snapshot struct {
 // swarmManager comes from the probe. It must be false for a worker and for a
 // standalone engine, which would refuse the swarm calls.
 func (c *Client) Snapshot(ctx context.Context, swarmManager bool) (Snapshot, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	cli := c.cur()
 
 	var snap Snapshot
 
-	cs, err := c.c.ContainerList(ctx, client.ContainerListOptions{All: true})
+	cs, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("list containers on %s: %w", c.t.Describe(), err)
 	}
 	snap.Containers = containerRows(cs.Items)
 
-	is, err := c.c.ImageList(ctx, client.ImageListOptions{})
+	is, err := cli.ImageList(ctx, client.ImageListOptions{})
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("list images on %s: %w", c.t.Describe(), err)
 	}
 	snap.Images = imageRows(is)
 
-	vs, err := c.c.VolumeList(ctx, client.VolumeListOptions{})
+	vs, err := cli.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("list volumes on %s: %w", c.t.Describe(), err)
 	}
@@ -121,7 +120,7 @@ func (c *Client) Snapshot(ctx context.Context, swarmManager bool) (Snapshot, err
 	}
 	slices.SortFunc(snap.Volumes, func(a, b VolumeRow) int { return cmp.Compare(a.Name, b.Name) })
 
-	ns, err := c.c.NetworkList(ctx, client.NetworkListOptions{})
+	ns, err := cli.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("list networks on %s: %w", c.t.Describe(), err)
 	}
@@ -153,11 +152,11 @@ func (c *Client) Snapshot(ctx context.Context, swarmManager bool) (Snapshot, err
 	snap.Counts.ContainersStopped = snap.Counts.Containers - snap.Counts.ContainersRunning
 
 	if swarmManager {
-		nodes, err := c.c.NodeList(ctx, client.NodeListOptions{})
+		nodes, err := cli.NodeList(ctx, client.NodeListOptions{})
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("list swarm nodes on %s: %w", c.t.Describe(), err)
 		}
-		services, err := c.c.ServiceList(ctx, client.ServiceListOptions{})
+		services, err := cli.ServiceList(ctx, client.ServiceListOptions{})
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("list swarm services on %s: %w", c.t.Describe(), err)
 		}

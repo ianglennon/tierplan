@@ -68,16 +68,10 @@ var keptAttributes = []string{"name", "image", "exitCode"}
 // Cancelling ctx is how a caller stops the stream. A stream that ended is never
 // reopened here: the caller decides when to try again.
 //
-// Unlike the other methods this one does not hold the client's read lock for
-// the life of the call. A stream lasts hours, and Probe, which takes the write
-// lock on every probe, would wait that long and could never report the
-// environment offline. The stream keeps the moby client that was current when
-// it began; a later Probe replaces the client but closes only its idle
-// connections.
+// The stream keeps the moby client that was current when it began; a later
+// Probe replaces the client but closes only its idle connections.
 func (c *Client) Events(ctx context.Context, since time.Time) (<-chan EventRow, <-chan error) {
-	c.mu.RLock()
-	cli := c.c
-	c.mu.RUnlock()
+	cli := c.cur()
 
 	rows := make(chan EventRow)
 	errc := make(chan error, 1)
