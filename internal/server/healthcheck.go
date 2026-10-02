@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,12 +17,26 @@ const healthcheckTimeout = 3 * time.Second
 // Healthcheck probes /healthz on the loopback address of the configured
 // listen port. It returns nil only for a 200 answer. A distroless image has no
 // curl, so the container HEALTHCHECK runs `bayplan healthcheck` (D-17, D-86).
-// Plan 27 adds TLS.
-func Healthcheck(ctx context.Context, listen string) error {
-	return healthcheck(ctx, listen, http.DefaultClient)
+//
+// With useTLS the probe speaks https and does not verify the certificate. That
+// is deliberate and safe: the address is always 127.0.0.1, the port is our own
+// listener, and a self-signed certificate (BAYPLAN_TLS_SELF_SIGNED) could not
+// be verified anyway. The probe sends no credentials and reads no body.
+func Healthcheck(ctx context.Context, listen string, useTLS bool) error {
+	client := http.DefaultClient
+	if useTLS {
+		client = &http.Client{Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: true, //nolint:gosec // loopback healthcheck of our own listener, possibly self-signed
+			},
+		}}
+		defer client.CloseIdleConnections()
+	}
+	return healthcheck(ctx, listen, useTLS, client)
 }
 
-func healthcheck(ctx context.Context, listen string, client *http.Client) error {
+func healthcheck(ctx context.Context, listen string, useTLS bool, client *http.Client) error {
 	_, port, err := net.SplitHostPort(listen)
 	if err != nil {
 		return fmt.Errorf("cannot read the port from listen address %q: %w", listen, err)
@@ -29,7 +44,11 @@ func healthcheck(ctx context.Context, listen string, client *http.Client) error 
 	ctx, cancel := context.WithTimeout(ctx, healthcheckTimeout)
 	defer cancel()
 
-	url := "http://" + net.JoinHostPort("127.0.0.1", port) + "/healthz"
+	scheme := "http"
+	if useTLS {
+		scheme = "https"
+	}
+	url := scheme + "://" + net.JoinHostPort("127.0.0.1", port) + "/healthz"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

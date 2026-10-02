@@ -7,11 +7,13 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -61,6 +63,8 @@ type Server struct {
 	// out to the browsers watching (plan 21).
 	hub    *envs.Hub
 	router *httpx.Router
+	// tlsConfig is nil when the server speaks plain HTTP (D-12).
+	tlsConfig *tls.Config
 
 	// stopBackground ends the nightly audit prune and waits for it, so Close
 	// never closes the database under a running prune.
@@ -197,6 +201,24 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		_ = st.Close()
 		return nil, fmt.Errorf("load instance settings: %w", err)
 	}
+
+	// HTTPS comes from a supplied pair or a generated self-signed certificate
+	// (D-12). It is prepared here so a bad pair stops startup before listening.
+	tlsCfg, err := TLSConfig(cfg, inst.PublicURL(), nil)
+	if err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	switch {
+	case tlsCfg == nil:
+		log.Info("serving plain HTTP; set BAYPLAN_TLS_CERT_FILE and BAYPLAN_TLS_KEY_FILE, BAYPLAN_TLS_SELF_SIGNED=true, or put a TLS-terminating proxy in front")
+	case cfg.TLSSelfSigned:
+		log.Info("serving HTTPS with a self-signed certificate; compare this fingerprint in your browser",
+			"sha256", fingerprint(tlsCfg), "certificate", filepath.Join(info.Path, selfSignedDir, selfSignedCertFile))
+	default:
+		log.Info("serving HTTPS", "certificate_file", cfg.TLSCertFile, "sha256", fingerprint(tlsCfg))
+	}
+
 	sessions := auth.NewSessions(st, vlt, cfg.SessionIdleTimeout, cfg.SessionRememberLifetime, nil)
 	checker := rbac.NewChecker(st)
 
@@ -232,6 +254,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		TrustedProxies: cfg.TrustedProxies,
 		PublicOrigin:   inst.PublicOrigin,
 		Logger:         log,
+		// Strict-Transport-Security when the request came over TLS or the
+		// public URL is https, which also covers a TLS-terminating proxy (D-37).
+		HSTS: func(r *http.Request) bool { return r.TLS != nil || inst.Secure() },
 	}, api.SystemDeps{Ready: ready}, api.SetupDeps{
 		Gate: gate,
 		// 5 attempts at once, then one every 12 seconds, per client address (D-05).
@@ -286,6 +311,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		snapshots: snapshots,
 		hub:       hub,
 		router:    router,
+		tlsConfig: tlsCfg,
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
@@ -368,14 +394,22 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
+		TLSConfig:         s.tlsConfig,
 	}
 	// Shutdown waits for open requests, and an events stream never ends by
 	// itself. Closing the hub ends every stream, so a restart is not held up for
 	// the whole shutdown timeout by a browser that has the feed open.
 	srv.RegisterOnShutdown(s.hub.Close)
 	errc := make(chan error, 1)
-	go func() { errc <- srv.Serve(ln) }()
-	s.log.Info("bayplan listening", "addr", ln.Addr().String())
+	// With a TLS config the certificate is already in it, so the file names are empty.
+	scheme := "http"
+	if s.tlsConfig != nil {
+		scheme = "https"
+		go func() { errc <- srv.ServeTLS(ln, "", "") }()
+	} else {
+		go func() { errc <- srv.Serve(ln) }()
+	}
+	s.log.Info("bayplan listening", "addr", ln.Addr().String(), "scheme", scheme)
 
 	select {
 	case err := <-errc:

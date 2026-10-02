@@ -76,7 +76,7 @@ func newRoot() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return server.Healthcheck(cmd.Context(), cfg.Listen)
+				return server.Healthcheck(cmd.Context(), cfg.Listen, server.TLSEnabled(cfg))
 			},
 		},
 		&cobra.Command{

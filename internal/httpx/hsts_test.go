@@ -45,6 +45,8 @@ func TestHSTSIsAbsentWithoutAHook(t *testing.T) {
 func TestHSTSIsAlsoSentOnErrorsAndNotFound(t *testing.T) {
 	opts := Options{HSTS: func(*http.Request) bool { return true }}
 	r := New(opts)
+	// chi runs its middleware chain only once a route exists.
+	r.Exempt(http.MethodGet, "/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	rec := httptest.NewRecorder()
 	r.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/nope", nil))
 	if rec.Code != http.StatusNotFound || rec.Header().Get("Strict-Transport-Security") == "" {

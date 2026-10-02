@@ -87,7 +87,7 @@ func TestTLSSelfSignedWritesTheSANSetAndAPrivateKey(t *testing.T) {
 	}
 
 	leaf := leafOf(t, got)
-	if _, ok := leaf.PublicKey.(*ecdsa.PublicKey); !ok || leaf.PublicKey.(*ecdsa.PublicKey).Curve != elliptic.P256() {
+	if pub, ok := leaf.PublicKey.(*ecdsa.PublicKey); !ok || pub.Curve != elliptic.P256() {
 		t.Errorf("public key = %T, want an ECDSA P-256 key", leaf.PublicKey)
 	}
 	if want := fixedNow.AddDate(1, 0, 0); leaf.NotAfter.Sub(want).Abs() > 2*time.Minute {
@@ -178,13 +178,26 @@ func TestTLSSelfSignedIsRegeneratedWithin30DaysOfExpiry(t *testing.T) {
 	if leafOf(t, second).SerialNumber.Cmp(leafOf(t, first).SerialNumber) == 0 {
 		t.Fatal("the certificate was reused 29 days before it expires")
 	}
-	// 31 days before expiry is still fine.
-	third, err := TLSConfig(cfg, "", nowFn(near.Add(-48*time.Hour)))
+	// The replacement is good for a year, so a day later it is kept.
+	third, err := TLSConfig(cfg, "", nowFn(near.Add(24*time.Hour)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if leafOf(t, third).SerialNumber.Cmp(leafOf(t, second).SerialNumber) != 0 {
 		t.Fatal("a certificate with more than 30 days left was regenerated")
+	}
+	// And one with 31 days left is kept as well.
+	fresh := selfSignedConfig(t)
+	a, err := TLSConfig(fresh, "", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := TLSConfig(fresh, "", nowFn(fixedNow.AddDate(1, 0, -31)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leafOf(t, a).SerialNumber.Cmp(leafOf(t, b).SerialNumber) != 0 {
+		t.Fatal("a certificate with 31 days left was regenerated")
 	}
 }
 

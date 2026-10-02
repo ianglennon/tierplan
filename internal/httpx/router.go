@@ -74,7 +74,14 @@ type Options struct {
 	PublicOrigin func() string
 	// Logger receives policy warnings and errors. Nil means slog.Default().
 	Logger *slog.Logger
+	// HSTS decides per request whether to send Strict-Transport-Security. It
+	// should be true when the request arrived over TLS or the public URL is
+	// https (D-37). Nil never sends it.
+	HSTS func(*http.Request) bool
 }
+
+// hstsMaxAge is one year, in seconds.
+const hstsMaxAge = "max-age=31536000"
 
 // Router is the chi mux, the huma API and the registry of registered routes.
 type Router struct {
@@ -105,7 +112,7 @@ func New(opts Options) *Router {
 	r.mux.Use(middleware.RequestID)
 	r.mux.Use(clientIP(opts.TrustedProxies))
 	r.mux.Use(middleware.Recoverer)
-	r.mux.Use(securityHeaders)
+	r.mux.Use(securityHeaders(opts.HSTS))
 	r.mux.NotFound(r.notFound)
 	r.mux.MethodNotAllowed(r.methodNotAllowed)
 
@@ -212,12 +219,20 @@ func writeProblemType(w http.ResponseWriter, status int, ptype, detail string) {
 	_, _ = w.Write(body)
 }
 
-func securityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		h := w.Header()
-		h.Set("Content-Security-Policy", contentSecurityPolicy)
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
-		next.ServeHTTP(w, req)
-	})
+func securityHeaders(hsts func(*http.Request) bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			h := w.Header()
+			h.Set("Content-Security-Policy", contentSecurityPolicy)
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("Referrer-Policy", "no-referrer")
+			// Sent only where https is how the browser reached us: on plain
+			// HTTP the header is ignored, and sending it from an http public
+			// URL would pin the host to a scheme it may not serve.
+			if hsts != nil && hsts(req) {
+				h.Set("Strict-Transport-Security", hstsMaxAge)
+			}
+			next.ServeHTTP(w, req)
+		})
+	}
 }
