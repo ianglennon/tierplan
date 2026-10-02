@@ -187,6 +187,21 @@ describe("SetupWizard", () => {
     expect(calls.filter((c) => c.url === "/api/setup/token")).toHaveLength(1);
   });
 
+  it("clears the mismatch error as soon as the confirmation matches, without a blur", async () => {
+    // Leaving the password field checks the confirmation too, and an empty one
+    // does not match. The error then has to go as the right text is typed: if it
+    // waited for the blur it would vanish between mouse-down and mouse-up on
+    // Continue, move the buttons and lose the click.
+    stubApi({});
+    await renderWizard();
+    await passToken();
+    type("Password", PASSWORD);
+    fireEvent.blur(field("Password"));
+    await screen.findByText("The passwords don't match.");
+    type("Confirm password", PASSWORD);
+    await waitFor(() => expect(screen.queryByText("The passwords don't match.")).toBeNull());
+  });
+
   it("lower-cases the username on blur", async () => {
     stubApi({});
     await renderWizard();

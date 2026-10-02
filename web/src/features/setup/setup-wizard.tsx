@@ -279,7 +279,16 @@ export function SetupWizard() {
 
   const username = adminForm.register("username");
   const password = adminForm.register("password", { deps: ["confirm"] });
-  const confirm = adminForm.register("confirm");
+  // Leaving the password field checks the confirmation as well, and an empty one
+  // does not match. Once the field shows an error it is re-checked on every
+  // keystroke, so the error goes as soon as the right text is typed. Waiting for
+  // the blur would remove it between mouse-down and mouse-up on Continue, move the
+  // buttons up and lose the click.
+  const confirm = adminForm.register("confirm", {
+    onChange: () => {
+      if (adminForm.getFieldState("confirm").error) void adminForm.trigger("confirm");
+    },
+  });
 
   return (
     <div className="flex flex-col gap-4">
