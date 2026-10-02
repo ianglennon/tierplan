@@ -4,30 +4,34 @@
 #
 # SPDX header gate (D-68). Every tracked .go, .ts, .tsx and .sql file must carry
 # both SPDX lines in its first 5 lines. Usage:
-#   scripts/spdx-check.sh [file ...]     (default: every tracked source file)
+#   scripts/spdx-check.sh [--with-exemptions] [file ...]
+# With no files it scans every tracked source file and applies the exemptions.
+# Files named explicitly are checked with no path exemptions, unless
+# --with-exemptions comes first (the tests use it to exercise the exemption list).
 # Exempt: generated files ("Code generated" and "DO NOT EDIT" in the first 5
-# lines) and, for the default scan only, a short list of path prefixes. Files
-# named explicitly on the command line are always checked, which is how the
-# fail-first fixtures under scripts/testdata/ are exercised. The shadcn
-# components are MIT code authored elsewhere and keep MIT attribution in the
-# third-party notices.
+# lines), the generated paths listed below (their generators do not write that
+# marker, or write it after line 5), and the one deliberately header-less
+# fail-first fixture. Copied-in third-party code is NOT exempt: it carries the
+# header plus a provenance line (see CONTRIBUTING.md).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 EXEMPT_PREFIXES=(
-  "web/src/components/ui/"
   "web/src/api/schema.d.ts"
   "web/src/routeTree.gen.ts"
   "internal/store/sqlc/"
-  "scripts/testdata/"
+  "scripts/testdata/spdx/missing.go"
 )
 
 LICENSE_LINE="SPDX-License-Identifier: AGPL-3.0-or-later"
 COPYRIGHT_LINE="SPDX-FileCopyrightText: 2026 The Bayplan Authors"
 
 use_exemptions=1
-if [ "$#" -gt 0 ]; then
+if [ "${1:-}" = "--with-exemptions" ]; then
+  shift
+  files=("$@")
+elif [ "$#" -gt 0 ]; then
   files=("$@")
   use_exemptions=0
 else
