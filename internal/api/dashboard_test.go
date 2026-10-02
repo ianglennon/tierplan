@@ -12,9 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/httpx"
 )
 
 // The environment summary and the four read-only lists (plan 18, ENV-07, PLAT-06,
@@ -513,5 +515,38 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// Each list documents its own 200 body in the OpenAPI contract. The generated
+// TypeScript types come from it, so a list that borrowed another operation's
+// schema would give the web app the wrong row type.
+func TestEachListDocumentsItsOwn200Schema(t *testing.T) {
+	r := httpx.New(httpx.Options{})
+	api.RegisterDashboard(r, api.DashboardDeps{})
+	doc := r.API().OpenAPI()
+	for path, want := range map[string]string{
+		"summary":    "EnvironmentSummaryBody",
+		"containers": "ContainerListBody",
+		"images":     "ImageListBody",
+		"volumes":    "VolumeListBody",
+		"networks":   "NetworkListBody",
+	} {
+		item := doc.Paths["/api/env/{envId}/"+path]
+		if item == nil || item.Get == nil {
+			t.Fatalf("%s: no GET operation in the contract", path)
+		}
+		ok := item.Get.Responses["200"]
+		if ok == nil || ok.Content["application/json"] == nil {
+			t.Fatalf("%s: no 200 application/json response", path)
+		}
+		if got := ok.Content["application/json"].Schema.Ref; !strings.HasSuffix(got, "/"+want) {
+			t.Errorf("%s: 200 schema = %q, want %s", path, got, want)
+		}
+		for _, status := range []string{"409", "503"} {
+			if item.Get.Responses[status] == nil {
+				t.Errorf("%s: %s response is not documented", path, status)
+			}
+		}
 	}
 }

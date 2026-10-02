@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"reflect"
 	"strings"
@@ -239,7 +240,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
-	responses := problemResponses(r)
+	problems := problemResponses(r)
 
 	// read fetches the snapshot, turning the monitor's two sentinel errors into
 	// the problems the SPA understands.
@@ -278,6 +279,10 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		return rbac.Requirement{Perm: p, Scope: rbac.ScopeEnvironment}
 	}
 	op := func(id, path, summary, description string) huma.Operation {
+		// huma adds the 200 response into this map when the operation is
+		// registered, so each operation needs its own copy: a shared one keeps the
+		// first operation's 200 schema and every later list documents the summary.
+		responses := maps.Clone(problems)
 		return huma.Operation{
 			OperationID: id, Method: http.MethodGet, Path: path, Summary: summary,
 			Description: description + " 503 environment_offline (with since and reason) when the engine does not answer, " +

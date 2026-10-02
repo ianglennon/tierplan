@@ -130,6 +130,98 @@
         ],
         "type": "object"
       },
+      "ContainerItem": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The full container ID",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image the container was created from",
+            "type": "string"
+          },
+          "isSelf": {
+            "description": "True for the container Bayplan itself runs in (D-27)",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The container name without the leading slash",
+            "type": "string"
+          },
+          "ports": {
+            "description": "Ports as 0.0.0.0:8080-\u003e80/tcp, or 80/tcp when not published",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "The container state",
+            "enum": [
+              "created",
+              "running",
+              "paused",
+              "restarting",
+              "removing",
+              "exited",
+              "dead"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "description": "The engine's status text, for example Up 3 hours",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state",
+          "status",
+          "image",
+          "ports",
+          "isSelf"
+        ],
+        "type": "object"
+      },
+      "ContainerListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "At most 500 rows",
+            "items": {
+              "$ref": "#/components/schemas/ContainerItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "How many there are, whatever the cap",
+            "format": "int64",
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "True when total is more than the rows returned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "EnvironmentBody": {
         "additionalProperties": false,
         "properties": {
@@ -453,6 +545,75 @@
         },
         "type": "object"
       },
+      "ImageItem": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The full image ID",
+            "type": "string"
+          },
+          "repoTags": {
+            "description": "repository:tag for each tag, or [\"\u003cnone\u003e\"] for an untagged image",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "shortId": {
+            "description": "The first 12 characters of the ID, without the sha256: prefix",
+            "type": "string"
+          },
+          "size": {
+            "description": "Size in bytes",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "shortId",
+          "repoTags",
+          "size"
+        ],
+        "type": "object"
+      },
+      "ImageListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "At most 500 rows",
+            "items": {
+              "$ref": "#/components/schemas/ImageItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "How many there are, whatever the cap",
+            "format": "int64",
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "True when total is more than the rows returned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "InstanceBody": {
         "additionalProperties": false,
         "properties": {
@@ -570,6 +731,76 @@
           "user",
           "csrfToken",
           "permissions"
+        ],
+        "type": "object"
+      },
+      "NetworkItem": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "driver": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "description": "local, or swarm for a cluster-wide network",
+            "type": "string"
+          },
+          "subnets": {
+            "description": "The IPAM subnets in CIDR notation; empty when the network has none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "driver",
+          "scope",
+          "subnets"
+        ],
+        "type": "object"
+      },
+      "NetworkListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "At most 500 rows",
+            "items": {
+              "$ref": "#/components/schemas/NetworkItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "How many there are, whatever the cap",
+            "format": "int64",
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "True when total is more than the rows returned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "truncated"
         ],
         "type": "object"
       },
@@ -933,6 +1164,56 @@
         ],
         "type": "object"
       },
+      "VolumeItem": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "driver": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "driver"
+        ],
+        "type": "object"
+      },
+      "VolumeListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "At most 500 rows",
+            "items": {
+              "$ref": "#/components/schemas/VolumeItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "How many there are, whatever the cap",
+            "format": "int64",
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "True when total is more than the rows returned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "WarningBody": {
         "additionalProperties": false,
         "properties": {
@@ -1097,7 +1378,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EnvironmentSummaryBody"
+                  "$ref": "#/components/schemas/ContainerListBody"
                 }
               }
             },
@@ -1158,7 +1439,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EnvironmentSummaryBody"
+                  "$ref": "#/components/schemas/ImageListBody"
                 }
               }
             },
@@ -1219,7 +1500,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EnvironmentSummaryBody"
+                  "$ref": "#/components/schemas/NetworkListBody"
                 }
               }
             },
@@ -1392,7 +1673,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EnvironmentSummaryBody"
+                  "$ref": "#/components/schemas/VolumeListBody"
                 }
               }
             },

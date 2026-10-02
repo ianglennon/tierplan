@@ -429,6 +429,38 @@ export interface components {
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
         };
+        ContainerItem: {
+            /** Format: date-time */
+            created?: string;
+            /** @description The full container ID */
+            id: string;
+            /** @description The image the container was created from */
+            image: string;
+            /** @description True for the container Bayplan itself runs in (D-27) */
+            isSelf: boolean;
+            /** @description The container name without the leading slash */
+            name: string;
+            /** @description Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published */
+            ports: string[] | null;
+            /**
+             * @description The container state
+             * @enum {string}
+             */
+            state: "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead";
+            /** @description The engine's status text, for example Up 3 hours */
+            status: string;
+        };
+        ContainerListBody: {
+            /** @description At most 500 rows */
+            items: components["schemas"]["ContainerItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many there are, whatever the cap
+             */
+            total: number;
+            /** @description True when total is more than the rows returned */
+            truncated: boolean;
+        };
         EnvironmentBody: {
             /** Format: date-time */
             createdAt: string;
@@ -589,6 +621,32 @@ export interface components {
              */
             type: string;
         };
+        ImageItem: {
+            /** Format: date-time */
+            created?: string;
+            /** @description The full image ID */
+            id: string;
+            /** @description repository:tag for each tag, or ["<none>"] for an untagged image */
+            repoTags: string[] | null;
+            /** @description The first 12 characters of the ID, without the sha256: prefix */
+            shortId: string;
+            /**
+             * Format: int64
+             * @description Size in bytes
+             */
+            size: number;
+        };
+        ImageListBody: {
+            /** @description At most 500 rows */
+            items: components["schemas"]["ImageItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many there are, whatever the cap
+             */
+            total: number;
+            /** @description True when total is more than the rows returned */
+            truncated: boolean;
+        };
         InstanceBody: {
             /** @description Display name of this instance, empty before setup */
             instanceName: string;
@@ -633,6 +691,28 @@ export interface components {
             permissions: components["schemas"]["PermissionsBody"];
             /** @description The signed-in user */
             user: components["schemas"]["UserBody"];
+        };
+        NetworkItem: {
+            /** Format: date-time */
+            created?: string;
+            driver: string;
+            id: string;
+            name: string;
+            /** @description local, or swarm for a cluster-wide network */
+            scope: string;
+            /** @description The IPAM subnets in CIDR notation; empty when the network has none */
+            subnets: string[] | null;
+        };
+        NetworkListBody: {
+            /** @description At most 500 rows */
+            items: components["schemas"]["NetworkItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many there are, whatever the cap
+             */
+            total: number;
+            /** @description True when total is more than the rows returned */
+            truncated: boolean;
         };
         PermissionsBody: {
             /** @description Permissions per environment ID; the key * holds those that apply to every environment */
@@ -779,6 +859,23 @@ export interface components {
             /** @description Release version, or dev for an untagged build */
             version: string;
         };
+        VolumeItem: {
+            /** Format: date-time */
+            created?: string;
+            driver: string;
+            name: string;
+        };
+        VolumeListBody: {
+            /** @description At most 500 rows */
+            items: components["schemas"]["VolumeItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many there are, whatever the cap
+             */
+            total: number;
+            /** @description True when total is more than the rows returned */
+            truncated: boolean;
+        };
         WarningBody: {
             /**
              * @description Which warning this is
@@ -886,7 +983,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EnvironmentSummaryBody"];
+                    "application/json": components["schemas"]["ContainerListBody"];
                 };
             };
             /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
@@ -928,7 +1025,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EnvironmentSummaryBody"];
+                    "application/json": components["schemas"]["ImageListBody"];
                 };
             };
             /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
@@ -970,7 +1067,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EnvironmentSummaryBody"];
+                    "application/json": components["schemas"]["NetworkListBody"];
                 };
             };
             /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
@@ -1087,7 +1184,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EnvironmentSummaryBody"];
+                    "application/json": components["schemas"]["VolumeListBody"];
                 };
             };
             /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
