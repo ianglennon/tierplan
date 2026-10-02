@@ -19,7 +19,8 @@
       "containers": "Containers",
       "images": "Images",
       "volumes": "Volumes",
-      "networks": "Networks"
+      "networks": "Networks",
+      "settings": "Settings"
     },
     "userMenu": {
       "trigger": "User menu",

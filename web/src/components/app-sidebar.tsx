@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Link, useParams } from "@tanstack/react-router";
-import { Container, HardDrive, Layers, LayoutDashboard, Network } from "lucide-react";
+import { Container, HardDrive, Layers, LayoutDashboard, Network, Settings } from "lucide-react";
 
 import { EnvSwitcher } from "@/components/env-switcher";
 import {
@@ -67,6 +67,11 @@ export function AppSidebar() {
   const footerHere = isMobile || state === "expanded";
   // The selected environment's sections show while a route has one.
   const { envId } = useParams({ strict: false });
+  // Settings is for admins: the settings pages and the environment registry
+  // are what it leads to (D-53). The server checks each of them again.
+  const canReadSettings = usePermission("settings.read");
+  const canManageEnvironments = usePermission("environments.write");
+  const canSettings = canReadSettings || canManageEnvironments;
 
   return (
     <Sidebar
@@ -116,9 +121,31 @@ export function AppSidebar() {
           </SidebarGroup>
         ) : null}
       </SidebarContent>
-      {/* Settings and Audit are added by plans 23 and 25, once those routes exist
-          for the typed links to point at. */}
-      <SidebarGroup className="mt-auto p-0" />
+      {/* Audit is added by plan 25, once its route exists for the typed link to
+          point at. */}
+      <SidebarGroup className="mt-auto">
+        <SidebarGroupContent>
+          <SidebarMenu>
+            {canSettings ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  tooltip={t("shell.nav.settings")}
+                  className="max-md:h-11"
+                >
+                  <Link
+                    to="/settings"
+                    activeProps={{ "aria-current": "page", "data-active": true }}
+                  >
+                    <Settings aria-hidden="true" />
+                    <span>{t("shell.nav.settings")}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
       <SidebarFooter className="border-t border-sidebar-border px-4 py-2">
         {footerHere ? <VersionFooter /> : null}
       </SidebarFooter>

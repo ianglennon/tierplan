@@ -114,9 +114,8 @@ export function EnvSwitcher() {
               </DropdownMenuItem>
             ) : null}
             <DropdownMenuSeparator />
-            {/* Plan 23 retargets this to /settings/environments. */}
             <DropdownMenuItem asChild className="max-md:min-h-11">
-              <Link to="/">
+              <Link to="/settings/environments">
                 <Settings2 aria-hidden="true" />
                 {t("shell.switcher.manage")}
               </Link>

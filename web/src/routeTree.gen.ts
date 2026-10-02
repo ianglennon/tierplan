@@ -14,7 +14,10 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppEnvEnvIdRouteImport } from './routes/_app/env/$envId'
+import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
+import { Route as AppSettingsEnvironmentsRouteImport } from './routes/_app/settings/environments'
 import { Route as AppEnvEnvIdIndexRouteImport } from './routes/_app/env/$envId/index'
 import { Route as AppEnvEnvIdContainersRouteImport } from './routes/_app/env/$envId/containers'
 import { Route as AppEnvEnvIdImagesRouteImport } from './routes/_app/env/$envId/images'
@@ -45,10 +48,25 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppEnvEnvIdRoute = AppEnvEnvIdRouteImport.update({
   id: '/env/$envId',
   path: '/env/$envId',
   getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppSettingsRoute,
+} as any)
+const AppSettingsEnvironmentsRoute = AppSettingsEnvironmentsRouteImport.update({
+  id: '/environments',
+  path: '/environments',
+  getParentRoute: () => AppSettingsRoute,
 } as any)
 const AppEnvEnvIdIndexRoute = AppEnvEnvIdIndexRouteImport.update({
   id: '/',
@@ -81,7 +99,10 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/welcome': typeof WelcomeRoute
+  '/settings': typeof AppSettingsRouteWithChildren
   '/env/$envId': typeof AppEnvEnvIdRouteWithChildren
+  '/settings/environments': typeof AppSettingsEnvironmentsRoute
+  '/settings/': typeof AppSettingsIndexRoute
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
@@ -93,6 +114,8 @@ export interface FileRoutesByTo {
   '/setup': typeof SetupRoute
   '/welcome': typeof WelcomeRoute
   '/': typeof AppIndexRoute
+  '/settings/environments': typeof AppSettingsEnvironmentsRoute
+  '/settings': typeof AppSettingsIndexRoute
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
@@ -105,8 +128,11 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/welcome': typeof WelcomeRoute
+  '/_app/settings': typeof AppSettingsRouteWithChildren
   '/_app/': typeof AppIndexRoute
   '/_app/env/$envId': typeof AppEnvEnvIdRouteWithChildren
+  '/_app/settings/environments': typeof AppSettingsEnvironmentsRoute
+  '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/_app/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/_app/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
@@ -120,7 +146,10 @@ export interface FileRouteTypes {
     | '/login'
     | '/setup'
     | '/welcome'
+    | '/settings'
     | '/env/$envId'
+    | '/settings/environments'
+    | '/settings/'
     | '/env/$envId/containers'
     | '/env/$envId/images'
     | '/env/$envId/networks'
@@ -132,6 +161,8 @@ export interface FileRouteTypes {
     | '/setup'
     | '/welcome'
     | '/'
+    | '/settings/environments'
+    | '/settings'
     | '/env/$envId/containers'
     | '/env/$envId/images'
     | '/env/$envId/networks'
@@ -143,8 +174,11 @@ export interface FileRouteTypes {
     | '/login'
     | '/setup'
     | '/welcome'
+    | '/_app/settings'
     | '/_app/'
     | '/_app/env/$envId'
+    | '/_app/settings/environments'
+    | '/_app/settings/'
     | '/_app/env/$envId/containers'
     | '/_app/env/$envId/images'
     | '/_app/env/$envId/networks'
@@ -196,12 +230,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/env/$envId': {
       id: '/_app/env/$envId'
       path: '/env/$envId'
       fullPath: '/env/$envId'
       preLoaderRoute: typeof AppEnvEnvIdRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/_app/settings/': {
+      id: '/_app/settings/'
+      path: '/'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof AppSettingsIndexRouteImport
+      parentRoute: typeof AppSettingsRoute
+    }
+    '/_app/settings/environments': {
+      id: '/_app/settings/environments'
+      path: '/environments'
+      fullPath: '/settings/environments'
+      preLoaderRoute: typeof AppSettingsEnvironmentsRouteImport
+      parentRoute: typeof AppSettingsRoute
     }
     '/_app/env/$envId/': {
       id: '/_app/env/$envId/'
@@ -241,6 +296,20 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AppSettingsRouteChildren {
+  AppSettingsEnvironmentsRoute: typeof AppSettingsEnvironmentsRoute
+  AppSettingsIndexRoute: typeof AppSettingsIndexRoute
+}
+
+const AppSettingsRouteChildren: AppSettingsRouteChildren = {
+  AppSettingsEnvironmentsRoute: AppSettingsEnvironmentsRoute,
+  AppSettingsIndexRoute: AppSettingsIndexRoute,
+}
+
+const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
+  AppSettingsRouteChildren,
+)
+
 interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdContainersRoute: typeof AppEnvEnvIdContainersRoute
   AppEnvEnvIdImagesRoute: typeof AppEnvEnvIdImagesRoute
@@ -262,11 +331,13 @@ const AppEnvEnvIdRouteWithChildren = AppEnvEnvIdRoute._addFileChildren(
 )
 
 interface AppRouteChildren {
+  AppSettingsRoute: typeof AppSettingsRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
   AppEnvEnvIdRoute: typeof AppEnvEnvIdRouteWithChildren
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppSettingsRoute: AppSettingsRouteWithChildren,
   AppIndexRoute: AppIndexRoute,
   AppEnvEnvIdRoute: AppEnvEnvIdRouteWithChildren,
 }
