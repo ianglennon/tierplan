@@ -18,9 +18,11 @@ on:
 permissions:
   contents: read
 
+# Superseded pull-request runs are cancelled; pushes to main queue, so an edge
+# publish is never cut off between push and sign (WR-11, D-75).
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -243,12 +245,19 @@ jobs:
 
   # D-75: every push to main publishes ghcr.io/ianglennon/bayplan:edge for amd64
   # and arm64, signed with keyless cosign. It is the only tag a push can move;
-  # versioned tags come from release.yml. This job runs only on main, after the
-  # checks above, and never for a pull request, so fork code never gets the
-  # package or id-token permissions.
+  # versioned tags come from release.yml. This job runs only on main and never
+  # for a pull request, so fork code never gets the package or id-token
+  # permissions. It waits for every gate that runs on a push: the licence and
+  # SPDX gates, the integration matrix and e2e must block a public image
+  # (D-70, D-74). dco runs only for pull requests, so it cannot be needed here.
+  # Push and sign are one step in a non-cancelling group, so nothing can leave
+  # :edge pushed but unsigned (WR-11).
   edge:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, test, build, release-check]
+    needs: [lint, test, gen-check, licences, spdx, build, integration, release-check, e2e]
+    concurrency:
+      group: edge-publish
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -281,8 +290,9 @@ jobs:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Build both binaries and the image context
         run: make edge-context
-      - name: Build and push the edge image
+      - name: Build, push and sign the edge image
         run: |
+          set -euo pipefail
           docker buildx build dist/edge \
             --platform linux/amd64,linux/arm64 \
             --tag ghcr.io/ianglennon/bayplan:edge \
@@ -293,6 +303,4 @@ jobs:
             --metadata-file "${RUNNER_TEMP}/edge-metadata.json"
           digest="$(jq -r '."containerimage.digest"' "${RUNNER_TEMP}/edge-metadata.json")"
           test -n "${digest}" && test "${digest}" != null
-          echo "EDGE_DIGEST=${digest}" >> "${GITHUB_ENV}"
-      - name: Sign the edge image
-        run: cosign sign --yes "ghcr.io/ianglennon/bayplan@${EDGE_DIGEST}"
+          cosign sign --yes "ghcr.io/ianglennon/bayplan@${digest}"
