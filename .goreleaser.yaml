@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+#
+# Release configuration for goreleaser v2 (pinned in the Makefile and in
+# release.yml). A v* tag runs it from .github/workflows/release.yml and
+# publishes ghcr.io/ianglennon/bayplan:X.Y.Z and :X.Y. Pushes to main publish
+# :edge from ci.yml. No floating catch-all tag is ever published while Bayplan
+# is 0.x (D-75), and no release is cut in Phase 1.
+#
+# Validate with `make release-check`; build the image locally with `make image`.
+version: 2
+
+project_name: bayplan
+
+before:
+  hooks:
+    # The SPA is embedded in the binary, so it is built first.
+    - make web
+
+builds:
+  - id: bayplan
+    main: ./cmd/bayplan
+    binary: bayplan
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64] # D-18
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X github.com/ianglennon/bayplan/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/ianglennon/bayplan/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/ianglennon/bayplan/internal/buildinfo.SourceURL=https://github.com/ianglennon/bayplan
+
+archives:
+  - id: bayplan
+    ids: [bayplan]
+    formats: [tar.gz]
+    name_template: "bayplan_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README*
+
+checksum:
+  name_template: checksums.txt
+
+# SPDX SBOMs of the archives, made by syft (installed by the release workflow).
+# The container image carries its own SPDX attestation from buildx (dockers_v2 sbom).
+sboms:
+  - id: archives
+    artifacts: archive
+    cmd: syft
+    args: ["$artifact", "--output", "spdx-json=$document"]
+    documents: ["${artifact}.spdx.json"]
+
+# The multi-arch image. goreleaser lays the binaries out as
+# $TARGETPLATFORM/bayplan in the build context for the Dockerfile.
+dockers_v2:
+  - id: bayplan
+    ids: [bayplan]
+    dockerfile: Dockerfile
+    images:
+      - ghcr.io/ianglennon/bayplan
+    # X.Y.Z always, X.Y for a final release. An empty tag is skipped, so a
+    # prerelease gets only its full version.
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+    sbom: true
+
+# Keyless cosign signatures: the identity is the GitHub Actions OIDC token of
+# the release workflow, so there is no key to leak or rotate.
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--yes", "--bundle=${signature}", "${artifact}"]
+    output: true
+
+docker_signs:
+  - id: images
+    cmd: cosign
+    artifacts: all
+    args: ["sign", "--yes", "${artifact}@${digest}"]
+    output: true
+
+snapshot:
+  version_template: "{{ .Version }}-snapshot-{{ .ShortCommit }}"
+
+# Release notes grouped by Conventional Commit type (D-73).
+changelog:
+  use: git
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^[a-f0-9]+\s+feat(\([^)]*\))?!?:'
+      order: 0
+    - title: Fixes
+      regexp: '^[a-f0-9]+\s+fix(\([^)]*\))?!?:'
+      order: 1
+    - title: Everything else
+      order: 2
+
+release:
+  prerelease: auto

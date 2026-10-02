@@ -16,7 +16,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check test test-int smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint
+.PHONY: web build gen gen-check test test-int smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke edge-context
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -115,3 +115,37 @@ lint:
 
 actionlint:
 	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION) .github/workflows/*.yml
+
+# --- Release (D-62, D-75) ---
+# goreleaser runs through `go run` at the pinned version, so nothing is added to
+# go.mod. The first run compiles it, which takes a few minutes.
+GORELEASER_VERSION := v2.18.2
+GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
+
+# Validates .goreleaser.yaml, builds this machine's binary the way a release
+# does (SPA, ldflags, trimpath) and runs its version subcommand. Needs no Docker.
+release-check:
+	$(GORELEASER) check
+	$(GORELEASER) build --snapshot --clean --single-target --output bin/bayplan-release
+	bin/bayplan-release version
+
+# The release image for this machine's engine, built exactly as a release builds
+# it but not pushed, signed or SBOM'd. Needs Docker with buildx.
+image:
+	$(GORELEASER) release --snapshot --clean --skip=publish,sign,sbom
+
+# Runs the image `make image` built: healthy, UID 1000, setup-token through
+# docker exec, state kept across docker rm -f, and its own container ID. Needs Docker.
+image-smoke:
+	scripts/image-smoke.sh
+
+# The build context for the :edge image: both binaries laid out as
+# $TARGETPLATFORM/bayplan next to the Dockerfile, as goreleaser does it. CI
+# pushes it with buildx from the main branch.
+edge-context:
+	$(GORELEASER) build --snapshot --clean
+	rm -rf dist/edge
+	mkdir -p dist/edge/linux/amd64 dist/edge/linux/arm64
+	cp "$$(find dist -path 'dist/edge' -prune -o -type f -name bayplan -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/bayplan
+	cp "$$(find dist -path 'dist/edge' -prune -o -type f -name bayplan -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/bayplan
+	cp Dockerfile dist/edge/Dockerfile

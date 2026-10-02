@@ -9,3 +9,4 @@ CLAUDE.md
 !/web/dist/.gitkeep
 /.devdata/
 /coverage/
+/dist/
