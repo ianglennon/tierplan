@@ -84,6 +84,9 @@ type Login struct {
 	ipLimiter   *IPLimiter
 	log         *slog.Logger
 	now         func() time.Time
+	// anon, when set, records the rate_limited refusal instead of aud, so a flood
+	// of them from one address cannot starve the single write connection (WR-04).
+	anon AuditRecorder
 	// dummy is the stand-in password check for accounts that do not exist or
 	// may not sign in. It is DummyVerify; tests count its calls.
 	dummy func(string)
@@ -104,6 +107,12 @@ func NewLogin(s *store.Store, sess *Sessions, w *audit.Writer, maxFailures int, 
 		ipLimiter: ipLimiter, log: log, now: now, dummy: DummyVerify,
 	}
 }
+
+// SetAnonymousAuditor makes the per-address rate_limited refusal, and only it,
+// go through a (normally an AuditThrottle). Every other refusal stays a direct,
+// synchronous write: a failed sign-in that passed the limiter is one row each
+// (T-01-35, D-05).
+func (l *Login) SetAnonymousAuditor(a AuditRecorder) { l.anon = a }
 
 // Login checks a username and password and, if they are right, creates a
 // session. Every refusal is ErrInvalidCredentials: any other error is a failure
@@ -127,7 +136,7 @@ func (l *Login) Login(ctx context.Context, in LoginInput) (LoginResult, error) {
 	nameChars := strconv.Itoa(utf8.RuneCountInString(in.Username))
 
 	if l.ipLimiter != nil && !l.ipLimiter.Allow(in.IP) {
-		return LoginResult{}, l.refuse(ctx, in, targetNotChecked, reasonRateLimited, "", "")
+		return LoginResult{}, l.refuseVia(ctx, l.anon, in, targetNotChecked, reasonRateLimited, "", "")
 	}
 
 	var u sqlc.User
@@ -169,7 +178,15 @@ func (l *Login) Login(ctx context.Context, in LoginInput) (LoginResult, error) {
 // refuse records a refusal that changes no state and returns the one error.
 // target is a stored username or one of the fixed placeholders, never raw input.
 func (l *Login) refuse(ctx context.Context, in LoginInput, target, reason, userID, nameChars string) error {
-	if err := l.aud.Record(ctx, l.failureEntry(in, target, reason, userID, nameChars)); err != nil {
+	return l.refuseVia(ctx, nil, in, target, reason, userID, nameChars)
+}
+
+// refuseVia is refuse with a recorder chosen by the caller; nil means the writer.
+func (l *Login) refuseVia(ctx context.Context, via AuditRecorder, in LoginInput, target, reason, userID, nameChars string) error {
+	if via == nil {
+		via = l.aud
+	}
+	if err := via.Record(ctx, l.failureEntry(in, target, reason, userID, nameChars)); err != nil {
 		return fmt.Errorf("auth: audit failed sign-in: %w", err)
 	}
 	return ErrInvalidCredentials

@@ -20,3 +20,18 @@ func (l *IPLimiter) MaxEntries() int {
 	defer l.mu.Unlock()
 	return l.maxEntries
 }
+
+// SetMaxPending lowers how many distinct suppressed-refusal keys the throttle
+// holds before it folds new ones into a per-action overflow summary.
+func (t *AuditThrottle) SetMaxPending(n int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.maxPending = n
+}
+
+// Pending is how many keys currently hold suppressed refusals.
+func (t *AuditThrottle) Pending() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.pending)
+}
