@@ -4,17 +4,9 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SETTINGS_TABS } from "@/features/settings/tabs";
 import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
-
-// The Settings tabs (D-60), in display order. Each is a route, so the address
-// bar and the back button follow the tab. A tab shows only to a user who has the
-// permission its page needs; the server checks it again.
-const TABS = [
-  { key: "general", to: "/settings/general", perm: "settings.read" },
-  { key: "environments", to: "/settings/environments", perm: "environments.write" },
-  { key: "about", to: "/settings/about", perm: "settings.read" },
-] as const;
 
 // SettingsLayout is the Settings area: the page title and a tab bar driven by
 // the URL. The Radix tab roles come from the Tabs components; the active tab is
@@ -24,8 +16,10 @@ function SettingsLayout() {
   const t = useT();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { data: me } = useMe();
-  const tabs = TABS.filter((tab) => hasPermission(me, tab.perm));
-  const active = TABS.find((tab) => pathname === tab.to || pathname.startsWith(`${tab.to}/`))?.key;
+  const tabs = SETTINGS_TABS.filter((tab) => hasPermission(me, tab.perm));
+  const active = SETTINGS_TABS.find(
+    (tab) => pathname === tab.to || pathname.startsWith(`${tab.to}/`),
+  )?.key;
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
