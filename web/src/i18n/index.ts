@@ -8,6 +8,7 @@ import auth from "./en/auth.json";
 import common from "./en/common.json";
 import dashboard from "./en/dashboard.json";
 import env from "./en/env.json";
+import settings from "./en/settings.json";
 import setup from "./en/setup.json";
 import shell from "./en/shell.json";
 
@@ -23,6 +24,7 @@ export const resources = {
     common,
     dashboard,
     env,
+    settings,
     setup,
     shell,
   },

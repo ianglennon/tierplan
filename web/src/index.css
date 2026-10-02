@@ -15,6 +15,7 @@
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
   --color-accent-ink: var(--accent-ink);
+  --color-destructive-fill: var(--destructive-fill);
   --color-status-online: var(--status-online);
   --color-status-online-text: var(--status-online-text);
   --color-status-warning: var(--status-warning);
@@ -82,6 +83,7 @@
   --input: oklch(0.922 0 0);
   --ring: #4338ca;
   --accent-ink: #4338ca;
+  --destructive-fill: #dc2626;
   --status-online: #16a34a;
   --status-online-text: #15803d;
   --status-warning: #d97706;
@@ -125,6 +127,7 @@
   --input: oklch(1 0 0 / 15%);
   --ring: #a5b4fc;
   --accent-ink: #a5b4fc;
+  --destructive-fill: #dc2626;
   --status-online: #4ade80;
   --status-online-text: #4ade80;
   --status-warning: #fbbf24;

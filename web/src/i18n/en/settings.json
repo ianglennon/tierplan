@@ -1,0 +1,45 @@
+{
+  "settings": {
+    "title": "Settings",
+    "tabsLabel": "Settings sections",
+    "tabs": {
+      "environments": "Environments"
+    },
+    "saved": "Settings saved.",
+    "environments": {
+      "tabTitle": "Environments",
+      "loading": "Loading environments…",
+      "loadFailed": "Couldn't load the environments.",
+      "retry": "Try again",
+      "engine": "Engine",
+      "engineMissing": "—",
+      "rename": "Rename",
+      "renameAria": "Rename {{name}}",
+      "remove": "Remove host",
+      "removeAria": "Remove host {{name}}"
+    },
+    "rename": {
+      "title": "Rename environment",
+      "description": "Choose how this environment is named across Bayplan.",
+      "name": {
+        "label": "Name",
+        "helper": "Up to 64 characters."
+      },
+      "cancel": "Cancel",
+      "submit": "Rename environment",
+      "pending": "Renaming…",
+      "errors": {
+        "required": "Enter a name.",
+        "tooLong": "Use 64 characters or fewer.",
+        "invalid": "Enter a name of 1 to 64 characters."
+      }
+    },
+    "removeConfirm": {
+      "title": "Remove {{name}}?",
+      "body": "Bayplan will stop managing this host. Containers, images, volumes and networks on it are not changed. You can add it again in Settings.",
+      "cancel": "Cancel",
+      "confirm": "Remove host",
+      "pending": "Removing…"
+    }
+  }
+}
