@@ -10,58 +10,63 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
-// fakeInfo is a FileInfo whose Sys() reports an owner, so the ownership logic
-// runs without root.
-type fakeInfo struct {
-	name string
-	dir  bool
-	uid  uint32
-	gid  uint32
-}
+// socketInfo is a FileInfo for the pretend Docker socket; Sys reports its group.
+type socketInfo struct{ gid uint32 }
 
-func (f fakeInfo) Name() string { return f.name }
-func (f fakeInfo) Size() int64  { return 0 }
-func (f fakeInfo) Mode() fs.FileMode {
-	if f.dir {
-		return fs.ModeDir | 0o750
-	}
-	return 0o600
-}
-func (f fakeInfo) ModTime() time.Time { return time.Time{} }
-func (f fakeInfo) IsDir() bool        { return f.dir }
-func (f fakeInfo) Sys() any           { return &syscall.Stat_t{Uid: f.uid, Gid: f.gid} }
+func (s socketInfo) Name() string       { return "docker.sock" }
+func (s socketInfo) Size() int64        { return 0 }
+func (s socketInfo) Mode() fs.FileMode  { return fs.ModeSocket | 0o660 }
+func (s socketInfo) ModTime() time.Time { return time.Time{} }
+func (s socketInfo) IsDir() bool        { return false }
+func (s socketInfo) Sys() any           { return &syscall.Stat_t{Gid: s.gid} }
 
-// rig records every privileged call, in order, and serves a fake file tree.
+// rig builds a real directory tree under t.TempDir() and fakes only the
+// ownership and the privileged calls, so the os.Root walk runs for real while
+// the test needs no root. Every privileged call is recorded, in order.
 type rig struct {
 	t     *testing.T
+	base  string // the real directory that holds the data directory
 	euid  int
 	calls []string
-	// tree maps a path to its owner; dirs lists the directories among them.
-	tree map[string]fakeInfo
-	// children maps a directory to the names inside it.
-	children map[string][]string
-	chowns   []string
+	// owners maps a data-directory-relative name ("." is the data directory,
+	// "backups/x.db" an entry of a subdirectory) to a pretend owner; a name
+	// that is not listed is owned by root.
+	owners map[string][2]uint32
+	// socketGID is the group of the pretend Docker socket; 0 means no socket.
+	socketGID uint32
+	chowns    []string
 
 	setuidErr error
 }
 
 func newRig(t *testing.T) *rig {
-	return &rig{t: t, euid: 0, tree: map[string]fakeInfo{}, children: map[string][]string{}}
+	t.Helper()
+	return &rig{t: t, base: t.TempDir(), euid: 0, owners: map[string][2]uint32{}}
 }
 
-func (r *rig) add(path string, uid, gid uint32, dir bool) {
-	r.tree[path] = fakeInfo{name: filepath.Base(path), dir: dir, uid: uid, gid: gid}
-	if parent := filepath.Dir(path); parent != path {
-		if _, known := r.tree[parent]; known {
-			r.children[parent] = append(r.children[parent], filepath.Base(path))
+// data is the path of the data directory the rig builds.
+func (r *rig) data() string { return filepath.Join(r.base, "data") }
+
+// add creates a file or directory below the data directory and records its
+// owner. The name is relative to the data directory.
+func (r *rig) add(name string, uid, gid uint32, dir bool) {
+	r.t.Helper()
+	path := filepath.Join(r.data(), name)
+	if dir {
+		if err := os.MkdirAll(path, 0o750); err != nil {
+			r.t.Fatal(err)
 		}
+	} else if err := os.WriteFile(path, nil, 0o600); err != nil {
+		r.t.Fatal(err)
 	}
+	r.owners[name] = [2]uint32{uid, gid}
 }
 
 func (r *rig) options(dataDir, socket string) Options {
@@ -70,33 +75,28 @@ func (r *rig) options(dataDir, socket string) Options {
 		SocketPath: socket,
 		Geteuid:    func() int { return r.euid },
 		Stat: func(p string) (os.FileInfo, error) {
-			if fi, ok := r.tree[p]; ok {
-				return fi, nil
+			if p == socket && r.socketGID != 0 {
+				return socketInfo{gid: r.socketGID}, nil
 			}
 			return nil, &fs.PathError{Op: "stat", Path: p, Err: fs.ErrNotExist}
 		},
-		Lchown: func(p string, uid, gid int) error {
-			r.chowns = append(r.chowns, fmt.Sprintf("%s=%d:%d", p, uid, gid))
+		Owner: func(name string, _ fs.FileInfo) (uint32, uint32, bool) {
+			o := r.owners[name]
+			return o[0], o[1], true
+		},
+		Chown: func(_ *os.Root, name string, uid, gid int) error {
+			rec := fmt.Sprintf("%s=%d:%d", name, uid, gid)
+			r.chowns = append(r.chowns, rec)
+			r.calls = append(r.calls, "chown "+rec)
 			return nil
 		},
-		ReadDir: func(p string) ([]os.DirEntry, error) {
-			names, ok := r.children[p]
-			if !ok {
-				if _, exists := r.tree[p]; exists {
-					return nil, nil
-				}
-				return nil, &fs.PathError{Op: "readdir", Path: p, Err: fs.ErrNotExist}
-			}
-			var out []os.DirEntry
-			for _, n := range names {
-				out = append(out, fs.FileInfoToDirEntry(r.tree[filepath.Join(p, n)]))
-			}
-			return out, nil
+		MkdirAll: func(p string, perm os.FileMode) error {
+			r.calls = append(r.calls, "mkdir")
+			return os.MkdirAll(p, perm)
 		},
-		MkdirAll: func(p string, _ os.FileMode) error {
-			r.calls = append(r.calls, "mkdir "+p)
-			r.add(p, 0, 0, true)
-			return nil
+		Umask: func(m int) int {
+			r.calls = append(r.calls, fmt.Sprintf("umask %03o", m))
+			return 0o022
 		},
 		Setgroups: func(g []int) error {
 			r.calls = append(r.calls, fmt.Sprintf("setgroups %v", g))
@@ -119,14 +119,14 @@ func (r *rig) options(dataDir, socket string) Options {
 
 func TestDropJoinsTheSocketGroupThenSetsGIDThenUID(t *testing.T) {
 	r := newRig(t)
-	r.add("/data", 1000, 1000, true)
-	r.add("/run/docker.sock", 0, 998, false)
+	r.add(".", 1000, 1000, true)
+	r.socketGID = 998
 
-	res, err := Drop(r.options("/data", "/run/docker.sock"))
+	res, err := Drop(r.options(r.data(), "/run/docker.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"setgroups [998]", "setgid 1000", "setuid 1000"}
+	want := []string{"umask 077", "setgroups [998]", "setgid 1000", "setuid 1000"}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("privileged calls = %v, want %v", r.calls, want)
 	}
@@ -137,9 +137,9 @@ func TestDropJoinsTheSocketGroupThenSetsGIDThenUID(t *testing.T) {
 
 func TestDropUsesTheOverrideGIDInsteadOfTheSocketGroup(t *testing.T) {
 	r := newRig(t)
-	r.add("/data", 1000, 1000, true)
-	r.add("/run/docker.sock", 0, 998, false)
-	o := r.options("/data", "/run/docker.sock")
+	r.add(".", 1000, 1000, true)
+	r.socketGID = 998
+	o := r.options(r.data(), "/run/docker.sock")
 	gid := 4242
 	o.GIDOverride = &gid
 
@@ -147,20 +147,20 @@ func TestDropUsesTheOverrideGIDInsteadOfTheSocketGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.calls[0] != "setgroups [4242]" || res.GID != 4242 {
+	if !slices.Contains(r.calls, "setgroups [4242]") || res.GID != 4242 {
 		t.Fatalf("calls = %v, result = %+v; want group 4242", r.calls, res)
 	}
 }
 
 func TestDropWithNoSocketJoinsNoSupplementaryGroup(t *testing.T) {
 	r := newRig(t)
-	r.add("/data", 1000, 1000, true)
+	r.add(".", 1000, 1000, true)
 
-	res, err := Drop(r.options("/data", "/run/docker.sock"))
+	res, err := Drop(r.options(r.data(), "/run/docker.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"setgroups []", "setgid 1000", "setuid 1000"}
+	want := []string{"umask 077", "setgroups []", "setgid 1000", "setuid 1000"}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("privileged calls = %v, want %v", r.calls, want)
 	}
@@ -171,49 +171,117 @@ func TestDropWithNoSocketJoinsNoSupplementaryGroup(t *testing.T) {
 
 func TestDropChownsRootOwnedDataEntriesAndLeavesOwnedOnesAlone(t *testing.T) {
 	r := newRig(t)
-	r.add("/data", 0, 0, true) // a fresh bind mount starts root-owned (Pitfall 9)
-	r.add("/data/bayplan.db", 0, 0, false)
-	r.add("/data/bayplan.db-wal", 0, 0, false) // left behind by a CLI run as root (A8)
-	r.add("/data/bayplan.key", 1000, 1000, false)
-	r.add("/data/setup-token", 0, 0, false)
-	r.add("/data/backups", 0, 0, true)
-	r.add("/data/backups/pre-0003.db", 0, 0, false)
-	r.add("/data/tls", 1000, 1000, true)
-	r.add("/data/tls/selfsigned.key", 0, 0, false)
+	r.add(".", 0, 0, true) // a fresh bind mount starts root-owned (Pitfall 9)
+	r.add("bayplan.db", 0, 0, false)
+	r.add("bayplan.db-wal", 0, 0, false) // left behind by a CLI run as root (A8)
+	r.add("bayplan.key", 1000, 1000, false)
+	r.add("setup-token", 0, 0, false)
+	r.add("backups", 0, 0, true)
+	r.add("backups/pre-0003.db", 0, 0, false)
+	r.add("tls", 1000, 1000, true)
+	r.add("tls/selfsigned.key", 0, 0, false)
+	// A directory that is not backups or tls is chowned itself but not entered.
+	r.add("other", 0, 0, true)
+	r.add("other/inner", 0, 0, false)
 
-	if _, err := Drop(r.options("/data", "")); err != nil {
+	if _, err := Drop(r.options(r.data(), "")); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
-		"/data/backups/pre-0003.db=1000:1000",
-		"/data/backups=1000:1000",
-		"/data/bayplan.db-wal=1000:1000",
-		"/data/bayplan.db=1000:1000",
-		"/data/setup-token=1000:1000",
-		"/data/tls/selfsigned.key=1000:1000",
-		"/data=1000:1000",
+		".=1000:1000",
+		"backups/pre-0003.db=1000:1000",
+		"backups=1000:1000",
+		"bayplan.db-wal=1000:1000",
+		"bayplan.db=1000:1000",
+		"other=1000:1000",
+		"setup-token=1000:1000",
+		"tls/selfsigned.key=1000:1000",
 	}
-	got := append([]string(nil), r.chowns...)
-	sortStrings(got)
+	got := slices.Sorted(slices.Values(r.chowns))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("chowns =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	// Ownership is fixed while still root, so before the first identity change.
-	if r.calls[0] != "setgroups []" {
+	if r.calls[len(r.calls)-4] != "umask 077" {
 		t.Fatalf("calls = %v", r.calls)
+	}
+}
+
+func TestDropNeverFollowsASymlinkedSubdirectoryOutOfTheDataDirectory(t *testing.T) {
+	r := newRig(t)
+	r.add(".", 1000, 1000, true)
+	// backups is a link to a directory outside the data directory that holds
+	// root-owned files; a walk that followed it would chown them (T-01-108).
+	outside := filepath.Join(r.base, "outside")
+	if err := os.MkdirAll(outside, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "victim"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(r.data(), "backups")); err != nil {
+		t.Fatal(err)
+	}
+	r.owners["backups"] = [2]uint32{0, 0}
+	r.owners["backups/victim"] = [2]uint32{0, 0}
+
+	if _, err := Drop(r.options(r.data(), "")); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"backups=1000:1000"}; !reflect.DeepEqual(r.chowns, want) {
+		t.Fatalf("chowns = %v, want only the link itself %v", r.chowns, want)
+	}
+}
+
+func TestDropChownsTheRealDirectoryBehindASymlinkedDataDir(t *testing.T) {
+	r := newRig(t)
+	r.add(".", 0, 0, true)
+	link := filepath.Join(r.base, "link")
+	if err := os.Symlink(r.data(), link); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Drop(r.options(link, "")); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{".=1000:1000"}; !reflect.DeepEqual(r.chowns, want) {
+		t.Fatalf("chowns = %v, want %v", r.chowns, want)
 	}
 }
 
 func TestDropCreatesAMissingDataDirectoryBeforeChowningIt(t *testing.T) {
 	r := newRig(t)
-	if _, err := Drop(r.options("/data", "")); err != nil {
+	if _, err := Drop(r.options(r.data(), "")); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.calls) == 0 || r.calls[0] != "mkdir /data" {
-		t.Fatalf("calls = %v, want the data directory created first", r.calls)
+	if len(r.calls) < 2 || r.calls[0] != "mkdir" || r.calls[1] != "chown .=1000:1000" {
+		t.Fatalf("calls = %v, want the data directory created, then chowned", r.calls)
 	}
-	if !reflect.DeepEqual(r.chowns, []string{"/data=1000:1000"}) {
-		t.Fatalf("chowns = %v", r.chowns)
+	if st, err := os.Stat(r.data()); err != nil || !st.IsDir() {
+		t.Fatalf("data directory not created: %v", err)
+	}
+}
+
+func TestDropSetsUmask077BeforeTheIdentityChange(t *testing.T) {
+	r := newRig(t)
+	r.add(".", 0, 0, true)
+	r.add("bayplan.db", 0, 0, false)
+
+	if _, err := Drop(r.options(r.data(), "")); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"chown .=1000:1000",
+		"chown bayplan.db=1000:1000",
+		"umask 077",
+		"setgroups []",
+		"setgid 1000",
+		"setuid 1000",
+	}
+	got := slices.Clone(r.calls)
+	// Directory entries are read in name order; "." is always first.
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
 	}
 }
 
@@ -225,19 +293,17 @@ func TestDropWithAnEmptyDataDirTouchesNoFiles(t *testing.T) {
 	if len(r.chowns) != 0 {
 		t.Fatalf("chowns = %v, want none", r.chowns)
 	}
-	for _, c := range r.calls {
-		if strings.HasPrefix(c, "mkdir") {
-			t.Fatalf("calls = %v, want no directory created", r.calls)
-		}
+	if slices.Contains(r.calls, "mkdir") {
+		t.Fatalf("calls = %v, want no directory created", r.calls)
 	}
 }
 
 func TestDropAsANonRootUserChangesNothing(t *testing.T) {
 	r := newRig(t)
 	r.euid = 1000
-	r.add("/data", 0, 0, true)
+	r.add(".", 0, 0, true)
 
-	res, err := Drop(r.options("/data", "/run/docker.sock"))
+	res, err := Drop(r.options(r.data(), "/run/docker.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,16 +311,16 @@ func TestDropAsANonRootUserChangesNothing(t *testing.T) {
 		t.Fatalf("result = %+v, want Dropped false", res)
 	}
 	if len(r.calls) != 0 || len(r.chowns) != 0 {
-		t.Fatalf("calls = %v, chowns = %v; a non-root process changes nothing", r.calls, r.chowns)
+		t.Fatalf("calls = %v, chowns = %v; a non-root process changes nothing (umask included)", r.calls, r.chowns)
 	}
 }
 
 func TestDropReturnsAnErrorWhenSetuidFails(t *testing.T) {
 	r := newRig(t)
-	r.add("/data", 1000, 1000, true)
+	r.add(".", 1000, 1000, true)
 	r.setuidErr = errors.New("operation not permitted")
 
-	_, err := Drop(r.options("/data", ""))
+	_, err := Drop(r.options(r.data(), ""))
 	if err == nil || !strings.Contains(err.Error(), "operation not permitted") {
 		t.Fatalf("err = %v, want the setuid failure", err)
 	}
@@ -262,8 +328,8 @@ func TestDropReturnsAnErrorWhenSetuidFails(t *testing.T) {
 
 func TestDropRefusesWhenTheProcessIsStillRootAfterTheDrop(t *testing.T) {
 	r := newRig(t)
-	r.add("/data", 1000, 1000, true)
-	o := r.options("/data", "")
+	r.add(".", 1000, 1000, true)
+	o := r.options(r.data(), "")
 	// A Setuid that reports success but changes nothing must not pass.
 	o.Setuid = func(int) error { return nil }
 
@@ -274,9 +340,9 @@ func TestDropRefusesWhenTheProcessIsStillRootAfterTheDrop(t *testing.T) {
 
 func TestDropReturnsAnErrorWhenChownFails(t *testing.T) {
 	r := newRig(t)
-	r.add("/data", 0, 0, true)
-	o := r.options("/data", "")
-	o.Lchown = func(string, int, int) error { return errors.New("read-only file system") }
+	r.add(".", 0, 0, true)
+	o := r.options(r.data(), "")
+	o.Chown = func(*os.Root, string, int, int) error { return errors.New("read-only file system") }
 
 	if _, err := Drop(o); err == nil || !strings.Contains(err.Error(), "read-only file system") {
 		t.Fatalf("err = %v, want the chown failure", err)
@@ -284,14 +350,6 @@ func TestDropReturnsAnErrorWhenChownFails(t *testing.T) {
 	for _, c := range r.calls {
 		if strings.HasPrefix(c, "setuid") {
 			t.Fatalf("calls = %v: the process must not drop while the data directory is unfixed", r.calls)
-		}
-	}
-}
-
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
 		}
 	}
 }
