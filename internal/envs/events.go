@@ -224,11 +224,19 @@ func (h *Hub) run(ctx context.Context, f *feed) {
 	delay := h.retryMin
 	failing := false
 	for ctx.Err() == nil {
-		cli, _, err := h.mon.Client(f.env)
+		cli, st, err := h.mon.Client(f.env)
 		if err != nil {
 			// Offline, unsupported or not probed yet: no stream is held.
 			failing = false
 			delay = h.retryMin
+			if st.State == StateUnknown {
+				// Just added: wait for the first probe instead of for the next
+				// poll, so the feed starts as soon as the engine answers.
+				h.mon.AwaitProbe(ctx, f.env)
+				if _, st, _ = h.mon.Client(f.env); st.State != StateUnknown {
+					continue
+				}
+			}
 			h.pause(ctx, h.poll)
 			continue
 		}

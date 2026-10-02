@@ -64,6 +64,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The recent Docker events of an environment
+         * @description The newest 50 container, image, network and volume events Bayplan has seen on this environment, newest first, for clients that cannot hold a stream open. Events are kept in memory only: the list is empty after a restart until Docker reports something, apart from what the daemon still remembers from the last hour. The live version of this list is a server-sent events stream with the same event data.
+         */
+        get: operations["listRecentEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/images": {
         parameters: {
             query?: never;
@@ -621,6 +641,34 @@ export interface components {
              */
             type: string;
         };
+        EventDTO: {
+            /** @description What happened, for example start, die, pull, connect or create */
+            action: string;
+            /** @description The ID of the container, image, network or volume */
+            actorId: string;
+            /** @description Only name, image and exitCode, when the event had them */
+            attributes: {
+                [key: string]: string;
+            };
+            /** @description A stable ID for the event; the SSE frame id, and what a repeated event is recognised by */
+            id: string;
+            /** @description The container, image, network or volume name; empty when Docker gave none */
+            name: string;
+            /**
+             * Format: date-time
+             * @description When it happened, in UTC, with sub-second precision
+             */
+            time: string;
+            /**
+             * @description What kind of object it is about
+             * @enum {string}
+             */
+            type: "container" | "image" | "network" | "volume";
+        };
+        EventListBody: {
+            /** @description At most 50 events, newest first */
+            items: components["schemas"]["EventDTO"][] | null;
+        };
         ImageItem: {
             /** Format: date-time */
             created?: string;
@@ -1002,6 +1050,39 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    listRecentEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
                 };
             };
         };

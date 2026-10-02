@@ -545,6 +545,78 @@
         },
         "type": "object"
       },
+      "EventDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "What happened, for example start, die, pull, connect or create",
+            "type": "string"
+          },
+          "actorId": {
+            "description": "The ID of the container, image, network or volume",
+            "type": "string"
+          },
+          "attributes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Only name, image and exitCode, when the event had them",
+            "type": "object"
+          },
+          "id": {
+            "description": "A stable ID for the event; the SSE frame id, and what a repeated event is recognised by",
+            "type": "string"
+          },
+          "name": {
+            "description": "The container, image, network or volume name; empty when Docker gave none",
+            "type": "string"
+          },
+          "time": {
+            "description": "When it happened, in UTC, with sub-second precision",
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "description": "What kind of object it is about",
+            "enum": [
+              "container",
+              "image",
+              "network",
+              "volume"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "time",
+          "type",
+          "action",
+          "actorId",
+          "name",
+          "attributes"
+        ],
+        "type": "object"
+      },
+      "EventListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "At most 50 events, newest first",
+            "items": {
+              "$ref": "#/components/schemas/EventDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "ImageItem": {
         "additionalProperties": false,
         "properties": {
@@ -1413,6 +1485,57 @@
           }
         },
         "summary": "List the containers of an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/events": {
+      "get": {
+        "description": "The newest 50 container, image, network and volume events Bayplan has seen on this environment, newest first, for clients that cannot hold a stream open. Events are kept in memory only: the list is empty after a restart until Docker reports something, apart from what the daemon still remembers from the last hour. The live version of this list is a server-sent events stream with the same event data.",
+        "operationId": "listRecentEvents",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The recent Docker events of an environment",
         "tags": [
           "environments"
         ]

@@ -318,7 +318,7 @@ func TestBuildSeedsTheAdminRoleAndEveryRouteIsGuarded(t *testing.T) {
 		t.Errorf("the assembled router has an unguarded route: %v", err)
 	}
 	// The openapi subcommand builds the same routes with no dependencies.
-	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.DashboardDeps{})); err != nil {
+	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.DashboardDeps{}, api.EventsDeps{})); err != nil {
 		t.Errorf("the dependency-free router has an unguarded route: %v", err)
 	}
 }
@@ -486,5 +486,111 @@ func TestBuildAddsNoEnvironmentAndNeverContactsDockerUntilAnAdminOptsIn(t *testi
 	}
 	if _, err := srv.Environments().Resolve(context.Background(), "nope"); !errors.Is(err, httpx.ErrEnvNotFound) {
 		t.Errorf("Resolve(unknown) = %v, want ErrEnvNotFound", err)
+	}
+}
+
+// Events (plan 21): the hub follows the environments the monitor follows, and an
+// open event stream does not hold a graceful shutdown up (Pitfall 8).
+func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "node-1", Events: []dockertest.FakeEvent{
+		{Type: "container", Action: "start", ActorID: "c-1", TimeNano: time.Now().Add(-time.Minute).UnixNano(), Attributes: map[string]string{"name": "web"}},
+	}})
+	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data", "DOCKER_HOST": "unix://" + fake.SocketPath()})
+	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	const password = "correct horse battery"
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	tx, err := srv.Store().Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().UnixNano()
+	if err := srv.Store().Q.WithTx(tx).InsertUser(ctx, sqlc.InsertUserParams{
+		ID: "u1", Username: "admin", PasswordHash: hash, CreatedAt: now, UpdatedAt: now, PasswordChangedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbac.AssignGlobalRole(ctx, tx, srv.Store().Q, rbac.PrincipalUser, "u1", rbac.AdminRoleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Adding the environment starts its feed with no extra wiring: the hub
+	// watches the monitor.
+	added, err := srv.Environments().AddLocal(ctx, audit.SystemCLI, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); len(srv.Hub().Recent(added.ID, 10)) == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the hub never received the daemon's buffered event")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "http://" + ln.Addr().String()
+	sctx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- srv.serve(sctx, ln) }()
+
+	loginReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/auth/login", strings.NewReader(`{"username":"admin","password":"`+password+`"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginResp, err := http.DefaultClient.Do(loginReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK || len(loginResp.Cookies()) != 1 {
+		t.Fatalf("login = %d", loginResp.StatusCode)
+	}
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/env/"+added.ID+"/events/stream", nil)
+	req.AddCookie(loginResp.Cookies()[0])
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("stream = %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	buf := make([]byte, 4096)
+	n, err := resp.Body.Read(buf)
+	if err != nil || !strings.Contains(string(buf[:n]), "event: docker") || !strings.Contains(string(buf[:n]), `"actorId":"c-1"`) {
+		t.Fatalf("first read = %q, %v, want the backlog frame", buf[:n], err)
+	}
+
+	start := time.Now()
+	stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("serve returned %v with a stream open, want a clean shutdown", err)
+		}
+		if took := time.Since(start); took > 5*time.Second {
+			t.Errorf("shutdown took %v with a stream open, want it not to wait for the stream", took)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("serve did not return with a stream open")
+	}
+
+	// Closing the hub dropped every feed with its events.
+	if got := srv.Hub().Recent(added.ID, 1); len(got) != 0 {
+		t.Errorf("the hub still holds events after shutdown: %v", got)
 	}
 }

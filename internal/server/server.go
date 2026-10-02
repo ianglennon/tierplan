@@ -34,8 +34,8 @@ import (
 
 const (
 	// readHeaderTimeout and idleTimeout bound slow clients (T-01-17, Pitfall 8).
-	// There is deliberately no global WriteTimeout: SSE streams in plan 21 set
-	// per-handler deadlines instead.
+	// There is deliberately no global WriteTimeout: the SSE events stream
+	// (plan 21) lives for hours and clears its own write deadline.
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 10 * time.Second
@@ -55,9 +55,12 @@ type Server struct {
 	envs    *envs.Service
 	monitor *envs.Monitor
 	// snapshots caches the resource lists per environment for a few seconds.
-	// The events feed (plan 21) calls Invalidate on it.
+	// The events hub invalidates it on every Docker event.
 	snapshots *envs.Snapshots
-	router    *httpx.Router
+	// hub holds one Docker events stream per online environment and fans it
+	// out to the browsers watching (plan 21).
+	hub    *envs.Hub
+	router *httpx.Router
 
 	// stopBackground ends the nightly audit prune and waits for it, so Close
 	// never closes the database under a running prune.
@@ -68,7 +71,7 @@ type Server struct {
 // NewRouter wires every operation. It takes plain dependencies so the
 // `openapi` subcommand can build the same handlers without a database or a
 // socket.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, dashboard api.DashboardDeps) *httpx.Router {
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, dashboard api.DashboardDeps, events api.EventsDeps) *httpx.Router {
 	r := httpx.New(opts)
 	api.RegisterSystem(r, sys)
 	api.RegisterSetup(r, setup)
@@ -77,6 +80,7 @@ func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, auth
 	api.RegisterLocalHost(r, localHost)
 	api.RegisterEnvironments(r, environments)
 	api.RegisterDashboard(r, dashboard)
+	api.RegisterEvents(r, events)
 	return r
 }
 
@@ -191,6 +195,10 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 	// The dashboard counts and the four lists read one snapshot of Docker, cached
 	// for 5 seconds per environment (Pitfall 22, D-57).
 	snapshots := envs.NewSnapshots(monitor, envs.DefaultSnapshotTTL, time.Now)
+	// One Docker events stream per online environment, in memory only (D-57).
+	// The hub watches the monitor, so it starts and stops with each environment
+	// and needs no wiring in the environment service.
+	hub := envs.NewHub(monitor, snapshots, log, time.Now)
 
 	spa := webui.Handler(web.FS())
 	router := NewRouter(httpx.Options{
@@ -231,9 +239,12 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		Log:      log,
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
 		api.EnvironmentsDeps{Envs: envSvc, Checker: checker, Log: log},
-		api.DashboardDeps{Snapshots: snapshots, SelfContainerID: selfID, Log: log})
+		api.DashboardDeps{Snapshots: snapshots, SelfContainerID: selfID, Log: log},
+		api.EventsDeps{Hub: hub, Log: log})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
+		hub.Close()
+		monitor.StopAll()
 		_ = st.Close()
 		return nil, err
 	}
@@ -250,6 +261,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 		envs:      envSvc,
 		monitor:   monitor,
 		snapshots: snapshots,
+		hub:       hub,
 		router:    router,
 	}
 
@@ -264,6 +276,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*Server, e
 	if err := envSvc.StartAll(bg); err != nil {
 		stop()
 		srv.background.Wait()
+		hub.Close()
 		monitor.StopAll()
 		_ = st.Close()
 		return nil, fmt.Errorf("start environment monitors: %w", err)
@@ -297,11 +310,16 @@ func (s *Server) Environments() *envs.Service { return s.envs }
 // invalidates it when Docker reports a change.
 func (s *Server) Snapshots() *envs.Snapshots { return s.snapshots }
 
-// Close stops background work, including the environment monitors, and
-// releases the database. Run calls it on exit; it is safe to call again.
+// Hub is the per-environment Docker events hub.
+func (s *Server) Hub() *envs.Hub { return s.hub }
+
+// Close stops background work, including the events streams and the
+// environment monitors, and releases the database. Run calls it on exit; it is
+// safe to call again.
 func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
+	s.hub.Close()
 	s.monitor.StopAll()
 	return s.store.Close()
 }
@@ -328,6 +346,10 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 	}
+	// Shutdown waits for open requests, and an events stream never ends by
+	// itself. Closing the hub ends every stream, so a restart is not held up for
+	// the whole shutdown timeout by a browser that has the feed open.
+	srv.RegisterOnShutdown(s.hub.Close)
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	s.log.Info("bayplan listening", "addr", ln.Addr().String())
