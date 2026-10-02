@@ -6,6 +6,7 @@ package dockerx_test
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"slices"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/engine"
+	"github.com/ianglennon/bayplan/internal/envs"
 )
 
 // Real-engine checks (D-28). CI runs this against docker:24-dind through
@@ -285,4 +287,84 @@ func TestIntegrationSnapshotCountsEqualTheCreatedResources(t *testing.T) {
 			t.Errorf("nodes/services = %v/%v, want 1/1", snap.Counts.Nodes, snap.Counts.Services)
 		}
 	})
+}
+
+// TestIntegrationEventsHubSeesAContainerStart checks the events feed against a
+// real engine of whichever major CI runs (plan 21, ENV-07): a subscriber of the
+// hub receives the container start event within 5 seconds, with the attribute
+// allowlist applied to what a real daemon sends (T-01-88). The hub runs behind
+// a real monitor over the test-only TCP transport, the same code path as the
+// product.
+func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
+	host := dockertest.DockerHost(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	raw := dockertest.RawClient(t, host)
+
+	pull, err := raw.ImagePull(ctx, "alpine:3", client.ImagePullOptions{})
+	if err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+	if err := pull.Wait(ctx); err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+
+	const env = "it-env"
+	mon := envs.NewMonitor(slog.New(slog.DiscardHandler), nil, nil)
+	hub := envs.NewHub(mon, nil, slog.New(slog.DiscardHandler), time.Now)
+	t.Cleanup(mon.StopAll)
+	t.Cleanup(hub.Close)
+	if err := mon.Start(ctx, env, dockertest.TCPTransportFor(host)); err != nil {
+		t.Fatalf("start the monitor: %v", err)
+	}
+	for deadline := time.Now().Add(30 * time.Second); mon.Status(env).State != envs.StateOnline; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the environment never came online: %+v", mon.Status(env))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	_, ch, stop := hub.Subscribe(ctx, env)
+	defer stop()
+
+	name := "bp-ev-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:   name,
+		Config: &container.Config{Image: "alpine:3", Cmd: []string{"sleep", "60"}, Labels: map[string]string{"bayplan.test.secret": "hunter2"}},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() {
+		c, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _ = raw.ContainerRemove(c, name, client.ContainerRemoveOptions{Force: true})
+	})
+	if _, err := raw.ContainerStart(ctx, name, client.ContainerStartOptions{}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("the subscriber channel closed")
+			}
+			t.Logf("event: %s %s %s %v", ev.Type, ev.Action, ev.Name, ev.Attributes)
+			if ev.Type != "container" || ev.Action != "start" || ev.Name != name {
+				continue
+			}
+			for k := range ev.Attributes {
+				if k != "name" && k != "image" && k != "exitCode" {
+					t.Errorf("attribute %q passed the allowlist", k)
+				}
+			}
+			if ev.Attributes["image"] != "alpine:3" || ev.ID == "" || ev.TimeNano == 0 {
+				t.Errorf("start event = %+v", ev)
+			}
+			return
+		case <-timeout:
+			t.Fatal("no container start event within 5 seconds")
+		}
+	}
 }

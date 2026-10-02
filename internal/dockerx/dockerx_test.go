@@ -5,6 +5,8 @@ package dockerx_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net"
 	"reflect"
 	"regexp"
@@ -394,7 +396,7 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 
 // allowedMethods is the exported method set of *dockerx.Client. Later plans add
 // their read-only methods here, deliberately and one at a time (D-52).
-var allowedMethods = []string{"Close", "Probe", "Snapshot"}
+var allowedMethods = []string{"Close", "Events", "Probe", "Snapshot"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 
@@ -673,5 +675,223 @@ func TestSnapshotFailsWhenTheEngineIsDown(t *testing.T) {
 	fake.Stop()
 	if _, err := cli.Snapshot(context.Background(), false); err == nil {
 		t.Fatal("Snapshot succeeded against a stopped engine")
+	}
+}
+
+// The events stream (plan 21, ENV-07, D-57, A12, Pitfall 7). The fake daemon
+// serves /events over a real socket, so the real client code runs.
+
+// waitFor polls cond until it holds, failing after ten seconds.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// recvRow waits for the next row, failing when none comes.
+func recvRow(t *testing.T, rows <-chan dockerx.EventRow) dockerx.EventRow {
+	t.Helper()
+	select {
+	case r, ok := <-rows:
+		if !ok {
+			t.Fatal("the events channel closed while a row was expected")
+		}
+		return r
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for an event row")
+	}
+	return dockerx.EventRow{}
+}
+
+func TestEventsKeepsContainerImageNetworkAndVolumeEventsAndDropsTheNoise(t *testing.T) {
+	base := time.Now().Add(-time.Minute).UnixNano()
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
+		{Type: "container", Action: "create", ActorID: "c1", TimeNano: base + 1, Attributes: map[string]string{"name": "web", "image": "nginx:1.27"}},
+		{Type: "container", Action: "exec_start: sh -c 'echo $SECRET'", ActorID: "c1", TimeNano: base + 2, Attributes: map[string]string{"name": "web"}},
+		{Type: "container", Action: "health_status: healthy", ActorID: "c1", TimeNano: base + 3, Attributes: map[string]string{"name": "web"}},
+		{Type: "image", Action: "pull", ActorID: "nginx:1.27", TimeNano: base + 4, Attributes: map[string]string{"name": "nginx"}},
+		{Type: "network", Action: "connect", ActorID: "n1", TimeNano: base + 5, Attributes: map[string]string{"name": "app", "container": "c1"}},
+		{Type: "volume", Action: "create", ActorID: "data", TimeNano: base + 6, Attributes: map[string]string{"driver": "local"}},
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rows, _ := newClient(t, fake).Events(ctx, time.Now().Add(-time.Hour))
+	var got []dockerx.EventRow
+	for range 4 {
+		got = append(got, recvRow(t, rows))
+	}
+
+	wantTypes := []string{"container", "image", "network", "volume"}
+	wantActions := []string{"create", "pull", "connect", "create"}
+	for i, r := range got {
+		if r.Type != wantTypes[i] || r.Action != wantActions[i] {
+			t.Errorf("row %d = %s %s, want %s %s", i, r.Type, r.Action, wantTypes[i], wantActions[i])
+		}
+		if r.ID == "" || r.TimeNano != base+int64(1+[]int{0, 3, 4, 5}[i]) || r.Time.IsZero() || r.Time.Location() != time.UTC {
+			t.Errorf("row %d has ID %q, TimeNano %d, Time %v", i, r.ID, r.TimeNano, r.Time)
+		}
+	}
+	if got[0].ActorID != "c1" || got[0].Name != "web" {
+		t.Errorf("the container row = %+v", got[0])
+	}
+	if got[3].Name != "data" {
+		t.Errorf("a volume's name is its actor ID, got %q", got[3].Name)
+	}
+	select {
+	case r := <-rows:
+		t.Errorf("a fifth row arrived: %+v (exec and health events must be dropped)", r)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestEventsDropsAttachDetachResizeAndTopToo(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
+	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+
+	for _, a := range []string{"attach", "detach", "resize", "top", "exec_die", "exec_create: sh", "health_status: unhealthy"} {
+		fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: a, ActorID: "c1"})
+	}
+	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c1"})
+	if r := recvRow(t, rows); r.Action != "die" {
+		t.Errorf("first kept row = %+v, want the die event", r)
+	}
+}
+
+func TestEventsCopiesOnlyNameImageAndExitCode(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
+	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+
+	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c1", Attributes: map[string]string{
+		"name": "web", "image": "nginx:1.27", "exitCode": "137",
+		"com.docker.compose.project": "shop", "API_TOKEN": "hunter2", "execID": "abc", "signal": "9",
+	}})
+	r := recvRow(t, rows)
+	want := map[string]string{"name": "web", "image": "nginx:1.27", "exitCode": "137"}
+	if !reflect.DeepEqual(r.Attributes, want) {
+		t.Errorf("Attributes = %v, want only %v (T-01-88)", r.Attributes, want)
+	}
+}
+
+func TestEventsAskForTheFourTypesAndPassSinceAsSecondsOrSecondsAndNanoseconds(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	cli := newClient(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, _ = cli.Events(ctx, time.Unix(1700000000, 0))
+	_, _ = cli.Events(ctx, time.Unix(1700000000, 123456789))
+	_, _ = cli.Events(ctx, time.Time{})
+	waitFor(t, "three requests", func() bool { return len(fake.EventQueries()) == 3 })
+
+	qs := fake.EventQueries()
+	sinces := []string{qs[0].Get("since"), qs[1].Get("since"), qs[2].Get("since")}
+	slices.Sort(sinces)
+	want := []string{"", "1700000000", "1700000000.123456789"}
+	if !slices.Equal(sinces, want) {
+		t.Errorf("since values = %q, want %q", sinces, want)
+	}
+	var f map[string]map[string]bool
+	if err := json.Unmarshal([]byte(qs[0].Get("filters")), &f); err != nil {
+		t.Fatalf("filters %q: %v", qs[0].Get("filters"), err)
+	}
+	if !reflect.DeepEqual(f, map[string]map[string]bool{"type": {"container": true, "image": true, "network": true, "volume": true}}) {
+		t.Errorf("filters = %v, want the four types", f)
+	}
+}
+
+func TestEventsEndsWithAnErrorWhenTheStreamDrops(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rows, errc := newClient(t, fake).Events(ctx, time.Time{})
+	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+
+	fake.DropEventStreams()
+	select {
+	case _, ok := <-rows:
+		if ok {
+			t.Fatal("a row arrived on a dropped stream")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the rows channel did not close after the drop")
+	}
+	if err := <-errc; err == nil {
+		t.Error("a dropped stream reported no error; the caller cannot tell it ended")
+	}
+}
+
+func TestEventsStopsWhenTheContextEnds(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	rows, errc := newClient(t, fake).Events(ctx, time.Time{})
+	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+
+	cancel()
+	select {
+	case _, ok := <-rows:
+		if ok {
+			t.Fatal("a row arrived after cancel")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the rows channel did not close after the context ended")
+	}
+	if err := <-errc; !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+	waitFor(t, "the daemon to see the stream end", func() bool { return fake.OpenEventStreams() == 0 })
+}
+
+func TestEventsDoesNotHoldTheClientLockSoProbeStillRuns(t *testing.T) {
+	// A stream lives for hours. If it held the read lock Probe, which takes the
+	// write lock every 30 seconds, would wait forever and the monitor could
+	// never see the environment go offline.
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	cli := newClient(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, _ = cli.Events(ctx, time.Time{})
+	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+
+	pctx, pcancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer pcancel()
+	if res, err := cli.Probe(pctx); err != nil || !res.Reachable {
+		t.Fatalf("Probe while a stream is open: %+v, %v", res, err)
+	}
+}
+
+func TestEventRowIDIsStableAndTellsEventsApart(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
+		{Type: "container", Action: "start", ActorID: "c1", TimeNano: 1_700_000_000_000_000_001},
+		{Type: "container", Action: "start", ActorID: "c2", TimeNano: 1_700_000_000_000_000_001},
+		{Type: "container", Action: "die", ActorID: "c1", TimeNano: 1_700_000_000_000_000_001},
+	}})
+	read := func() []string {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		rows, _ := newClient(t, fake).Events(ctx, time.Unix(1_700_000_000, 0))
+		var ids []string
+		for range 3 {
+			ids = append(ids, recvRow(t, rows).ID)
+		}
+		return ids
+	}
+	first, second := read(), read()
+	if !slices.Equal(first, second) {
+		t.Errorf("IDs change between reads: %v then %v", first, second)
+	}
+	if first[0] == first[1] || first[0] == first[2] || first[1] == first[2] {
+		t.Errorf("distinct events share an ID: %v", first)
 	}
 }

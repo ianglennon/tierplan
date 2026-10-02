@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
@@ -101,6 +103,32 @@ type FakeConfig struct {
 	// ListDelay is how long /containers/json takes to answer, so a test can
 	// make concurrent callers overlap.
 	ListDelay time.Duration
+	// Events is the history the daemon has buffered when it starts, oldest
+	// first, as /events replays it to a client that passes since.
+	Events []FakeEvent
+}
+
+// FakeEvent is one event of the fake daemon's /events stream. A zero TimeNano
+// means the moment the event is published.
+type FakeEvent struct {
+	Type    string
+	Action  string
+	ActorID string
+	// Attributes are sent as they are, so a test can prove which ones Bayplan
+	// drops.
+	Attributes map[string]string
+	TimeNano   int64
+}
+
+// eventBuffer is how many events a real daemon keeps for a client that asks
+// for history with since (RESEARCH Pitfall 7).
+const eventBuffer = 256
+
+// eventSub is one open /events stream.
+type eventSub struct {
+	ch       chan FakeEvent
+	drop     chan struct{}
+	dropOnce sync.Once
 }
 
 // FakeContainer is one entry of /containers/json. Labels and Mounts exist so a
@@ -182,6 +210,12 @@ type Fake struct {
 	cfg      FakeConfig
 	requests []string
 	srv      *httptest.Server // nil while the daemon is stopped
+
+	// evMu guards the events history, the open streams and the queries seen.
+	evMu      sync.Mutex
+	evHistory []FakeEvent
+	evSubs    map[*eventSub]struct{}
+	evQueries []url.Values
 }
 
 var versionPrefix = regexp.MustCompile(`^/v(\d+)\.(\d+)(/.*)$`)
@@ -204,7 +238,8 @@ func NewFake(t testing.TB, cfg FakeConfig) *Fake {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults()}
+	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults(), evSubs: map[*eventSub]struct{}{}}
+	f.evHistory = append(f.evHistory, cfg.Events...)
 	if err := f.listen(); err != nil {
 		t.Fatalf("listen on the fake daemon socket: %v", err)
 	}
@@ -237,6 +272,8 @@ func (f *Fake) Stop() {
 	f.srv = nil
 	f.mu.Unlock()
 	if srv != nil {
+		// An open /events stream would keep Close waiting.
+		f.DropEventStreams()
 		srv.Close()
 	}
 }
@@ -382,6 +419,8 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 				ControlAvailable: cfg.SwarmControl,
 			},
 		})
+	case "/events":
+		f.serveEvents(w, r)
 	case "/containers/json":
 		if cfg.ListDelay > 0 {
 			select {
@@ -584,4 +623,155 @@ func RawClient(t testing.TB, host string) *client.Client {
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	return cli
+}
+
+// PublishEvent adds an event to the daemon's buffered history and sends it to
+// every open /events stream, as the daemon does when something happens on the
+// host. A zero TimeNano is replaced with the current time.
+func (f *Fake) PublishEvent(e FakeEvent) {
+	if e.TimeNano == 0 {
+		e.TimeNano = time.Now().UnixNano()
+	}
+	f.evMu.Lock()
+	defer f.evMu.Unlock()
+	f.evHistory = append(f.evHistory, e)
+	if len(f.evHistory) > eventBuffer {
+		f.evHistory = f.evHistory[len(f.evHistory)-eventBuffer:]
+	}
+	for sub := range f.evSubs {
+		select {
+		case sub.ch <- e:
+		default: // a stream nobody reads is as good as dropped
+			sub.dropOnce.Do(func() { close(sub.drop) })
+		}
+	}
+}
+
+// ClearEvents empties the buffered history, as a daemon restart does.
+func (f *Fake) ClearEvents() {
+	f.evMu.Lock()
+	defer f.evMu.Unlock()
+	f.evHistory = nil
+}
+
+// DropEventStreams ends every open /events stream without ending the daemon,
+// as a network blip or a proxy timeout would.
+func (f *Fake) DropEventStreams() {
+	f.evMu.Lock()
+	defer f.evMu.Unlock()
+	for sub := range f.evSubs {
+		sub.dropOnce.Do(func() { close(sub.drop) })
+	}
+}
+
+// OpenEventStreams is how many /events streams are open now.
+func (f *Fake) OpenEventStreams() int {
+	f.evMu.Lock()
+	defer f.evMu.Unlock()
+	return len(f.evSubs)
+}
+
+// EventQueries returns the query string of every /events request served, in
+// order, so a test can check the since and filters a client sent.
+func (f *Fake) EventQueries() []url.Values {
+	f.evMu.Lock()
+	defer f.evMu.Unlock()
+	return append([]url.Values(nil), f.evQueries...)
+}
+
+// serveEvents answers GET /events like a daemon: the response starts at once
+// (headers flushed), history at or after since is replayed when since is given,
+// then new events follow until the client leaves or the stream is dropped.
+func (f *Fake) serveEvents(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	types := eventTypeFilter(q.Get("filters"))
+	since, hasSince := parseEventSince(q.Get("since"))
+
+	sub := &eventSub{ch: make(chan FakeEvent, 2*eventBuffer), drop: make(chan struct{})}
+	f.evMu.Lock()
+	f.evQueries = append(f.evQueries, q)
+	var replay []FakeEvent
+	if hasSince {
+		for _, e := range f.evHistory {
+			if e.TimeNano >= since {
+				replay = append(replay, e)
+			}
+		}
+	}
+	f.evSubs[sub] = struct{}{}
+	f.evMu.Unlock()
+	defer func() {
+		f.evMu.Lock()
+		delete(f.evSubs, sub)
+		f.evMu.Unlock()
+	}()
+
+	rc := http.NewResponseController(w)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if rc.Flush() != nil {
+		return
+	}
+	enc := json.NewEncoder(w)
+	send := func(e FakeEvent) bool {
+		if types != nil && !types[e.Type] {
+			return true
+		}
+		msg := events.Message{
+			Type: events.Type(e.Type), Action: events.Action(e.Action), Scope: "local",
+			Actor:    events.Actor{ID: e.ActorID, Attributes: e.Attributes},
+			Time:     e.TimeNano / int64(time.Second),
+			TimeNano: e.TimeNano,
+		}
+		return enc.Encode(msg) == nil && rc.Flush() == nil
+	}
+	for _, e := range replay {
+		if !send(e) {
+			return
+		}
+	}
+	for {
+		select {
+		case e := <-sub.ch:
+			if !send(e) {
+				return
+			}
+		case <-sub.drop:
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// eventTypeFilter reads the type terms of the filters query parameter, which is
+// JSON like {"type":{"container":true}}. Nil means no type filter.
+func eventTypeFilter(raw string) map[string]bool {
+	if raw == "" {
+		return nil
+	}
+	var f map[string]map[string]bool
+	if json.Unmarshal([]byte(raw), &f) != nil || len(f["type"]) == 0 {
+		return nil
+	}
+	return f["type"]
+}
+
+// parseEventSince reads since as unix seconds or seconds.nanoseconds and
+// returns nanoseconds.
+func parseEventSince(raw string) (int64, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	secs, frac, _ := strings.Cut(raw, ".")
+	s, err := strconv.ParseInt(secs, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	var ns int64
+	if frac != "" {
+		frac = (frac + "000000000")[:9]
+		ns, _ = strconv.ParseInt(frac, 10, 64)
+	}
+	return s*int64(time.Second) + ns, true
 }
