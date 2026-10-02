@@ -4,11 +4,17 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
-// The Settings tabs (D-60). Each is a route, so the address bar and the back
-// button follow the tab. Plan 26 adds General and About to this list.
-const TABS = [{ key: "environments", to: "/settings/environments" }] as const;
+// The Settings tabs (D-60), in display order. Each is a route, so the address
+// bar and the back button follow the tab. A tab shows only to a user who has the
+// permission its page needs; the server checks it again.
+const TABS = [
+  { key: "general", to: "/settings/general", perm: "settings.read" },
+  { key: "environments", to: "/settings/environments", perm: "environments.write" },
+  { key: "about", to: "/settings/about", perm: "settings.read" },
+] as const;
 
 // SettingsLayout is the Settings area: the page title and a tab bar driven by
 // the URL. The Radix tab roles come from the Tabs components; the active tab is
@@ -17,6 +23,8 @@ const TABS = [{ key: "environments", to: "/settings/environments" }] as const;
 function SettingsLayout() {
   const t = useT();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const { data: me } = useMe();
+  const tabs = TABS.filter((tab) => hasPermission(me, tab.perm));
   const active = TABS.find((tab) => pathname === tab.to || pathname.startsWith(`${tab.to}/`))?.key;
 
   return (
@@ -24,7 +32,7 @@ function SettingsLayout() {
       <h1 className="text-2xl font-semibold">{t("settings.title")}</h1>
       <Tabs value={active ?? ""} className="gap-6">
         <TabsList variant="line" aria-label={t("settings.tabsLabel")} className="h-9 max-md:h-11">
-          {TABS.map((tab) => (
+          {tabs.map((tab) => (
             <TabsTrigger
               key={tab.key}
               value={tab.key}

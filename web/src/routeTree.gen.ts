@@ -18,7 +18,9 @@ import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppEnvEnvIdRouteImport } from './routes/_app/env/$envId'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
+import { Route as AppSettingsAboutRouteImport } from './routes/_app/settings/about'
 import { Route as AppSettingsEnvironmentsRouteImport } from './routes/_app/settings/environments'
+import { Route as AppSettingsGeneralRouteImport } from './routes/_app/settings/general'
 import { Route as AppEnvEnvIdIndexRouteImport } from './routes/_app/env/$envId/index'
 import { Route as AppEnvEnvIdContainersRouteImport } from './routes/_app/env/$envId/containers'
 import { Route as AppEnvEnvIdImagesRouteImport } from './routes/_app/env/$envId/images'
@@ -69,9 +71,19 @@ const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppSettingsRoute,
 } as any)
+const AppSettingsAboutRoute = AppSettingsAboutRouteImport.update({
+  id: '/about',
+  path: '/about',
+  getParentRoute: () => AppSettingsRoute,
+} as any)
 const AppSettingsEnvironmentsRoute = AppSettingsEnvironmentsRouteImport.update({
   id: '/environments',
   path: '/environments',
+  getParentRoute: () => AppSettingsRoute,
+} as any)
+const AppSettingsGeneralRoute = AppSettingsGeneralRouteImport.update({
+  id: '/general',
+  path: '/general',
   getParentRoute: () => AppSettingsRoute,
 } as any)
 const AppEnvEnvIdIndexRoute = AppEnvEnvIdIndexRouteImport.update({
@@ -108,7 +120,9 @@ export interface FileRoutesByFullPath {
   '/audit': typeof AppAuditRoute
   '/settings': typeof AppSettingsRouteWithChildren
   '/env/$envId': typeof AppEnvEnvIdRouteWithChildren
+  '/settings/about': typeof AppSettingsAboutRoute
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
+  '/settings/general': typeof AppSettingsGeneralRoute
   '/settings/': typeof AppSettingsIndexRoute
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
@@ -122,7 +136,9 @@ export interface FileRoutesByTo {
   '/welcome': typeof WelcomeRoute
   '/audit': typeof AppAuditRoute
   '/': typeof AppIndexRoute
+  '/settings/about': typeof AppSettingsAboutRoute
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
+  '/settings/general': typeof AppSettingsGeneralRoute
   '/settings': typeof AppSettingsIndexRoute
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
@@ -140,7 +156,9 @@ export interface FileRoutesById {
   '/_app/settings': typeof AppSettingsRouteWithChildren
   '/_app/': typeof AppIndexRoute
   '/_app/env/$envId': typeof AppEnvEnvIdRouteWithChildren
+  '/_app/settings/about': typeof AppSettingsAboutRoute
   '/_app/settings/environments': typeof AppSettingsEnvironmentsRoute
+  '/_app/settings/general': typeof AppSettingsGeneralRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/_app/env/$envId/images': typeof AppEnvEnvIdImagesRoute
@@ -158,7 +176,9 @@ export interface FileRouteTypes {
     | '/audit'
     | '/settings'
     | '/env/$envId'
+    | '/settings/about'
     | '/settings/environments'
+    | '/settings/general'
     | '/settings/'
     | '/env/$envId/containers'
     | '/env/$envId/images'
@@ -172,7 +192,9 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/audit'
     | '/'
+    | '/settings/about'
     | '/settings/environments'
+    | '/settings/general'
     | '/settings'
     | '/env/$envId/containers'
     | '/env/$envId/images'
@@ -189,7 +211,9 @@ export interface FileRouteTypes {
     | '/_app/settings'
     | '/_app/'
     | '/_app/env/$envId'
+    | '/_app/settings/about'
     | '/_app/settings/environments'
+    | '/_app/settings/general'
     | '/_app/settings/'
     | '/_app/env/$envId/containers'
     | '/_app/env/$envId/images'
@@ -270,11 +294,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsIndexRouteImport
       parentRoute: typeof AppSettingsRoute
     }
+    '/_app/settings/about': {
+      id: '/_app/settings/about'
+      path: '/about'
+      fullPath: '/settings/about'
+      preLoaderRoute: typeof AppSettingsAboutRouteImport
+      parentRoute: typeof AppSettingsRoute
+    }
     '/_app/settings/environments': {
       id: '/_app/settings/environments'
       path: '/environments'
       fullPath: '/settings/environments'
       preLoaderRoute: typeof AppSettingsEnvironmentsRouteImport
+      parentRoute: typeof AppSettingsRoute
+    }
+    '/_app/settings/general': {
+      id: '/_app/settings/general'
+      path: '/general'
+      fullPath: '/settings/general'
+      preLoaderRoute: typeof AppSettingsGeneralRouteImport
       parentRoute: typeof AppSettingsRoute
     }
     '/_app/env/$envId/': {
@@ -316,12 +354,16 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppSettingsRouteChildren {
+  AppSettingsAboutRoute: typeof AppSettingsAboutRoute
   AppSettingsEnvironmentsRoute: typeof AppSettingsEnvironmentsRoute
+  AppSettingsGeneralRoute: typeof AppSettingsGeneralRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
 }
 
 const AppSettingsRouteChildren: AppSettingsRouteChildren = {
+  AppSettingsAboutRoute: AppSettingsAboutRoute,
   AppSettingsEnvironmentsRoute: AppSettingsEnvironmentsRoute,
+  AppSettingsGeneralRoute: AppSettingsGeneralRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
 }
 

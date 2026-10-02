@@ -3,10 +3,9 @@
 
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
-// /settings has no page of its own: it opens the first tab. Plan 26 adds the
-// General tab and retargets this to it.
+// /settings has no page of its own: it opens the first tab, General.
 export const Route = createFileRoute("/_app/settings/")({
   beforeLoad: () => {
-    throw redirect({ to: "/settings/environments", replace: true });
+    throw redirect({ to: "/settings/general", replace: true });
   },
 });

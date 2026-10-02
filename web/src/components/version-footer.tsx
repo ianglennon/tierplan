@@ -16,7 +16,7 @@ const linkClass =
 
 const footerClass = "text-xs text-muted-foreground";
 
-async function fetchVersion() {
+export async function fetchVersion() {
   const { data, error } = await api.GET("/api/version");
   if (!data) throw new Error(`GET /api/version failed: ${JSON.stringify(error)}`);
   return data;

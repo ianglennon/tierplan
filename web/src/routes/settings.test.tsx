@@ -159,10 +159,10 @@ describe("Settings layout", () => {
     await waitFor(() => expect(document.title).toBe("Environments · Lab"));
   });
 
-  it("opens the Environments tab from /settings", async () => {
+  it("opens the General tab from /settings", async () => {
     const router = renderAt("/settings");
     await screen.findByRole("tab", { name: "Environments" });
-    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/environments"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/general"));
   });
 
   it("renders no permission without environments.write, and asks the server for nothing", async () => {
