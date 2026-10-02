@@ -133,6 +133,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
 		DataDir: f.dataInfo, Vault: f.acctVault, Log: log,
 	})
+	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Log: log})
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{Envs: f.envSvc, Checker: checker, Log: log})
 	if f.envSvc != nil && f.snaps != nil {
