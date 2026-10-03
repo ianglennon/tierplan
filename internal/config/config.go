@@ -72,6 +72,11 @@ type Config struct {
 	AgentHeartbeatInterval time.Duration
 	AgentOfflineAfter      time.Duration
 	AgentReconnectGrace    time.Duration
+	// AgentAllowInsecure lets agents connect over plain ws:// although the public
+	// URL is https; for development only. AgentConnectBurst is how many
+	// connection attempts one client address may make at once.
+	AgentAllowInsecure bool
+	AgentConnectBurst  int
 
 	// raw holds the resolved text of every setting, for Redacted.
 	raw map[string]string

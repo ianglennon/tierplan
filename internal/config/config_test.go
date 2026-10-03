@@ -387,3 +387,42 @@ func TestTheOfflineWindowMustBeAtLeastTwiceTheHeartbeatInterval(t *testing.T) {
 		t.Errorf("a window of exactly twice the interval was refused: %v", err)
 	}
 }
+
+func TestNamesListsTheAgentEndpointSettings(t *testing.T) {
+	names := strings.Join(config.Names(), " ")
+	for _, want := range []string{"BAYPLAN_AGENT_ALLOW_INSECURE", "BAYPLAN_AGENT_CONNECT_BURST"} {
+		if !strings.Contains(names, want) {
+			t.Errorf("Names() does not list %s", want)
+		}
+	}
+}
+
+func TestTheAgentEndpointDefaultsAreSecureAndTwoHundred(t *testing.T) {
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AgentAllowInsecure || c.AgentConnectBurst != 200 {
+		t.Fatalf("allow insecure %v, burst %d; want false and 200", c.AgentAllowInsecure, c.AgentConnectBurst)
+	}
+}
+
+func TestTheAgentEndpointSettingsCanBeOverriddenAndBadValuesAreRefused(t *testing.T) {
+	c, err := load(t, nil, envMap{"BAYPLAN_AGENT_ALLOW_INSECURE": "true", "BAYPLAN_AGENT_CONNECT_BURST": "500"}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.AgentAllowInsecure || c.AgentConnectBurst != 500 {
+		t.Fatalf("allow insecure %v, burst %d; want true and 500", c.AgentAllowInsecure, c.AgentConnectBurst)
+	}
+	for name, vars := range map[string]envMap{
+		"a zero burst":      {"BAYPLAN_AGENT_CONNECT_BURST": "0"},
+		"a negative burst":  {"BAYPLAN_AGENT_CONNECT_BURST": "-5"},
+		"a burst of text":   {"BAYPLAN_AGENT_CONNECT_BURST": "many"},
+		"insecure not bool": {"BAYPLAN_AGENT_ALLOW_INSECURE": "sometimes"},
+	} {
+		if _, err := load(t, nil, vars, files{}); err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_") {
+			t.Errorf("%s: error = %v, want one naming a BAYPLAN_AGENT_ variable", name, err)
+		}
+	}
+}

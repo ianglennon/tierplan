@@ -227,6 +227,14 @@ func checkRoute(method, path string, need rbac.Requirement) {
 // rightmost address that is not itself a trusted proxy is used, so a client
 // cannot choose the address by prepending to X-Forwarded-For.
 func clientIP(trusted []netip.Prefix) func(http.Handler) http.Handler {
+	return ClientIPMiddleware(trusted)
+}
+
+// ClientIPMiddleware is the middleware that records the client address and
+// whether the TCP peer is a trusted proxy. The router installs it; it is exported
+// so a handler served outside the router, and the tests of one, can sit behind
+// the same logic.
+func ClientIPMiddleware(trusted []netip.Prefix) func(http.Handler) http.Handler {
 	var strategy realclientip.Strategy
 	if len(trusted) > 0 {
 		ranges := make([]net.IPNet, 0, len(trusted))
