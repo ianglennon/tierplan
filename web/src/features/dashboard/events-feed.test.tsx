@@ -125,6 +125,26 @@ describe("EventsFeed", () => {
     expect(screen.getByText("Manager mgr-2 unreachable, using mgr-1")).toBeTruthy();
   });
 
+  it("sets the Bayplan label in the line of the message, so a word wider than the icon column never covers it", async () => {
+    recent = async () =>
+      Response.json({
+        items: [
+          ev("1", {
+            type: "bayplan",
+            action: "failover",
+            name: "Manager m2 unreachable, using m1",
+            actorId: "env-1",
+          }),
+        ],
+      });
+    show();
+    const row = (await screen.findAllByRole("listitem"))[0] as HTMLElement;
+    const label = within(row).getByText("Bayplan");
+    const message = within(row).getByText("Manager m2 unreachable, using m1");
+    expect(label.parentElement).toBe(message);
+    expect(label.className).not.toMatch(/\bw-\d/);
+  });
+
   it("falls back to the short ID when Docker gave no name", async () => {
     recent = async () => Response.json({ items: [ev("1", { name: "" })] });
     show();

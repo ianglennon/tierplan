@@ -38,6 +38,9 @@ export function useNodeColumn<T extends { node: string }>(): Column<T> {
   return {
     id: "node",
     header: t("aggregate.filter.label"),
+    // One width whatever the names, so the other columns stay put as nodes
+    // report and the filter changes which names are in the column.
+    className: "w-56 min-w-56",
     cell: (row) => <TruncatedText className="max-w-48">{row.node}</TruncatedText>,
   };
 }

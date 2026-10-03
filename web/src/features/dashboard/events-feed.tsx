@@ -45,10 +45,14 @@ function EventRow({ event, showNode }: { event: EventDTO; showNode?: boolean }) 
         <span className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground">
           <RelativeTime value={event.time} />
         </span>
-        <span className="mt-0.5 w-4 shrink-0 text-center text-xs font-semibold text-muted-foreground">
-          {t("dashboard.events.filters.bayplan")}
-        </span>
-        <p className="min-w-0 flex-1 text-sm font-semibold">{event.name}</p>
+        {/* Keeps the message in line with the other rows' text, where the icon is. */}
+        <span className="w-4 shrink-0" aria-hidden="true" />
+        <p className="min-w-0 flex-1 text-sm font-semibold">
+          <span className="mr-2 text-xs font-semibold text-muted-foreground">
+            {t("dashboard.events.filters.bayplan")}
+          </span>
+          {event.name}
+        </p>
       </li>
     );
   }

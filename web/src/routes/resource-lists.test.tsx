@@ -519,6 +519,16 @@ describe("swarm lists", () => {
     ).toBeTruthy();
   });
 
+  it("gives the Node column one width, so the table does not reflow as nodes report", async () => {
+    renderAt("/env/e1/containers");
+    await screen.findByText("web.1");
+    const header = screen.getByRole("columnheader", { name: "Node" });
+    expect(header.className).toContain("w-56");
+    expect(header.className).toContain("min-w-56");
+    const cell = within(screen.getAllByRole("row")[1] as HTMLElement).getAllByRole("cell")[1];
+    expect(cell?.className).toContain("w-56");
+  });
+
   it("asks for one node, sets ?node= and shows only that node when it is chosen", async () => {
     const router = renderAt("/env/e1/containers");
     await screen.findByText("web.1");
