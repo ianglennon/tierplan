@@ -336,3 +336,54 @@ func TestLoadWithNilFlagsAndReadFileError(t *testing.T) {
 		t.Errorf("nil flag set with defaults only should load: %v", err)
 	}
 }
+
+func TestNamesListsTheAgentTimingSettings(t *testing.T) {
+	names := strings.Join(config.Names(), " ")
+	for _, want := range []string{"BAYPLAN_AGENT_HEARTBEAT_INTERVAL", "BAYPLAN_AGENT_OFFLINE_AFTER", "BAYPLAN_AGENT_RECONNECT_GRACE"} {
+		if !strings.Contains(names, want) {
+			t.Errorf("Names() does not list %s", want)
+		}
+	}
+}
+
+func TestTheAgentTimingDefaultsAreTenThirtyAndSixtySeconds(t *testing.T) {
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AgentHeartbeatInterval != 10*time.Second || c.AgentOfflineAfter != 30*time.Second || c.AgentReconnectGrace != 60*time.Second {
+		t.Fatalf("heartbeat %v, offline after %v, grace %v; want 10s, 30s, 60s", c.AgentHeartbeatInterval, c.AgentOfflineAfter, c.AgentReconnectGrace)
+	}
+}
+
+func TestTheAgentTimingSettingsCanBeOverridden(t *testing.T) {
+	c, err := load(t, nil, envMap{
+		"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "5s", "BAYPLAN_AGENT_OFFLINE_AFTER": "20s", "BAYPLAN_AGENT_RECONNECT_GRACE": "2m",
+	}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AgentHeartbeatInterval != 5*time.Second || c.AgentOfflineAfter != 20*time.Second || c.AgentReconnectGrace != 2*time.Minute {
+		t.Fatalf("heartbeat %v, offline after %v, grace %v", c.AgentHeartbeatInterval, c.AgentOfflineAfter, c.AgentReconnectGrace)
+	}
+}
+
+func TestTheOfflineWindowMustBeAtLeastTwiceTheHeartbeatInterval(t *testing.T) {
+	for name, vars := range map[string]envMap{
+		"offline window equal to the interval":             {"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "10s", "BAYPLAN_AGENT_OFFLINE_AFTER": "10s"},
+		"offline window under twice the interval":          {"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "10s", "BAYPLAN_AGENT_OFFLINE_AFTER": "19s"},
+		"an interval that leaves the default window short": {"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "20s"},
+		"not a duration":   {"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "often"},
+		"a zero window":    {"BAYPLAN_AGENT_OFFLINE_AFTER": "0s"},
+		"a negative grace": {"BAYPLAN_AGENT_RECONNECT_GRACE": "-1m"},
+	} {
+		_, err := load(t, nil, vars, files{})
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_") {
+			t.Errorf("%s: error = %v, want one naming a BAYPLAN_AGENT_ variable", name, err)
+		}
+	}
+	// Exactly twice is allowed.
+	if _, err := load(t, nil, envMap{"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "10s", "BAYPLAN_AGENT_OFFLINE_AFTER": "20s"}, files{}); err != nil {
+		t.Errorf("a window of exactly twice the interval was refused: %v", err)
+	}
+}

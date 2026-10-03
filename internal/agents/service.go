@@ -263,6 +263,9 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	return tunnel.EnrolResult{AgentID: agentID, EnvID: envID, Cert: leaf.DER, NotAfter: leaf.NotAfter}, nil
 }
 
+// TouchLastSeen records that an agent was just heard from. Stub.
+func (s *Service) TouchLastSeen(_ context.Context, _ string) {}
+
 // Hello checks the reconnect of an enrolled agent. It implements tunnel.Verifier.
 //
 // Authentication is by key, not by serial: any unexpired certificate that chains

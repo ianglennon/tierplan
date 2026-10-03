@@ -10,12 +10,14 @@
 package tunneltest
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
@@ -70,8 +72,12 @@ type Options struct {
 	Clock *Clock
 	// Wrap lets a test put middleware around the hub's handler.
 	Wrap func(http.Handler) http.Handler
-	// Configure runs on the hub before it serves, for settings later plans add.
+	// Configure runs on the hub before it serves, after the defaults a test
+	// server gets (the agents service records last-seen), so it may override them.
 	Configure func(*tunnel.Hub) *tunnel.Hub
+	// Server replaces the http.Server the hub is served by, for a test of how the
+	// real server settings treat a tunnel. It is given the hub's handler.
+	Server func(http.Handler) *http.Server
 }
 
 // Server is a running in-process Bayplan tunnel endpoint.
@@ -175,7 +181,7 @@ func Start(t *testing.T, opts Options) *Server {
 
 	ts := httptest.NewUnstartedServer(nil)
 	addr := ts.Listener.Addr().String()
-	hub := tunnel.NewHub(svc, rec, log, clock.Now).WithPublicURL(func() string { return "https://" + addr })
+	hub := tunnel.NewHub(svc, rec, log, clock.Now).WithPublicURL(func() string { return "https://" + addr }).WithLastSeen(svc)
 	if opts.Configure != nil {
 		hub = opts.Configure(hub)
 	}
@@ -183,7 +189,11 @@ func Start(t *testing.T, opts Options) *Server {
 	if opts.Wrap != nil {
 		h = opts.Wrap(h)
 	}
-	ts.Config.Handler = h
+	if opts.Server != nil {
+		ts.Config = opts.Server(h)
+	} else {
+		ts.Config.Handler = h
+	}
 	ts.StartTLS()
 	t.Cleanup(func() {
 		hub.Close()
@@ -443,6 +453,39 @@ func SendHeartbeat(t testing.TB, control io.Writer, engineReachable bool, clockM
 	if _, err := control.Write(append(b, '\n')); err != nil {
 		t.Fatalf("tunneltest: send a heartbeat: %v", err)
 	}
+}
+
+// AnswerDocker serves the Docker streams the hub opens on this connection: for
+// each it reads the kind byte and one HTTP request and answers it with status
+// and body. It runs until the connection ends. A stream of another kind is closed.
+func (c *Conn) AnswerDocker(t testing.TB, status int, body string) {
+	t.Helper()
+	if c.Mux == nil {
+		t.Fatal("tunneltest: no multiplexer on this connection")
+	}
+	go func() {
+		for {
+			st, err := c.Mux.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = st.Close() }()
+				br := bufio.NewReader(st)
+				kind, err := br.ReadByte()
+				if err != nil || kind != wire.StreamKindDockerHTTP {
+					return
+				}
+				req, err := http.ReadRequest(br)
+				if err != nil {
+					return
+				}
+				_ = req.Body.Close()
+				_, _ = fmt.Fprintf(st, "HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+					status, http.StatusText(status), len(body), body)
+			}()
+		}
+	}()
 }
 
 // ForeignCert issues a client certificate shaped like Bayplan's (CN the agent ID,

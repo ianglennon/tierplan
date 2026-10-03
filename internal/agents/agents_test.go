@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -595,5 +596,60 @@ func TestHelloRefusesABadSignatureAClaimedIDThatIsNotTheCertificatesAndGarbage(t
 	req.Transcript = authn.Transcript(wire.ModeHello, wire.ProtoVersion, make([]byte, 32), make([]byte, 32), "evil", m.cert, nil)
 	if _, err := r.svc.Hello(r.ctx, req); refusal(t, err).Code != wire.ReasonAuthRejected {
 		t.Error("a signature that does not cover the transcript was accepted")
+	}
+}
+
+func lastSeen(t *testing.T, r *rig, id string) (int64, bool) {
+	t.Helper()
+	var ns sql.NullInt64
+	if err := r.st.Read.QueryRow(`SELECT last_seen_at FROM agents WHERE id = ?`, id).Scan(&ns); err != nil {
+		t.Fatal(err)
+	}
+	return ns.Int64, ns.Valid
+}
+
+func TestTouchLastSeenWritesAtMostOncePerMinutePerAgent(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	a := r.enrolMember(t, c)
+	b := r.enrolMember(t, c)
+	if _, ok := lastSeen(t, r, a.id); ok {
+		t.Fatal("a freshly enrolled agent already has a last_seen_at")
+	}
+
+	t0 := r.clock
+	r.svc.TouchLastSeen(r.ctx, a.id)
+	if got, ok := lastSeen(t, r, a.id); !ok || got != t0.UnixNano() {
+		t.Fatalf("after the first touch last_seen_at = %d (%v), want %d", got, ok, t0.UnixNano())
+	}
+
+	// Two more heartbeats inside the minute change nothing: no second UPDATE.
+	for _, d := range []time.Duration{10 * time.Second, 59 * time.Second} {
+		r.clock = t0.Add(d)
+		r.svc.TouchLastSeen(r.ctx, a.id)
+		if got, _ := lastSeen(t, r, a.id); got != t0.UnixNano() {
+			t.Fatalf("a touch %v after the first wrote last_seen_at = %d; at most one write a minute", d, got)
+		}
+	}
+
+	// Another agent has its own minute.
+	r.svc.TouchLastSeen(r.ctx, b.id)
+	if got, ok := lastSeen(t, r, b.id); !ok || got != r.clock.UnixNano() {
+		t.Fatalf("the second agent's last_seen_at = %d (%v); each agent is limited on its own", got, ok)
+	}
+
+	// After a minute the next one is written.
+	r.clock = t0.Add(61 * time.Second)
+	r.svc.TouchLastSeen(r.ctx, a.id)
+	if got, _ := lastSeen(t, r, a.id); got != r.clock.UnixNano() {
+		t.Fatalf("after a minute last_seen_at = %d, want %d", got, r.clock.UnixNano())
+	}
+}
+
+func TestTouchLastSeenForAnUnknownAgentWritesNothingAndDoesNotFail(t *testing.T) {
+	r := newRig(t)
+	r.svc.TouchLastSeen(r.ctx, "no-such-agent")
+	if n := count(t, r.st, `SELECT COUNT(*) FROM agents`); n != 0 {
+		t.Fatalf("%d agent rows", n)
 	}
 }

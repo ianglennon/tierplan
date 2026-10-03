@@ -58,6 +58,14 @@ type Config struct {
 	// DockerHost is the raw string; the Docker transport enforces unix-only (D-21).
 	DockerHost string
 
+	// AgentHeartbeatInterval is how often agents are told to heartbeat,
+	// AgentOfflineAfter how long a session may be silent before it is closed,
+	// and AgentReconnectGrace how long after a server start an environment shows
+	// "Reconnecting" instead of offline (D-41).
+	AgentHeartbeatInterval time.Duration
+	AgentOfflineAfter      time.Duration
+	AgentReconnectGrace    time.Duration
+
 	// raw holds the resolved text of every setting, for Redacted.
 	raw map[string]string
 }
