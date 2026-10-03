@@ -306,11 +306,24 @@ func TestHealthcheckWorksAgainstTheServersOwnSelfSignedTLS(t *testing.T) {
 		<-done
 	})
 
-	if err := Healthcheck(context.Background(), ":"+port, true); err != nil {
+	if err := Healthcheck(context.Background(), ":"+port, HealthcheckCertFile(cfg)); err != nil {
 		t.Fatalf("Healthcheck over TLS: %v", err)
 	}
+	// The certificate is verified: another one in the file is refused, and a
+	// file that cannot be read is an error that names it.
+	other := selfSignedConfig(t)
+	if _, err := TLSConfig(other, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Healthcheck(context.Background(), ":"+port, HealthcheckCertFile(other)); err == nil {
+		t.Fatal("a healthcheck trusting a different certificate passed")
+	}
+	missing := filepath.Join(t.TempDir(), "none.crt")
+	if err := Healthcheck(context.Background(), ":"+port, missing); err == nil || !strings.Contains(err.Error(), "none.crt") {
+		t.Fatalf("a missing certificate file gave %v, want an error naming it", err)
+	}
 	// Plain HTTP against the TLS listener must not pass as healthy.
-	if err := Healthcheck(context.Background(), ":"+port, false); err == nil {
+	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil {
 		t.Fatal("a plain-HTTP healthcheck against a TLS listener should fail")
 	}
 

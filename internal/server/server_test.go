@@ -146,7 +146,7 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 
 	// Healthcheck succeeds while the server is up. The listen address may be
 	// ":port" or "host:port"; only the port matters.
-	if err := Healthcheck(context.Background(), ":"+port, false); err != nil {
+	if err := Healthcheck(context.Background(), ":"+port, ""); err != nil {
 		t.Fatalf("Healthcheck while up: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 		t.Fatal("server did not shut down")
 	}
 
-	if err := Healthcheck(context.Background(), ":"+port, false); err == nil {
+	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil {
 		t.Fatal("Healthcheck after shutdown should fail")
 	}
 }
@@ -171,10 +171,10 @@ func TestHealthcheckRejectsNon200AndBadListen(t *testing.T) {
 	}))
 	defer ts.Close()
 	_, port, _ := net.SplitHostPort(strings.TrimPrefix(ts.URL, "http://"))
-	if err := Healthcheck(context.Background(), ":"+port, false); err == nil || !strings.Contains(err.Error(), "503") {
+	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("Healthcheck against a 503 = %v, want an error naming 503", err)
 	}
-	if err := Healthcheck(context.Background(), "no-port", false); err == nil {
+	if err := Healthcheck(context.Background(), "no-port", ""); err == nil {
 		t.Error("Healthcheck with an unusable listen address should fail")
 	}
 	if _, err := strconv.Atoi(port); err != nil {
@@ -772,7 +772,7 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 			t.Skipf("cannot bind 127.0.0.2: %v", err)
 		}
 		port := healthyOn(t, ln)
-		if err := Healthcheck(context.Background(), "127.0.0.2:"+port, false); err != nil {
+		if err := Healthcheck(context.Background(), "127.0.0.2:"+port, ""); err != nil {
 			t.Errorf("Healthcheck on the address the server is bound to: %v", err)
 		}
 	})
@@ -782,7 +782,7 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 			t.Skipf("no IPv6 loopback: %v", err)
 		}
 		port := healthyOn(t, ln)
-		if err := Healthcheck(context.Background(), "[::1]:"+port, false); err != nil {
+		if err := Healthcheck(context.Background(), "[::1]:"+port, ""); err != nil {
 			t.Errorf("Healthcheck on [::1]: %v", err)
 		}
 	})
@@ -793,7 +793,7 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 		}
 		port := healthyOn(t, ln)
 		for _, listen := range []string{":" + port, "0.0.0.0:" + port, "[::]:" + port} {
-			if err := Healthcheck(context.Background(), listen, false); err != nil {
+			if err := Healthcheck(context.Background(), listen, ""); err != nil {
 				t.Errorf("Healthcheck(%q): %v", listen, err)
 			}
 		}
