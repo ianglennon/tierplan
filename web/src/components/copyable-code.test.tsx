@@ -70,6 +70,15 @@ describe("CopyableCode", () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
+  it("puts the copy button beside the scrolling block, never over the end of a long line", () => {
+    render(<CopyableCode code={CODE} label="the docker run command" />);
+    const block = document.querySelector("pre") as HTMLElement;
+    const button = screen.getByRole("button", { name: COPY_NAME });
+    expect(block.contains(button)).toBe(false);
+    expect(button.className).not.toContain("absolute");
+    expect(block.parentElement?.contains(button)).toBe(true);
+  });
+
   it("falls back to a hidden textarea and execCommand when there is no clipboard API", async () => {
     stubClipboard(undefined);
     stubExecCommand(true);

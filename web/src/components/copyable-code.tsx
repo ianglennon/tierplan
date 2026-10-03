@@ -122,25 +122,29 @@ export function CopyableCode({ code, label, secret }: CopyableCodeProps) {
 
   const copiedText = t("env.copy.copied", { label });
   return (
-    <section aria-label={label} className="relative">
-      {/* Focusable, so a keyboard user can scroll a long line. */}
-      <pre
-        // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
-        tabIndex={0}
-        className="overflow-x-auto rounded-lg border bg-muted py-3 pr-12 pl-3 font-mono text-xs leading-relaxed text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-      >
-        <code ref={codeRef}>{shown}</code>
-      </pre>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        className="absolute top-1.5 right-1.5 max-md:size-11"
-        aria-label={copied ? copiedText : t("env.copy.button", { label })}
-        onClick={onCopy}
-      >
-        {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-      </Button>
+    <section aria-label={label}>
+      {/* The button sits beside the block, not over it, so a long line scrolls
+          under nothing. */}
+      <div className="flex items-start gap-1 rounded-lg border bg-muted">
+        {/* Focusable, so a keyboard user can scroll a long line. */}
+        <pre
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
+          tabIndex={0}
+          className="min-w-0 flex-1 overflow-x-auto rounded-lg py-3 pr-3 pl-3 font-mono text-xs leading-relaxed text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <code ref={codeRef}>{shown}</code>
+        </pre>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="mt-1.5 mr-1.5 shrink-0 max-md:size-11"
+          aria-label={copied ? copiedText : t("env.copy.button", { label })}
+          onClick={onCopy}
+        >
+          {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+        </Button>
+      </div>
       <span role="status" className="sr-only">
         {copied ? copiedText : ""}
       </span>
