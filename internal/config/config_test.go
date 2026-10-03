@@ -426,3 +426,64 @@ func TestTheAgentEndpointSettingsCanBeOverriddenAndBadValuesAreRefused(t *testin
 		}
 	}
 }
+
+func TestAgentURLIsNormalisedLikeThePublicURL(t *testing.T) {
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil || c.AgentURL != "" {
+		t.Fatalf("unset: %q, %v; want empty", c.AgentURL, err)
+	}
+	for in, want := range map[string]string{
+		"https://bayplan.internal:7480":  "https://bayplan.internal:7480",
+		"HTTPS://Bayplan.Internal:7480/": "https://bayplan.internal:7480",
+		"http://192.168.1.10:7480":       "http://192.168.1.10:7480",
+		"https://example.com/bayplan/":   "https://example.com/bayplan",
+	} {
+		c, err := load(t, nil, envMap{"BAYPLAN_AGENT_URL": in}, files{})
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+		if c.AgentURL != want {
+			t.Errorf("%q normalised to %q, want %q", in, c.AgentURL, want)
+		}
+	}
+	for _, bad := range []string{"example.com", "ftp://example.com", "https://", "https://u:p@example.com", "https://example.com/?a=b", "https://example.com/api"} {
+		_, err := load(t, nil, envMap{"BAYPLAN_AGENT_URL": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_URL") {
+			t.Errorf("%q: error = %v, want one naming BAYPLAN_AGENT_URL", bad, err)
+		}
+	}
+}
+
+func TestAgentURLHasAFlagAndTheEnvironmentWinsOverNothingElse(t *testing.T) {
+	c, err := load(t, []string{"--agent-url", "https://flag.example:7480/"}, envMap{}, files{})
+	if err != nil || c.AgentURL != "https://flag.example:7480" {
+		t.Fatalf("flag: %q, %v", c.AgentURL, err)
+	}
+	// The public URL is a separate setting.
+	c, err = load(t, nil, envMap{"BAYPLAN_PUBLIC_URL": "https://pub.example", "BAYPLAN_AGENT_URL": "https://agent.example"}, files{})
+	if err != nil || c.PublicURL != "https://pub.example" || c.AgentURL != "https://agent.example" {
+		t.Fatalf("both: %q %q, %v", c.PublicURL, c.AgentURL, err)
+	}
+}
+
+func TestAgentEndpointIsTheWebSocketAddressAgentsDial(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://example.com":               "wss://example.com/agent/connect",
+		"https://example.com/bayplan":       "wss://example.com/bayplan/agent/connect",
+		"https://example.com/bayplan/":      "wss://example.com/bayplan/agent/connect",
+		"https://bayplan.lan:7480":          "wss://bayplan.lan:7480/agent/connect",
+		"http://192.168.1.10:7480":          "ws://192.168.1.10:7480/agent/connect",
+		"https://u:p@bayplan.example/x?q=1": "wss://bayplan.example/x/agent/connect",
+	} {
+		got, err := config.AgentEndpoint(in)
+		if err != nil || got != want {
+			t.Errorf("AgentEndpoint(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "ftp://x", "not a url", "https://"} {
+		if got, err := config.AgentEndpoint(bad); err == nil {
+			t.Errorf("AgentEndpoint(%q) = %q, want an error", bad, got)
+		}
+	}
+}

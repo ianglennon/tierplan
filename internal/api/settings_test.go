@@ -20,6 +20,9 @@ type settingsResp struct {
 	InstanceName    string `json:"instanceName"`
 	PublicURL       string `json:"publicUrl"`
 	PublicURLLocked bool   `json:"publicUrlLocked"`
+	AgentURL        string `json:"agentUrl"`
+	AgentURLLocked  bool   `json:"agentUrlLocked"`
+	AgentEndpoint   string `json:"agentEndpoint"`
 }
 
 func (f *authFixture) getSettings(t *testing.T, cookie string) (int, settingsResp) {
@@ -259,5 +262,147 @@ func TestSettingsNeedSettingsPermissions(t *testing.T) {
 	admin, _ := f.signIn(t, "admin", false)
 	if rec := f.patchSettings(t, admin, "", map[string]string{"instanceName": "Mine"}); rec.Code != http.StatusForbidden {
 		t.Fatalf("PATCH without X-CSRF-Token: %d, want 403", rec.Code)
+	}
+}
+
+// The agent URL (plan 02-09, D-18): where agents dial when it differs from the
+// address people browse to.
+
+func TestGetSettingsReportsTheAgentURLTheLockAndTheEndpoint(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	if _, s := f.getSettings(t, cookie); s.AgentURL != "" || s.AgentURLLocked || s.AgentEndpoint != "" {
+		t.Fatalf("nothing set: %+v, want an empty agent URL, unlocked, and no endpoint", s)
+	}
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://example.com/bayplan"}); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body)
+	}
+	if _, s := f.getSettings(t, cookie); s.AgentURL != "" || s.AgentEndpoint != "wss://example.com/bayplan/agent/connect" {
+		t.Fatalf("public URL only: %+v, want the endpoint from the public URL", s)
+	}
+
+	locked := newAuthFixture(t, config.Config{PublicURL: "https://pub.example", AgentURL: "https://agent.internal:7480"})
+	lcookie, _ := locked.signIn(t, "admin", false)
+	_, s := locked.getSettings(t, lcookie)
+	if !s.AgentURLLocked || s.AgentURL != "https://agent.internal:7480" || s.AgentEndpoint != "wss://agent.internal:7480/agent/connect" {
+		t.Fatalf("locked: %+v", s)
+	}
+}
+
+func TestPatchSettingsStoresTheAgentURLAndAuditsIt(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://example.com"})
+
+	rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://bayplan.lan:7480/"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	var got settingsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.AgentURL != "https://bayplan.lan:7480" || got.AgentEndpoint != "wss://bayplan.lan:7480/agent/connect" {
+		t.Fatalf("body = %s (%v), want the normalised agent URL and its endpoint", rec.Body, err)
+	}
+	if f.inst.AgentURL() != "https://bayplan.lan:7480" || f.inst.AgentEndpoint() != "wss://bayplan.lan:7480/agent/connect" {
+		t.Fatalf("the cached agent URL = %q, endpoint %q, want them at once", f.inst.AgentURL(), f.inst.AgentEndpoint())
+	}
+	var stored string
+	if err := f.st.Read.QueryRow(`SELECT value FROM settings WHERE key = 'agent_url'`).Scan(&stored); err != nil || stored != "https://bayplan.lan:7480" {
+		t.Fatalf("stored = %q, %v", stored, err)
+	}
+	d := f.auditDetails(t, "settings.updated")
+	last := d[len(d)-1]
+	if last["agent_url_from"] != "" || last["agent_url_to"] != "https://bayplan.lan:7480" {
+		t.Fatalf("details = %v, want the agent URL field with its old and new value", last)
+	}
+	if _, ok := last["public_url_from"]; ok {
+		t.Fatalf("details = %v: an unchanged field must not be listed", last)
+	}
+
+	// An empty agent URL clears it, and agents are told the public address again.
+	rec = f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": ""})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", rec.Code, rec.Body)
+	}
+	if f.inst.AgentURL() != "" || f.inst.AgentEndpoint() != "wss://example.com/agent/connect" {
+		t.Fatalf("after clearing: agent URL %q endpoint %q", f.inst.AgentURL(), f.inst.AgentEndpoint())
+	}
+	d = f.auditDetails(t, "settings.updated")
+	if last := d[len(d)-1]; last["agent_url_from"] != "https://bayplan.lan:7480" || last["agent_url_to"] != "" {
+		t.Fatalf("details = %v, want the cleared agent URL audited", last)
+	}
+}
+
+func TestPatchSettingsRefusesAnInvalidAgentURL(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	for _, bad := range []string{"/agent", "bayplan.lan", "ftp://bayplan.lan", "https://user@bayplan.lan", "https://bayplan.lan/api"} {
+		rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": bad})
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%q: status = %d: %s, want 422", bad, rec.Code, rec.Body)
+		}
+		p := decodeProblem(t, rec)
+		if p.Type != "validation_failed" || len(p.Errors) != 1 || p.Errors[0].Location != "body.agentUrl" || p.Errors[0].Message != "invalid_agent_url" {
+			t.Fatalf("%q: problem = %+v, want invalid_agent_url at body.agentUrl", bad, p)
+		}
+	}
+	if f.inst.AgentURL() != "" {
+		t.Fatalf("a refused change stored %q", f.inst.AgentURL())
+	}
+	if n := len(f.audits(t, "settings.updated")); n != 0 {
+		t.Fatalf("%d settings.updated entries after only invalid requests", n)
+	}
+}
+
+func TestPatchSettingsRefusesAnEnvironmentLockedAgentURL(t *testing.T) {
+	f := newAuthFixture(t, config.Config{AgentURL: "https://fixed.internal:7480"})
+	cookie, csrf := f.signIn(t, "admin", false)
+
+	rec := f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Changed", "agentUrl": "https://other.example"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d: %s, want 409", rec.Code, rec.Body)
+	}
+	if p := decodeProblem(t, rec); p.Type != "agent_url_locked" {
+		t.Fatalf("problem type = %q, want agent_url_locked", p.Type)
+	}
+	if f.inst.AgentURL() != "https://fixed.internal:7480" || f.inst.Name() == "Changed" {
+		t.Fatalf("agent URL %q name %q: a refused change must change nothing", f.inst.AgentURL(), f.inst.Name())
+	}
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": ""}); rec.Code != http.StatusConflict {
+		t.Fatalf("clearing a locked agent URL: %d, want 409", rec.Code)
+	}
+
+	// Naming the fixed value again is not a change, so the name still goes through.
+	rec = f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Lab", "agentUrl": "https://fixed.internal:7480"})
+	if rec.Code != http.StatusOK || f.inst.Name() != "Lab" {
+		t.Fatalf("renaming with the fixed agent URL echoed back: %d %s", rec.Code, rec.Body)
+	}
+	// The public URL is a different lock.
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://pub.example"}); rec.Code != http.StatusOK {
+		t.Fatalf("the public URL stays editable while only the agent URL is locked: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestPatchSettingsWithTheSameAgentURLIsANoOp(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://bayplan.lan:7480"})
+	before := len(f.audits(t, "settings.updated"))
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://BAYPLAN.lan:7480/"}); rec.Code != http.StatusOK {
+		t.Fatalf("no-op: %d %s", rec.Code, rec.Body)
+	}
+	if after := len(f.audits(t, "settings.updated")); after != before {
+		t.Fatalf("%d entries, want %d: a no-op must not be audited", after, before)
+	}
+}
+
+func TestAgentURLNeedsSettingsPermissions(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addUser(t, "viewer", false)
+	cookie, csrf := f.signIn(t, "viewer", false)
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://evil.example"}); rec.Code != http.StatusForbidden {
+		t.Fatalf("PATCH agentUrl without settings.write: %d, want 403", rec.Code)
+	}
+	if f.inst.AgentURL() != "" {
+		t.Fatal("a refused PATCH changed the agent URL")
 	}
 }

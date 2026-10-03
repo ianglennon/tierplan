@@ -69,7 +69,7 @@ func ipStrings(ips []net.IP) []string {
 }
 
 func TestTLSConfigIsNilWithoutTLSSettings(t *testing.T) {
-	got, err := TLSConfig(config.Config{DataDir: t.TempDir()}, "", nowFn(fixedNow))
+	got, err := TLSConfig(config.Config{DataDir: t.TempDir()}, "", "", nowFn(fixedNow))
 	if err != nil || got != nil {
 		t.Fatalf("TLSConfig = %v, %v; want nil and no error (plain HTTP)", got, err)
 	}
@@ -80,7 +80,7 @@ func TestTLSConfigIsNilWithoutTLSSettings(t *testing.T) {
 
 func TestTLSConfigRefusesFilesTogetherWithSelfSigned(t *testing.T) {
 	cfg := config.Config{DataDir: t.TempDir(), TLSSelfSigned: true, TLSCertFile: "/c.pem", TLSKeyFile: "/k.pem"}
-	_, err := TLSConfig(cfg, "", nowFn(fixedNow))
+	_, err := TLSConfig(cfg, "", "", nowFn(fixedNow))
 	if err == nil {
 		t.Fatal("want an error")
 	}
@@ -93,7 +93,7 @@ func TestTLSConfigRefusesFilesTogetherWithSelfSigned(t *testing.T) {
 
 func TestTLSSelfSignedWritesTheSANSetAndAPrivateKey(t *testing.T) {
 	cfg := selfSignedConfig(t)
-	got, err := TLSConfig(cfg, "https://bayplan.example.com:7480", nowFn(fixedNow))
+	got, err := TLSConfig(cfg, "https://bayplan.example.com:7480", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestTLSSelfSignedWritesTheSANSetAndAPrivateKey(t *testing.T) {
 }
 
 func TestTLSSelfSignedPutsAnIPPublicHostInTheIPSANs(t *testing.T) {
-	got, err := TLSConfig(selfSignedConfig(t), "http://192.0.2.10:7480", nowFn(fixedNow))
+	got, err := TLSConfig(selfSignedConfig(t), "http://192.0.2.10:7480", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,11 +146,11 @@ func TestTLSSelfSignedPutsAnIPPublicHostInTheIPSANs(t *testing.T) {
 
 func TestTLSSelfSignedIsReusedOnTheSecondCall(t *testing.T) {
 	cfg := selfSignedConfig(t)
-	first, err := TLSConfig(cfg, "https://a.example.com", nowFn(fixedNow))
+	first, err := TLSConfig(cfg, "https://a.example.com", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := TLSConfig(cfg, "https://a.example.com", nowFn(fixedNow.Add(24*time.Hour)))
+	second, err := TLSConfig(cfg, "https://a.example.com", "", nowFn(fixedNow.Add(24*time.Hour)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,11 +161,11 @@ func TestTLSSelfSignedIsReusedOnTheSecondCall(t *testing.T) {
 
 func TestTLSSelfSignedIsRegeneratedWhenThePublicHostChanges(t *testing.T) {
 	cfg := selfSignedConfig(t)
-	first, err := TLSConfig(cfg, "https://a.example.com", nowFn(fixedNow))
+	first, err := TLSConfig(cfg, "https://a.example.com", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := TLSConfig(cfg, "https://b.example.com", nowFn(fixedNow))
+	second, err := TLSConfig(cfg, "https://b.example.com", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,13 +180,13 @@ func TestTLSSelfSignedIsRegeneratedWhenThePublicHostChanges(t *testing.T) {
 
 func TestTLSSelfSignedIsRegeneratedWithin30DaysOfExpiry(t *testing.T) {
 	cfg := selfSignedConfig(t)
-	first, err := TLSConfig(cfg, "", nowFn(fixedNow))
+	first, err := TLSConfig(cfg, "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
 	// 29 days before the end of a one-year certificate.
 	near := fixedNow.AddDate(1, 0, -29)
-	second, err := TLSConfig(cfg, "", nowFn(near))
+	second, err := TLSConfig(cfg, "", "", nowFn(near))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestTLSSelfSignedIsRegeneratedWithin30DaysOfExpiry(t *testing.T) {
 		t.Fatal("the certificate was reused 29 days before it expires")
 	}
 	// The replacement is good for a year, so a day later it is kept.
-	third, err := TLSConfig(cfg, "", nowFn(near.Add(24*time.Hour)))
+	third, err := TLSConfig(cfg, "", "", nowFn(near.Add(24*time.Hour)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,11 +203,11 @@ func TestTLSSelfSignedIsRegeneratedWithin30DaysOfExpiry(t *testing.T) {
 	}
 	// And one with 31 days left is kept as well.
 	fresh := selfSignedConfig(t)
-	a, err := TLSConfig(fresh, "", nowFn(fixedNow))
+	a, err := TLSConfig(fresh, "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := TLSConfig(fresh, "", nowFn(fixedNow.AddDate(1, 0, -31)))
+	b, err := TLSConfig(fresh, "", "", nowFn(fixedNow.AddDate(1, 0, -31)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,13 +218,13 @@ func TestTLSSelfSignedIsRegeneratedWithin30DaysOfExpiry(t *testing.T) {
 
 func TestTLSSelfSignedIsRegeneratedWhenTheStoredPairIsBroken(t *testing.T) {
 	cfg := selfSignedConfig(t)
-	if _, err := TLSConfig(cfg, "", nowFn(fixedNow)); err != nil {
+	if _, err := TLSConfig(cfg, "", "", nowFn(fixedNow)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(cfg.DataDir, "tls", "selfsigned.crt"), []byte("not a certificate"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := TLSConfig(cfg, "", nowFn(fixedNow))
+	got, err := TLSConfig(cfg, "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatalf("a corrupt stored certificate must be replaced, got %v", err)
 	}
@@ -233,7 +233,7 @@ func TestTLSSelfSignedIsRegeneratedWhenTheStoredPairIsBroken(t *testing.T) {
 
 func TestTLSConfigLoadsASuppliedCertificatePair(t *testing.T) {
 	src := selfSignedConfig(t)
-	if _, err := TLSConfig(src, "https://files.example.com", nowFn(fixedNow)); err != nil {
+	if _, err := TLSConfig(src, "https://files.example.com", "", nowFn(fixedNow)); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(src.DataDir, "tls")
@@ -242,7 +242,7 @@ func TestTLSConfigLoadsASuppliedCertificatePair(t *testing.T) {
 		TLSCertFile: filepath.Join(dir, "selfsigned.crt"),
 		TLSKeyFile:  filepath.Join(dir, "selfsigned.key"),
 	}
-	got, err := TLSConfig(cfg, "", nowFn(fixedNow))
+	got, err := TLSConfig(cfg, "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,14 +260,14 @@ func TestTLSConfigLoadsASuppliedCertificatePair(t *testing.T) {
 
 func TestTLSConfigNamesTheSettingWhenTheFilesCannotBeLoaded(t *testing.T) {
 	cfg := config.Config{DataDir: t.TempDir(), TLSCertFile: "/nonexistent/c.pem", TLSKeyFile: "/nonexistent/k.pem"}
-	_, err := TLSConfig(cfg, "", nowFn(fixedNow))
+	_, err := TLSConfig(cfg, "", "", nowFn(fixedNow))
 	if err == nil || !strings.Contains(err.Error(), "BAYPLAN_TLS_CERT_FILE") {
 		t.Fatalf("err = %v, want one naming BAYPLAN_TLS_CERT_FILE", err)
 	}
 }
 
 func TestTLSFingerprintIsTheSHA256OfTheLeaf(t *testing.T) {
-	got, err := TLSConfig(selfSignedConfig(t), "", nowFn(fixedNow))
+	got, err := TLSConfig(selfSignedConfig(t), "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestHealthcheckWorksAgainstTheServersOwnSelfSignedTLS(t *testing.T) {
 	// The certificate is verified: another one in the file is refused, and a
 	// file that cannot be read is an error that names it.
 	other := selfSignedConfig(t)
-	if _, err := TLSConfig(other, "", nil); err != nil {
+	if _, err := TLSConfig(other, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := Healthcheck(context.Background(), ":"+port, HealthcheckCertFile(other)); err == nil {
@@ -344,7 +344,7 @@ func TestHealthcheckWorksAgainstTheServersOwnSelfSignedTLS(t *testing.T) {
 
 func TestTLSSelfSignedLeavesAContainerIDHostnameOut(t *testing.T) {
 	setHostname(t, "3f2a9c1b7d4e", nil)
-	got, err := TLSConfig(selfSignedConfig(t), "", nowFn(fixedNow))
+	got, err := TLSConfig(selfSignedConfig(t), "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +354,7 @@ func TestTLSSelfSignedLeavesAContainerIDHostnameOut(t *testing.T) {
 
 	full := strings.Repeat("ab12", 16)
 	setHostname(t, full, nil)
-	got, err = TLSConfig(selfSignedConfig(t), "", nowFn(fixedNow))
+	got, err = TLSConfig(selfSignedConfig(t), "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestTLSSelfSignedLeavesAContainerIDHostnameOut(t *testing.T) {
 	}
 
 	setHostname(t, "nas01", nil)
-	got, err = TLSConfig(selfSignedConfig(t), "", nowFn(fixedNow))
+	got, err = TLSConfig(selfSignedConfig(t), "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,12 +393,12 @@ func TestLooksLikeContainerID(t *testing.T) {
 func TestTLSSelfSignedIsKeptWhenTheContainerIsRecreated(t *testing.T) {
 	cfg := selfSignedConfig(t)
 	setHostname(t, "aaaaaaaaaaaa", nil)
-	first, err := TLSConfig(cfg, "https://bayplan.example.com", nowFn(fixedNow))
+	first, err := TLSConfig(cfg, "https://bayplan.example.com", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
 	setHostname(t, "bbbbbbbbbbbb", nil)
-	second, err := TLSConfig(cfg, "https://bayplan.example.com", nowFn(fixedNow.Add(time.Hour)))
+	second, err := TLSConfig(cfg, "https://bayplan.example.com", "", nowFn(fixedNow.Add(time.Hour)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestTLSSelfSignedIsKeptWhenTheContainerIsRecreated(t *testing.T) {
 func TestTLSSelfSignedIsKeptWhenItCoversMoreThanIsWanted(t *testing.T) {
 	cfg := selfSignedConfig(t)
 	setHostname(t, "nas01", nil)
-	first, err := TLSConfig(cfg, "", nowFn(fixedNow))
+	first, err := TLSConfig(cfg, "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +419,7 @@ func TestTLSSelfSignedIsKeptWhenItCoversMoreThanIsWanted(t *testing.T) {
 		"a container ID host name":   func() { setHostname(t, "cccccccccccc", nil) },
 	} {
 		hostname()
-		again, err := TLSConfig(cfg, "", nowFn(fixedNow.Add(time.Hour)))
+		again, err := TLSConfig(cfg, "", "", nowFn(fixedNow.Add(time.Hour)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -436,7 +436,7 @@ func (c *movingClock) now() time.Time { return c.t }
 
 func TestTLSSelfSignedIsRenewedWhileRunning(t *testing.T) {
 	clk := &movingClock{t: fixedNow}
-	got, err := TLSConfig(selfSignedConfig(t), "", clk.now)
+	got, err := TLSConfig(selfSignedConfig(t), "", "", clk.now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestTLSSelfSignedIsRenewedWhileRunning(t *testing.T) {
 func writePair(t *testing.T, crt, key string, host string) *x509.Certificate {
 	t.Helper()
 	src := config.Config{DataDir: t.TempDir(), TLSSelfSigned: true}
-	got, err := TLSConfig(src, "https://"+host, nowFn(fixedNow))
+	got, err := TLSConfig(src, "https://"+host, "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +524,7 @@ func TestTLSCertificateIsServedWhenTheClientSendsNoServerName(t *testing.T) {
 	// Go uses a static Certificates list in preference to GetCertificate when
 	// the client sends no SNI (a connection to an IP address), which would
 	// silently pin that client to the first certificate for ever.
-	got, err := TLSConfig(selfSignedConfig(t), "", nowFn(fixedNow))
+	got, err := TLSConfig(selfSignedConfig(t), "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,12 +545,12 @@ func pinOf(t *testing.T, c *tls.Config) string {
 
 func TestSPKIPinIsStableWhenTheCertificateIsRenewed(t *testing.T) {
 	cfg := selfSignedConfig(t)
-	first, err := TLSConfig(cfg, "", nowFn(fixedNow))
+	first, err := TLSConfig(cfg, "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
 	// 29 days before the end of a one-year certificate: a forced renewal.
-	second, err := TLSConfig(cfg, "", nowFn(fixedNow.AddDate(1, 0, -29)))
+	second, err := TLSConfig(cfg, "", "", nowFn(fixedNow.AddDate(1, 0, -29)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +565,7 @@ func TestSPKIPinIsStableWhenTheCertificateIsRenewed(t *testing.T) {
 func TestSPKIPinIsStableWhileRunningAcrossARenewal(t *testing.T) {
 	cfg := selfSignedConfig(t)
 	var now = fixedNow
-	got, err := TLSConfig(cfg, "", func() time.Time { return now })
+	got, err := TLSConfig(cfg, "", "", func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,11 +578,11 @@ func TestSPKIPinIsStableWhileRunningAcrossARenewal(t *testing.T) {
 
 func TestSPKIPinIsStableWhenTheWantedNamesChange(t *testing.T) {
 	cfg := selfSignedConfig(t)
-	first, err := TLSConfig(cfg, "https://a.example.com", nowFn(fixedNow))
+	first, err := TLSConfig(cfg, "https://a.example.com", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := TLSConfig(cfg, "https://b.example.com", nowFn(fixedNow))
+	second, err := TLSConfig(cfg, "https://b.example.com", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +610,7 @@ func TestSPKIPinChangesAndIsLoggedWhenTheKeyIsMissingOrCorrupt(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := selfSignedConfig(t)
-			first, err := TLSConfig(cfg, "", nowFn(fixedNow))
+			first, err := TLSConfig(cfg, "", "", nowFn(fixedNow))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -621,7 +621,7 @@ func TestSPKIPinChangesAndIsLoggedWhenTheKeyIsMissingOrCorrupt(t *testing.T) {
 			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 			t.Cleanup(func() { slog.SetDefault(old) })
 
-			second, err := TLSConfig(cfg, "", nowFn(fixedNow))
+			second, err := TLSConfig(cfg, "", "", nowFn(fixedNow))
 			if err != nil {
 				t.Fatalf("a lost key must be replaced, got %v", err)
 			}
@@ -691,5 +691,62 @@ func TestServerWelcomePinsComeFromTheSelfSignedPin(t *testing.T) {
 	}
 	if got := self(map[string]string{}).Tunnel().Pins(); len(got) != 0 {
 		t.Errorf("plain HTTP welcome pins = %v, want none", got)
+	}
+}
+
+func TestTLSSelfSignedCoversTheAgentURLHostAndKeepsThePin(t *testing.T) {
+	cfg := selfSignedConfig(t)
+	first, err := TLSConfig(cfg, "https://bayplan.example.com", "", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := spkiPin(first)
+	if pin == "" {
+		t.Fatal("no pin for the first certificate")
+	}
+
+	// Naming an agent URL on another host re-signs the certificate for both
+	// hosts. The key is the same, so the pin installed agents hold still matches.
+	second, err := TLSConfig(cfg, "https://bayplan.example.com", "https://bayplan.lan:7480", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := leafOf(t, second)
+	if l.SerialNumber.Cmp(leafOf(t, first).SerialNumber) == 0 {
+		t.Fatal("the certificate was reused although the agent URL host is new")
+	}
+	for _, name := range []string{"bayplan.example.com", "bayplan.lan"} {
+		if !slices.Contains(l.DNSNames, name) {
+			t.Errorf("DNS SANs %v lack %q", l.DNSNames, name)
+		}
+	}
+	if got := spkiPin(second); got != pin {
+		t.Errorf("pin = %q after the agent URL changed, want %q: a pinned agent would stop connecting", got, pin)
+	}
+
+	// An agent URL given as an address is an IP SAN.
+	third, err := TLSConfig(cfg, "https://bayplan.example.com", "http://192.0.2.44:7480", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ips := ipStrings(leafOf(t, third).IPAddresses); !slices.Contains(ips, "192.0.2.44") {
+		t.Errorf("IP SANs = %v, want the agent URL address", ips)
+	}
+	if got := spkiPin(third); got != pin {
+		t.Errorf("pin = %q, want %q", got, pin)
+	}
+}
+
+func TestWantedNamesTakesBothURLs(t *testing.T) {
+	setHostname(t, "", errors.New("no hostname"))
+	got := wantedNames("https://a.example.com/bayplan", "https://b.example.com:7480")
+	if !slices.Equal(got.dns, []string{"a.example.com", "b.example.com", "localhost"}) {
+		t.Errorf("dns = %v, want both hosts and localhost", got.dns)
+	}
+	// An empty or unparsable agent URL adds nothing.
+	for _, agent := range []string{"", "::not a url::"} {
+		if got := wantedNames("https://a.example.com", agent); !slices.Equal(got.dns, []string{"a.example.com", "localhost"}) {
+			t.Errorf("agent URL %q: dns = %v", agent, got.dns)
+		}
 	}
 }
