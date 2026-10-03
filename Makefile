@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image
+.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -69,9 +69,11 @@ test-int: agent-image
 
 # The multi-node suite (D-57, D-58), build tag `swarm`: real agents in a dind swarm
 # of 3 managers and 1 worker, for the engine BAYPLAN_TEST_ENGINE names (default
-# 29). Needs Docker it can reach, with buildx for the agent image.
+# 29). Needs Docker it can reach, with buildx for the agent image. One engine takes
+# about 17 minutes on a developer machine, so the 40 minute timeout (CI allows 45
+# for the job) is a margin, not a target.
 test-swarm: agent-image
-	go test -tags=swarm -race -count=1 -timeout 30m ./internal/...
+	go test -tags=swarm -race -count=1 -timeout 40m ./internal/...
 
 smoke:
 	scripts/smoke.sh
@@ -85,8 +87,20 @@ dev:
 # air is run via `go run`, never added to go.mod. All settings are command-line
 # overrides, so there is no .air.toml. The devspa tag serves the SPA from
 # web/dist on disk, so Vite rebuilds are visible without recompiling Go.
+#
+# The agent settings are for the local swarm (make dev-swarm) and for development
+# only. BAYPLAN_AGENT_URL is where agents dial: the dev swarm's network sees this
+# machine as DEV_SWARM_GATEWAY, and it is plain ws:// because there is no
+# certificate for an address like that. BAYPLAN_AGENT_ALLOW_INSECURE lets those
+# plain connections in, which sends join tokens and Docker answers unencrypted; the
+# server logs a warning at start while it is on. Neither belongs anywhere but this
+# target. To let the dev swarm's nodes reach the server, listen on every interface:
+# make dev DEV_LISTEN=0.0.0.0:7480 (the default stays loopback).
+DEV_LISTEN ?= 127.0.0.1:7480
+DEV_SWARM_GATEWAY ?= 172.31.250.1
 dev-go:
-	BAYPLAN_LISTEN=127.0.0.1:7480 BAYPLAN_DATA_DIR=./.devdata BAYPLAN_PUBLIC_URL=http://localhost:5173 \
+	BAYPLAN_LISTEN=$(DEV_LISTEN) BAYPLAN_DATA_DIR=./.devdata BAYPLAN_PUBLIC_URL=http://localhost:5173 \
+	BAYPLAN_AGENT_URL=http://$(DEV_SWARM_GATEWAY):7480 BAYPLAN_AGENT_ALLOW_INSECURE=true \
 	go run github.com/air-verse/air@v1.67.4 \
 		-tmp_dir .devdata/air \
 		-build.cmd "go build -tags devspa -o .devdata/air/bayplan ./cmd/bayplan" \
@@ -97,6 +111,17 @@ dev-go:
 
 dev-web:
 	pnpm -C web dev
+
+# A local Docker Swarm of three managers and a worker (docker:29-dind, privileged),
+# with the agent built from this tree loaded on every node (D-60). The command it
+# prints next uses make dev. dev-swarm-down removes exactly what dev-swarm created,
+# by name, and never prunes. Needs Docker with buildx; DEV_SWARM_ENGINE picks the
+# dind major version.
+dev-swarm:
+	scripts/dev-swarm.sh up
+
+dev-swarm-down:
+	scripts/dev-swarm.sh down
 
 # --- Policy gates (D-68 to D-70, D-74) ---
 

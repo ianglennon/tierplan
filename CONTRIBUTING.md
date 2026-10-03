@@ -22,7 +22,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): 
 
 - **Go 1.27** (`go.mod` says `go 1.27`).
 - **Node 24** (the version CI uses) and **pnpm through corepack**. The version is pinned in `web/package.json` (`packageManager`), so run `corepack enable` once and use `pnpm` normally. Do not install pnpm with `npm i -g pnpm`: the pinned version would be ignored.
-- **Docker is optional.** You need it only for `make test-int` and `make e2e`, plus `make image` and `make image-smoke`. Membership of the `docker` group is root-equivalent on that machine; use a throwaway machine or VM if that worries you.
+- **Docker is optional.** You need it only for `make test-int`, `make test-swarm`, `make dev-swarm` and `make e2e`, plus `make image` and `make image-smoke`. Membership of the `docker` group is root-equivalent on that machine; use a throwaway machine or VM if that worries you.
 
 Known problem: pnpm 12 does not start under **corepack 0.24**. That corepack looks for a `pnpm.cjs` entry point and pnpm 12 ships `.mjs` files, so `pnpm` fails to launch. Use a newer corepack, or a pnpm 12 you installed another way. The author's host worked around it with local shims inside corepack's cache, which is a workaround, not something the repository carries. Check `corepack --version` if `pnpm` fails straight after `corepack enable`.
 
@@ -38,6 +38,8 @@ No tool is added to `go.mod` for development: golangci-lint, sqlc, goreleaser, a
 | `make build` | Builds the SPA, then `bin/bayplan` (static, CGO off, SPA embedded). Pass `VERSION=v0.1.0` to stamp a version. |
 | `make test` | `go test ./... -race` and the web unit tests (Vitest). |
 | `make test-int` | Real-engine Go tests (build tag `integration`) against a Docker daemon. Set `BAYPLAN_TEST_DOCKER_HOST` to use one, otherwise each run starts a `docker:<N>-dind` container (`BAYPLAN_TEST_ENGINE`, default 29). Needs Docker. |
+| `make test-swarm` | The multi-node suite (build tag `swarm`): real agents in dind swarms of 3 managers and a worker (`BAYPLAN_TEST_ENGINE`, default 29; CI runs 24 and 29). Builds the agent image first. Needs Docker with buildx. |
+| `make dev-swarm`, `make dev-swarm-down` | A local swarm for the development loop, and its removal (see "Local swarm" below). Need Docker with buildx. |
 | `make lint` | golangci-lint, Biome and `tsc --noEmit`. `make lint-config` and `make actionlint` check the linter and workflow files. |
 | `make gen` | Regenerates `openapi.json`, the TypeScript API types, the sqlc code and `web/public/third-party-notices.json`. Run it whenever you change an API route, a SQL query or a dependency. |
 | `make gen-check` | Runs `make gen` and fails if anything changed. CI runs it. The first run needs network access. |
@@ -70,6 +72,17 @@ make dev
 Open <http://localhost:5173/>. Vite serves the SPA there and proxies `/api` to the Go server on `127.0.0.1:7480`, which air rebuilds when a `.go` file changes. Development data lives in `.devdata/` (git-ignored). The Go side is built with the `devspa` tag, so it serves the SPA from `web/dist` on disk.
 
 **The setup token flow applies in development too.** A new `.devdata` prints a setup token in the Go server's output, and `BAYPLAN_DATA_DIR=./.devdata go run ./cmd/bayplan setup-token` prints it again. There is deliberately no flag or setting that skips it (D-79), and no change should add one. Development needs a Docker socket to show a host; without one the app shows its "no Docker socket" screens.
+
+### Local swarm
+
+`make dev-swarm` starts four privileged `docker:29-dind` containers (`bayplan-dev-m1` to `bayplan-dev-m3` and `bayplan-dev-w1`) on a network called `bayplan-dev-swarm`, makes them a swarm of three managers and a worker, builds the agent from this tree (`make agent-image`) and loads it on every node under the name the install command uses. It then prints the next steps: start the server with `make dev DEV_LISTEN=0.0.0.0:7480` so the nodes can reach it, add an agent environment in the UI, and paste the swarm command into `docker exec -i bayplan-dev-m1 sh`.
+
+`make dev-swarm-down` removes those four containers, their volumes and the network, by name, and only if they carry the label `bayplan.dev-swarm=true`. It never runs a prune command, so nothing else on your Docker host is touched. `DEV_SWARM_ENGINE` (default 29) and `DEV_SWARM_SUBNET` (default `172.31.250.0/24`) change the engine version and the network.
+
+Two things to know:
+
+- The agents dial the server over plain `ws://`, because there is no certificate for a bare address. `make dev-go` sets `BAYPLAN_AGENT_URL` and `BAYPLAN_AGENT_ALLOW_INSECURE=true` for this, and the server logs a warning at start while the second is on. That is for development only and is set nowhere else. `DEV_LISTEN=0.0.0.0` also makes the dev server reachable from your network; the setup-token gate still applies, but do not do this on a network you do not trust.
+- If your shell predates your `docker` group membership, run the targets through `sg docker -c 'make dev-swarm'`. Both `make test-swarm` and `make dev-swarm` need Docker to run privileged containers, which is root-equivalent on that machine.
 
 ## SPDX headers
 

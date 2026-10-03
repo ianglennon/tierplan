@@ -7,7 +7,8 @@
 # Supply chain (T-01-12): every action is pinned to a full commit SHA with the
 # release tag in a trailing comment, the token is read-only and there are no
 # secrets. Plan 15 added the engine matrix (the integration job); plan 27 added
-# release-check and the main-only edge image; plan 28 adds the e2e job.
+# release-check and the main-only edge image; plan 28 adds the e2e job. The swarm
+# job (Phase 2) runs the multi-node suite on Engines 24 and 29.
 name: CI
 
 on:
@@ -209,6 +210,32 @@ jobs:
       - name: Build the agent image
         run: make agent-image
       - run: make test-int
+
+  # D-57, D-58: the multi-node suite on the oldest and newest Engines, on every
+  # pull request. Unlike the integration job there is no dind service: every test
+  # starts its own swarm of dind nodes (3 managers and a worker) on a network of
+  # its own, so the in-process Bayplan is reachable from them, and loads the agent
+  # image built here. One engine takes about ten minutes.
+  swarm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [24, 29]
+    env:
+      BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+            proto/go.mod
+      - run: make test-swarm
 
   # D-75: the release configuration stays valid on every pull request, without a
   # tag and without Docker: goreleaser check, a snapshot build of this runner's
