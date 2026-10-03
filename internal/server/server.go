@@ -342,6 +342,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// the snapshot cache and the events hub (D-47).
 	envSvc.WithAgents(tunnelHub).WithHealth(envs.HealthConfig{
 		OfflineAfter: cfg.AgentOfflineAfter, Grace: cfg.AgentReconnectGrace,
+		// An agent older than this server shows an update badge in the overview.
+		ServerVersion: buildinfo.Get().Version,
 	})
 	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
 

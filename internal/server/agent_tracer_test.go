@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -150,6 +151,29 @@ func TestAgentTracerStandaloneEnrolsAndComesOnline(t *testing.T) {
 		t.Fatalf("agent URL = %q, want %q", created.Install.AgentURL, want)
 	}
 
+	// A tab watches the global health stream before the agent starts (plan 02-12).
+	streamCtx, stopStream := context.WithCancel(context.Background())
+	t.Cleanup(stopStream)
+	streamReq, err := http.NewRequestWithContext(streamCtx, http.MethodGet, ts.URL+"/api/environments/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamReq.AddCookie(cookie)
+	streamResp, err := ts.Client().Do(streamReq) //nolint:bodyclose // closed by stopStream, which ends the request
+	if err != nil || streamResp.StatusCode != http.StatusOK {
+		t.Fatalf("open the environments stream: %v, %v", streamResp, err)
+	}
+	streamed := make(chan string, 64)
+	go func() {
+		sc := bufio.NewScanner(streamResp.Body)
+		for sc.Scan() {
+			if name, ok := strings.CutPrefix(sc.Text(), "event: "); ok {
+				streamed <- name
+			}
+		}
+		close(streamed)
+	}()
+
 	// The agent starts on a host whose Docker is a fake daemon.
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "tracer-host"})
 	agentCtx, stopAgent := context.WithCancel(context.Background())
@@ -185,6 +209,13 @@ func TestAgentTracerStandaloneEnrolsAndComesOnline(t *testing.T) {
 		Engine struct {
 			Version string `json:"version"`
 		} `json:"engine"`
+		EnvType string `json:"envType"`
+		Nodes   *struct {
+			Ready int `json:"ready"`
+			Total int `json:"total"`
+		} `json:"nodes"`
+		AgentVersion    *string `json:"agentVersion"`
+		UpdateAvailable bool    `json:"updateAvailable"`
 	}
 	var got environment
 	deadline := time.Now().Add(15 * time.Second)
@@ -222,6 +253,31 @@ func TestAgentTracerStandaloneEnrolsAndComesOnline(t *testing.T) {
 	}
 	if strings.Contains(agentLog.String(), created.Install.JoinToken) {
 		t.Error("the agent logged the join token")
+	}
+
+	// The overview columns come from the real agent (plan 02-12).
+	if got.EnvType != "standalone" || got.Nodes == nil || got.Nodes.Ready != 1 || got.Nodes.Total != 1 || got.AgentVersion == nil || *got.AgentVersion == "" || got.UpdateAvailable {
+		t.Errorf("overview = envType %q, nodes %+v, agentVersion %v, updateAvailable %v; want standalone, 1 of 1, the agent's version and no update", got.EnvType, got.Nodes, got.AgentVersion, got.UpdateAvailable)
+	}
+	// The tab hears it: the snapshot, the agent connecting, and the environment changing state.
+	seen := map[string]bool{}
+	for timeout := time.After(10 * time.Second); !seen["snapshot"] || !seen["agent.connected"] || !seen["env.status"]; {
+		select {
+		case name, ok := <-streamed:
+			if !ok {
+				t.Fatalf("the environments stream ended; saw %v", seen)
+			}
+			seen[name] = true
+		case <-timeout:
+			t.Fatalf("the environments stream carried only %v, want snapshot, agent.connected and env.status", seen)
+		}
+	}
+	// The admin's last-used environment is kept on the server.
+	if code, body := call(http.MethodPut, "/api/me/recent-environments/"+created.ID, ""); code != http.StatusNoContent {
+		t.Fatalf("PUT recent environment: %d %s", code, body)
+	}
+	if code, body := call(http.MethodGet, "/api/me/recent-environments", ""); code != http.StatusOK || !strings.Contains(string(body), created.ID) {
+		t.Errorf("GET recent environments = %d %s, want it to list %s", code, body, created.ID)
 	}
 
 	// Everything the fake daemon was asked for is a read on an allowlisted path.
