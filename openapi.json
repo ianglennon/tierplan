@@ -168,6 +168,126 @@
         ],
         "type": "object"
       },
+      "AgentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agentVersion": {
+            "description": "The agent's version when it last connected or enrolled",
+            "type": "string"
+          },
+          "blocked": {
+            "description": "True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them",
+            "type": "boolean"
+          },
+          "certFingerprint": {
+            "description": "The full SHA-256 of the agent's certificate, in hex",
+            "type": "string"
+          },
+          "certNotAfter": {
+            "description": "When the agent's certificate expires",
+            "format": "date-time",
+            "type": "string"
+          },
+          "clockOffsetSeconds": {
+            "description": "How far the agent's clock is ahead of the server's, in seconds, measured when it last connected; negative is behind, 0 when it has not connected since the server started",
+            "format": "int64",
+            "type": "integer"
+          },
+          "connected": {
+            "description": "Whether the agent has a live connection now",
+            "type": "boolean"
+          },
+          "engineVersion": {
+            "description": "The Docker Engine version the agent reported. Present only while it is connected",
+            "type": "string"
+          },
+          "id": {
+            "description": "The agent ID",
+            "type": "string"
+          },
+          "lastDenial": {
+            "$ref": "#/components/schemas/DenialBody",
+            "description": "The last request the agent refused by its own policy, while it is connected. Absent if it has refused none"
+          },
+          "lastSeen": {
+            "description": "When the agent was last heard from. Absent if it never has been",
+            "format": "date-time",
+            "type": "string"
+          },
+          "node": {
+            "description": "The hostname the agent reported when it enrolled",
+            "type": "string"
+          },
+          "readOnly": {
+            "description": "The host owner set the agent to read-only. Reported only while it is connected",
+            "type": "boolean"
+          },
+          "revokeReason": {
+            "description": "The reason given when it was revoked",
+            "type": "string"
+          },
+          "revokedAt": {
+            "description": "When the agent was revoked",
+            "format": "date-time",
+            "type": "string"
+          },
+          "role": {
+            "description": "What the node is: a swarm manager, a swarm worker or a standalone host. Which manager leads is not reported yet",
+            "enum": [
+              "manager",
+              "worker",
+              "standalone"
+            ],
+            "type": "string"
+          },
+          "selfUpdate": {
+            "description": "The host owner allowed the agent to update itself. Reported only while it is connected",
+            "type": "boolean"
+          },
+          "status": {
+            "description": "revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back",
+            "enum": [
+              "active",
+              "revoked"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "node",
+          "role",
+          "status",
+          "blocked",
+          "connected",
+          "agentVersion",
+          "certFingerprint",
+          "certNotAfter",
+          "clockOffsetSeconds",
+          "readOnly",
+          "selfUpdate"
+        ],
+        "type": "object"
+      },
+      "AgentListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent",
+            "items": {
+              "$ref": "#/components/schemas/AgentBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "AuditEntryDTO": {
         "additionalProperties": false,
         "properties": {
@@ -482,6 +602,25 @@
           "items",
           "total",
           "truncated"
+        ],
+        "type": "object"
+      },
+      "DenialBody": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "When it refused",
+            "format": "date-time",
+            "type": "string"
+          },
+          "endpoint": {
+            "description": "The Docker API path the agent refused",
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "at"
         ],
         "type": "object"
       },
@@ -1576,6 +1715,17 @@
         ],
         "type": "object"
       },
+      "RevokeAgentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "Why the node is revoked, for the audit log and the node table. Optional",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "RotateTokenBody": {
         "additionalProperties": false,
         "properties": {
@@ -2397,6 +2547,57 @@
         ]
       }
     },
+    "/api/env/{envId}/agents": {
+      "get": {
+        "description": "Every enrolled agent with its node name, role, status, whether its host is blocked, whether it is connected, versions, the full certificate fingerprint and expiry, clock offset, when it was last seen, the policy flags the host owner set and the last request it refused. Problems come first: revoked agents, then agents that are not connected, then the rest by node name. A local-socket environment has none. Never carries a key, a token or a serial. 404 environment_not_found when the environment does not exist or the caller may not read it. Needs environments.read on the environment.",
+        "operationId": "listEnvironmentAgents",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the agents of an environment's nodes",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/containers": {
       "get": {
         "description": "Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
@@ -3031,6 +3232,109 @@
           }
         },
         "summary": "Rename an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/agents/{agentId}/revoke": {
+      "post": {
+        "description": "The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked when it was revoked already, by this admin or another. Needs environments.revoke. Audited as agent.revoked and agent.blocked.",
+        "operationId": "revokeEnvironmentAgent",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeAgentBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Revoke a node's agent",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/agents/{agentId}/unblock": {
+      "post": {
+        "description": "Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. The host's own agent retries on its own at its backoff limit and is refused until it is installed or enrolled again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. Audited as agent.unblocked.",
+        "operationId": "unblockEnvironmentAgent",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Let a revoked node's host enrol again",
         "tags": [
           "environments"
         ]

@@ -31,6 +31,9 @@ const (
 	problemEnvironmentNotFound    = "environment_not_found"
 	problemPublicURLRequired      = "public_url_required"
 	problemAgentsUnavailable      = "agents_unavailable"
+	problemAgentNotFound          = "agent_not_found"
+	problemAgentAlreadyRevoked    = "agent_already_revoked"
+	problemNotBlocked             = "not_blocked"
 )
 
 // EnvironmentsDeps are the dependencies of the environment routes.

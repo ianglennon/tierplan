@@ -402,7 +402,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Log:     log,
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
 		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Log: log},
-		api.AgentsDeps{Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Log: log},
+		api.AgentsDeps{Agents: agentSvc, Live: tunnelHub, Instance: inst, TLSPin: tlsPin, Log: log},
 		api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
 		api.EventsDeps{Aggregator: aggregator, Log: log},
 		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},

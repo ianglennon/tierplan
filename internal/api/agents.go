@@ -8,6 +8,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -16,13 +19,26 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 )
+
+// AgentSessions is what the node list reads of the live agents: the tunnel hub.
+type AgentSessions interface {
+	// Session is the live session of an agent, or nil.
+	Session(agentID string) *tunnel.Session
+	// Views is what the hub remembers of the agents of an environment that have
+	// connected since the server started.
+	Views(envID string) []tunnel.AgentLive
+}
 
 // AgentsDeps are the dependencies of the agent routes.
 type AgentsDeps struct {
 	// Agents rotates and disables join tokens. Nil means the routes answer 409
 	// agents_unavailable.
 	Agents *agents.Service
+	// Live is where the node list reads who is connected now and what each agent
+	// reported. Nil means nobody is: every node shows as not connected.
+	Live AgentSessions
 	// Instance supplies the address agents dial, as for adding an environment.
 	Instance *instance.Instance
 	// TLSPin returns the SPKI pin of the self-signed certificate Bayplan serves, or
@@ -67,18 +83,153 @@ type TokenMutationInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
-// RegisterAgents registers the join token routes: rotate, disable and inspect.
-// All three need environments.token, a dangerous global permission, because a
-// token is what lets a new host in (D-02).
+// AgentPathInput carries {envId} and {agentId} for the routes that act on one agent.
+type AgentPathInput struct {
+	EnvironmentPathInput
+	AgentID string `path:"agentId" doc:"The agent ID, as listed by GET /api/env/{envId}/agents"`
+}
+
+// RevokeAgentBody is the optional body of a revoke.
+type RevokeAgentBody struct {
+	Reason string `json:"reason,omitempty" maxLength:"256" doc:"Why the node is revoked, for the audit log and the node table. Optional"`
+}
+
+// RevokeAgentInput is a revoke of one agent.
+type RevokeAgentInput struct {
+	AgentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      *RevokeAgentBody
+}
+
+// UnblockAgentInput is an unblock of one agent's host.
+type UnblockAgentInput struct {
+	AgentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// DenialBody is the last request an agent refused by its own policy.
+type DenialBody struct {
+	Endpoint string `json:"endpoint" doc:"The Docker API path the agent refused"`
+	At       string `json:"at" format:"date-time" doc:"When it refused"`
+}
+
+// AgentBody is one node's agent.
+type AgentBody struct {
+	ID                 string      `json:"id" doc:"The agent ID"`
+	Node               string      `json:"node" doc:"The hostname the agent reported when it enrolled"`
+	Role               string      `json:"role" enum:"manager,worker,standalone" doc:"What the node is: a swarm manager, a swarm worker or a standalone host. Which manager leads is not reported yet"`
+	Status             string      `json:"status" enum:"active,revoked" doc:"revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back"`
+	Blocked            bool        `json:"blocked" doc:"True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them"`
+	Connected          bool        `json:"connected" doc:"Whether the agent has a live connection now"`
+	AgentVersion       string      `json:"agentVersion" doc:"The agent's version when it last connected or enrolled"`
+	EngineVersion      string      `json:"engineVersion,omitempty" doc:"The Docker Engine version the agent reported. Present only while it is connected"`
+	CertFingerprint    string      `json:"certFingerprint" doc:"The full SHA-256 of the agent's certificate, in hex"`
+	CertNotAfter       string      `json:"certNotAfter" format:"date-time" doc:"When the agent's certificate expires"`
+	ClockOffsetSeconds int         `json:"clockOffsetSeconds" doc:"How far the agent's clock is ahead of the server's, in seconds, measured when it last connected; negative is behind, 0 when it has not connected since the server started"`
+	LastSeen           string      `json:"lastSeen,omitempty" format:"date-time" doc:"When the agent was last heard from. Absent if it never has been"`
+	ReadOnly           bool        `json:"readOnly" doc:"The host owner set the agent to read-only. Reported only while it is connected"`
+	SelfUpdate         bool        `json:"selfUpdate" doc:"The host owner allowed the agent to update itself. Reported only while it is connected"`
+	LastDenial         *DenialBody `json:"lastDenial,omitempty" doc:"The last request the agent refused by its own policy, while it is connected. Absent if it has refused none"`
+	RevokedAt          string      `json:"revokedAt,omitempty" format:"date-time" doc:"When the agent was revoked"`
+	RevokeReason       string      `json:"revokeReason,omitempty" doc:"The reason given when it was revoked"`
+}
+
+// AgentListBody is every agent of an environment.
+type AgentListBody struct {
+	Items []AgentBody `json:"items" doc:"One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent"`
+}
+
+// AgentListOutput wraps AgentListBody for huma.
+type AgentListOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         AgentListBody
+}
+
+// agentBodies merges the database's view of an environment's agents with the
+// live one: connected, what the agent reported and when it was last heard from.
+func agentBodies(nodes []agents.Node, live AgentSessions, envID string) []AgentBody {
+	views := map[string]tunnel.AgentLive{}
+	if live != nil {
+		for _, v := range live.Views(envID) {
+			views[v.AgentID] = v
+		}
+	}
+	items := make([]AgentBody, 0, len(nodes))
+	for _, n := range nodes {
+		b := AgentBody{
+			ID: n.ID, Node: n.Name, Role: n.Role, Status: n.Status, Blocked: n.Blocked,
+			AgentVersion: n.AgentVersion, CertFingerprint: n.CertFingerprint, CertNotAfter: rfc3339(n.CertNotAfter),
+			RevokedAt: rfc3339(n.RevokedAt), RevokeReason: n.RevokeReason,
+		}
+		lastSeen := n.LastSeen
+		if v, ok := views[n.ID]; ok {
+			b.AgentVersion = cmpOr(v.Version, b.AgentVersion)
+			b.ClockOffsetSeconds = int(v.ClockOffset.Round(time.Second) / time.Second)
+			if v.LastSeen.After(lastSeen) {
+				lastSeen = v.LastSeen
+			}
+			b.Connected = v.Connected && n.Status == "active"
+		}
+		if b.Connected && live != nil {
+			if s := live.Session(n.ID); s != nil {
+				b.EngineVersion = s.Facts.EngineVersion
+				b.ReadOnly, b.SelfUpdate = s.Facts.Policy.ReadOnly, s.Facts.Policy.SelfUpdate
+				if d := s.Status().LastDenial; d != nil {
+					b.LastDenial = &DenialBody{Endpoint: d.Endpoint, At: rfc3339(d.At)}
+				}
+			} else {
+				b.Connected = false
+			}
+		}
+		b.LastSeen = rfc3339(lastSeen)
+		items = append(items, b)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		a, b := items[i], items[j]
+		if ra, rb := a.Status == "revoked", b.Status == "revoked"; ra != rb {
+			return ra
+		}
+		if a.Connected != b.Connected {
+			return !a.Connected
+		}
+		if na, nb := strings.ToLower(a.Node), strings.ToLower(b.Node); na != nb {
+			return na < nb
+		}
+		return a.ID < b.ID
+	})
+	return items
+}
+
+// cmpOr is v unless it is empty, then fallback.
+func cmpOr(v, fallback string) string {
+	if v != "" {
+		return v
+	}
+	return fallback
+}
+
+// RegisterAgents registers the agent routes: the join token (rotate, disable and
+// inspect, environments.token, a dangerous global permission, because a token is
+// what lets a new host in, D-02), the node list (environments.read on the
+// environment) and revoke and unblock (environments.revoke, D-08, D-09).
 func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
 	fail := func(what string, err error) error {
-		if errors.Is(err, agents.ErrEnvironmentNotFound) {
+		switch {
+		case errors.Is(err, agents.ErrEnvironmentNotFound):
 			return httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
+		case errors.Is(err, agents.ErrAgentNotFound):
+			return httpx.Problem(http.StatusNotFound, problemAgentNotFound, "No such agent in this environment.")
+		case errors.Is(err, agents.ErrAlreadyRevoked):
+			return httpx.Problem(http.StatusConflict, problemAgentAlreadyRevoked, "That node was revoked while you were looking at it.")
+		case errors.Is(err, agents.ErrNotBlocked):
+			return httpx.Problem(http.StatusConflict, problemNotBlocked, "That node's host is not blocked.")
 		}
-		d.Log.Error("join token request failed", "step", what, "error", err)
+		d.Log.Error("agent request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
 	}
 	usable := func() error {
@@ -187,5 +338,81 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		return &TokenStatusOutput{CacheControl: "no-store", Body: TokenStatusBody{
 			Generation: st.Generation, CreatedAt: rfc3339(st.CreatedAt), CreatedBy: st.CreatedBy, Disabled: st.Disabled,
 		}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listEnvironmentAgents",
+		Method:      http.MethodGet,
+		Path:        "/api/env/{envId}/agents",
+		Summary:     "List the agents of an environment's nodes",
+		Description: "Every enrolled agent with its node name, role, status, whether its host is blocked, whether it is connected, versions, " +
+			"the full certificate fingerprint and expiry, clock offset, when it was last seen, the policy flags the host owner set and the last " +
+			"request it refused. Problems come first: revoked agents, then agents that are not connected, then the rest by node name. A " +
+			"local-socket environment has none. Never carries a key, a token or a serial. 404 environment_not_found when the environment does " +
+			"not exist or the caller may not read it. Needs environments.read on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRead, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *EnvironmentPathInput) (*AgentListOutput, error) {
+		if err := usable(); err != nil {
+			return nil, err
+		}
+		nodes, err := d.Agents.ListNodes(ctx, in.EnvID)
+		if err != nil {
+			return nil, fail("list agents", err)
+		}
+		return &AgentListOutput{CacheControl: "no-store", Body: AgentListBody{Items: agentBodies(nodes, d.Live, in.EnvID)}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "revokeEnvironmentAgent",
+		Method:        http.MethodPost,
+		Path:          "/api/environments/{envId}/agents/{agentId}/revoke",
+		Summary:       "Revoke a node's agent",
+		DefaultStatus: http.StatusNoContent,
+		Description: "The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm " +
+			"node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host " +
+			"is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked " +
+			"when it was revoked already, by this admin or another. Needs environments.revoke. Audited as agent.revoked and agent.blocked.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRevoke, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RevokeAgentInput) (*struct{}, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if err := usable(); err != nil {
+			return nil, err
+		}
+		reason := ""
+		if in.Body != nil {
+			reason = in.Body.Reason
+		}
+		if err := d.Agents.Revoke(ctx, p.AuditActor(), in.EnvID, in.AgentID, reason, httpx.ClientIP(ctx), in.UserAgent); err != nil {
+			return nil, fail("revoke agent", err)
+		}
+		return nil, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "unblockEnvironmentAgent",
+		Method:        http.MethodPost,
+		Path:          "/api/environments/{envId}/agents/{agentId}/unblock",
+		Summary:       "Let a revoked node's host enrol again",
+		DefaultStatus: http.StatusNoContent,
+		Description: "Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The " +
+			"revoked agent stays revoked. The host's own agent retries on its own at its backoff limit and is refused until it is installed or " +
+			"enrolled again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. " +
+			"Audited as agent.unblocked.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRevoke, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UnblockAgentInput) (*struct{}, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if err := usable(); err != nil {
+			return nil, err
+		}
+		if err := d.Agents.Unblock(ctx, p.AuditActor(), in.EnvID, in.AgentID, httpx.ClientIP(ctx), in.UserAgent); err != nil {
+			return nil, fail("unblock agent", err)
+		}
+		return nil, nil
 	})
 }

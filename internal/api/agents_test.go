@@ -424,7 +424,7 @@ func TestAgentListReportsTheClockOffsetOfAConnectedAgent(t *testing.T) {
 	}
 }
 
-func TestAgentListOfAnEnvironmentTheCallerCannotReadIs404AndOfALocalHostIsEmpty(t *testing.T) {
+func TestAgentListOfAnEnvironmentTheCallerCannotReadIsRefusedWithNothingOfItAndAnUnknownOneIs404(t *testing.T) {
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "A")
 	b := f.srv.NewEnvironment(t, "B")
@@ -434,8 +434,14 @@ func TestAgentListOfAnEnvironmentTheCallerCannotReadIs404AndOfALocalHostIsEmpty(
 	cookie, csrf := f.signIn(t, "viewer", false)
 
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + b.ID + "/agents", cookie: cookie, csrf: csrf})
-	if rec.Code != http.StatusNotFound || problemType(t, rec) != "environment_not_found" || strings.Contains(rec.Body.String(), "b-node") {
-		t.Fatalf("an environment the viewer may not read: %d %s, want 404 environment_not_found and nothing of it", rec.Code, rec.Body)
+	// Every /api/env route answers an environment the caller may not read with the
+	// platform's 403 and a permission.denied entry (an unknown one is a 404): the
+	// answer carries nothing of the environment's agents.
+	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "b-node") || strings.Contains(rec.Body.String(), b.ID) {
+		t.Fatalf("an environment the viewer may not read: %d %s, want 403 and nothing of it", rec.Code, rec.Body)
+	}
+	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-viewer" {
+		t.Errorf("permission.denied entries = %+v", denied)
 	}
 	rec = f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + a.ID + "/agents", cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusOK {

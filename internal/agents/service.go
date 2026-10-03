@@ -642,6 +642,67 @@ func (s *Service) Unblock(ctx context.Context, actor audit.Actor, envID, agentID
 	return nil
 }
 
+// Node is one enrolled agent as the database knows it: what the node list shows
+// before live state is added.
+type Node struct {
+	ID string
+	// Name is the hostname the agent reported when it enrolled.
+	Name string
+	// Role is manager, worker or standalone.
+	Role string
+	// Status is active or revoked.
+	Status string
+	// Blocked is true while the host's identity is on the block list because of
+	// this agent's revoke.
+	Blocked         bool
+	AgentVersion    string
+	CertFingerprint string
+	CertNotAfter    time.Time
+	// LastSeen is when the agent was last heard from, as far as the database
+	// knows (it is written at most once a minute); zero if never.
+	LastSeen time.Time
+	// RevokedAt and RevokeReason are set once the agent is revoked. RevokeReason may
+	// be empty.
+	RevokedAt    time.Time
+	RevokeReason string
+}
+
+// ListNodes returns every agent enrolled in an environment, oldest first, with
+// whether each is blocked. An environment with no agents, or one that is not an
+// agent environment, has none.
+func (s *Service) ListNodes(ctx context.Context, envID string) ([]Node, error) {
+	rows, err := s.st.RQ.ListAgentsByEnv(ctx, envID)
+	if err != nil {
+		return nil, fmt.Errorf("list the agents: %w", err)
+	}
+	blocks, err := s.st.RQ.ListBlocks(ctx, envID)
+	if err != nil {
+		return nil, fmt.Errorf("list the blocks: %w", err)
+	}
+	blocked := make(map[string]bool, len(blocks))
+	for _, b := range blocks {
+		if b.AgentID.Valid {
+			blocked[b.AgentID.String] = true
+		}
+	}
+	out := make([]Node, 0, len(rows))
+	for _, a := range rows {
+		n := Node{
+			ID: a.ID, Name: a.Name, Role: a.Role, Status: a.Status, Blocked: blocked[a.ID],
+			AgentVersion: a.AgentVersion, CertFingerprint: a.CertFingerprint, CertNotAfter: time.Unix(0, a.CertNotAfter).UTC(),
+			RevokeReason: a.RevokeReason.String,
+		}
+		if a.LastSeenAt.Valid {
+			n.LastSeen = time.Unix(0, a.LastSeenAt.Int64).UTC()
+		}
+		if a.RevokedAt.Valid {
+			n.RevokedAt = time.Unix(0, a.RevokedAt.Int64).UTC()
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
 // StillActive reports whether the agent exists and has not been revoked. The hub
 // asks it when it registers a session. It implements tunnel.Verifier.
 func (s *Service) StillActive(agentID string) bool {

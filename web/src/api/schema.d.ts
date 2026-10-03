@@ -104,6 +104,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the agents of an environment's nodes
+         * @description Every enrolled agent with its node name, role, status, whether its host is blocked, whether it is connected, versions, the full certificate fingerprint and expiry, clock offset, when it was last seen, the policy flags the host owner set and the last request it refused. Problems come first: revoked agents, then agents that are not connected, then the rest by node name. A local-socket environment has none. Never carries a key, a token or a serial. 404 environment_not_found when the environment does not exist or the caller may not read it. Needs environments.read on the environment.
+         */
+        get: operations["listEnvironmentAgents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/containers": {
         parameters: {
             query?: never;
@@ -290,6 +310,46 @@ export interface paths {
          * @description Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.
          */
         patch: operations["renameEnvironment"];
+        trace?: never;
+    };
+    "/api/environments/{envId}/agents/{agentId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a node's agent
+         * @description The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked when it was revoked already, by this admin or another. Needs environments.revoke. Audited as agent.revoked and agent.blocked.
+         */
+        post: operations["revokeEnvironmentAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}/agents/{agentId}/unblock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Let a revoked node's host enrol again
+         * @description Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. The host's own agent retries on its own at its backoff limit and is refused until it is installed or enrolled again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. Audited as agent.unblocked.
+         */
+        post: operations["unblockEnvironmentAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/environments/{envId}/token": {
@@ -616,6 +676,64 @@ export interface components {
             /** @description 1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent */
             name?: string;
         };
+        AgentBody: {
+            /** @description The agent's version when it last connected or enrolled */
+            agentVersion: string;
+            /** @description True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them */
+            blocked: boolean;
+            /** @description The full SHA-256 of the agent's certificate, in hex */
+            certFingerprint: string;
+            /**
+             * Format: date-time
+             * @description When the agent's certificate expires
+             */
+            certNotAfter: string;
+            /**
+             * Format: int64
+             * @description How far the agent's clock is ahead of the server's, in seconds, measured when it last connected; negative is behind, 0 when it has not connected since the server started
+             */
+            clockOffsetSeconds: number;
+            /** @description Whether the agent has a live connection now */
+            connected: boolean;
+            /** @description The Docker Engine version the agent reported. Present only while it is connected */
+            engineVersion?: string;
+            /** @description The agent ID */
+            id: string;
+            /** @description The last request the agent refused by its own policy, while it is connected. Absent if it has refused none */
+            lastDenial?: components["schemas"]["DenialBody"];
+            /**
+             * Format: date-time
+             * @description When the agent was last heard from. Absent if it never has been
+             */
+            lastSeen?: string;
+            /** @description The hostname the agent reported when it enrolled */
+            node: string;
+            /** @description The host owner set the agent to read-only. Reported only while it is connected */
+            readOnly: boolean;
+            /** @description The reason given when it was revoked */
+            revokeReason?: string;
+            /**
+             * Format: date-time
+             * @description When the agent was revoked
+             */
+            revokedAt?: string;
+            /**
+             * @description What the node is: a swarm manager, a swarm worker or a standalone host. Which manager leads is not reported yet
+             * @enum {string}
+             */
+            role: "manager" | "worker" | "standalone";
+            /** @description The host owner allowed the agent to update itself. Reported only while it is connected */
+            selfUpdate: boolean;
+            /**
+             * @description revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back
+             * @enum {string}
+             */
+            status: "active" | "revoked";
+        };
+        AgentListBody: {
+            /** @description One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent */
+            items: components["schemas"]["AgentBody"][] | null;
+        };
         AuditEntryDTO: {
             /** @description A stable action key such as auth.login */
             action: string;
@@ -726,6 +844,15 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        DenialBody: {
+            /**
+             * Format: date-time
+             * @description When it refused
+             */
+            at: string;
+            /** @description The Docker API path the agent refused */
+            endpoint: string;
         };
         EnvironmentAgentsBody: {
             /**
@@ -1169,6 +1296,10 @@ export interface components {
             /** @description The new name, 1 to 64 characters */
             name: string;
         };
+        RevokeAgentBody: {
+            /** @description Why the node is revoked, for the audit log and the node table. Optional */
+            reason?: string;
+        };
         RotateTokenBody: {
             /**
              * @description What the environment's active agents run on. Absent while it has none
@@ -1535,6 +1666,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvironmentAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentListBody"];
+                };
             };
             /** @description Error */
             default: {
@@ -1987,6 +2151,74 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RevokeAgentBody"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unblockEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {
