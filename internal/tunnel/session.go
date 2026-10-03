@@ -50,6 +50,11 @@ type SessionStatus struct {
 	EngineReachable bool
 	// ClockMs is the agent's clock in the last heartbeat, in Unix milliseconds.
 	ClockMs int64
+	// ClockOffset is how far the agent's clock is ahead of the server's (negative
+	// when behind), measured in the handshake, and ClockWarning is set when it is
+	// beyond ClockWarnOffset. They hold for the whole session (D-45).
+	ClockOffset  time.Duration
+	ClockWarning bool
 }
 
 // Status is the last heartbeat. It reads memory and never the database.

@@ -271,6 +271,14 @@ type Agent struct {
 	// NoMux leaves the WebSocket unwrapped after the welcome, so a test can read
 	// the server's close frame itself.
 	NoMux bool
+	// Version is the agent version sent. Empty means "0.2.0".
+	Version string
+	// ClockSkew is how far the agent's clock is ahead of the server's, in the ts
+	// it sends. Negative is behind.
+	ClockSkew time.Duration
+	// EKM replaces the TLS exporter value sent and signed. NoEKM sends none.
+	EKM   []byte
+	NoEKM bool
 }
 
 // Conn is a connection after the handshake.
@@ -343,9 +351,19 @@ func (s *Server) Dial(t testing.TB, a Agent) *Conn {
 	nonce := make([]byte, 32)
 	_, _ = rand.Read(nonce)
 	ekm := authn.EKM(resp.TLS)
+	switch {
+	case a.NoEKM:
+		ekm = nil
+	case a.EKM != nil:
+		ekm = a.EKM
+	}
+	version := a.Version
+	if version == "" {
+		version = "0.2.0"
+	}
 	auth := wire.Auth{
-		T: wire.TypeAuth, Mode: mode, Proto: proto, AgentVersion: "0.2.0", Aud: aud, Nonce: nonce,
-		TS: s.Clock.Now().UnixMilli(), EKM: ekm, Facts: facts,
+		T: wire.TypeAuth, Mode: mode, Proto: proto, AgentVersion: version, Aud: aud, Nonce: nonce,
+		TS: s.Clock.Now().Add(a.ClockSkew).UnixMilli(), EKM: ekm, Facts: facts,
 	}
 	var signer ed25519.PrivateKey
 	var signed []byte

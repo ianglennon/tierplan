@@ -4,7 +4,11 @@
 package tunnel_test
 
 import (
+	"bytes"
 	"context"
+	"net/http"
+	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +16,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
@@ -236,5 +242,163 @@ func TestSimultaneousHellosForOneAgentLeaveExactlyOneSession(t *testing.T) {
 	}
 	if got := srv.Hub.Sessions(); len(got) != 1 {
 		t.Fatalf("hub holds %d sessions", len(got))
+	}
+}
+
+// trustLoopback puts the hub behind the client-address middleware with
+// 127.0.0.0/8 as a trusted proxy, so the test client counts as a TLS-terminating
+// proxy in front of Bayplan.
+func trustLoopback(h http.Handler) http.Handler {
+	return httpx.ClientIPMiddleware([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")})(h)
+}
+
+func versioned(v string) tunneltest.Options {
+	return tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithServerVersion(v) }}
+}
+
+func TestCompatibleWindowIsEnforcedByTheHandshakeInBothModes(t *testing.T) {
+	srv := tunneltest.Start(t, versioned("v0.3.1"))
+	env := srv.NewEnvironment(t, "Production")
+	for _, tc := range []struct {
+		agent string
+		ok    bool
+		say   string
+	}{
+		{"0.3.0", true, ""},
+		{"v0.2.7", true, ""},
+		{"0.1.9", false, "too old"},
+		{"0.4.0", false, "too new"},
+	} {
+		c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Version: tc.agent})
+		if tc.ok {
+			if c.Welcome == nil {
+				t.Errorf("agent %s was refused: %+v", tc.agent, c.Refuse)
+			}
+			continue
+		}
+		if c.Refuse == nil || c.Refuse.Code != wire.ReasonVersionIncompatible || !strings.Contains(c.Refuse.Detail, tc.say) {
+			t.Errorf("agent %s got refusal %+v (welcomed: %v), want version_incompatible saying %q", tc.agent, c.Refuse, c.Welcome != nil, tc.say)
+		}
+	}
+
+	// A hello is held to the same window.
+	id := enrolled(t, srv, env)
+	c := srv.Dial(t, tunneltest.Agent{Identity: &id, Version: "0.4.0"})
+	if c.Refuse == nil || c.Refuse.Code != wire.ReasonVersionIncompatible {
+		t.Fatalf("hello of a too-new agent got %+v, want version_incompatible", c.Refuse)
+	}
+}
+
+func TestCompatibleDevAndEdgeServersAcceptAnyAgentOfTheSameProtocol(t *testing.T) {
+	for _, server := range []string{"dev (abc123)", "edge-20261003-abc1234", ""} {
+		srv := tunneltest.Start(t, versioned(server))
+		env := srv.NewEnvironment(t, "Production")
+		if c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Version: "0.0.1"}); c.Welcome == nil {
+			t.Errorf("server %q refused an old agent: %+v", server, c.Refuse)
+		}
+		if c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Proto: 2}); c.Refuse == nil || c.Refuse.Code != wire.ReasonVersionIncompatible {
+			t.Errorf("server %q accepted protocol 2: %+v", server, c)
+		}
+	}
+}
+
+func TestCompatibleRefusalCarriesTheUpdateHintWhenOneIsSet(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub {
+		return h.WithServerVersion("v0.3.1").WithUpdateHint(func(tooOld bool) string {
+			if tooOld {
+				return "run: docker pull bayplan-agent"
+			}
+			return ""
+		})
+	}})
+	env := srv.NewEnvironment(t, "Production")
+	c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Version: "0.1.0"})
+	if c.Refuse == nil || !strings.Contains(c.Refuse.Detail, "run: docker pull bayplan-agent") {
+		t.Fatalf("refusal = %+v, want the update command in the detail", c.Refuse)
+	}
+}
+
+func TestClockSkewBeyondFiveMinutesIsRefusedWithTheOffset(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	env := srv.NewEnvironment(t, "Production")
+	for _, skew := range []time.Duration{6 * time.Minute, -6 * time.Minute} {
+		c := srv.Dial(t, tunneltest.Agent{Token: env.Token, ClockSkew: skew})
+		if c.Refuse == nil || c.Refuse.Code != wire.ReasonClockSkew {
+			t.Fatalf("an agent %v off was answered %+v, want clock_skew", skew, c.Refuse)
+		}
+		if !strings.Contains(c.Refuse.Detail, "6m") {
+			t.Errorf("detail %q does not carry the offset", c.Refuse.Detail)
+		}
+	}
+	// A refused enrolment leaves no agent behind.
+	var n int
+	if err := srv.Store.Read.QueryRow(`SELECT COUNT(*) FROM agents`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d agents after refused enrolments (%v), want none", n, err)
+	}
+
+	// The same applies to a hello.
+	id := enrolled(t, srv, env)
+	c := srv.Dial(t, tunneltest.Agent{Identity: &id, ClockSkew: 6 * time.Minute})
+	if c.Refuse == nil || c.Refuse.Code != wire.ReasonClockSkew {
+		t.Fatalf("hello with a skewed clock got %+v, want clock_skew", c.Refuse)
+	}
+}
+
+func TestClockSkewOfFortySecondsIsAcceptedWithAWarningAndTwentyWithout(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	env := srv.NewEnvironment(t, "Production")
+	for _, tc := range []struct {
+		skew time.Duration
+		warn bool
+	}{
+		{40 * time.Second, true},
+		{-40 * time.Second, true},
+		{20 * time.Second, false},
+		{0, false},
+	} {
+		c := srv.Dial(t, tunneltest.Agent{Token: env.Token, ClockSkew: tc.skew})
+		if c.Welcome == nil {
+			t.Fatalf("an agent %v off was refused: %+v", tc.skew, c.Refuse)
+		}
+		s := srv.Hub.Session(c.Welcome.AgentID)
+		if s == nil {
+			t.Fatalf("no session for the agent %v off", tc.skew)
+		}
+		st := s.Status()
+		if st.ClockOffset != tc.skew || st.ClockWarning != tc.warn {
+			t.Errorf("skew %v: session says offset %v warning %v, want %v and %v", tc.skew, st.ClockOffset, st.ClockWarning, tc.skew, tc.warn)
+		}
+	}
+}
+
+func TestExporterBindingIsCheckedWhenBayplanTerminatesTLSItself(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	env := srv.NewEnvironment(t, "Production")
+
+	if c := srv.Dial(t, tunneltest.Agent{Token: env.Token}); c.Welcome == nil {
+		t.Fatalf("a hello bound to its own TLS session was refused: %+v", c.Refuse)
+	}
+	for name, a := range map[string]tunneltest.Agent{
+		"an exporter value from another session": {Token: env.Token, EKM: bytes.Repeat([]byte{7}, 32)},
+		"no exporter value":                      {Token: env.Token, NoEKM: true},
+	} {
+		c := srv.Dial(t, a)
+		if c.Refuse == nil || c.Refuse.Code != wire.ReasonAuthRejected {
+			t.Errorf("%s: got %+v, want auth_rejected", name, c.Refuse)
+		}
+	}
+}
+
+func TestExporterBindingIsNotComparedBehindATrustedProxy(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{Wrap: trustLoopback})
+	env := srv.NewEnvironment(t, "Production")
+	for name, a := range map[string]tunneltest.Agent{
+		"no exporter value":      {Token: env.Token, NoEKM: true},
+		"a different exporter":   {Token: env.Token, EKM: bytes.Repeat([]byte{7}, 32)},
+		"the exporter as it was": {Token: env.Token},
+	} {
+		if c := srv.Dial(t, a); c.Welcome == nil {
+			t.Errorf("%s: refused behind a trusted proxy: %+v", name, c.Refuse)
+		}
 	}
 }
