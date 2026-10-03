@@ -21,7 +21,8 @@ export interface ReasonParams {
   endpoint?: string;
   host?: string;
   environment?: string;
-  // duplicate_environment and type_mismatch: what the host and the environment are.
+  // duplicate_environment, type_mismatch and host_mismatch: what the host and the
+  // environment are.
   hostType?: string;
   envType?: string;
   // version_incompatible: the command that updates the agent, and which way the
@@ -69,9 +70,11 @@ const TEXT_NEEDS: Record<string, string[]> = {
   agent_policy_denied: ["endpoint"],
   duplicate_environment: ["host", "environment"],
   type_mismatch: ["host", "hostType", "environment", "envType"],
+  host_mismatch: ["environment"],
 };
 const HINT_NEEDS: Record<string, string[]> = {
   duplicate_environment: ["environment"],
+  host_mismatch: ["host"],
 };
 // A code whose sentence has a middle form that needs only some parameters.
 const TEXT_MIDDLE: Record<string, { suffix: string; needs: string[] }> = {

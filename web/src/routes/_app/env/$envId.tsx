@@ -30,6 +30,7 @@ import { useNow } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { EnvEventsProvider } from "@/features/dashboard/events";
+import { AdoptClusterDialog } from "@/features/environments/adopt-cluster-dialog";
 import { EnvDegradedBanner } from "@/features/environments/degraded-banner";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import { isKnownReason, ReasonText } from "@/features/environments/reason-text";
@@ -192,6 +193,56 @@ function problemActions({ envId, settings, canManage, canDelete, t }: ProblemLin
   return links.length > 0 ? links : undefined;
 }
 
+interface ClusterChangedProps extends StateProps {
+  // The environment as the list knows it, for the cluster ID the dialog names.
+  item: EnvironmentItem | undefined;
+  canManage: boolean;
+  canDelete: boolean;
+}
+
+// ClusterChangedPage is a swarm that was re-initialised: its agents report a
+// different cluster, so Bayplan refused them and changed nothing. Someone who may
+// manage the environment can adopt the new cluster (the primary action); someone
+// who may delete it can remove it instead (D-14).
+function ClusterChangedPage({ envId, name, item, canManage, canDelete }: ClusterChangedProps) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const heading = t("fullpage.clusterChanged.heading");
+  const links = problemActions({ envId, settings: false, canManage, canDelete, t }) ?? [];
+  return (
+    <>
+      <PageTitle page={heading} />
+      <FullPageState
+        icon={Network}
+        tone="warning"
+        heading={heading}
+        body={t("fullpage.clusterChanged.body", { name })}
+        action={
+          canManage || links.length > 0 ? (
+            <>
+              {canManage ? (
+                <Button ref={trigger} type="button" onClick={() => setOpen(true)}>
+                  {t("fullpage.clusterChanged.adopt")}
+                </Button>
+              ) : null}
+              {links}
+            </>
+          ) : undefined
+        }
+      />
+      {canManage ? (
+        <AdoptClusterDialog
+          environment={{ id: envId, name, pendingClusterId: item?.pendingClusterId }}
+          open={open}
+          onOpenChange={setOpen}
+          returnFocusRef={trigger}
+        />
+      ) : null}
+    </>
+  );
+}
+
 // EnvironmentLayout wraps every page of one environment. It reads the summary
 // and turns the server's problem answers into full-page states: 503
 // environment_offline (pending, reconnecting, offline, revoked or
@@ -316,18 +367,14 @@ function EnvironmentLayout() {
     );
   }
   if (shown === "cluster_changed") {
-    const heading = t("fullpage.clusterChanged.heading");
     return (
-      <>
-        <PageTitle page={heading} />
-        <FullPageState
-          icon={Network}
-          tone="warning"
-          heading={heading}
-          body={t("fullpage.clusterChanged.body", { name })}
-          action={problemActions({ envId, settings: false, canManage, canDelete, t })}
-        />
-      </>
+      <ClusterChangedPage
+        envId={envId}
+        name={name}
+        item={item}
+        canManage={canManage}
+        canDelete={canDelete}
+      />
     );
   }
   if (failure === "offline" || failure === "unsupported") {

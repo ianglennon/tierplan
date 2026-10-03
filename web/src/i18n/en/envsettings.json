@@ -121,6 +121,19 @@
       "done": "{{node}} was unblocked.",
       "notBlocked": "That node was already unblocked.",
       "failed": "Couldn't unblock the node. Try again."
+    },
+    "adopt": {
+      "button": "Adopt new cluster",
+      "title": "Adopt the new cluster?",
+      "body": "{{name}} will be bound to the swarm that now reports cluster ID {{id}}. This is recorded in the audit log.",
+      "bodyNoId": "{{name}} will be bound to the swarm that now reports a new cluster ID. This is recorded in the audit log.",
+      "cancel": "Cancel",
+      "confirm": "Adopt new cluster",
+      "pending": "Adopting…",
+      "done": "{{name}} now follows the new cluster.",
+      "noChange": "There is nothing left to adopt. Another admin may have adopted it already.",
+      "inUse": "Another environment already manages that cluster, so this one can't adopt it.",
+      "failed": "Couldn't adopt the new cluster. Try again."
     }
   }
 }

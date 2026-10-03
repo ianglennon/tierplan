@@ -109,6 +109,12 @@
         "textGeneric": "This host is a different type from the environment it tried to join.",
         "hint": "Add it as a separate environment."
       },
+      "host_mismatch": {
+        "text": "{{environment}} already manages a different host.",
+        "textGeneric": "This environment already manages a different host.",
+        "hint": "Add {{host}} as its own environment.",
+        "hintGeneric": "Add this host as its own environment."
+      },
       "unreachable": {
         "text": "Docker isn't answering on the local socket.",
         "hint": "Check that `/var/run/docker.sock` is mounted into Bayplan and that the Docker daemon is running."

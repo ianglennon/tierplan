@@ -23,6 +23,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AdoptClusterDialog } from "@/features/environments/adopt-cluster-dialog";
 import { RenameDialog } from "@/features/environments/environments-settings";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import { JoinTokenCard } from "@/features/environments/join-token-card";
@@ -123,8 +124,18 @@ function GeneralCard({ env }: { env: EnvironmentItem }) {
   );
 }
 
-function ConnectionCard({ env, canSettings }: { env: EnvironmentItem; canSettings: boolean }) {
+function ConnectionCard({
+  env,
+  canSettings,
+  canManage,
+}: {
+  env: EnvironmentItem;
+  canSettings: boolean;
+  canManage: boolean;
+}) {
   const t = useT();
+  const [adopting, setAdopting] = useState(false);
+  const adoptTrigger = useRef<HTMLButtonElement>(null);
   const healthLabel = useHealthLabel();
   const reason = activeReason(env);
   const isAgent = env.kind === "agent";
@@ -171,6 +182,26 @@ function ConnectionCard({ env, canSettings }: { env: EnvironmentItem; canSetting
           ) : null}
         </div>
       ) : null}
+      {env.status.state === "cluster_changed" && canManage ? (
+        <>
+          <div>
+            <Button
+              ref={adoptTrigger}
+              type="button"
+              className={`${TOUCH_HEIGHT} max-md:w-full`}
+              onClick={() => setAdopting(true)}
+            >
+              {t("envsettings.adopt.button")}
+            </Button>
+          </div>
+          <AdoptClusterDialog
+            environment={env}
+            open={adopting}
+            onOpenChange={setAdopting}
+            returnFocusRef={adoptTrigger}
+          />
+        </>
+      ) : null}
     </SettingsCard>
   );
 }
@@ -181,7 +212,8 @@ interface EnvSettingsPageProps {
 
 // EnvSettingsPage is Settings > Environments > {env} (D-38): the breadcrumb and
 // the cards General, Connection and Join token, each shown only to someone who
-// holds its permission. Plans 19, 29 and 30 add the adopt, agent update, remove
+// holds its permission. The Connection card offers Adopt new cluster while the
+// swarm was re-initialised (plan 19); plans 29 and 30 add the agent update, remove
 // and fold cards. Hiding a card is not access control; the server answers 403.
 export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   const t = useT();
@@ -269,7 +301,9 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
         </div>
       </header>
       {canManage ? <GeneralCard env={env} /> : null}
-      {canRead ? <ConnectionCard env={env} canSettings={canSettings} /> : null}
+      {canRead ? (
+        <ConnectionCard env={env} canSettings={canSettings} canManage={canManage} />
+      ) : null}
       {canRead ? (
         <SettingsCard title={t("envsettings.sections.nodes")}>
           <NodeTable

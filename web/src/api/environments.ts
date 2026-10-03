@@ -225,9 +225,25 @@ export class AdoptClusterError extends Error {
     this.status = problem.status;
     this.type = problem.type;
   }
+
+  // Another admin adopted it first, or the change is gone.
+  get noChange(): boolean {
+    return this.status === 409 && this.type === "no_cluster_change";
+  }
+
+  // Another environment manages the new cluster by now.
+  get inUse(): boolean {
+    return this.status === 409 && this.type === "cluster_in_use";
+  }
 }
 
-// adoptCluster binds the environment to the cluster its managers now report.
-export async function adoptCluster(_envId: string): Promise<void> {
-  throw new Error("adoptCluster is not implemented");
+// adoptCluster binds a re-initialised swarm's environment to the cluster its
+// managers now report (D-14). It is audited on the server. The caller reads the
+// ["environments"] list again afterwards, which is what takes the environment out
+// of cluster_changed on every page.
+export async function adoptCluster(envId: string): Promise<void> {
+  const { error, response } = await api.POST("/api/environments/{envId}/adopt-cluster", {
+    params: { path: { envId } },
+  });
+  if (!response.ok) throw new AdoptClusterError(error, response);
 }

@@ -24,6 +24,7 @@
     "clusterChanged": {
       "heading": "This swarm was re-initialised",
       "body": "The agents on {{name}} now report a different cluster, so Bayplan refused them. Nothing was changed on the old environment.",
+      "adopt": "Adopt new cluster",
       "remove": "Remove environment"
     },
     "degraded": {
