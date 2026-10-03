@@ -13,9 +13,11 @@ package agents
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/x509"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -51,6 +53,9 @@ const (
 	maxNameLen  = 64
 	// maxAgentName caps the hostname an agent reports, which is untrusted input.
 	maxAgentName = 128
+
+	// statusActive is the status of an agent that may connect.
+	statusActive = "active"
 
 	targetEnvironment = "environment"
 	targetAgent       = "agent"
@@ -258,9 +263,85 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	return tunnel.EnrolResult{AgentID: agentID, EnvID: envID, Cert: leaf.DER, NotAfter: leaf.NotAfter}, nil
 }
 
-// Hello checks the reconnect of an enrolled agent. Stub.
-func (s *Service) Hello(_ context.Context, _ tunnel.HelloRequest) (tunnel.HelloResult, error) {
-	return tunnel.HelloResult{}, &tunnel.Refusal{Code: wire.ReasonAuthRejected, Detail: "hello is not implemented"}
+// Hello checks the reconnect of an enrolled agent. It implements tunnel.Verifier.
+//
+// Authentication is by key, not by serial: any unexpired certificate that chains
+// to the environment's CA and carries the public key stored for that agent is
+// accepted, so a renewal needs no two-phase commit (RESEARCH Pattern 3). The
+// checks run cheapest and least revealing first, and everything that would let a
+// probe learn something (an unknown environment, a certificate from another CA,
+// an agent that does not exist, a key that differs, a bad signature) is the same
+// auth_rejected with the same text. Only an agent that holds a certificate the
+// environment really issued can learn that it expired or was revoked.
+func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.HelloResult, error) {
+	reject := func(reason string) error {
+		return &tunnel.Refusal{
+			Code: wire.ReasonAuthRejected, Detail: "the agent's certificate was not accepted", AuditReason: reason,
+		}
+	}
+
+	leaf, err := x509.ParseCertificate(req.Cert)
+	if err != nil {
+		return tunnel.HelloResult{}, reject("bad_certificate")
+	}
+	if len(leaf.Subject.OrganizationalUnit) != 1 || leaf.Subject.CommonName == "" {
+		return tunnel.HelloResult{}, reject("no_identity_in_certificate")
+	}
+	envID, agentID := leaf.Subject.OrganizationalUnit[0], leaf.Subject.CommonName
+	if req.AgentID != agentID {
+		return tunnel.HelloResult{}, reject("agent_id_mismatch")
+	}
+	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return tunnel.HelloResult{}, reject("not_an_ed25519_key")
+	}
+
+	// An environment that does not exist and a certificate from another
+	// environment's CA both end here with the same answer.
+	caRow, err := s.st.RQ.GetCA(ctx, envID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return tunnel.HelloResult{}, reject("unknown_environment")
+	case err != nil:
+		return tunnel.HelloResult{}, fmt.Errorf("load the CA: %w", err)
+	}
+	now := s.now()
+	if _, err := VerifyLeaf(caRow.CertPem, req.Cert, now); err != nil {
+		var invalid x509.CertificateInvalidError
+		if errors.As(err, &invalid) && invalid.Reason == x509.Expired && now.After(leaf.NotAfter) {
+			return tunnel.HelloResult{}, &tunnel.Refusal{
+				Code:        wire.ReasonCertExpired,
+				Detail:      "the agent's certificate has expired; enrol the agent again with a join token",
+				AuditReason: wire.ReasonCertExpired,
+			}
+		}
+		return tunnel.HelloResult{}, reject("bad_chain")
+	}
+
+	row, err := s.st.RQ.GetAgent(ctx, agentID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return tunnel.HelloResult{}, reject("unknown_agent")
+	case err != nil:
+		return tunnel.HelloResult{}, fmt.Errorf("load the agent: %w", err)
+	}
+	if row.EnvID != envID {
+		return tunnel.HelloResult{}, reject("environment_mismatch")
+	}
+	if row.Status != statusActive {
+		return tunnel.HelloResult{}, &tunnel.Refusal{
+			Code:        wire.ReasonRevoked,
+			Detail:      "an administrator revoked this agent",
+			AuditReason: wire.ReasonRevoked,
+		}
+	}
+	if subtle.ConstantTimeCompare(row.PublicKey, pub) != 1 {
+		return tunnel.HelloResult{}, reject("key_mismatch")
+	}
+	if !authn.Verify(pub, req.Transcript, req.Sig) {
+		return tunnel.HelloResult{}, reject("bad_signature")
+	}
+	return tunnel.HelloResult{AgentID: agentID, EnvID: envID, NotAfter: leaf.NotAfter}, nil
 }
 
 // newToken makes a join token bpjt_<envId>_<base64url of 32 random bytes> and

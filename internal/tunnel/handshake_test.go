@@ -69,10 +69,9 @@ func TestHelloRefusesWhatItShouldWithTheSpecificCode(t *testing.T) {
 			cert := tunneltest.ForeignCert(t, env.ID, id.AgentID, id.Public(), srv.Clock.Now())
 			return tunneltest.Agent{Identity: &id, Cert: cert}
 		}, wire.ReasonAuthRejected},
-		{"a certificate of an agent of another environment", func(t *testing.T, srv *tunneltest.Server, _ tunneltest.Environment, _ tunneltest.Identity) tunneltest.Agent {
-			// A real agent of environment B presents its own certificate and key
-			// but claims the ID of an agent of A: it is still B's agent, and B's
-			// CA is the one that vouches, so this must be refused by the row check.
+		{"an agent that claims an ID other than its certificate's", func(t *testing.T, srv *tunneltest.Server, _ tunneltest.Environment, _ tunneltest.Identity) tunneltest.Agent {
+			// A real agent of another environment presents its own certificate and
+			// key but claims a different agent ID: the certificate names who it is.
 			b := srv.Enrol(t, other(t, srv))
 			srv.Events.WaitLen(t, 3)
 			id := b.Identity
@@ -220,10 +219,10 @@ func TestSimultaneousHellosForOneAgentLeaveExactlyOneSession(t *testing.T) {
 	// never two live sessions at once.
 	live := 0
 	for i, e := range log[2:] {
-		switch {
-		case e == "connected:"+id.AgentID:
+		switch e {
+		case "connected:" + id.AgentID:
 			live++
-		case e == "disconnected:"+id.AgentID+":replaced":
+		case "disconnected:" + id.AgentID + ":replaced":
 			live--
 		default:
 			t.Fatalf("unexpected lifecycle event %q at %d in %v", e, i, log)

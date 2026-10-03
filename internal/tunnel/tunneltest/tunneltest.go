@@ -179,7 +179,7 @@ func Start(t *testing.T, opts Options) *Server {
 	if opts.Configure != nil {
 		hub = opts.Configure(hub)
 	}
-	var h http.Handler = hub.Handler()
+	h := hub.Handler()
 	if opts.Wrap != nil {
 		h = opts.Wrap(h)
 	}

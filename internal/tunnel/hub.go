@@ -150,6 +150,33 @@ type Session struct {
 	ws   *websocket.Conn
 	done chan struct{}
 	once sync.Once
+
+	reasonMu sync.Mutex
+	reason   string
+	// reported makes the Observer's Disconnected run once for this session, from
+	// whichever path ends it first.
+	reported sync.Once
+}
+
+// endWith records why the session ended. The first reason wins, so a session
+// that was replaced and then saw its socket close is still reported as replaced.
+func (s *Session) endWith(code string) {
+	s.reasonMu.Lock()
+	if s.reason == "" {
+		s.reason = code
+	}
+	s.reasonMu.Unlock()
+}
+
+// Reason is why the session ended, one of the Disconnect codes, or DisconnectClosed
+// when nothing more specific was recorded.
+func (s *Session) Reason() string {
+	s.reasonMu.Lock()
+	defer s.reasonMu.Unlock()
+	if s.reason == "" {
+		return DisconnectClosed
+	}
+	return s.reason
 }
 
 // Transport is how the session carries Docker calls: one stream per dial.
@@ -184,6 +211,14 @@ type Hub struct {
 	now func() time.Time
 
 	publicURL func() string
+
+	// life serializes session lifecycle transitions together with the Observer
+	// calls they cause, so for one agent the Observer hears Connected, then
+	// Disconnected, then Connected again, in that order, never a Disconnected
+	// before the Connected of the same session. An Observer must not call back
+	// into anything that takes it. mu guards the map and is never held across an
+	// Observer call.
+	life sync.Mutex
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -247,6 +282,7 @@ func (h *Hub) Close() {
 
 	var wg sync.WaitGroup
 	for _, s := range live {
+		s.endWith(DisconnectShutdown)
 		wg.Go(func() { s.close(websocket.StatusGoingAway, "the server is stopping") })
 	}
 	wg.Wait()
@@ -259,9 +295,14 @@ func (h *Hub) isClosed() bool {
 }
 
 // register adds s, replacing any session of the same agent: a half-open stale
-// connection must not block the reconnect. It reports false when the hub is
-// closed.
+// connection must not block the reconnect. The old session is closed and
+// reported Disconnected with the reason replaced before the new one is reported
+// Connected, all inside one critical section, so two simultaneous hellos for one
+// agent can never both remain. It reports false when the hub is closed.
 func (h *Hub) register(s *Session) bool {
+	h.life.Lock()
+	defer h.life.Unlock()
+
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -270,19 +311,38 @@ func (h *Hub) register(s *Session) bool {
 	old := h.sessions[s.AgentID]
 	h.sessions[s.AgentID] = s
 	h.mu.Unlock()
+
 	if old != nil {
+		old.endWith(DisconnectReplaced)
 		old.closeNow()
+		h.report(old)
+	}
+	if h.o != nil {
+		h.o.Connected(s)
 	}
 	return true
 }
 
-// unregister removes s if it is still the current session of its agent.
-func (h *Hub) unregister(s *Session) {
+// finish removes s if it is still the current session of its agent and reports
+// it Disconnected, unless a replacement already did.
+func (h *Hub) finish(s *Session) {
+	h.life.Lock()
+	defer h.life.Unlock()
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.sessions[s.AgentID] == s {
 		delete(h.sessions, s.AgentID)
 	}
+	h.mu.Unlock()
+	h.report(s)
+}
+
+// report tells the Observer, once, that s has ended.
+func (h *Hub) report(s *Session) {
+	s.reported.Do(func() {
+		if h.o != nil {
+			h.o.Disconnected(s, s.Reason())
+		}
+	})
 }
 
 // muxConfig is the yamux configuration of RESEARCH Pattern 1. Keepalives every
