@@ -349,6 +349,42 @@ func (h *Hub) Sessions() []*Session {
 	return out
 }
 
+// Views returns what the hub knows about the agents of envID that have connected
+// since the server started, ordered by agent ID.
+func (h *Hub) Views(envID string) []AgentLive {
+	type live struct {
+		id string
+		m  agentMemory
+	}
+	h.mu.Lock()
+	var found []live
+	for id, m := range h.memory {
+		if m.envID == envID {
+			found = append(found, live{id: id, m: *m})
+		}
+	}
+	h.mu.Unlock()
+	sort.Slice(found, func(i, j int) bool { return found[i].id < found[j].id })
+
+	out := make([]AgentLive, 0, len(found))
+	for _, f := range found {
+		v := AgentLive{
+			AgentID: f.id, EnvID: envID, ConnectedAt: f.m.connectedAt, LastSeen: f.m.lastSeen,
+			Ended: f.m.ended, LastCode: f.m.lastCode, EngineReachable: f.m.engineReachable,
+			ClockOffset: f.m.clockOffset, ClockWarning: f.m.clockWarning,
+		}
+		if s := f.m.sess; s != nil {
+			// Read outside h.mu: a session's status has its own lock.
+			st := s.Status()
+			v.Connected, v.LastSeen = true, s.lastSignOfLife()
+			v.EngineReachable = st.LastHeartbeat.IsZero() || st.EngineReachable
+			v.ClockOffset, v.ClockWarning = st.ClockOffset, st.ClockWarning
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
 // Close ends every session with a close frame, so agents reconnect with
 // jittered backoff, and refuses new connections. http.Server.Shutdown ignores
 // hijacked connections, so the server registers this with RegisterOnShutdown
