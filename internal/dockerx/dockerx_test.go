@@ -396,7 +396,7 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 
 // allowedMethods is the exported method set of *dockerx.Client. Later plans add
 // their read-only methods here, deliberately and one at a time (D-52).
-var allowedMethods = []string{"Close", "Events", "Probe", "Snapshot"}
+var allowedMethods = []string{"Close", "Cluster", "Events", "Probe", "RestartPolicies", "Snapshot"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 
@@ -965,5 +965,202 @@ func TestAProbeWaitingForAnotherGivesUpWhenItsContextEnds(t *testing.T) {
 	wg.Wait()
 	if res, err := cli.Probe(context.Background()); err != nil || !res.Reachable {
 		t.Fatalf("Probe after abandoned probes: %+v, %v", res, err)
+	}
+}
+
+// The cluster view (plan 02-20, ENV-09, D-34, D-43). The fake manager serves
+// /nodes, /services?status=true and /tasks, so the real client code runs.
+
+func clusterManager() dockertest.FakeConfig {
+	old := time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)
+	return dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		NodeRows: []dockertest.FakeNode{
+			{ID: "n3", Hostname: "worker-b", Role: "worker", State: "down", EngineVersion: "23.0.1", OS: "linux"},
+			{ID: "n2", Hostname: "mgr-b", Role: "manager", EngineVersion: "29.1.0", OS: "linux", Reachability: "unreachable"},
+			{ID: "n1", Hostname: "mgr-a", Role: "manager", EngineVersion: "29.1.0", OS: "linux", Leader: true},
+			{ID: "n4", Hostname: "worker-a", Role: "worker", Availability: "drain", EngineVersion: "28.5.1", OS: "windows"},
+		},
+		ServiceRows: []dockertest.FakeService{
+			{ID: "s2", Name: "web", Mode: "replicated", Running: 2, Desired: 3, UpdateState: "completed", UpdatedAt: old},
+			{ID: "s1", Name: "agent", Mode: "global", Running: 4, Desired: 4},
+			{ID: "s3", Name: "backup", Mode: "replicated-job", Running: 0, Desired: 1},
+		},
+		AgentTasks: []dockertest.FakeAgentTask{
+			{ID: "t1", NodeID: "n1", State: "running", Created: old},
+			{ID: "t2", NodeID: "n3", State: "rejected", Error: "no such image", Created: old},
+			{ID: "t3", NodeID: "n3", State: "failed", Error: "task: non-zero exit (1)", Created: old.Add(time.Minute)},
+		},
+	}
+}
+
+func TestClusterReadsNodesServicesAndTheAgentTasksFromAManager(t *testing.T) {
+	fake := dockertest.NewFake(t, clusterManager())
+	got, err := newClient(t, fake).Cluster(context.Background())
+	if err != nil {
+		t.Fatalf("Cluster: %v", err)
+	}
+
+	var hosts []string
+	leaders := 0
+	for _, n := range got.Nodes {
+		hosts = append(hosts, n.Hostname)
+		if n.Leader {
+			leaders++
+		}
+	}
+	if want := []string{"mgr-a", "mgr-b", "worker-a", "worker-b"}; !slices.Equal(hosts, want) {
+		t.Errorf("nodes are %v, want %v sorted by hostname", hosts, want)
+	}
+	if leaders != 1 {
+		t.Errorf("%d nodes lead, want exactly one", leaders)
+	}
+	byHost := map[string]dockerx.NodeRow{}
+	for _, n := range got.Nodes {
+		byHost[n.Hostname] = n
+	}
+	if n := byHost["mgr-a"]; !n.Leader || n.Role != "manager" || n.Reachability != "reachable" || n.State != "ready" || n.Availability != "active" || n.EngineVersion != "29.1.0" || n.OS != "linux" || n.ID != "n1" {
+		t.Errorf("mgr-a = %+v", n)
+	}
+	if n := byHost["mgr-b"]; n.Leader || n.Reachability != "unreachable" {
+		t.Errorf("mgr-b = %+v, want a follower that is unreachable", n)
+	}
+	if n := byHost["worker-b"]; n.Role != "worker" || n.State != "down" || n.Reachability != "" {
+		t.Errorf("worker-b = %+v, want a worker that is down and has no reachability", n)
+	}
+	if n := byHost["worker-a"]; n.Availability != "drain" || n.OS != "windows" {
+		t.Errorf("worker-a = %+v", n)
+	}
+
+	if len(got.Services) != 3 {
+		t.Fatalf("services = %+v, want 3", got.Services)
+	}
+	svc := map[string]dockerx.ServiceRow{}
+	for _, s := range got.Services {
+		svc[s.Name] = s
+	}
+	if s := svc["web"]; s.Running != 2 || s.Desired != 3 || s.Mode != "replicated" || s.UpdateState != "completed" || !s.UpdatedAt.Equal(time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)) || s.UpdatedAt.Location() != time.UTC {
+		t.Errorf("web = %+v, want 2 of 3 replicated, completed, updated at 09:00 UTC", s)
+	}
+	if s := svc["agent"]; s.Mode != "global" || s.Running != 4 || s.Desired != 4 || s.UpdateState != "" {
+		t.Errorf("agent = %+v", s)
+	}
+	if s := svc["backup"]; s.Mode != "replicated-job" {
+		t.Errorf("backup = %+v, want mode replicated-job", s)
+	}
+	for i := 1; i < len(got.Services); i++ {
+		if got.Services[i-1].Name > got.Services[i].Name {
+			t.Errorf("services are not sorted by name: %+v", got.Services)
+		}
+	}
+
+	// One row per node: the newest task is the current one.
+	tasks := map[string]dockerx.AgentTaskRow{}
+	for _, tk := range got.AgentTasks {
+		tasks[tk.NodeID] = tk
+	}
+	if len(got.AgentTasks) != 2 || tasks["n1"].State != "running" || tasks["n3"].State != "failed" || tasks["n3"].Error != "task: non-zero exit (1)" {
+		t.Errorf("agent tasks = %+v, want n1 running and n3's newest task, failed", got.AgentTasks)
+	}
+}
+
+func TestClusterAsksForServiceStatusAndOnlyTheAgentServiceTasks(t *testing.T) {
+	fake := dockertest.NewFake(t, clusterManager())
+	if _, err := newClient(t, fake).Cluster(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(fake.Requests(), " ")
+	for _, want := range []string{"/nodes", "/services", "/tasks"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the manager was never asked %s: %s", want, got)
+		}
+	}
+	for _, bad := range []string{"/swarm", "/secrets", "/configs", "POST"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("the cluster read touched %s: %s", bad, got)
+		}
+	}
+}
+
+func TestClusterOnAWorkerFailsWithTheMessageThatMapsToNotAManager(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{SwarmState: "active", SwarmControl: false})
+	_, err := newClient(t, fake).Cluster(context.Background())
+	if err == nil {
+		t.Fatal("a worker answered a cluster read")
+	}
+	if !strings.Contains(err.Error(), "This node is not a swarm manager") {
+		t.Errorf("error = %v, want the daemon's worker message so the reason maps to not_a_manager", err)
+	}
+}
+
+func TestClusterWithQuorumLostFailsWithTheMessageThatMapsToNoQuorum(t *testing.T) {
+	cfg := clusterManager()
+	cfg.QuorumLost = true
+	fake := dockertest.NewFake(t, cfg)
+	cli := newClient(t, fake)
+	_, err := cli.Cluster(context.Background())
+	if err == nil {
+		t.Fatal("a manager without quorum answered a cluster read")
+	}
+	if !strings.Contains(err.Error(), "The swarm does not have a leader") {
+		t.Errorf("error = %v, want the daemon's quorum message so the reason maps to no_quorum", err)
+	}
+	// Node-local calls keep working, as on a real manager.
+	if _, err := cli.Snapshot(context.Background(), false); err != nil {
+		t.Errorf("a node-local snapshot failed while quorum is lost: %v", err)
+	}
+}
+
+func TestRestartPoliciesReturnsOnlyTheNameAndTheRetryCount(t *testing.T) {
+	cfg := dockertest.FakeConfig{
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/a"}, State: "running"},
+			{ID: "c2", Names: []string{"/b"}, State: "running"},
+			{ID: "c3", Names: []string{"/c"}, State: "exited"},
+		},
+		RestartPolicies: map[string]string{"c1": "always", "c2": "on-failure:3"},
+	}
+	fake := dockertest.NewFake(t, cfg)
+	got, err := newClient(t, fake).RestartPolicies(context.Background(), []string{"c1", "c2", "c3"})
+	if err != nil {
+		t.Fatalf("RestartPolicies: %v", err)
+	}
+	want := map[string]dockerx.RestartPolicy{
+		"c1": {Name: "always"},
+		"c2": {Name: "on-failure", MaxRetry: 3},
+		"c3": {Name: "no"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("policies = %+v, want %+v", got, want)
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("policy of %s = %+v, want %+v", id, got[id], w)
+		}
+	}
+	// The type holds nothing but the two fields: the inspect body also carries
+	// the container's environment variables, which can hold secrets.
+	if n := reflect.TypeFor[dockerx.RestartPolicy]().NumField(); n != 2 {
+		t.Errorf("RestartPolicy has %d fields, want only Name and MaxRetry", n)
+	}
+	for _, p := range fake.Requests() {
+		if !strings.HasSuffix(p, "/json") || !strings.Contains(p, "/containers/") {
+			t.Errorf("RestartPolicies asked %s, want only container inspects", p)
+		}
+	}
+}
+
+func TestRestartPoliciesOfNoContainersAsksNothingAndAnUnknownIDIsAnError(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	cli := newClient(t, fake)
+	got, err := cli.RestartPolicies(context.Background(), nil)
+	if err != nil || len(got) != 0 {
+		t.Errorf("RestartPolicies(nil) = %v, %v, want an empty map", got, err)
+	}
+	if n := len(fake.Requests()); n != 0 {
+		t.Errorf("an empty request made %d calls", n)
+	}
+	if _, err := cli.RestartPolicies(context.Background(), []string{"gone"}); err == nil {
+		t.Error("an unknown container was not an error")
 	}
 }

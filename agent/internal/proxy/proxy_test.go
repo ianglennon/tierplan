@@ -466,3 +466,45 @@ func TestHopByHopAndForwardingHeadersDoNotReachTheEngine(t *testing.T) {
 		t.Errorf("an end-to-end header was dropped: %v", sock.headers[0])
 	}
 }
+
+// The one thing opened up for plan 20 (D-27, T-02-70): GET and HEAD of
+// /containers/{id}/json, which Bayplan reads only for a container's restart
+// policy. Nothing else under /containers/{id}/ is allowed.
+func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path string
+		wantOK             bool
+	}{
+		{"an inspect by ID", "GET", "/containers/abc123/json", true},
+		{"an inspect by name with the version prefix", "GET", "/v1.47/containers/web-1/json", true},
+		{"a HEAD of an inspect", "HEAD", "/containers/abc123/json", true},
+		{"a name with dots and underscores", "GET", "/containers/my_app.1/json", true},
+		{"a POST of an inspect", "POST", "/containers/abc/json", false},
+		{"a DELETE of an inspect", "DELETE", "/containers/abc/json", false},
+		{"the logs", "GET", "/containers/abc/logs", false},
+		{"a stats stream", "GET", "/containers/abc/stats", false},
+		{"a file archive", "GET", "/containers/abc/archive", false},
+		{"an export", "GET", "/containers/abc/export", false},
+		{"a dot-dot ID", "GET", "/containers/../json", false},
+		{"an ID that starts with a dot", "GET", "/containers/.hidden/json", false},
+		{"an ID that starts with a dash", "GET", "/containers/-x/json", false},
+		{"an empty ID", "GET", "/containers//json", false},
+		{"an encoded slash in the ID", "GET", "/containers/a%2Fb/json", false},
+		{"an ID with a space", "GET", "/containers/a b/json", false},
+		{"an ID of 129 characters", "GET", "/containers/a" + strings.Repeat("b", 128) + "/json", false},
+		{"a second segment after json", "GET", "/containers/abc/json/extra", false},
+		{"the list itself still allowed", "GET", "/containers/json", true},
+		{"the images inspect is not opened", "GET", "/images/abc/json", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _ := Allowed(tc.method, tc.path, "", false, false, Policy{})
+			if ok != tc.wantOK {
+				t.Fatalf("Allowed(%s %q) = %v, want %v", tc.method, tc.path, ok, tc.wantOK)
+			}
+		})
+	}
+	// A read-only host still refuses the POST, whatever the allowlist grew to.
+	if ok, reason := Allowed("POST", "/containers/abc/json", "", false, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+		t.Errorf("a POST of an inspect on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+}

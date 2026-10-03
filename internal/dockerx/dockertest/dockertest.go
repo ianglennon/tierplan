@@ -110,6 +110,60 @@ type FakeConfig struct {
 	// Events is the history the daemon has buffered when it starts, oldest
 	// first, as /events replays it to a client that passes since.
 	Events []FakeEvent
+
+	// NodeRows are the nodes /nodes lists, in place of the Nodes count, so a test
+	// can say who leads, who is reachable and what each node runs.
+	NodeRows []FakeNode
+	// ServiceRows are the services /services lists, in place of the Services count.
+	// With ?status=true each carries its ServiceStatus.
+	ServiceRows []FakeService
+	// AgentTasks are the tasks of the service named bayplan-agent, listed by /tasks
+	// when it is filtered by that service name.
+	AgentTasks []FakeAgentTask
+	// QuorumLost makes /nodes, /services, /tasks and /swarm answer the 500 a
+	// manager gives when the swarm has no leader. Node-local calls keep working,
+	// and so does /_ping, as on a real manager (RESEARCH Pitfall 11).
+	QuorumLost bool
+	// RestartPolicies maps a container ID to the restart policy /containers/{id}/json
+	// reports: a name such as "always", or "on-failure:3" with its maximum retry
+	// count. An ID that is not here is a container with no policy.
+	RestartPolicies map[string]string
+}
+
+// FakeNode is one entry of /nodes. Leader marks the one manager whose
+// ManagerStatus says so; Reachability applies to managers only and defaults to
+// "reachable". Zero Role is "worker", zero Availability "active", zero State
+// "ready".
+type FakeNode struct {
+	ID            string
+	Hostname      string
+	Role          string
+	Availability  string
+	State         string
+	EngineVersion string
+	OS            string
+	Leader        bool
+	Reachability  string
+}
+
+// FakeService is one entry of /services. Mode is "replicated" (the default),
+// "global", "replicated-job" or "global-job". UpdateState is the UpdateStatus
+// state, empty for none. A zero UpdatedAt is the Unix epoch.
+type FakeService struct {
+	ID, Name    string
+	Mode        string
+	Running     uint64
+	Desired     uint64
+	UpdateState string
+	UpdatedAt   time.Time
+}
+
+// FakeAgentTask is one task of the bayplan-agent service.
+type FakeAgentTask struct {
+	NodeID, State, Error string
+	// ID and Created order the tasks of one node: the newest is the current one.
+	ID      string
+	Created time.Time
 }
 
 // FakeEvent is one event of the fake daemon's /events stream. A zero TimeNano
@@ -448,29 +502,82 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, cfg.volumeList())
 	case "/networks":
 		writeJSON(w, http.StatusOK, cfg.networkList())
+	case "/nodes", "/services", "/tasks", "/swarm":
+		f.serveCluster(w, r, p, cfg)
+	default:
+		if id, ok := inspectID(p); ok {
+			f.serveInspect(w, id, cfg)
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "page not found"})
+	}
+}
+
+// workerRefusal and quorumRefusal are the messages a real Engine 29 daemon gives
+// a cluster question it cannot answer (RESEARCH Pattern 5, read from real daemons).
+const (
+	workerRefusal = "This node is not a swarm manager. Worker nodes can't be used to view or modify cluster state. Please run this command on a manager node or promote the current node to a manager."
+	quorumRefusal = "rpc error: code = Unknown desc = The swarm does not have a leader. It's possible that too few managers are online. Make sure more than half of the managers are online."
+)
+
+// serveCluster answers the swarm-wide lists: the worker 503, the quorum-loss 500
+// or the configured rows.
+func (f *Fake) serveCluster(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) {
+	if !cfg.swarmManager() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": workerRefusal})
+		return
+	}
+	if cfg.QuorumLost {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": quorumRefusal})
+		return
+	}
+	switch p {
 	case "/nodes":
-		if !cfg.swarmManager() {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "This node is not a swarm manager. Use \"docker swarm init\" or \"docker swarm join\" to connect this node to swarm and try again."})
-			return
-		}
-		nodes := make([]swarm.Node, cfg.Nodes)
-		for i := range nodes {
-			nodes[i].ID = fmt.Sprintf("node%02d", i)
-		}
-		writeJSON(w, http.StatusOK, nodes)
+		writeJSON(w, http.StatusOK, cfg.nodeList())
 	case "/services":
-		if !cfg.swarmManager() {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "This node is not a swarm manager. Use \"docker swarm init\" or \"docker swarm join\" to connect this node to swarm and try again."})
-			return
-		}
-		services := make([]swarm.Service, cfg.Services)
-		for i := range services {
-			services[i].ID = fmt.Sprintf("svc%02d", i)
-		}
-		writeJSON(w, http.StatusOK, services)
+		writeJSON(w, http.StatusOK, cfg.serviceList(r.URL.Query().Get("status") == "true"))
+	case "/tasks":
+		writeJSON(w, http.StatusOK, cfg.taskList(r.URL.Query().Get("filters")))
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "page not found"})
 	}
+}
+
+// inspectContainer matches /containers/{id}/json.
+var inspectContainer = regexp.MustCompile(`^/containers/([^/]+)/json$`)
+
+func inspectID(p string) (string, bool) {
+	m := inspectContainer.FindStringSubmatch(p)
+	if m == nil || m[1] == "json" {
+		return "", false
+	}
+	return m[1], true
+}
+
+// serveInspect answers GET /containers/{id}/json with the restart policy and, to
+// prove it is never read, an environment variable that holds a secret.
+func (f *Fake) serveInspect(w http.ResponseWriter, id string, cfg FakeConfig) {
+	known := false
+	for _, c := range cfg.Containers {
+		known = known || c.ID == id
+	}
+	policy, hasPolicy := cfg.RestartPolicies[id]
+	if !known && !hasPolicy {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + id})
+		return
+	}
+	name, retries, _ := strings.Cut(policy, ":")
+	max, _ := strconv.Atoi(retries)
+	writeJSON(w, http.StatusOK, container.InspectResponse{
+		ID:   id,
+		Name: "/" + id,
+		Config: &container.Config{
+			Env: []string{"DB_PASSWORD=hunter2"},
+		},
+		HostConfig: &container.HostConfig{
+			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(name), MaximumRetryCount: max},
+		},
+	})
 }
 
 func (c FakeConfig) swarmManager() bool { return c.SwarmState == "active" && c.SwarmControl }
@@ -786,4 +893,103 @@ func parseEventSince(raw string) (int64, bool) {
 		ns, _ = strconv.ParseInt(frac, 10, 64)
 	}
 	return s*int64(time.Second) + ns, true
+}
+
+// nodeList is the /nodes answer: the configured rows, or Nodes bare nodes.
+func (c FakeConfig) nodeList() []swarm.Node {
+	if len(c.NodeRows) == 0 {
+		nodes := make([]swarm.Node, c.Nodes)
+		for i := range nodes {
+			nodes[i].ID = fmt.Sprintf("node%02d", i)
+		}
+		return nodes
+	}
+	out := make([]swarm.Node, 0, len(c.NodeRows))
+	for _, fn := range c.NodeRows {
+		role := fn.Role
+		if role == "" {
+			role = "worker"
+		}
+		avail := fn.Availability
+		if avail == "" {
+			avail = "active"
+		}
+		state := fn.State
+		if state == "" {
+			state = "ready"
+		}
+		n := swarm.Node{
+			ID:   fn.ID,
+			Spec: swarm.NodeSpec{Role: swarm.NodeRole(role), Availability: swarm.NodeAvailability(avail)},
+			Description: swarm.NodeDescription{
+				Hostname: fn.Hostname,
+				Platform: swarm.Platform{OS: fn.OS, Architecture: "x86_64"},
+				Engine:   swarm.EngineDescription{EngineVersion: fn.EngineVersion},
+			},
+			Status: swarm.NodeStatus{State: swarm.NodeState(state)},
+		}
+		if role == "manager" {
+			reach := fn.Reachability
+			if reach == "" {
+				reach = "reachable"
+			}
+			n.ManagerStatus = &swarm.ManagerStatus{Leader: fn.Leader, Reachability: swarm.Reachability(reach)}
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// serviceList is the /services answer: the configured rows, or Services bare
+// services. The status counts are sent only when the client asked for them, as a
+// real daemon does.
+func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
+	if len(c.ServiceRows) == 0 {
+		services := make([]swarm.Service, c.Services)
+		for i := range services {
+			services[i].ID = fmt.Sprintf("svc%02d", i)
+		}
+		return services
+	}
+	out := make([]swarm.Service, 0, len(c.ServiceRows))
+	for _, fs := range c.ServiceRows {
+		s := swarm.Service{ID: fs.ID}
+		s.Spec.Name = fs.Name
+		s.UpdatedAt = fs.UpdatedAt
+		switch fs.Mode {
+		case "global":
+			s.Spec.Mode.Global = &swarm.GlobalService{}
+		case "replicated-job":
+			s.Spec.Mode.ReplicatedJob = &swarm.ReplicatedJob{}
+		case "global-job":
+			s.Spec.Mode.GlobalJob = &swarm.GlobalJob{}
+		default:
+			s.Spec.Mode.Replicated = &swarm.ReplicatedService{}
+		}
+		if fs.UpdateState != "" {
+			s.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(fs.UpdateState)}
+		}
+		if withStatus {
+			s.ServiceStatus = &swarm.ServiceStatus{RunningTasks: fs.Running, DesiredTasks: fs.Desired}
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// taskList is the /tasks answer. The agent tasks are listed only when the filter
+// names the bayplan-agent service, as a real daemon lists only what matches.
+func (c FakeConfig) taskList(rawFilters string) []swarm.Task {
+	out := []swarm.Task{}
+	var f map[string]map[string]bool
+	if json.Unmarshal([]byte(rawFilters), &f) != nil || !f["service"]["bayplan-agent"] {
+		return out
+	}
+	for _, ft := range c.AgentTasks {
+		t := swarm.Task{ID: ft.ID, NodeID: ft.NodeID, ServiceID: "svc-agent"}
+		t.CreatedAt = ft.Created
+		t.Status = swarm.TaskStatus{State: swarm.TaskState(ft.State), Err: ft.Error}
+		out = append(out, t)
+	}
+	return out
 }
