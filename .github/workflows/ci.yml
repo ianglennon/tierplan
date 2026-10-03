@@ -204,6 +204,10 @@ jobs:
           done
           echo "docker:${{ matrix.engine }}-dind did not answer /_ping within 60s" >&2
           exit 1
+      # The agent tests run the real agent image in their own dind nodes, so it is
+      # built on the runner first (make test-int would build it too).
+      - name: Build the agent image
+        run: make agent-image
       - run: make test-int
 
   # D-75: the release configuration stays valid on every pull request, without a

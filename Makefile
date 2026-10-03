@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-int smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image
+.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -61,9 +61,17 @@ test:
 # Real-engine tests (D-28), build tag `integration`. With BAYPLAN_TEST_DOCKER_HOST
 # set (CI points it at the dind service) they use that engine; without it each
 # run starts docker:<N>-dind (N is BAYPLAN_TEST_ENGINE, default 29) with testcontainers, so the
-# machine needs a Docker it can reach.
-test-int:
+# machine needs a Docker it can reach. The agent tests always start their own
+# dind (they need a network the in-process Bayplan is reachable on) and load the
+# agent image into it, so the image is built first.
+test-int: agent-image
 	go test -tags=integration -race -count=1 ./internal/...
+
+# The multi-node suite (D-57, D-58), build tag `swarm`: real agents in a dind swarm
+# of 3 managers and 1 worker, for the engine BAYPLAN_TEST_ENGINE names (default
+# 29). Needs Docker it can reach, with buildx for the agent image.
+test-swarm: agent-image
+	go test -tags=swarm -race -count=1 -timeout 30m ./internal/...
 
 smoke:
 	scripts/smoke.sh
