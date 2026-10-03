@@ -249,21 +249,15 @@ function EnvironmentRow({
     <Item variant="outline" role="listitem" className="max-md:gap-3">
       <ItemContent>
         <ItemTitle className="w-full flex-wrap">
-          {isLocal ? (
-            <span className="min-w-0 break-words" title={environment.name}>
-              {environment.name}
-            </span>
-          ) : (
-            // An agent environment has a page of its own (D-38).
-            <Link
-              to="/settings/environments/$envId"
-              params={{ envId: environment.id }}
-              className="min-w-0 break-words text-accent-ink underline-offset-4 hover:underline focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-              title={environment.name}
-            >
-              {environment.name}
-            </Link>
-          )}
+          {/* Every environment has a page of its own (D-38). */}
+          <Link
+            to="/settings/environments/$envId"
+            params={{ envId: environment.id }}
+            className="min-w-0 break-words text-accent-ink underline-offset-4 hover:underline focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            title={environment.name}
+          >
+            {environment.name}
+          </Link>
           <TypeBadge
             envType={environment.envType}
             type={environment.type}

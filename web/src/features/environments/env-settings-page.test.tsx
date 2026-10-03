@@ -170,17 +170,20 @@ function renderAt(path: string) {
 const headings = () => screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
 
 describe("/settings/environments (the list)", () => {
-  it("links an agent environment's row to its page and keeps Rename and Remove host on the local socket row", async () => {
+  it("links every row to its page, adds Manage to an agent environment, and keeps Rename and Remove host on the local socket row", async () => {
     renderAt("/settings/environments");
     const link = await screen.findByRole("link", { name: "edge" });
     expect(link.getAttribute("href")).toBe("/settings/environments/e2");
     expect(screen.getByRole("link", { name: "Manage edge" }).getAttribute("href")).toBe(
       "/settings/environments/e2",
     );
-    // The local host has nothing to open: Phase 1's actions stay on it.
+    // The local host's row opens its page by its name and keeps Phase 1's actions.
+    expect(screen.getByRole("link", { name: "lab-1" }).getAttribute("href")).toBe(
+      "/settings/environments/e1",
+    );
     expect(screen.getByRole("button", { name: "Rename lab-1" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Remove host lab-1" })).toBeTruthy();
-    expect(screen.queryByRole("link", { name: "lab-1" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Manage lab-1" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rename edge" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove host edge" })).toBeNull();
   });
