@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -97,6 +98,11 @@ type Server struct {
 	Events *Recorder
 	// Clock is the server's clock.
 	Clock *Clock
+	// Vault is the master key holder the service seals CA keys with. Its key file
+	// is in DataDir.
+	Vault *vault.Vault
+	// DataDir is the directory that holds the database, its WAL and the key file.
+	DataDir string
 }
 
 // Recorder is an Observer that records every lifecycle call in order.
@@ -176,7 +182,11 @@ func Start(t *testing.T, opts Options) *Server {
 		clock = NewClock(time.Now())
 	}
 	st := storetest.New(t)
-	vlt, err := vault.LoadOrCreate("", t.TempDir(), log)
+	// The master key sits in the data directory next to the database, as it does in
+	// production, so a test can search the whole directory for secrets and exempt
+	// only the key file.
+	dataDir := filepath.Dir(st.Path)
+	vlt, err := vault.LoadOrCreate("", dataDir, log)
 	if err != nil {
 		t.Fatalf("tunneltest: vault: %v", err)
 	}
@@ -208,7 +218,7 @@ func Start(t *testing.T, opts Options) *Server {
 		ts.CloseClientConnections()
 		ts.Close()
 	})
-	return &Server{Hub: hub, HTTP: ts, Store: st, Svc: svc, Events: rec, Clock: clock}
+	return &Server{Hub: hub, HTTP: ts, Store: st, Svc: svc, Events: rec, Clock: clock, Vault: vlt, DataDir: dataDir}
 }
 
 // URL is the address an agent dials.
