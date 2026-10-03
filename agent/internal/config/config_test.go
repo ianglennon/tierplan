@@ -335,3 +335,40 @@ func TestLoadRefusesAPolicyFlagItCannotRead(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadReadsTheServerPinsFromTheInstallCommand(t *testing.T) {
+	a := "sha256/" + strings.Repeat("A", 43) + "="
+	b := "sha256/" + strings.Repeat("B", 43) + "="
+	base := map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "bpjt_x_y"}
+	load := func(pin string) (Config, error) {
+		m := map[string]string{"BAYPLAN_AGENT_PIN": pin}
+		for k, v := range base {
+			m[k] = v
+		}
+		return Load(env(m), files(nil))
+	}
+
+	cfg, err := load("")
+	if err != nil || len(cfg.Pins) != 0 {
+		t.Fatalf("no pin: %v, %v; want none", cfg.Pins, err)
+	}
+	cfg, err = load(a)
+	if err != nil || len(cfg.Pins) != 1 || cfg.Pins[0] != a {
+		t.Fatalf("one pin: %v, %v", cfg.Pins, err)
+	}
+	cfg, err = load(" " + a + " , " + b + ",")
+	if err != nil || len(cfg.Pins) != 2 || cfg.Pins[0] != a || cfg.Pins[1] != b {
+		t.Fatalf("two pins: %v, %v", cfg.Pins, err)
+	}
+}
+
+func TestLoadRefusesAPinThatIsNotASHA256Pin(t *testing.T) {
+	for _, bad := range []string{"sha1/abc", "AAAA", "sha256/short", "sha256/" + strings.Repeat("A", 44), "sha256/" + strings.Repeat("!", 43) + "="} {
+		_, err := Load(env(map[string]string{
+			"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "bpjt_x_y", "BAYPLAN_AGENT_PIN": bad,
+		}), files(nil))
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_PIN") {
+			t.Errorf("pin %q: error = %v, want one naming BAYPLAN_AGENT_PIN", bad, err)
+		}
+	}
+}

@@ -118,10 +118,11 @@ func TestARefusalNamesItsCode(t *testing.T) {
 
 // reply is what the fake server does with one connection.
 type reply struct {
-	refuse      string // non-empty: refuse with this code
-	cert        []byte // the certificate in an enrol welcome
-	heartbeatMs int    // zero: 40 ms, so a test sees heartbeats quickly
-	drop        bool   // close the connection right after the welcome
+	refuse      string   // non-empty: refuse with this code
+	cert        []byte   // the certificate in an enrol welcome
+	heartbeatMs int      // zero: 40 ms, so a test sees heartbeats quickly
+	drop        bool     // close the connection right after the welcome
+	pins        []string // the pins in the welcome
 	toAgent     []string
 	// dockerRequests are raw HTTP requests the server sends on streams it opens
 	// after the welcome, the way its Docker client would.
@@ -199,7 +200,7 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	if hb == 0 {
 		hb = 40
 	}
-	b, _ = json.Marshal(wire.Welcome{T: wire.TypeWelcome, AgentID: "agent-7", EnvID: "env-7", Cert: rep.cert, HeartbeatMs: hb, ServerTime: time.Now().UnixMilli()})
+	b, _ = json.Marshal(wire.Welcome{T: wire.TypeWelcome, AgentID: "agent-7", EnvID: "env-7", Cert: rep.cert, HeartbeatMs: hb, Pins: rep.pins, ServerTime: time.Now().UnixMilli()})
 	if c.Write(ctx, websocket.MessageText, b) != nil {
 		return
 	}
