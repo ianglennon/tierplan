@@ -651,7 +651,7 @@ func workerFacts(name string) *wire.Facts {
 	}
 }
 
-func container(id, name string) dockertest.FakeContainer {
+func fakeContainer(id, name string) dockertest.FakeContainer {
 	return dockertest.FakeContainer{ID: id, Names: []string{"/" + name}, State: "running"}
 }
 
@@ -676,7 +676,7 @@ func newFanRig(t *testing.T, extraNodes []dockertest.FakeNode, cfg func(i int, c
 		}
 		s.m[i-1] = r.connect(t, s.env, c, managerFacts(i))
 	}
-	wc := dockertest.FakeConfig{Hostname: "wrk-1", SwarmState: "active", Containers: []dockertest.FakeContainer{container("w1", "svc-on-wrk-1")}}
+	wc := dockertest.FakeConfig{Hostname: "wrk-1", SwarmState: "active", Containers: []dockertest.FakeContainer{fakeContainer("w1", "svc-on-wrk-1")}}
 	if cfg != nil {
 		cfg(4, &wc)
 	}
@@ -708,7 +708,7 @@ func containerNodes(rows []ContainerRow) []string {
 
 func TestAggregateSwarmReadsEveryNodeAndGivesEachRowItsNode(t *testing.T) {
 	f := newFanRig(t, nil, func(i int, c *dockertest.FakeConfig) {
-		c.Containers = []dockertest.FakeContainer{container(fmt.Sprintf("c%d", i), "web")}
+		c.Containers = []dockertest.FakeContainer{fakeContainer(fmt.Sprintf("c%d", i), "web")}
 		c.Images = []dockertest.FakeImage{{ID: fmt.Sprintf("sha256:%064d", 1), RepoTags: []string{"nginx:1"}, Size: 10}}
 		c.Volumes = []dockertest.FakeVolume{{Name: "data", Driver: "local"}}
 	})
@@ -850,9 +850,9 @@ func TestAggregateWhenNoNodeReportsTheListsAreEmptyAndEveryNodeIsNamed(t *testin
 	}
 }
 
-func TestAggregateReadsEveryNodeAtOnceAndAtMostSixteenAtATime(t *testing.T) {
-	// 20 workers behind a 200 ms list each: serial reads would take 4 s, 16 at a time
-	// about 400 ms.
+func TestAggregateReadsTwentyNodesInParallelNotOneAfterAnother(t *testing.T) {
+	// 20 workers behind a 200 ms list each: serial reads would take 4 s, parallel ones
+	// about 400 ms (the limit is 16 at once).
 	r := newTunRig(t, nil)
 	r.pastGrace()
 	env := r.srv.NewEnvironment(t, "Many")
@@ -861,7 +861,7 @@ func TestAggregateReadsEveryNodeAtOnceAndAtMostSixteenAtATime(t *testing.T) {
 		name := fmt.Sprintf("w-%02d", i)
 		r.connect(t, env, dockertest.FakeConfig{
 			Hostname: name, SwarmState: "active", ListDelay: 200 * time.Millisecond,
-			Containers: []dockertest.FakeContainer{container("c"+name, "job-"+name)},
+			Containers: []dockertest.FakeContainer{fakeContainer("c"+name, "job-"+name)},
 		}, workerFacts(name))
 	}
 	r.whenOnline(t, env.ID)
@@ -881,7 +881,7 @@ func TestAggregateOfAStandaloneHostIsOneNodeAndNamesNobodyMissing(t *testing.T) 
 	r.pastGrace()
 	env := r.srv.NewEnvironment(t, "Remote")
 	r.connect(t, env, dockertest.FakeConfig{
-		Hostname: "edge-1", Containers: []dockertest.FakeContainer{container("a1", "web")},
+		Hostname: "edge-1", Containers: []dockertest.FakeContainer{fakeContainer("a1", "web")},
 		Networks: []dockertest.FakeNetwork{{ID: "n1", Name: "bridge", Driver: "bridge", Scope: "local"}},
 	}, nil)
 	r.whenOnline(t, env.ID)
@@ -899,7 +899,7 @@ func TestAggregateOfAStandaloneHostIsOneNodeAndNamesNobodyMissing(t *testing.T) 
 
 func TestAggregateOfTheLocalSocketIsOneNodeNamedAfterTheEngine(t *testing.T) {
 	local := dockertest.NewFake(t, dockertest.FakeConfig{
-		Hostname: "this-host", Containers: []dockertest.FakeContainer{container("l1", "local-1")},
+		Hostname: "this-host", Containers: []dockertest.FakeContainer{fakeContainer("l1", "local-1")},
 	})
 	r := newTunRig(t, local)
 	r.pastGrace()

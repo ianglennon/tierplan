@@ -133,7 +133,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables, labels or mounts. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -173,7 +173,7 @@ export interface paths {
         };
         /**
          * List the images of an environment
-         * @description Newest first. An untagged image is listed as <none>. At most 500 rows with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Newest first. An untagged image is listed as <none>. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listImages"];
         put?: never;
@@ -193,7 +193,7 @@ export interface paths {
         };
         /**
          * List the networks of an environment
-         * @description By name. At most 500 rows with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description By name. On a swarm a swarm-wide network is listed once, from the manager in use, with node Cluster; local networks are listed per node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listNetworks"];
         put?: never;
@@ -233,7 +233,7 @@ export interface paths {
         };
         /**
          * The dashboard of an environment
-         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. On a swarm the counts are the cluster's totals over the nodes that answered, with each node's own counts in byNode; notReporting names the nodes that did not, and while it is not empty the totals are not the whole cluster. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["getEnvironmentSummary"];
         put?: never;
@@ -253,7 +253,7 @@ export interface paths {
         };
         /**
          * List the volumes of an environment
-         * @description By name. At most 500 rows with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description By name. On a swarm every node's volumes, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listVolumes"];
         put?: never;
@@ -852,6 +852,8 @@ export interface components {
             isSelf: boolean;
             /** @description The container name without the leading slash */
             name: string;
+            /** @description The node the container runs on */
+            node: string;
             /** @description Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published */
             ports: string[] | null;
             /**
@@ -865,6 +867,10 @@ export interface components {
         ContainerListBody: {
             /** @description At most 500 rows */
             items: components["schemas"]["ContainerItem"][] | null;
+            /** @description The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown */
+            nodes: string[] | null;
+            /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
+            notReporting: string[] | null;
             /**
              * Format: int64
              * @description How many there are, whatever the cap
@@ -1068,6 +1074,8 @@ export interface components {
             state: "unknown" | "online" | "offline" | "unsupported" | "pending" | "reconnecting" | "degraded" | "revoked" | "cluster_changed";
         };
         EnvironmentSummaryBody: {
+            /** @description Each node that answered, by name, with its own counts; a standalone host or the local socket is one node */
+            byNode: components["schemas"]["NodeCountsBody"][] | null;
             counts: components["schemas"]["SummaryCountsBody"];
             engine: components["schemas"]["SummaryEngineBody"];
             environment: components["schemas"]["SummaryEnvironmentBody"];
@@ -1078,6 +1086,8 @@ export interface components {
             fetchedAt: string;
             /** @description True on a swarm worker, which can show only its own containers, images, volumes and networks (D-24) */
             isWorker: boolean;
+            /** @description Nodes that should have answered and did not: no agent connected, or its read failed or timed out. Their rows are left out of the counts, so when this is not empty the counts are not the whole cluster */
+            notReporting: string[] | null;
             /** @description The ID of Bayplan's own container, when it can tell (D-27) */
             selfContainerId?: string;
         };
@@ -1155,6 +1165,8 @@ export interface components {
             created?: string;
             /** @description The full image ID */
             id: string;
+            /** @description The node that holds the image */
+            node: string;
             /** @description repository:tag for each tag, or ["<none>"] for an untagged image */
             repoTags: string[] | null;
             /** @description The first 12 characters of the ID, without the sha256: prefix */
@@ -1168,6 +1180,10 @@ export interface components {
         ImageListBody: {
             /** @description At most 500 rows */
             items: components["schemas"]["ImageItem"][] | null;
+            /** @description The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown */
+            nodes: string[] | null;
+            /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
+            notReporting: string[] | null;
             /**
              * Format: int64
              * @description How many there are, whatever the cap
@@ -1270,6 +1286,8 @@ export interface components {
             driver: string;
             id: string;
             name: string;
+            /** @description The node the network is local to, or Cluster for a swarm-wide network */
+            node: string;
             /** @description local, or swarm for a cluster-wide network */
             scope: string;
             /** @description The IPAM subnets in CIDR notation; empty when the network has none */
@@ -1278,6 +1296,10 @@ export interface components {
         NetworkListBody: {
             /** @description At most 500 rows */
             items: components["schemas"]["NetworkItem"][] | null;
+            /** @description The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown */
+            nodes: string[] | null;
+            /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
+            notReporting: string[] | null;
             /**
              * Format: int64
              * @description How many there are, whatever the cap
@@ -1285,6 +1307,24 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        NodeCountsBody: {
+            /**
+             * Format: int64
+             * @description Containers on this node, stopped ones included
+             */
+            containers: number;
+            /** Format: int64 */
+            images: number;
+            /**
+             * Format: int64
+             * @description Networks local to this node; a swarm-wide network is counted in the total only
+             */
+            networks: number;
+            /** @description The node's host name */
+            node: string;
+            /** Format: int64 */
+            volumes: number;
         };
         PermissionsBody: {
             /** @description Permissions per environment ID; the key * holds those that apply to every environment */
@@ -1493,10 +1533,16 @@ export interface components {
             created?: string;
             driver: string;
             name: string;
+            /** @description The node that holds the volume */
+            node: string;
         };
         VolumeListBody: {
             /** @description At most 500 rows */
             items: components["schemas"]["VolumeItem"][] | null;
+            /** @description The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown */
+            nodes: string[] | null;
+            /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
+            notReporting: string[] | null;
             /**
              * Format: int64
              * @description How many there are, whatever the cap
@@ -1743,7 +1789,10 @@ export interface operations {
     };
     listContainers: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
+                node?: string;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */
@@ -1827,7 +1876,10 @@ export interface operations {
     };
     listImages: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
+                node?: string;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */
@@ -1878,7 +1930,10 @@ export interface operations {
     };
     listNetworks: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
+                node?: string;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */
@@ -2013,7 +2068,10 @@ export interface operations {
     };
     listVolumes: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
+                node?: string;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */

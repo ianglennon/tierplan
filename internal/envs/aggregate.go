@@ -4,9 +4,15 @@
 package envs
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"slices"
+	"sort"
 	"time"
+
+	"github.com/moby/moby/api/types/container"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 )
@@ -19,8 +25,6 @@ const (
 	// defaultNodeTimeout is how long one node may take before it is named in
 	// NotReporting.
 	defaultNodeTimeout = 5 * time.Second
-	// fanOutLimit is how many nodes are read at once.
-	fanOutLimit = 16
 )
 
 // swarmScope is the Scope Docker gives a cluster-wide network.
@@ -160,6 +164,9 @@ func (a *Aggregator) Snapshot(ctx context.Context, envID string) (Aggregate, Hea
 	if h.State != StateOnline && h.State != StateDegraded {
 		return Aggregate{}, h, ErrNotOnline{Health: h, Target: primaryStatus(a.svc, in)}
 	}
+	if in.EnvType == envTypeSwarm {
+		return a.swarm(ctx, in, h)
+	}
 	key, ok := a.svc.primary(in)
 	if !ok {
 		// Present inside the offline window but between sessions: nothing to read
@@ -199,32 +206,273 @@ func nodeOf(in RollupInput, key string, st Status) NodeRef {
 	return NodeRef{ID: in.EnvID, Name: name, Role: st.Probe.Type}
 }
 
+// swarmNets says what to do with the swarm-scoped networks a node lists.
+type swarmNets int
+
+const (
+	// netsOfNode keeps them as the node's own, for an engine read alone.
+	netsOfNode swarmNets = iota
+	// netsOfCluster keeps them, labelled NodeCluster: the node is the manager in use.
+	netsOfCluster
+	// netsDropped leaves them out: another manager's list is the cluster's.
+	netsDropped
+)
+
 // oneNode is the aggregate of an environment read through one target.
 func oneNode(snap dockerx.Snapshot, st Status, ref NodeRef, manager bool) Aggregate {
-	node := ref.Name
 	agg := Aggregate{
-		Counts: snap.Counts, ByNode: map[string]dockerx.Counts{node: snap.Counts},
-		FetchedAt: snap.FetchedAt, Target: st, Nodes: []NodeRef{ref}, NotReporting: []string{},
-		Containers: make([]ContainerRow, 0, len(snap.Containers)), Images: make([]ImageRow, 0, len(snap.Images)),
-		Volumes: make([]VolumeRow, 0, len(snap.Volumes)), Networks: make([]NetworkRow, 0, len(snap.Networks)),
+		Counts: snap.Counts, FetchedAt: snap.FetchedAt, Target: st, Nodes: []NodeRef{ref}, NotReporting: []string{},
+		Containers: []ContainerRow{}, Images: []ImageRow{}, Volumes: []VolumeRow{}, Networks: []NetworkRow{},
 	}
+	nets := netsOfNode
+	if manager {
+		nets = netsOfCluster
+	}
+	agg.addRows(snap, ref.Name, nets)
+	agg.ByNode = map[string]dockerx.Counts{ref.Name: snap.Counts}
+	return agg
+}
+
+// addRows appends a node's rows, each with its node.
+func (a *Aggregate) addRows(snap dockerx.Snapshot, node string, nets swarmNets) {
 	for _, c := range snap.Containers {
-		agg.Containers = append(agg.Containers, ContainerRow{c, node})
+		a.Containers = append(a.Containers, ContainerRow{c, node})
 	}
 	for _, i := range snap.Images {
-		agg.Images = append(agg.Images, ImageRow{i, node})
+		a.Images = append(a.Images, ImageRow{i, node})
 	}
 	for _, v := range snap.Volumes {
-		agg.Volumes = append(agg.Volumes, VolumeRow{v, node})
+		a.Volumes = append(a.Volumes, VolumeRow{v, node})
 	}
 	for _, n := range snap.Networks {
 		label := node
-		if manager && n.Scope == swarmScope {
-			label = NodeCluster
+		if n.Scope == swarmScope {
+			switch nets {
+			case netsDropped:
+				continue
+			case netsOfCluster:
+				label = NodeCluster
+			}
 		}
-		agg.Networks = append(agg.Networks, NetworkRow{n, label})
+		a.Networks = append(a.Networks, NetworkRow{n, label})
 	}
-	return agg
+}
+
+// nodeRead is the outcome of reading one node of a swarm.
+type nodeRead struct {
+	agent AgentView
+	snap  dockerx.Snapshot
+	st    Status
+	err   error
+}
+
+// swarm reads every connected agent of a swarm at once, at most 16 at a
+// time and each for at most the node timeout, and merges what answered (D-46).
+// Containers, images and volumes are node-local, so every row keeps its node and a
+// name used on two nodes stays two rows. Swarm-scoped networks are the cluster's:
+// they come from the manager in use only and are labelled NodeCluster. A node that
+// is expected and did not answer is named in NotReporting and its rows are left
+// out, so a total is never presented as complete when it is not.
+//
+// With no agent connected at all the lists are empty and every expected node is
+// named; the health says whether the environment is still considered readable.
+func (a *Aggregator) swarm(ctx context.Context, in RollupInput, h Health) (Aggregate, Health, error) {
+	reads := a.fanOut(ctx, connectedAgents(in))
+	if err := ctx.Err(); err != nil {
+		return Aggregate{}, h, err
+	}
+	var ok []nodeRead
+	var denied error
+	deniedAll := true
+	for _, r := range reads {
+		if r.err == nil {
+			ok = append(ok, r)
+			continue
+		}
+		a.svc.log.Debug("a node of a swarm did not report", "environment", in.EnvID, "node", nodeName(r.agent), "error", r.err)
+		err := ClassifyDockerError(r.err)
+		var pd *AgentPolicyDeniedError
+		if errors.As(err, &pd) {
+			denied = err
+		} else {
+			deniedAll = false
+		}
+	}
+	if len(ok) == 0 && len(reads) > 0 && denied != nil && deniedAll {
+		// Every node's agent refused by its own policy: that is a Bayplan fault, not
+		// a node that is missing, and the data route says so.
+		return Aggregate{}, h, denied
+	}
+
+	// The manager in use answers for the cluster; if it did not, another manager that
+	// did is as good a source.
+	designated := -1
+	inUse, _ := a.svc.primary(in)
+	for i, r := range ok {
+		if r.agent.Role != roleManager {
+			continue
+		}
+		if AgentTarget(r.agent.ID) == inUse {
+			designated = i
+			break
+		}
+		if designated < 0 {
+			designated = i
+		}
+	}
+
+	agg := Aggregate{
+		Containers: []ContainerRow{}, Images: []ImageRow{}, Volumes: []VolumeRow{}, Networks: []NetworkRow{},
+		ByNode: map[string]dockerx.Counts{}, Nodes: []NodeRef{}, NotReporting: []string{},
+	}
+	reported := map[string]bool{}
+	for i, r := range ok {
+		node := nodeName(r.agent)
+		reported[agentKey(r.agent)] = true
+		nets := netsDropped
+		if i == designated {
+			nets = netsOfCluster
+			agg.Target = r.st
+			agg.Counts.Nodes, agg.Counts.Services = r.snap.Counts.Nodes, r.snap.Counts.Services
+		}
+		before := len(agg.Networks)
+		agg.addRows(r.snap, node, nets)
+		agg.Nodes = append(agg.Nodes, NodeRef{ID: r.agent.ID, Name: node, Role: r.agent.Role})
+		agg.ByNode[node] = nodeCounts(r.snap, agg.Networks[before:])
+		if agg.FetchedAt.IsZero() || r.snap.FetchedAt.Before(agg.FetchedAt) {
+			agg.FetchedAt = r.snap.FetchedAt
+		}
+	}
+	if designated < 0 {
+		agg.Target = primaryStatus(a.svc, in)
+	}
+	if agg.FetchedAt.IsZero() {
+		agg.FetchedAt = a.now()
+	}
+	agg.total()
+	agg.sortRows()
+	slices.SortFunc(agg.Nodes, func(x, y NodeRef) int { return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.ID, y.ID)) })
+	for _, e := range a.expectedNodes(in) {
+		if !reported[e.key] {
+			agg.NotReporting = append(agg.NotReporting, e.name)
+		}
+	}
+	sort.Strings(agg.NotReporting)
+	return agg, h, nil
+}
+
+// fanOut reads the snapshot of each agent's target in parallel. Each read is bounded
+// by the node timeout, so one slow or hostile node cannot hold the page (T-02-72); a
+// read that times out stops being waited for while the shared fetch carries on and
+// fills the cache for the next one.
+func (a *Aggregator) fanOut(ctx context.Context, agents []AgentView) []nodeRead {
+	reads := make([]nodeRead, len(agents))
+	var g errgroup.Group
+	g.SetLimit(16) // at most 16 nodes are read at once (T-02-72)
+	for i, ag := range agents {
+		g.Go(func() error {
+			nctx, cancel := context.WithTimeout(ctx, a.nodeTimeout)
+			defer cancel()
+			snap, st, err := a.snaps.Get(nctx, AgentTarget(ag.ID))
+			reads[i] = nodeRead{agent: ag, snap: snap, st: st, err: err}
+			return nil
+		})
+	}
+	_ = g.Wait() // no read returns an error: each outcome is in its slot
+	return reads
+}
+
+// agentKey identifies the node an agent runs on: the swarm node when it said so,
+// else the agent.
+func agentKey(a AgentView) string {
+	if a.SwarmNodeID != "" {
+		return a.SwarmNodeID
+	}
+	return AgentTarget(a.ID)
+}
+
+type expectedNode struct{ key, name string }
+
+// expectedNodes are the nodes that should answer a read: every agent not revoked,
+// and every node the manager's last node list says should run one (active, and
+// ready or down: a drained or paused node gets no agent task). An agent and its
+// node are one entry.
+func (a *Aggregator) expectedNodes(in RollupInput) []expectedNode {
+	var out []expectedNode
+	seen := map[string]bool{}
+	add := func(key, name string) {
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, expectedNode{key, name})
+		}
+	}
+	for _, ag := range in.Agents {
+		if !ag.Revoked {
+			add(agentKey(ag), nodeName(ag))
+		}
+	}
+	if a.svc.clusters != nil {
+		if st, ok := a.svc.clusters.Cached(in.EnvID); ok && st.Known() {
+			for _, n := range st.Read.Nodes {
+				if n.Availability == "active" && (n.State == "ready" || n.State == "down") {
+					name := cleanText(n.Hostname, maxNodeLen)
+					if name == "" {
+						name = cleanText(n.ID, maxNodeLen)
+					}
+					add(n.ID, name)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// nodeCounts are one node's counts from its own rows; nets are the network rows it
+// contributed, so a swarm-scoped network left out is not counted for it.
+func nodeCounts(snap dockerx.Snapshot, nets []NetworkRow) dockerx.Counts {
+	c := dockerx.Counts{Containers: len(snap.Containers), Images: len(snap.Images), Volumes: len(snap.Volumes)}
+	for _, n := range nets {
+		if n.Scope != swarmScope {
+			c.Networks++
+		}
+	}
+	for _, row := range snap.Containers {
+		if row.State == string(container.StateRunning) {
+			c.ContainersRunning++
+		}
+	}
+	c.ContainersStopped = c.Containers - c.ContainersRunning
+	return c
+}
+
+// total sets the cluster totals from the rows, so each count is the length of the
+// list it links to. Nodes and Services are the manager's and are set by the caller.
+func (a *Aggregate) total() {
+	for _, c := range a.ByNode {
+		a.Counts.Containers += c.Containers
+		a.Counts.ContainersRunning += c.ContainersRunning
+		a.Counts.ContainersStopped += c.ContainersStopped
+		a.Counts.Images += c.Images
+		a.Counts.Volumes += c.Volumes
+	}
+	a.Counts.Networks = len(a.Networks)
+}
+
+// sortRows puts the merged rows in the order each list is shown in: the order of
+// dockerx, with the node as the last tie-break so equal rows keep a stable order.
+func (a *Aggregate) sortRows() {
+	slices.SortFunc(a.Containers, func(x, y ContainerRow) int {
+		return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.Node, y.Node), cmp.Compare(x.ID, y.ID))
+	})
+	slices.SortFunc(a.Images, func(x, y ImageRow) int {
+		return cmp.Or(y.Created.Compare(x.Created), cmp.Compare(x.ID, y.ID), cmp.Compare(x.Node, y.Node))
+	})
+	slices.SortFunc(a.Volumes, func(x, y VolumeRow) int {
+		return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.Node, y.Node))
+	})
+	slices.SortFunc(a.Networks, func(x, y NetworkRow) int {
+		return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.ID, y.ID), cmp.Compare(x.Node, y.Node))
+	})
 }
 
 // local reads the local socket: its health is the monitor's status, kept exactly as

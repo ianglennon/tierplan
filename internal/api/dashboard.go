@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -109,11 +110,22 @@ type SummaryCountsBody struct {
 	Services          *int `json:"services,omitempty" doc:"Swarm services; present on swarm managers only"`
 }
 
+// NodeCountsBody is what one node of an environment holds.
+type NodeCountsBody struct {
+	Node       string `json:"node" doc:"The node's host name"`
+	Containers int    `json:"containers" doc:"Containers on this node, stopped ones included"`
+	Images     int    `json:"images"`
+	Volumes    int    `json:"volumes"`
+	Networks   int    `json:"networks" doc:"Networks local to this node; a swarm-wide network is counted in the total only"`
+}
+
 // EnvironmentSummaryBody is the dashboard of one environment.
 type EnvironmentSummaryBody struct {
 	Environment     SummaryEnvironmentBody `json:"environment"`
 	Engine          SummaryEngineBody      `json:"engine"`
 	Counts          SummaryCountsBody      `json:"counts"`
+	ByNode          []NodeCountsBody       `json:"byNode" doc:"Each node that answered, by name, with its own counts; a standalone host or the local socket is one node"`
+	NotReporting    []string               `json:"notReporting" doc:"Nodes that should have answered and did not: no agent connected, or its read failed or timed out. Their rows are left out of the counts, so when this is not empty the counts are not the whole cluster"`
 	IsWorker        bool                   `json:"isWorker" doc:"True on a swarm worker, which can show only its own containers, images, volumes and networks (D-24)"`
 	SelfContainerID string                 `json:"selfContainerId,omitempty" doc:"The ID of Bayplan's own container, when it can tell (D-27)"`
 	FetchedAt       string                 `json:"fetchedAt" format:"date-time" doc:"When the counts were read from Docker; they are cached for a few seconds"`
@@ -128,6 +140,7 @@ type EnvironmentSummaryOutput struct {
 // ContainerItem is one row of the containers list. It carries no variables,
 // labels or mounts (T-01-77).
 type ContainerItem struct {
+	Node    string   `json:"node" doc:"The node the container runs on"`
 	ID      string   `json:"id" doc:"The full container ID"`
 	Name    string   `json:"name" doc:"The container name without the leading slash"`
 	State   string   `json:"state" enum:"created,running,paused,restarting,removing,exited,dead" doc:"The container state"`
@@ -140,6 +153,7 @@ type ContainerItem struct {
 
 // ImageItem is one row of the images list.
 type ImageItem struct {
+	Node     string   `json:"node" doc:"The node that holds the image"`
 	ID       string   `json:"id" doc:"The full image ID"`
 	ShortID  string   `json:"shortId" doc:"The first 12 characters of the ID, without the sha256: prefix"`
 	RepoTags []string `json:"repoTags" doc:"repository:tag for each tag, or [\"<none>\"] for an untagged image"`
@@ -149,6 +163,7 @@ type ImageItem struct {
 
 // VolumeItem is one row of the volumes list.
 type VolumeItem struct {
+	Node    string `json:"node" doc:"The node that holds the volume"`
 	Name    string `json:"name"`
 	Driver  string `json:"driver"`
 	Created string `json:"created,omitempty" format:"date-time"`
@@ -156,6 +171,7 @@ type VolumeItem struct {
 
 // NetworkItem is one row of the networks list.
 type NetworkItem struct {
+	Node    string   `json:"node" doc:"The node the network is local to, or Cluster for a swarm-wide network"`
 	ID      string   `json:"id"`
 	Name    string   `json:"name"`
 	Driver  string   `json:"driver"`
@@ -166,30 +182,38 @@ type NetworkItem struct {
 
 // ContainerListBody and its siblings are a capped list with the full total.
 type ContainerListBody struct {
-	Items     []ContainerItem `json:"items" doc:"At most 500 rows"`
-	Total     int             `json:"total" doc:"How many there are, whatever the cap"`
-	Truncated bool            `json:"truncated" doc:"True when total is more than the rows returned"`
+	Items        []ContainerItem `json:"items" doc:"At most 500 rows"`
+	Total        int             `json:"total" doc:"How many there are, whatever the cap"`
+	Truncated    bool            `json:"truncated" doc:"True when total is more than the rows returned"`
+	Nodes        []string        `json:"nodes" doc:"The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown"`
+	NotReporting []string        `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
 }
 
 // ImageListBody is a capped list of images.
 type ImageListBody struct {
-	Items     []ImageItem `json:"items" doc:"At most 500 rows"`
-	Total     int         `json:"total" doc:"How many there are, whatever the cap"`
-	Truncated bool        `json:"truncated" doc:"True when total is more than the rows returned"`
+	Items        []ImageItem `json:"items" doc:"At most 500 rows"`
+	Total        int         `json:"total" doc:"How many there are, whatever the cap"`
+	Truncated    bool        `json:"truncated" doc:"True when total is more than the rows returned"`
+	Nodes        []string    `json:"nodes" doc:"The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown"`
+	NotReporting []string    `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
 }
 
 // VolumeListBody is a capped list of volumes.
 type VolumeListBody struct {
-	Items     []VolumeItem `json:"items" doc:"At most 500 rows"`
-	Total     int          `json:"total" doc:"How many there are, whatever the cap"`
-	Truncated bool         `json:"truncated" doc:"True when total is more than the rows returned"`
+	Items        []VolumeItem `json:"items" doc:"At most 500 rows"`
+	Total        int          `json:"total" doc:"How many there are, whatever the cap"`
+	Truncated    bool         `json:"truncated" doc:"True when total is more than the rows returned"`
+	Nodes        []string     `json:"nodes" doc:"The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown"`
+	NotReporting []string     `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
 }
 
 // NetworkListBody is a capped list of networks.
 type NetworkListBody struct {
-	Items     []NetworkItem `json:"items" doc:"At most 500 rows"`
-	Total     int           `json:"total" doc:"How many there are, whatever the cap"`
-	Truncated bool          `json:"truncated" doc:"True when total is more than the rows returned"`
+	Items        []NetworkItem `json:"items" doc:"At most 500 rows"`
+	Total        int           `json:"total" doc:"How many there are, whatever the cap"`
+	Truncated    bool          `json:"truncated" doc:"True when total is more than the rows returned"`
+	Nodes        []string      `json:"nodes" doc:"The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown"`
+	NotReporting []string      `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
 }
 
 // ContainerListOutput wraps ContainerListBody for huma.
@@ -214,6 +238,48 @@ type VolumeListOutput struct {
 type NetworkListOutput struct {
 	CacheControl string `header:"Cache-Control"`
 	Body         NetworkListBody
+}
+
+// NodeFilterInput is the path of a list and its optional node filter (T-02-74).
+type NodeFilterInput struct {
+	EnvironmentPathInput
+	Node string `query:"node" maxLength:"128" doc:"Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list"`
+}
+
+// filterNode keeps the rows of node, all of them when node is empty. The filter is
+// applied before the 500-row cap, so the total is the filtered count.
+func filterNode[R any](rows []R, node string, nodeOf func(R) string) []R {
+	if node == "" {
+		return rows
+	}
+	out := make([]R, 0, len(rows))
+	for _, r := range rows {
+		if nodeOf(r) == node {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// reportingNodes are the names a node filter can take: every node that answered.
+func reportingNodes(agg envs.Aggregate, extra ...string) []string {
+	out := make([]string, 0, len(agg.Nodes)+len(extra))
+	for _, n := range agg.Nodes {
+		out = append(out, n.Name)
+	}
+	out = append(out, extra...)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// clusterNode is NodeCluster when any network row carries it, for the filter.
+func clusterNode(rows []envs.NetworkRow) []string {
+	for _, n := range rows {
+		if n.Node == envs.NodeCluster {
+			return []string{envs.NodeCluster}
+		}
+	}
+	return nil
 }
 
 // capRows converts at most maxListRows rows and reports the full total.
@@ -308,7 +374,9 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		"The dashboard of an environment",
 		"The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and "+
 			"services on a swarm manager. Every count is the length of the list its tile links to, because both come from "+
-			"the same snapshot, cached for a few seconds."),
+			"the same snapshot, cached for a few seconds. On a swarm the counts are the cluster's totals over the nodes that "+
+			"answered, with each node's own counts in byNode; notReporting names the nodes that did not, and while it is not "+
+			"empty the totals are not the whole cluster."),
 		need(rbac.PermEnvironmentsRead),
 		func(ctx context.Context, in *EnvironmentPathInput) (*EnvironmentSummaryOutput, error) {
 			agg, health, err := read(ctx, in.EnvID)
@@ -333,6 +401,8 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 					ContainersRunning: c.ContainersRunning, ContainersStopped: c.ContainersStopped, Containers: c.Containers,
 					Images: c.Images, Volumes: c.Volumes, Networks: c.Networks, Nodes: c.Nodes, Services: c.Services,
 				},
+				ByNode:          byNode(agg),
+				NotReporting:    agg.NotReporting,
 				IsWorker:        p.Type == dockerx.TypeSwarmWorker,
 				SelfContainerID: d.SelfContainerID,
 				FetchedAt:       rfc3339(agg.FetchedAt),
@@ -341,66 +411,90 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 
 	httpx.Register(r, op("listContainers", "/api/env/{envId}/containers",
 		"List the containers of an environment",
-		"Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total."),
+		"Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. "+
+			"Read-only rows: no variables, labels or mounts. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
 		need(rbac.PermContainersRead),
-		func(ctx context.Context, in *EnvironmentPathInput) (*ContainerListOutput, error) {
+		func(ctx context.Context, in *NodeFilterInput) (*ContainerListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(agg.Containers, func(c envs.ContainerRow) ContainerItem {
+			rows := filterNode(agg.Containers, in.Node, func(c envs.ContainerRow) string { return c.Node })
+			items, total, truncated := capRows(rows, func(c envs.ContainerRow) ContainerItem {
 				return ContainerItem{
-					ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
+					Node: c.Node, ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
 					Created: rfc3339(c.Created), Ports: c.Ports, IsSelf: isSelf(c.ID),
 				}
 			})
-			return &ContainerListOutput{CacheControl: "no-store", Body: ContainerListBody{Items: items, Total: total, Truncated: truncated}}, nil
+			return &ContainerListOutput{CacheControl: "no-store", Body: ContainerListBody{
+				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
+			}}, nil
 		})
 
 	httpx.Register(r, op("listImages", "/api/env/{envId}/images",
 		"List the images of an environment",
-		"Newest first. An untagged image is listed as <none>. At most 500 rows with the total."),
+		"Newest first. An untagged image is listed as <none>. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
 		need(rbac.PermImagesRead),
-		func(ctx context.Context, in *EnvironmentPathInput) (*ImageListOutput, error) {
+		func(ctx context.Context, in *NodeFilterInput) (*ImageListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(agg.Images, func(i envs.ImageRow) ImageItem {
-				return ImageItem{ID: i.ID, ShortID: shortImageID(i.ID), RepoTags: i.RepoTags, Size: i.Size, Created: rfc3339(i.Created)}
+			rows := filterNode(agg.Images, in.Node, func(i envs.ImageRow) string { return i.Node })
+			items, total, truncated := capRows(rows, func(i envs.ImageRow) ImageItem {
+				return ImageItem{Node: i.Node, ID: i.ID, ShortID: shortImageID(i.ID), RepoTags: i.RepoTags, Size: i.Size, Created: rfc3339(i.Created)}
 			})
-			return &ImageListOutput{CacheControl: "no-store", Body: ImageListBody{Items: items, Total: total, Truncated: truncated}}, nil
+			return &ImageListOutput{CacheControl: "no-store", Body: ImageListBody{
+				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
+			}}, nil
 		})
 
 	httpx.Register(r, op("listVolumes", "/api/env/{envId}/volumes",
 		"List the volumes of an environment",
-		"By name. At most 500 rows with the total."),
+		"By name. On a swarm every node's volumes, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
 		need(rbac.PermVolumesRead),
-		func(ctx context.Context, in *EnvironmentPathInput) (*VolumeListOutput, error) {
+		func(ctx context.Context, in *NodeFilterInput) (*VolumeListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(agg.Volumes, func(v envs.VolumeRow) VolumeItem {
-				return VolumeItem{Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created)}
+			rows := filterNode(agg.Volumes, in.Node, func(v envs.VolumeRow) string { return v.Node })
+			items, total, truncated := capRows(rows, func(v envs.VolumeRow) VolumeItem {
+				return VolumeItem{Node: v.Node, Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created)}
 			})
-			return &VolumeListOutput{CacheControl: "no-store", Body: VolumeListBody{Items: items, Total: total, Truncated: truncated}}, nil
+			return &VolumeListOutput{CacheControl: "no-store", Body: VolumeListBody{
+				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
+			}}, nil
 		})
 
 	httpx.Register(r, op("listNetworks", "/api/env/{envId}/networks",
 		"List the networks of an environment",
-		"By name. At most 500 rows with the total."),
+		"By name. On a swarm a swarm-wide network is listed once, from the manager in use, with node Cluster; local networks are listed per node. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
 		need(rbac.PermNetworksRead),
-		func(ctx context.Context, in *EnvironmentPathInput) (*NetworkListOutput, error) {
+		func(ctx context.Context, in *NodeFilterInput) (*NetworkListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(agg.Networks, func(n envs.NetworkRow) NetworkItem {
-				return NetworkItem{ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created)}
+			rows := filterNode(agg.Networks, in.Node, func(n envs.NetworkRow) string { return n.Node })
+			items, total, truncated := capRows(rows, func(n envs.NetworkRow) NetworkItem {
+				return NetworkItem{Node: n.Node, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created)}
 			})
-			return &NetworkListOutput{CacheControl: "no-store", Body: NetworkListBody{Items: items, Total: total, Truncated: truncated}}, nil
+			return &NetworkListOutput{CacheControl: "no-store", Body: NetworkListBody{
+				Items: items, Total: total, Truncated: truncated,
+				Nodes: reportingNodes(agg, clusterNode(agg.Networks)...), NotReporting: agg.NotReporting,
+			}}, nil
 		})
+}
+
+// byNode lists each reporting node's counts by node name.
+func byNode(agg envs.Aggregate) []NodeCountsBody {
+	out := make([]NodeCountsBody, 0, len(agg.ByNode))
+	for node, c := range agg.ByNode {
+		out = append(out, NodeCountsBody{Node: node, Containers: c.Containers, Images: c.Images, Volumes: c.Volumes, Networks: c.Networks})
+	}
+	slices.SortFunc(out, func(a, b NodeCountsBody) int { return strings.Compare(a.Node, b.Node) })
+	return out
 }
 
 // offlineProblem is the 503 for an environment whose engine does not answer.
