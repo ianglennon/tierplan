@@ -112,7 +112,7 @@ func (f *setupFixture) setting(t *testing.T, key string) (string, bool) {
 
 func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == auth.CookieName(auth.CookieScope{Secure: true}) || c.Name == auth.CookieName(auth.CookieScope{Secure: false}) {
+		if c.Name == "__Host-bayplan_session" || c.Name == "__Secure-bayplan_session" || c.Name == "bayplan_session" {
 			return c
 		}
 	}
@@ -323,6 +323,8 @@ func TestSetupCompleteRejectsEachInvalidInputWithAFieldCodeAndCreatesNothing(t *
 		"public url with userinfo":   {map[string]any{"publicUrl": "https://user:" + "secret@bayplan.example"}, "body.publicUrl", "invalid_public_url"},
 		"public url with a query":    {map[string]any{"publicUrl": "https://bayplan.example/?a=b"}, "body.publicUrl", "invalid_public_url"},
 		"public url empty":           {map[string]any{"publicUrl": ""}, "body.publicUrl", "invalid_public_url"},
+		"public url under /api":      {map[string]any{"publicUrl": "https://bayplan.example/api"}, "body.publicUrl", "invalid_public_url"},
+		"public url under /agent":    {map[string]any{"publicUrl": "https://bayplan.example/agent/x"}, "body.publicUrl", "invalid_public_url"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newSetupFixture(t, config.Config{})

@@ -401,7 +401,7 @@ func TestCookieOverHTTPSIsHostPrefixedSecureAndHTTPOnly(t *testing.T) {
 		t.Fatalf("a browser-session cookie must carry no lifetime: MaxAge %d, Expires %v", c.MaxAge, c.Expires)
 	}
 	if auth.CookieName(auth.CookieScope{Secure: true}) != "__Host-bayplan_session" {
-		t.Fatalf("CookieName(true) = %q", auth.CookieName(auth.CookieScope{Secure: true}))
+		t.Fatalf("CookieName(secure) = %q", auth.CookieName(auth.CookieScope{Secure: true}))
 	}
 }
 
@@ -420,7 +420,7 @@ func TestCookieOverPlainHTTPDropsThePrefixAndSecure(t *testing.T) {
 		t.Fatalf("http cookie = %+v", c)
 	}
 	if auth.CookieName(auth.CookieScope{Secure: false}) != "bayplan_session" {
-		t.Fatalf("CookieName(false) = %q", auth.CookieName(auth.CookieScope{Secure: false}))
+		t.Fatalf("CookieName(plain) = %q", auth.CookieName(auth.CookieScope{Secure: false}))
 	}
 }
 

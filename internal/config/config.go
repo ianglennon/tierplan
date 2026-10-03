@@ -303,6 +303,30 @@ func parsePrefixes(raw string) ([]netip.Prefix, error) {
 	return out, nil
 }
 
+// reservedSegments are the first path segments Bayplan serves itself: its API,
+// assets, agent endpoint, probes and the SPA's own routes. A public URL whose
+// path started with one would make the base path shadow a route (D-50, T-02-14).
+var reservedSegments = map[string]bool{
+	"api": true, "assets": true, "agent": true, "healthz": true, "readyz": true,
+	"setup": true, "openapi": true, "docs": true, "schemas": true, "env": true,
+	"environments": true, "settings": true, "audit": true, "login": true, "welcome": true,
+}
+
+// reservedSegment returns the first segment of the decoded URL path when
+// Bayplan serves it itself, and "" otherwise. Only the first segment is
+// Bayplan's to claim: /tools/api is a fine base. A name such as openapi.json is
+// treated as the openapi segment, as the router does.
+func reservedSegment(p string) string {
+	first, _, _ := strings.Cut(strings.TrimPrefix(p, "/"), "/")
+	if reservedSegments[first] {
+		return first
+	}
+	if strings.HasPrefix(first, "openapi.") {
+		return first
+	}
+	return ""
+}
+
 // NormalisePublicURL validates a public URL the same way BAYPLAN_PUBLIC_URL is
 // validated, so a value entered in the setup wizard and one set in the
 // environment are held to one rule. Empty stays empty.
@@ -326,6 +350,9 @@ func normalisePublicURL(raw string) (string, error) {
 	}
 	if u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
 		return "", errors.New("must not contain a query or fragment")
+	}
+	if seg := reservedSegment(u.Path); seg != "" {
+		return "", fmt.Errorf("must not start with /%s, which Bayplan serves itself", seg)
 	}
 	path := strings.TrimRight(u.EscapedPath(), "/")
 	return u.Scheme + "://" + strings.ToLower(u.Host) + path, nil

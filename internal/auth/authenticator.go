@@ -54,12 +54,14 @@ type authenticator struct {
 // as anonymous, and the expired or orphaned row is deleted. A nil now means
 // time.Now.
 //
-// secure reports whether the public URL is https; it is read on every request
-// because an administrator can change the URL at run time. On https only the
-// __Host- cookie is believed, so a bare cookie tossed from a sibling host or
-// over plain http is ignored (WR-01, D-12); on plain http only the bare cookie
-// is read. A nil secure means plain http. Changing the scheme therefore signs
-// existing browser sessions out once, which is the accepted cost.
+// scope reports whether the public URL is https and the path it is served
+// under; it is read on every request because an administrator can change the
+// URL at run time. Only the cookie named for the current scope is believed
+// (__Host- for https at the root, __Secure- for https under a base, bare for
+// http), so a cookie tossed from a sibling host, over plain http or under
+// another scope is ignored (WR-01, D-12, D-50). A nil scope means plain http at
+// the root. Changing the scheme or the base therefore signs existing browser
+// sessions out once, which is the accepted cost.
 func NewAuthenticator(s *store.Store, idle time.Duration, scope func() CookieScope, now func() time.Time) httpx.Authenticator {
 	if now == nil {
 		now = time.Now
