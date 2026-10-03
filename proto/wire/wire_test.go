@@ -96,7 +96,7 @@ func TestEveryD40ReasonCodeIsDefinedOnce(t *testing.T) {
 		seen[c] = true
 	}
 	for _, c := range []string{
-		RefuseDuplicateEnvironment, RefuseTypeMismatch, RefuseTokenDisabled, RefuseInsecureTransport, RefuseRateLimited, RefuseInternal,
+		RefuseDuplicateEnvironment, RefuseTypeMismatch, RefuseTokenDisabled, RefuseTokenSuperseded, RefuseInsecureTransport, RefuseRateLimited, RefuseInternal,
 	} {
 		if c == "" || seen[c] {
 			t.Fatalf("enrolment refusal %q is empty or collides with a reason code", c)

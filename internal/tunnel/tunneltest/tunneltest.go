@@ -78,6 +78,10 @@ type Options struct {
 	// Server replaces the http.Server the hub is served by, for a test of how the
 	// real server settings treat a tunnel. It is given the hub's handler.
 	Server func(http.Handler) *http.Server
+	// AuditRefusals records every refused handshake as agent.enrol_refused with the
+	// real audit writer, unthrottled, so a test can read the reason from the
+	// database. Off by default, so tests that count audit rows are unaffected.
+	AuditRefusals bool
 }
 
 // Server is a running in-process Bayplan tunnel endpoint.
@@ -176,12 +180,16 @@ func Start(t *testing.T, opts Options) *Server {
 	if err != nil {
 		t.Fatalf("tunneltest: vault: %v", err)
 	}
-	svc := agents.NewService(st, vlt, audit.NewWriter(st, vlt, log, clock.Now), clock.Now)
+	aud := audit.NewWriter(st, vlt, log, clock.Now)
+	svc := agents.NewService(st, vlt, aud, clock.Now)
 	rec := newRecorder()
 
 	ts := httptest.NewUnstartedServer(nil)
 	addr := ts.Listener.Addr().String()
 	hub := tunnel.NewHub(svc, rec, log, clock.Now).WithPublicURL(func() string { return "https://" + addr }).WithLastSeen(svc)
+	if opts.AuditRefusals {
+		hub = hub.WithRefusalAudit(aud)
+	}
 	if opts.Configure != nil {
 		hub = opts.Configure(hub)
 	}

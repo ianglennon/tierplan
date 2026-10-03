@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -651,5 +652,315 @@ func TestTouchLastSeenForAnUnknownAgentWritesNothingAndDoesNotFail(t *testing.T)
 	r.svc.TouchLastSeen(r.ctx, "no-such-agent")
 	if n := count(t, r.st, `SELECT COUNT(*) FROM agents`); n != 0 {
 		t.Fatalf("%d agent rows", n)
+	}
+}
+
+// Join token rotation and disabling (plan 02-10, D-02).
+
+func tokenRowCounts(t *testing.T, st *store.Store, envID string) (total, current int) {
+	t.Helper()
+	total = count(t, st, `SELECT COUNT(*) FROM env_join_tokens WHERE env_id = ?`, envID)
+	current = count(t, st, `SELECT COUNT(*) FROM env_join_tokens WHERE env_id = ? AND superseded_at IS NULL`, envID)
+	return total, current
+}
+
+func auditRows(t *testing.T, st *store.Store, action string) (details []string) {
+	t.Helper()
+	rows, err := st.Read.Query(`SELECT details FROM audit_log WHERE action = ? ORDER BY seq`, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			t.Fatal(err)
+		}
+		details = append(details, d)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return details
+}
+
+func TestRotateTokenSupersedesTheCurrentTokenAndMakesGenerationTwo(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	r.clock = fixedNow.Add(time.Hour)
+	rot, err := r.svc.RotateToken(r.ctx, audit.SystemCLI, c.EnvID, "203.0.113.9", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rot.Generation != 2 || rot.JoinToken == "" || rot.JoinToken == c.JoinToken {
+		t.Fatalf("rotation = generation %d token %q", rot.Generation, rot.JoinToken)
+	}
+	envID, _, ok := agents.ParseToken(rot.JoinToken)
+	if !ok || envID != c.EnvID {
+		t.Fatalf("the new token %q does not parse into environment %s", rot.JoinToken, c.EnvID)
+	}
+	if total, current := tokenRowCounts(t, r.st, c.EnvID); total != 2 || current != 1 {
+		t.Fatalf("%d token rows, %d current; want 2 and exactly 1", total, current)
+	}
+	var superseded sql.NullInt64
+	if err := r.st.Read.QueryRow(`SELECT superseded_at FROM env_join_tokens WHERE env_id = ? AND generation = 1`, c.EnvID).Scan(&superseded); err != nil {
+		t.Fatal(err)
+	}
+	if !superseded.Valid || superseded.Int64 != fixedNow.Add(time.Hour).UnixNano() {
+		t.Errorf("generation 1 superseded_at = %+v, want the rotation time", superseded)
+	}
+	// Only the hash of the new token's secret is kept.
+	_, secret, _ := agents.ParseToken(rot.JoinToken)
+	var hash []byte
+	if err := r.st.Read.QueryRow(`SELECT token_hash FROM env_join_tokens WHERE env_id = ? AND generation = 2 AND superseded_at IS NULL`, c.EnvID).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(hash, sha256Sum([]byte(secret))) {
+		t.Error("the current row does not hold the SHA-256 of the new token's secret")
+	}
+	entries := auditRows(t, r.st, audit.ActionEnvironmentTokenRotated)
+	if len(entries) != 1 || !strings.Contains(entries[0], `"generation":"2"`) {
+		t.Fatalf("environment.token_rotated rows = %v, want one recording generation 2", entries)
+	}
+}
+
+func TestRotateTokenAuditsTheGenerationAndNeverTheToken(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	rot, err := r.svc.RotateToken(r.ctx, audit.SystemCLI, c.EnvID, "203.0.113.9", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.DisableToken(r.ctx, audit.SystemCLI, c.EnvID, "203.0.113.9", "test"); err != nil {
+		t.Fatal(err)
+	}
+	_, oldSecret, _ := agents.ParseToken(c.JoinToken)
+	_, newSecret, _ := agents.ParseToken(rot.JoinToken)
+	rows, err := r.st.Read.Query(`SELECT action, target_id, env_id, reason, ip, user_agent, details FROM audit_log`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var cols [7]sql.NullString
+		if err := rows.Scan(&cols[0], &cols[1], &cols[2], &cols[3], &cols[4], &cols[5], &cols[6]); err != nil {
+			t.Fatal(err)
+		}
+		var line string
+		for _, c := range cols {
+			line += c.String + "|"
+		}
+		if strings.Contains(line, oldSecret) || strings.Contains(line, newSecret) {
+			t.Errorf("an audit row holds a join token secret: %s", line)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRotateTokenRefusesTheOldTokenAsSupersededAndAcceptsTheNewOne(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	rot, err := r.svc.RotateToken(r.ctx, audit.SystemCLI, c.EnvID, "203.0.113.9", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.svc.Enrol(r.ctx, newProof(t, "h").request(c.JoinToken))
+	var re *tunnel.RefuseError
+	if !errors.As(err, &re) || re.Code != wire.ReasonAuthRejected || re.AuditReason != wire.RefuseTokenSuperseded {
+		t.Fatalf("enrol with the old token: err = %v, want auth_rejected with the audit reason %s", err, wire.RefuseTokenSuperseded)
+	}
+	if n := count(t, r.st, `SELECT COUNT(*) FROM agents WHERE env_id = ?`, c.EnvID); n != 0 {
+		t.Fatalf("%d agents enrolled with a superseded token", n)
+	}
+	if _, err := r.svc.Enrol(r.ctx, newProof(t, "h").request(rot.JoinToken)); err != nil {
+		t.Fatalf("enrol with the new token: %v", err)
+	}
+}
+
+func TestRotateTokenAnAgentEnrolledEarlierStillSaysHelloAndOldAndNewTokensAreJudgedByTheHub(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{AuditRefusals: true})
+	env := srv.NewEnvironment(t, "Production")
+	first := srv.Enrol(t, env)
+
+	rot, err := srv.Svc.RotateToken(context.Background(), audit.SystemCLI, env.ID, "203.0.113.9", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The old command is refused with the same answer any wrong token gets...
+	refused := srv.Dial(t, tunneltest.Agent{Token: env.Token})
+	if refused.Refuse == nil || refused.Refuse.Code != wire.ReasonAuthRejected {
+		t.Fatalf("enrol with the superseded token: refuse = %+v, err %v, want auth_rejected", refused.Refuse, refused.Err)
+	}
+	// ...and the audit keeps the specific reason.
+	var reason string
+	if err := srv.Store.Read.QueryRow(`SELECT reason FROM audit_log WHERE action = ? ORDER BY seq DESC LIMIT 1`, audit.ActionAgentEnrolRefused).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "token_superseded" {
+		t.Errorf("agent.enrol_refused reason = %q, want token_superseded", reason)
+	}
+
+	// The new one enrols a second agent.
+	if c := srv.Dial(t, tunneltest.Agent{Token: rot.JoinToken}); c.Welcome == nil {
+		t.Fatalf("enrol with the new token was refused: %+v (err %v)", c.Refuse, c.Err)
+	}
+	// The agent enrolled before the rotation reconnects with its certificate.
+	if c := srv.Hello(t, first.Identity); c.Welcome == nil {
+		t.Fatalf("hello after the rotation was refused: %+v (err %v)", c.Refuse, c.Err)
+	}
+}
+
+func TestDisableTokenRefusesEnrolmentAsDisabledUntilTheNextRotation(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	rot2, err := r.svc.RotateToken(r.ctx, audit.SystemCLI, c.EnvID, "203.0.113.9", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.DisableToken(r.ctx, audit.SystemCLI, c.EnvID, "203.0.113.9", "test"); err != nil {
+		t.Fatal(err)
+	}
+	entries := auditRows(t, r.st, audit.ActionEnvironmentTokenDisabled)
+	if len(entries) != 1 || !strings.Contains(entries[0], `"generation":"2"`) {
+		t.Fatalf("environment.token_disabled rows = %v, want one recording generation 2", entries)
+	}
+	_, err = r.svc.Enrol(r.ctx, newProof(t, "h").request(rot2.JoinToken))
+	var re *tunnel.RefuseError
+	if !errors.As(err, &re) || re.Code != wire.ReasonAuthRejected || re.AuditReason != wire.RefuseTokenDisabled {
+		t.Fatalf("enrol with a disabled token: err = %v, want auth_rejected with the audit reason %s", err, wire.RefuseTokenDisabled)
+	}
+	st, err := r.svc.TokenStatus(r.ctx, c.EnvID)
+	if err != nil || !st.Disabled || st.Generation != 2 {
+		t.Fatalf("status = %+v, %v, want generation 2 disabled", st, err)
+	}
+
+	// Disabling again changes nothing and is not audited a second time.
+	if err := r.svc.DisableToken(r.ctx, audit.SystemCLI, c.EnvID, "203.0.113.9", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(auditRows(t, r.st, audit.ActionEnvironmentTokenDisabled)); n != 1 {
+		t.Errorf("%d environment.token_disabled rows after disabling twice, want 1", n)
+	}
+
+	// A rotation makes generation 3 and lets agents enrol again.
+	rot3, err := r.svc.RotateToken(r.ctx, audit.SystemCLI, c.EnvID, "203.0.113.9", "test")
+	if err != nil || rot3.Generation != 3 {
+		t.Fatalf("rotation after a disable = %+v, %v, want generation 3", rot3, err)
+	}
+	if _, err := r.svc.Enrol(r.ctx, newProof(t, "h").request(rot3.JoinToken)); err != nil {
+		t.Fatalf("enrol with the generation 3 token: %v", err)
+	}
+	st, err = r.svc.TokenStatus(r.ctx, c.EnvID)
+	if err != nil || st.Disabled || st.Generation != 3 {
+		t.Fatalf("status = %+v, %v, want generation 3 enabled", st, err)
+	}
+}
+
+func TestEnrolWithAWrongSecretIsStillATokenMismatchAfterARotation(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	if _, err := r.svc.RotateToken(r.ctx, audit.SystemCLI, c.EnvID, "203.0.113.9", "test"); err != nil {
+		t.Fatal(err)
+	}
+	other, _, _ := agents.ParseToken(c.JoinToken)
+	forged := "bpjt_" + other + "_" + strings.Repeat("A", 43)
+	_, err := r.svc.Enrol(r.ctx, newProof(t, "h").request(forged))
+	var re *tunnel.RefuseError
+	if !errors.As(err, &re) || re.Code != wire.ReasonAuthRejected || re.AuditReason != "token_mismatch" {
+		t.Fatalf("err = %v, want auth_rejected with the audit reason token_mismatch", err)
+	}
+}
+
+func TestRotateTokenReportsASwarmWithAgentsAndAStandaloneHostAndNone(t *testing.T) {
+	r := newRig(t)
+	none := r.create(t, "Empty")
+	rot, err := r.svc.RotateToken(r.ctx, audit.SystemCLI, none.EnvID, "203.0.113.9", "test")
+	if err != nil || rot.HasAgents || rot.EnvType != "" {
+		t.Fatalf("an environment with no agents: %+v, %v, want hasAgents false and no type", rot, err)
+	}
+
+	standalone := r.create(t, "Standalone")
+	if _, err := r.svc.Enrol(r.ctx, newProof(t, "h").request(standalone.JoinToken)); err != nil {
+		t.Fatal(err)
+	}
+	rot, err = r.svc.RotateToken(r.ctx, audit.SystemCLI, standalone.EnvID, "203.0.113.9", "test")
+	if err != nil || !rot.HasAgents || rot.EnvType != "standalone" {
+		t.Fatalf("a standalone host: %+v, %v", rot, err)
+	}
+
+	swarm := r.create(t, "Swarm")
+	req := newProof(t, "h").request(swarm.JoinToken)
+	req.Facts.Swarm = &wire.SwarmFacts{State: "active", NodeID: "node-1", ClusterID: "cl-1", Control: true}
+	if _, err := r.svc.Enrol(r.ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	rot, err = r.svc.RotateToken(r.ctx, audit.SystemCLI, swarm.EnvID, "203.0.113.9", "test")
+	if err != nil || !rot.HasAgents || rot.EnvType != "swarm" {
+		t.Fatalf("a swarm with a manager: %+v, %v, want swarm with agents", rot, err)
+	}
+
+	// A revoked agent does not count.
+	if _, err := r.st.Write.Exec(`UPDATE agents SET status = 'revoked' WHERE env_id = ?`, swarm.EnvID); err != nil {
+		t.Fatal(err)
+	}
+	rot, err = r.svc.RotateToken(r.ctx, audit.SystemCLI, swarm.EnvID, "203.0.113.9", "test")
+	if err != nil || rot.HasAgents {
+		t.Fatalf("a swarm whose only agent is revoked: %+v, %v, want hasAgents false", rot, err)
+	}
+}
+
+func TestRotateAndDisableTokenAnUnknownOrLocalEnvironmentIsNotFoundAndWritesNothing(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.st.Write.Exec(`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at)
+		VALUES ('local-1', 'local', 'This host', '/var/run/docker.sock', 1, 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"0197b8a0-0000-7000-8000-000000000000", "local-1"} {
+		if _, err := r.svc.RotateToken(r.ctx, audit.SystemCLI, id, "203.0.113.9", "test"); !errors.Is(err, agents.ErrEnvironmentNotFound) {
+			t.Errorf("RotateToken(%s) = %v, want ErrEnvironmentNotFound", id, err)
+		}
+		if err := r.svc.DisableToken(r.ctx, audit.SystemCLI, id, "203.0.113.9", "test"); !errors.Is(err, agents.ErrEnvironmentNotFound) {
+			t.Errorf("DisableToken(%s) = %v, want ErrEnvironmentNotFound", id, err)
+		}
+		if _, err := r.svc.TokenStatus(r.ctx, id); !errors.Is(err, agents.ErrEnvironmentNotFound) {
+			t.Errorf("TokenStatus(%s) = %v, want ErrEnvironmentNotFound", id, err)
+		}
+	}
+	if n := count(t, r.st, `SELECT COUNT(*) FROM audit_log WHERE action LIKE 'environment.token_%'`); n != 0 {
+		t.Errorf("%d token audit rows written for environments that have no token", n)
+	}
+}
+
+func TestTokenStatusReportsGenerationCreatorAndTheDisabledFlagNeverTheToken(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.st.Write.Exec(`INSERT INTO users (id, username, password_hash, created_at, updated_at, password_changed_at)
+		VALUES ('user-1', 'ada', 'x', 0, 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	c, err := r.svc.CreateEnvironment(r.ctx, audit.Actor{Type: audit.ActorUser, ID: "user-1", Name: "ada"}, "Production", "203.0.113.9", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := r.svc.TokenStatus(r.ctx, c.EnvID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Generation != 1 || st.Disabled || st.CreatedBy != "ada" || !st.CreatedAt.Equal(fixedNow) {
+		t.Fatalf("status = %+v, want generation 1, enabled, by ada at %v", st, fixedNow)
+	}
+	// A creator that is not a user (the CLI, a deleted account) is shown as it was recorded.
+	rot, err := r.svc.RotateToken(r.ctx, audit.SystemCLI, c.EnvID, "203.0.113.9", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err = r.svc.TokenStatus(r.ctx, c.EnvID)
+	if err != nil || st.Generation != 2 || st.CreatedBy != "system:cli" {
+		t.Fatalf("status = %+v, %v, want generation 2 by system:cli", st, err)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", st), rot.JoinToken) {
+		t.Error("the status holds the token")
 	}
 }
