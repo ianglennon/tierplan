@@ -358,6 +358,14 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show install command" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("button", { name: "Generate new token" })).toBeTruthy();
+    // Closing it puts focus back on the button that opened it.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Show install command" }),
+      ),
+    );
   });
 
   it("tells someone without environments.token to ask an admin, and offers no button", async () => {

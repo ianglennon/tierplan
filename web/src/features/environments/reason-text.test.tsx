@@ -227,6 +227,19 @@ describe("ReasonText", () => {
     });
   });
 
+  it("restyles an inline path for a tooltip's inverted colours, and keeps the chip elsewhere", () => {
+    const { container, unmount } = render(
+      <ReasonText code="engine_unreachable" variant="tooltip" />,
+    );
+    const inTooltip = container.querySelector("code");
+    expect(inTooltip?.textContent).toBe("/var/run/docker.sock");
+    expect(inTooltip?.className).toContain("text-background");
+    unmount();
+    const full = render(<ReasonText code="engine_unreachable" />);
+    expect(full.container.querySelector("code")?.className).toContain("bg-muted");
+    expect(full.container.querySelector("code")?.className).not.toContain("text-background");
+  });
+
   describe("variants", () => {
     it("compact is the text and the hint on two lines, without commands", () => {
       const { container } = render(

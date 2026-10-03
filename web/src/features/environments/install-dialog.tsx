@@ -508,13 +508,22 @@ export interface InstallDialogProps {
   // when it is pressed.
   mode: "add" | "rotate";
   envId?: string;
+  // What takes focus when the dialog closes. A dialog with no Radix trigger
+  // (this one is opened from state) otherwise leaves focus on the page body.
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
 // InstallDialog is the one surface for "Add environment", "Show install
 // command" and "Finish setup" (D-15, D-23). The join token is shown once, masked
 // until asked, and lives only in the component state of the open dialog: it is
 // not in a URL, the router, a storage area or the query cache (D-20).
-export function InstallDialog({ open, onOpenChange, mode, envId }: InstallDialogProps) {
+export function InstallDialog({
+  open,
+  onOpenChange,
+  mode,
+  envId,
+  returnFocusRef,
+}: InstallDialogProps) {
   const [busy, setBusy] = useState(false);
   const initialFocus = useRef<HTMLElement | null>(null);
 
@@ -534,6 +543,11 @@ export function InstallDialog({ open, onOpenChange, mode, envId }: InstallDialog
           if (!initialFocus.current) return;
           event.preventDefault();
           initialFocus.current.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          if (!returnFocusRef?.current) return;
+          event.preventDefault();
+          returnFocusRef.current.focus();
         }}
       >
         {open ? (

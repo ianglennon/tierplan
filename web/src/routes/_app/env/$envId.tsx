@@ -12,7 +12,7 @@ import {
   ShieldOff,
   Unplug,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import {
   type EnvironmentItem,
@@ -125,6 +125,7 @@ function PendingPage({ envId, name }: StateProps) {
   const t = useT();
   const canToken = usePermission("environments.token", envId);
   const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   const heading = t("fullpage.pending.heading");
   return (
     <>
@@ -135,12 +136,20 @@ function PendingPage({ envId, name }: StateProps) {
         body={t(canToken ? "fullpage.pending.body" : "fullpage.pending.bodyNoToken", { name })}
         action={
           canToken ? (
-            <Button onClick={() => setOpen(true)}>{t("fullpage.pending.action")}</Button>
+            <Button ref={trigger} onClick={() => setOpen(true)}>
+              {t("fullpage.pending.action")}
+            </Button>
           ) : undefined
         }
       />
       {canToken ? (
-        <InstallDialog open={open} onOpenChange={setOpen} mode="rotate" envId={envId} />
+        <InstallDialog
+          open={open}
+          onOpenChange={setOpen}
+          mode="rotate"
+          envId={envId}
+          returnFocusRef={trigger}
+        />
       ) : null}
     </>
   );

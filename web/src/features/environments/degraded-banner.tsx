@@ -65,7 +65,7 @@ export function EnvDegradedBanner({ environment }: EnvDegradedBannerProps) {
     <Alert variant="warning">
       <TriangleAlert aria-hidden="true" />
       <AlertTitle>{t("fullpage.degraded.title", { name: environment.name })}</AlertTitle>
-      <AlertDescription className="flex flex-col gap-1 text-foreground">
+      <AlertDescription className="flex flex-col gap-1 text-foreground [&_p:not(:last-child)]:mb-0">
         {worst ? (
           <ReasonText
             variant="compact"
@@ -83,7 +83,7 @@ export function EnvDegradedBanner({ environment }: EnvDegradedBannerProps) {
             <Link
               to="/settings/environments/$envId"
               params={{ envId: environment.id }}
-              className="rounded-sm text-accent-ink underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              className="inline-flex rounded-sm text-accent-ink underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-md:min-h-11 max-md:items-center"
             >
               {t("fullpage.degraded.viewNodes")}
             </Link>

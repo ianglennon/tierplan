@@ -225,7 +225,10 @@ export function ReasonText({
           {sinceText ? <span className="ms-1 opacity-80">{sinceText}</span> : null}
         </p>
         <p className={tooltip ? "opacity-80" : "text-muted-foreground"}>
-          <TickedText text={reason.hint} />
+          <TickedText
+            text={reason.hint}
+            codeClassName={tooltip ? "bg-background/20 text-background" : undefined}
+          />
         </p>
       </div>
     );

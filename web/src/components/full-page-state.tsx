@@ -73,7 +73,9 @@ export function FullPageState({
         <EmptyDescription>{body}</EmptyDescription>
       </EmptyHeader>
       {detail ? (
-        <div className="flex w-full max-w-md min-w-0 flex-col gap-2 text-start">{detail}</div>
+        <div className="flex w-full max-w-md min-w-0 flex-col gap-2 text-start text-pretty">
+          {detail}
+        </div>
       ) : null}
       {action || footnote ? (
         <EmptyContent>
