@@ -142,6 +142,68 @@ describe("CopyableCode", () => {
   });
 });
 
+describe("CopyableCode with a secret", () => {
+  const TOKEN = "bpjt_E_S";
+  const COMMAND = ` docker run -d -e BAYPLAN_AGENT_JOIN_TOKEN='${TOKEN}' -e BAYPLAN_AGENT_URL='wss://b.test/agent/connect' agent`;
+  const MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
+
+  it("shows the mask in place of the token and keeps the rest of the command", () => {
+    const { container } = render(<CopyableCode code={COMMAND} secret={TOKEN} label="command" />);
+    const shown = container.querySelector("code")?.textContent ?? "";
+    expect(shown).toContain(`BAYPLAN_AGENT_JOIN_TOKEN='${MASK}'`);
+    expect(shown).toContain("BAYPLAN_AGENT_URL='wss://b.test/agent/connect'");
+    expect(container.textContent).not.toContain(TOKEN);
+  });
+
+  it("masks every occurrence, such as the token in a stack file's first line", () => {
+    const twice = `# printf %s '${TOKEN}' | docker secret create s -\nsecrets: ${TOKEN}`;
+    const { container } = render(<CopyableCode code={twice} secret={TOKEN} label="command" />);
+    expect(container.textContent).not.toContain(TOKEN);
+    expect(container.querySelector("code")?.textContent?.split(MASK)).toHaveLength(3);
+  });
+
+  it("reveals the token with Show token and hides it again, with aria-pressed", () => {
+    const { container } = render(<CopyableCode code={COMMAND} secret={TOKEN} label="command" />);
+    const toggle = screen.getByRole("button", { name: "Show token" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(toggle);
+    const hide = screen.getByRole("button", { name: "Hide token" });
+    expect(hide.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector("code")?.textContent).toBe(COMMAND);
+
+    fireEvent.click(hide);
+    expect(container.textContent).not.toContain(TOKEN);
+  });
+
+  it("copies the real, complete command with its leading space while it is masked", async () => {
+    const writeText = vi.fn(async () => {});
+    stubClipboard(writeText);
+    render(<CopyableCode code={COMMAND} secret={TOKEN} label="command" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy command" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(COMMAND));
+    expect(writeText.mock.calls[0]?.[0]?.startsWith(" docker")).toBe(true);
+  });
+
+  it("has no toggle without a secret", () => {
+    render(<CopyableCode code="docker ps" label="command" />);
+    expect(screen.queryByRole("button", { name: "Show token" })).toBeNull();
+  });
+
+  it("reveals the token before selecting the text when every copy method fails", async () => {
+    stubClipboard(undefined);
+    stubExecCommand(false);
+    render(<CopyableCode code={COMMAND} secret={TOKEN} label="command" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy command" }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(FAILED));
+    await waitFor(() => expect(window.getSelection()?.toString()).toBe(COMMAND));
+  });
+});
+
 describe("dockerRunSnippet", () => {
   const mounts = [
     "-p 7480:7480",

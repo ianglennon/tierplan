@@ -57,6 +57,8 @@ interface CopyableCodeProps {
   // What is being copied, as a noun phrase: "the docker run command". It
   // completes the button's accessible name ("Copy the docker run command").
   label: string;
+  // STUB
+  secret?: string;
 }
 
 // CopyableCode is a read-only monospace block with a copy button. If the copy

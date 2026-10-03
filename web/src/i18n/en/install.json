@@ -1,0 +1,71 @@
+{
+  "install": {
+    "cancel": "Cancel",
+    "close": "Close",
+    "add": {
+      "title": "Add environment",
+      "body": "Name it now, or let the first agent name it after its host.",
+      "submit": "Generate install command",
+      "pending": "Generating…"
+    },
+    "name": {
+      "label": "Name (optional)",
+      "helper": "Leave this empty to use the host's name when the first agent connects. You can rename it later.",
+      "tooLong": "Use 64 characters or fewer."
+    },
+    "rotate": {
+      "title": "Show install command",
+      "description": "Generate a new join token and its install command.",
+      "alert": "This replaces the previous token. Install commands you copied earlier stop working. Agents that are already enrolled aren't affected.",
+      "submit": "Generate new token",
+      "pending": "Generating…"
+    },
+    "step2": {
+      "title": "Install the agent",
+      "body": "Run one of these on a swarm manager or on a standalone host. Bayplan detects which it is."
+    },
+    "tabs": {
+      "label": "Where to install",
+      "swarm": "Swarm",
+      "standalone": "Standalone"
+    },
+    "view": {
+      "label": "Format",
+      "command": "Command",
+      "composeFile": "Compose file"
+    },
+    "copyLabel": {
+      "command": "command",
+      "composeFile": "compose file"
+    },
+    "helper": {
+      "swarm": "Run it on any manager node. It creates a Docker secret for the join token and starts the agent as a global service, so nodes you add later enrol by themselves.",
+      "standalone": "Run it on the host. It starts the agent container with the Docker socket mounted.",
+      "composeSwarm": "Save this as `bayplan-agent.yml` and run `docker stack deploy -c bayplan-agent.yml bayplan-agent`.",
+      "composeSwarmSecret": "Create the secret first with the command in the file's first line.",
+      "composeStandalone": "Save this as `bayplan-agent.yml` and run `docker compose -f bayplan-agent.yml up -d`."
+    },
+    "update": {
+      "heading": "Update the join token on this swarm",
+      "helper": "Docker secrets can't be edited, so this command removes the old secret and adds the new one.",
+      "serviceName": "It is for an agent installed with the command, whose service is named `bayplan-agent`. If you installed from the stack file, the service is named after your stack, such as `bayplan-agent_bayplan-agent`; change the name in the command to match."
+    },
+    "secretNotice": "This command contains a secret. It starts with a space so shells that ignore space-prefixed commands keep it out of history. Once your hosts are enrolled, rotate the token from Settings.",
+    "token": {
+      "show": "Show token",
+      "hide": "Hide token"
+    },
+    "details": {
+      "label": "Install details",
+      "image": "Agent image",
+      "connectsTo": "Connects to",
+      "changeUrl": "Change the agent URL",
+      "pin": "Server certificate pin"
+    },
+    "errors": {
+      "create": "Couldn't create the environment. Try again, and check the Bayplan logs if it keeps happening.",
+      "rotate": "Couldn't generate a new token. Try again, and check the Bayplan logs if it keeps happening.",
+      "publicUrlRequired": "Bayplan doesn't know what address to give the agent. Set the public URL or the agent URL in Settings, then try again."
+    }
+  }
+}

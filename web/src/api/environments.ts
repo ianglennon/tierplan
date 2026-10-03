@@ -11,6 +11,8 @@ export type EnvironmentItem = components["schemas"]["EnvironmentBody"];
 export type EnvironmentSummary = components["schemas"]["EnvironmentSummaryBody"];
 export type EnvironmentStatus = components["schemas"]["EnvironmentStatusBody"];
 export type HealthState = EnvironmentStatus["state"];
+export type InstallInfo = components["schemas"]["InstallBody"];
+export type RotateAnswer = components["schemas"]["RotateTokenBody"];
 
 // The dashboard counts refetch on this interval as the polling fallback while
 // the events stream is not there (D-57).
@@ -130,4 +132,55 @@ export function summaryQuery(envId: string) {
 // answer is 202 and the result shows up in a later read, so callers poll.
 export async function reconnectEnvironment(envId: string): Promise<void> {
   await api.POST("/api/env/{envId}/reconnect", { params: { path: { envId } } });
+}
+
+// InstallRequestError is a failed create or rotate call. It keeps the status
+// and the problem type, which is all the dialog needs to pick its message, and
+// never the body: the answer to a success carries the join token, and nothing
+// that failed should be kept around either.
+export class InstallRequestError extends Error {
+  readonly status: number;
+  readonly type?: string;
+
+  constructor(body: unknown, response?: { status: number }) {
+    const problem = readProblem(body, response);
+    super(`install request failed with status ${problem.status}`);
+    this.name = "InstallRequestError";
+    this.status = problem.status;
+    this.type = problem.type;
+  }
+
+  // The server has no address to give an agent: the admin has to set the
+  // public URL or the agent URL first.
+  get publicUrlRequired(): boolean {
+    return this.status === 409 && this.type === "public_url_required";
+  }
+}
+
+export interface CreatedAgentEnvironment {
+  id: string;
+  name: string;
+  install: InstallInfo;
+}
+
+// createAgentEnvironment makes an environment for hosts that run the agent,
+// with its first join token, in one call (D-23). The answer holds the token and
+// is shown once, so it is used through useMutation only and never as a query:
+// nothing here may put it in the TanStack cache.
+export async function createAgentEnvironment(name?: string): Promise<CreatedAgentEnvironment> {
+  const { data, error, response } = await api.POST("/api/environments", {
+    body: name ? { kind: "agent", name } : { kind: "agent" },
+  });
+  if (!data?.install) throw new InstallRequestError(error, response);
+  return { id: data.id, name: data.name, install: data.install };
+}
+
+// rotateToken mints the next join token for an environment and retires the
+// current one. Like createAgentEnvironment, it is a mutation and never cached.
+export async function rotateToken(envId: string): Promise<RotateAnswer> {
+  const { data, error, response } = await api.POST("/api/environments/{envId}/token", {
+    params: { path: { envId } },
+  });
+  if (!data) throw new InstallRequestError(error, response);
+  return data;
 }
