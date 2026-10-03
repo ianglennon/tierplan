@@ -236,6 +236,8 @@ type Hub struct {
 	now func() time.Time
 
 	publicURL func() string
+	// pins is what the welcome tells agents are the server's pins (D-06).
+	pins func() []string
 
 	// heartbeat is the interval agents are told to use, offlineAfter how long a
 	// session may be silent, watchEvery how often silence is looked for (zero
@@ -302,6 +304,23 @@ func NewHub(v Verifier, o Observer, log *slog.Logger, now func() time.Time) *Hub
 func (h *Hub) WithPublicURL(f func() string) *Hub {
 	h.publicURL = f
 	return h
+}
+
+// WithPins sets the server's certificate pins, "sha256/" and the base64 SPKI
+// hash, that every welcome carries so an agent can keep them for the next
+// connection. It is read on every handshake. Without it the welcome has none.
+// Call it before the hub serves.
+func (h *Hub) WithPins(f func() []string) *Hub {
+	h.pins = f
+	return h
+}
+
+// Pins is what a welcome sent now would carry.
+func (h *Hub) Pins() []string {
+	if h.pins == nil {
+		return nil
+	}
+	return h.pins()
 }
 
 // Handler serves GET /agent/connect.

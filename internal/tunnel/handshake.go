@@ -104,7 +104,7 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 
 	if err := writeJSON(ctx, c, wire.Welcome{
 		T: wire.TypeWelcome, AgentID: acc.AgentID, EnvID: acc.EnvID, Cert: acc.Cert,
-		HeartbeatMs: int(h.heartbeat / time.Millisecond), ServerTime: h.now().UnixMilli(),
+		HeartbeatMs: int(h.heartbeat / time.Millisecond), Pins: h.Pins(), ServerTime: h.now().UnixMilli(),
 	}); err != nil {
 		h.log.Warn("agent went away before the welcome", "agent_id", acc.AgentID, "error", err)
 		return accepted{}, false

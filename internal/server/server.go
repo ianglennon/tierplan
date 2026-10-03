@@ -250,7 +250,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		log.Info("serving plain HTTP; set BAYPLAN_TLS_CERT_FILE and BAYPLAN_TLS_KEY_FILE, BAYPLAN_TLS_SELF_SIGNED=true, or put a TLS-terminating proxy in front")
 	case cfg.TLSSelfSigned:
 		log.Info("serving HTTPS with a self-signed certificate; compare this fingerprint in your browser",
-			"sha256", fingerprint(tlsCfg), "certificate", filepath.Join(info.Path, selfSignedDir, selfSignedCertFile))
+			"sha256", fingerprint(tlsCfg), "tls_pin", spkiPin(tlsCfg),
+			"certificate", filepath.Join(info.Path, selfSignedDir, selfSignedCertFile))
 	default:
 		log.Info("serving HTTPS", "certificate_file", cfg.TLSCertFile, "sha256", fingerprint(tlsCfg))
 	}
@@ -304,6 +305,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	agentAudit := auth.NewAuditThrottle(aud, auth.NewIPLimiter(6*time.Second, 20, 10*time.Minute, nil), log, nil)
 	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
 		WithPublicURL(inst.PublicURL).
+		WithPins(func() []string { return selfSignedPins(cfg, tlsCfg) }).
 		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
 		WithLastSeen(agentSvc).
 		WithServerVersion(buildinfo.Get().Version).
@@ -448,6 +450,29 @@ func (s *Server) Snapshots() *envs.Snapshots { return s.snapshots }
 
 // Hub is the per-environment Docker events hub.
 func (s *Server) Hub() *envs.Hub { return s.hub }
+
+// TLSPin is the SPKI pin ("sha256/" and base64) of the certificate Bayplan
+// generated for itself, which an install command carries so the agent can trust
+// it (D-06). It is empty when Bayplan serves a supplied certificate or plain
+// HTTP: the first is the operator's to pin, the second has nothing to pin.
+func (s *Server) TLSPin() string {
+	if p := selfSignedPins(s.cfg, s.tlsConfig); len(p) > 0 {
+		return p[0]
+	}
+	return ""
+}
+
+// selfSignedPins is the pin list a welcome carries: the generated certificate's
+// pin, and nothing for a supplied certificate or plain HTTP.
+func selfSignedPins(cfg config.Config, tlsCfg *tls.Config) []string {
+	if !cfg.TLSSelfSigned {
+		return nil
+	}
+	if p := spkiPin(tlsCfg); p != "" {
+		return []string{p}
+	}
+	return nil
+}
 
 // Tunnel holds the live agent connections.
 func (s *Server) Tunnel() *tunnel.Hub { return s.tunnel }

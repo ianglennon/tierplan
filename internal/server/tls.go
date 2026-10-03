@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/proto/authn"
 )
 
 const (
@@ -311,7 +312,13 @@ func (n names) covers(leaf *x509.Certificate) bool {
 }
 
 // selfSigned loads the stored certificate when it is still right, and otherwise
-// generates and stores a new one.
+// signs a new one.
+//
+// The key and the certificate are kept apart. The key is what agents pin (D-06),
+// so it is created once and then only ever read: a renewal, or a change of the
+// names wanted, signs a new certificate with the stored key and leaves its SPKI
+// pin alone. A key is generated only when none can be loaded, and that is logged
+// as a pin change because every pinned agent depends on the old one.
 func selfSigned(dir string, want names, now time.Time) (tls.Certificate, error) {
 	certPath := filepath.Join(dir, selfSignedCertFile)
 	keyPath := filepath.Join(dir, selfSignedKeyFile)
@@ -322,35 +329,106 @@ func selfSigned(dir string, want names, now time.Time) (tls.Certificate, error) 
 			return cert, nil
 		}
 	}
-	// Missing, corrupt, a mismatched pair, other names or nearly expired: replace it.
+	// Missing, corrupt, a mismatched pair, other names or nearly expired: sign a
+	// new certificate, with the stored key when it can be read.
 
-	certPEM, keyPEM, err := generate(want, now)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return tls.Certificate{}, fmt.Errorf("create %s: %w", dir, err)
 	}
-	// The key goes first. A crash between the two renames leaves a pair that
-	// does not match, which the next start detects and replaces.
-	if err := writeAtomic(keyPath, keyPEM, 0o600); err != nil {
+	key, keyErr := loadKey(keyPath)
+	newlyMade := keyErr != nil
+	_, statErr := os.Stat(certPath)
+	hadCert := statErr == nil
+	if newlyMade {
+		key, keyErr = newKey()
+		if keyErr != nil {
+			return tls.Certificate{}, keyErr
+		}
+		keyPEM, err := encodeKey(key)
+		if err != nil {
+			return tls.Certificate{}, err
+		}
+		// The key goes first. A crash between the two renames leaves a pair that
+		// does not match, which the next start detects and replaces.
+		if err := writeAtomic(keyPath, keyPEM, 0o600); err != nil {
+			return tls.Certificate{}, err
+		}
+	}
+
+	certDER, err := signCertificate(key, want, now)
+	if err != nil {
 		return tls.Certificate{}, err
 	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	if err := writeAtomic(certPath, certPEM, 0o644); err != nil {
 		return tls.Certificate{}, err
 	}
-	return tls.X509KeyPair(certPEM, keyPEM)
+	if newlyMade {
+		logNewKey(hadCert, certDER)
+	}
+	return tls.Certificate{Certificate: [][]byte{certDER}, PrivateKey: key}, nil
 }
 
-// generate makes a one-year ECDSA P-256 server certificate for the names.
-func generate(want names, now time.Time) (certPEM, keyPEM []byte, err error) {
+// logNewKey records that a key was created. When a certificate already existed
+// the pin that agents hold is gone, which is worth a warning; on a first start
+// it is just news.
+func logNewKey(hadCert bool, certDER []byte) {
+	var pin string
+	if leaf, err := x509.ParseCertificate(certDER); err == nil {
+		pin = authn.SPKIPin(leaf)
+	}
+	if hadCert {
+		slog.Warn("the self-signed TLS key could not be loaded and was replaced, so tls_pin changed; agents pinned to the old key will refuse this server until they are reinstalled with the new pin",
+			"tls_pin", pin)
+		return
+	}
+	slog.Info("generated a self-signed TLS key", "tls_pin", pin)
+}
+
+// loadKey reads the stored ECDSA key, or reports why it cannot.
+func loadKey(path string) (*ecdsa.PrivateKey, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // Bayplan's own key under its data directory
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "PRIVATE KEY" {
+		return nil, errors.New("no PKCS#8 private key in " + path)
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	key, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok || key.Curve != elliptic.P256() {
+		return nil, errors.New("the stored key is not an ECDSA P-256 key")
+	}
+	return key, nil
+}
+
+// newKey makes the ECDSA P-256 key of a new self-signed identity.
+func newKey() (*ecdsa.PrivateKey, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, nil, fmt.Errorf("generate a key: %w", err)
+		return nil, fmt.Errorf("generate a key: %w", err)
 	}
+	return key, nil
+}
+
+func encodeKey(key *ecdsa.PrivateKey) ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("encode the key: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
+}
+
+// signCertificate makes a one-year server certificate for the names, signed by
+// key itself.
+func signCertificate(key *ecdsa.PrivateKey, want names, now time.Time) ([]byte, error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
 	if err != nil {
-		return nil, nil, fmt.Errorf("generate a serial number: %w", err)
+		return nil, fmt.Errorf("generate a serial number: %w", err)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
@@ -367,15 +445,27 @@ func generate(want names, now time.Time) (certPEM, keyPEM []byte, err error) {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create the certificate: %w", err)
+		return nil, fmt.Errorf("create the certificate: %w", err)
 	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	return der, nil
+}
+
+// spkiPin is the SPKI pin ("sha256/" and base64) of the certificate a TLS
+// config serves; empty when it serves none. The pin follows the key, so it
+// survives every renewal.
+func spkiPin(c *tls.Config) string {
+	if c == nil || c.GetCertificate == nil {
+		return ""
+	}
+	cert, err := c.GetCertificate(&tls.ClientHelloInfo{})
+	if err != nil || cert == nil || len(cert.Certificate) == 0 {
+		return ""
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
-		return nil, nil, fmt.Errorf("encode the key: %w", err)
+		return ""
 	}
-	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	return certPEM, keyPEM, nil
+	return authn.SPKIPin(leaf)
 }
 
 // writeAtomic writes data to a temporary file in the same directory, sets its
