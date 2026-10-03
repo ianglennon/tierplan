@@ -245,6 +245,13 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 	return in, nil
 }
 
+// Known reports whether an environment with this ID exists. A lookup that fails
+// counts as not known.
+func (s *Service) Known(ctx context.Context, id string) bool {
+	_, err := s.st.RQ.GetEnvironment(ctx, id)
+	return err == nil
+}
+
 // SelfContainerID is the ID of Bayplan's own container, or empty (D-27).
 func (s *Service) SelfContainerID() string { return s.selfID }
 

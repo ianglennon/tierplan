@@ -5,10 +5,7 @@ package envs
 
 import (
 	"sort"
-	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 )
 
 // States an environment can be in besides the three the monitor reports for one
@@ -324,19 +321,10 @@ func connectedAgents(in RollupInput) []AgentView {
 // characters are dropped, the name is cut to the length of an environment name,
 // and a blank name falls back to the agent ID.
 func nodeName(a AgentView) string {
-	name := strings.TrimSpace(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, a.Node))
-	if name == "" {
-		name = a.ID
+	if name := cleanText(a.Node, maxNodeLen); name != "" {
+		return name
 	}
-	if utf8.RuneCountInString(name) > maxNodeLen {
-		name = string([]rune(name)[:maxNodeLen])
-	}
-	return name
+	return cleanText(a.ID, maxNodeLen)
 }
 
 // ClockOffsetSeconds is d in whole seconds, rounded toward zero, with its sign.

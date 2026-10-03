@@ -84,6 +84,9 @@ type Server struct {
 	// hub holds one Docker events stream per online environment and fans it
 	// out to the browsers watching (plan 21).
 	hub *envs.Hub
+	// broker turns agent connections and health changes into the global
+	// environments stream (plan 02-12).
+	broker *envs.Broker
 	// tunnel holds the live agent connections; agents creates agent
 	// environments and enrols agents.
 	tunnel *tunnel.Hub
@@ -107,7 +110,7 @@ type Server struct {
 // inside it is its own authentication. Nil mounts a handler that answers 404,
 // which is what the `openapi` subcommand and the router-walk tests pass: the route
 // exists in every router, so its exemption is always checked.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, agentsDeps api.AgentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, auditDeps api.AuditDeps, settings api.SettingsDeps, agentConnect http.Handler) *httpx.Router {
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, agentsDeps api.AgentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, envStream api.EnvStreamDeps, auditDeps api.AuditDeps, settings api.SettingsDeps, agentConnect http.Handler) *httpx.Router {
 	r := httpx.New(opts)
 	if agentConnect == nil {
 		agentConnect = http.NotFoundHandler()
@@ -123,6 +126,7 @@ func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, auth
 	api.RegisterAgents(r, agentsDeps)
 	api.RegisterDashboard(r, dashboard)
 	api.RegisterEvents(r, events)
+	api.RegisterEnvStream(r, envStream)
 	api.RegisterAudit(r, auditDeps)
 	return r
 }
@@ -308,7 +312,11 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// both read when asked: the pin changes only if the self-signed key is
 	// replaced, and the endpoint follows Settings.
 	tlsPin := func() string { return firstSelfSignedPin(cfg, tlsCfg) }
+	// The health broker is told what the tunnel hub sees, and recomputes every
+	// environment's health on a tick, so one stream per tab can say what changed.
+	broker := envs.NewBroker(envSvc, nil)
 	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
+		WithNotifier(broker).
 		// The hub checks each handshake against the address agents are told to dial:
 		// the agent URL when one is set, else the public URL (D-18).
 		WithPublicURL(inst.AgentBase).
@@ -392,6 +400,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		api.AgentsDeps{Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Log: log},
 		api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
 		api.EventsDeps{Aggregator: aggregator, Log: log},
+		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
 		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Log: log}, tunnelHub.Handler())
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
@@ -416,6 +425,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		monitor:   monitor,
 		snapshots: snapshots,
 		hub:       hub,
+		broker:    broker,
 		tunnel:    tunnelHub,
 		agents:    agentSvc,
 		router:    router,
@@ -432,6 +442,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// bg ends, which is before Close shuts the database.
 	srv.background.Go(func() { anonAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
+	srv.background.Go(func() { broker.Run(bg) })
 	// Monitoring resumes for the environments an admin already added. The
 	// monitors live as long as bg, and Close waits for them.
 	if err := envSvc.StartAll(bg); err != nil {
@@ -514,6 +525,7 @@ func (s *Server) Agents() *agents.Service { return s.agents }
 func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
+	s.broker.Close()
 	s.tunnel.Close()
 	s.hub.Close()
 	s.monitor.StopAll()
@@ -546,6 +558,8 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	// itself. Closing the hub ends every stream, so a restart is not held up for
 	// the whole shutdown timeout by a browser that has the feed open.
 	srv.RegisterOnShutdown(s.hub.Close)
+	// The health stream is open as long as a tab is, so it ends the same way.
+	srv.RegisterOnShutdown(s.broker.Close)
 	// http.Server.Shutdown ignores hijacked connections, and every agent
 	// tunnel is one. Closing the hub sends each a close frame so the agents
 	// reconnect with backoff instead of waiting on a dead session (Pitfall 5).

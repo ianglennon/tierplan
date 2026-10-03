@@ -8,12 +8,15 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/proto/authn"
@@ -23,6 +26,11 @@ import (
 // maxCertBytes bounds a certificate in a hello. A real one is under 1 KiB; the
 // handshake read limit is the outer bound, this keeps parsing cheap.
 const maxCertBytes = 8 << 10
+
+// joinTokenPrefix starts every join token: bpjt_<environment ID>_<secret>. The
+// agents package makes them; the hub only reads the environment ID out of a
+// refused one, to say where the refusal happened.
+const joinTokenPrefix = "bpjt_"
 
 // peerInfo is what the handler knows about the connection that the signed
 // handshake must agree with.
@@ -94,6 +102,11 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 		var re *RefuseError
 		if errors.As(err, &re) {
 			h.log.Info("agent handshake refused", "ip", ip, "mode", a.Mode, "code", re.Code, "reason", re.AuditReason)
+			// Told before the agent is, so whoever watches has the event by the time
+			// the agent can try again.
+			if h.notifier != nil {
+				h.notifier.AgentRefused(refusalEnv(a), re.Code, clip(a.Mode, 16), clip(a.Facts.Hostname, maxAuditNode), ip)
+			}
 			h.turnAway(ctx, c, ip, a.Mode, a.Facts.Hostname, re.Code, re.Detail, re.AuditReason)
 		} else {
 			h.log.Error("agent handshake failed", "ip", ip, "mode", a.Mode, "error", err)
@@ -241,4 +254,35 @@ func environmentType(f wire.Facts) string {
 		return "swarm"
 	}
 	return "standalone"
+}
+
+// refusalEnv is the environment a refused handshake said it was for: the ID in an
+// enrolment's join token, or the one in a hello's certificate, read without
+// checking anything. It is only where the event for a person watching is routed,
+// and the receiver confirms the environment exists before it uses it; it is
+// never evidence that the attempt had any right to the environment. An attempt
+// that names none gives "".
+func refusalEnv(a wire.Auth) string {
+	var id string
+	switch a.Mode {
+	case wire.ModeEnrol:
+		rest, ok := strings.CutPrefix(a.Token, joinTokenPrefix)
+		if !ok {
+			return ""
+		}
+		id, _, _ = strings.Cut(rest, "_")
+	case wire.ModeHello:
+		if len(a.Cert) == 0 || len(a.Cert) > maxCertBytes {
+			return ""
+		}
+		leaf, err := x509.ParseCertificate(a.Cert)
+		if err != nil || len(leaf.Subject.OrganizationalUnit) != 1 {
+			return ""
+		}
+		id = leaf.Subject.OrganizationalUnit[0]
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		return ""
+	}
+	return id
 }

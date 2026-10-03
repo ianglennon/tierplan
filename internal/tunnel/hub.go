@@ -461,6 +461,9 @@ func (h *Hub) register(s *Session) bool {
 	if h.o != nil {
 		h.o.Connected(s)
 	}
+	if h.notifier != nil {
+		h.notifier.AgentConnected(s)
+	}
 	return true
 }
 
@@ -483,6 +486,9 @@ func (h *Hub) report(s *Session) {
 		h.noteEnded(s)
 		if h.o != nil {
 			h.o.Disconnected(s, s.Reason())
+		}
+		if h.notifier != nil {
+			h.notifier.AgentDisconnected(s, s.Reason())
 		}
 	})
 }
