@@ -402,3 +402,35 @@ func TestExporterBindingIsNotComparedBehindATrustedProxy(t *testing.T) {
 		}
 	}
 }
+
+func TestWelcomeCarriesTheServersCurrentPins(t *testing.T) {
+	pins := []string{"sha256/AAAA"}
+	srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub {
+		return h.WithPins(func() []string { return pins })
+	}})
+	env := srv.NewEnvironment(t, "Production")
+
+	c := srv.Dial(t, tunneltest.Agent{Token: env.Token})
+	if c.Welcome == nil {
+		t.Fatalf("refused: %+v", c.Refuse)
+	}
+	if got := c.Welcome.Pins; len(got) != 1 || got[0] != "sha256/AAAA" {
+		t.Fatalf("welcome pins = %v, want [sha256/AAAA]", got)
+	}
+
+	// The function is read on every handshake, so a change applies to the next one.
+	pins = []string{"sha256/BBBB", "sha256/AAAA"}
+	c = srv.Dial(t, tunneltest.Agent{Token: env.Token})
+	if c.Welcome == nil || len(c.Welcome.Pins) != 2 || c.Welcome.Pins[0] != "sha256/BBBB" {
+		t.Fatalf("welcome = %+v, want both pins", c.Welcome)
+	}
+}
+
+func TestWelcomeHasNoPinsWhenNoneAreConfigured(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	env := srv.NewEnvironment(t, "Production")
+	c := srv.Dial(t, tunneltest.Agent{Token: env.Token})
+	if c.Welcome == nil || len(c.Welcome.Pins) != 0 {
+		t.Fatalf("welcome = %+v, want no pins", c.Welcome)
+	}
+}

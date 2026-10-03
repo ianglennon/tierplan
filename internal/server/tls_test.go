@@ -519,3 +519,164 @@ func TestTLSCertificateIsServedWhenTheClientSendsNoServerName(t *testing.T) {
 		t.Errorf("Certificates holds %d entries; it must stay empty so GetCertificate always answers", len(got.Certificates))
 	}
 }
+
+// pinOf is the SPKI pin of what a TLS config serves.
+func pinOf(t *testing.T, c *tls.Config) string {
+	t.Helper()
+	pin := spkiPin(c)
+	if !strings.HasPrefix(pin, "sha256/") {
+		t.Fatalf("spkiPin = %q, want a sha256/ pin", pin)
+	}
+	return pin
+}
+
+func TestSPKIPinIsStableWhenTheCertificateIsRenewed(t *testing.T) {
+	cfg := selfSignedConfig(t)
+	first, err := TLSConfig(cfg, "", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 29 days before the end of a one-year certificate: a forced renewal.
+	second, err := TLSConfig(cfg, "", nowFn(fixedNow.AddDate(1, 0, -29)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leafOf(t, first).SerialNumber.Cmp(leafOf(t, second).SerialNumber) == 0 {
+		t.Fatal("the certificate was not renewed, so the test proves nothing")
+	}
+	if a, b := pinOf(t, first), pinOf(t, second); a != b {
+		t.Fatalf("pin changed on renewal: %s then %s", a, b)
+	}
+}
+
+func TestSPKIPinIsStableWhileRunningAcrossARenewal(t *testing.T) {
+	cfg := selfSignedConfig(t)
+	var now = fixedNow
+	got, err := TLSConfig(cfg, "", func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := pinOf(t, got)
+	now = fixedNow.AddDate(1, 0, -29).Add(selfSignedRecheck)
+	if after := pinOf(t, got); after != before {
+		t.Fatalf("pin changed in a running renewal: %s then %s", before, after)
+	}
+}
+
+func TestSPKIPinIsStableWhenTheWantedNamesChange(t *testing.T) {
+	cfg := selfSignedConfig(t)
+	first, err := TLSConfig(cfg, "https://a.example.com", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := TLSConfig(cfg, "https://b.example.com", nowFn(fixedNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := leafOf(t, second)
+	if !slices.Contains(l.DNSNames, "b.example.com") {
+		t.Fatalf("DNS SANs = %v, want the new host", l.DNSNames)
+	}
+	if a, b := pinOf(t, first), pinOf(t, second); a != b {
+		t.Fatalf("pin changed with the host name: %s then %s", a, b)
+	}
+}
+
+func TestSPKIPinChangesAndIsLoggedWhenTheKeyIsMissingOrCorrupt(t *testing.T) {
+	for name, damage := range map[string]func(t *testing.T, keyPath string){
+		"missing": func(t *testing.T, p string) {
+			if err := os.Remove(p); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"corrupt": func(t *testing.T, p string) {
+			if err := os.WriteFile(p, []byte("not a key"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := selfSignedConfig(t)
+			first, err := TLSConfig(cfg, "", nowFn(fixedNow))
+			if err != nil {
+				t.Fatal(err)
+			}
+			damage(t, filepath.Join(cfg.DataDir, selfSignedDir, selfSignedKeyFile))
+
+			var buf strings.Builder
+			old := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+			t.Cleanup(func() { slog.SetDefault(old) })
+
+			second, err := TLSConfig(cfg, "", nowFn(fixedNow))
+			if err != nil {
+				t.Fatalf("a lost key must be replaced, got %v", err)
+			}
+			if pinOf(t, first) == pinOf(t, second) {
+				t.Fatal("pin is unchanged although the key was replaced")
+			}
+			if out := buf.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "tls_pin") {
+				t.Fatalf("log = %q, want a warning that names tls_pin", out)
+			}
+		})
+	}
+}
+
+func TestSPKIPinIsEmptyWithoutACertificate(t *testing.T) {
+	if got := spkiPin(nil); got != "" {
+		t.Errorf("spkiPin(nil) = %q, want empty", got)
+	}
+}
+
+func TestServerTLSPinIsPublishedOnlyForTheSelfSignedCertificate(t *testing.T) {
+	build := func(env map[string]string) *Server {
+		t.Helper()
+		env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = srv.Close() })
+		return srv
+	}
+
+	self := build(map[string]string{"BAYPLAN_TLS_SELF_SIGNED": "true"})
+	if got, want := self.TLSPin(), spkiPin(self.tlsConfig); got == "" || got != want {
+		t.Errorf("self-signed TLSPin() = %q, want %q", got, want)
+	}
+
+	src := t.TempDir()
+	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	supplied := build(map[string]string{
+		"BAYPLAN_TLS_CERT_FILE": filepath.Join(src, selfSignedDir, selfSignedCertFile),
+		"BAYPLAN_TLS_KEY_FILE":  filepath.Join(src, selfSignedDir, selfSignedKeyFile),
+	})
+	if got := supplied.TLSPin(); got != "" {
+		t.Errorf("supplied certificate TLSPin() = %q, want empty", got)
+	}
+
+	if got := build(map[string]string{}).TLSPin(); got != "" {
+		t.Errorf("plain HTTP TLSPin() = %q, want empty", got)
+	}
+}
+
+func TestServerWelcomePinsComeFromTheSelfSignedPin(t *testing.T) {
+	self := func(env map[string]string) *Server {
+		env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = srv.Close() })
+		return srv
+	}
+	srv := self(map[string]string{"BAYPLAN_TLS_SELF_SIGNED": "true"})
+	if got := srv.Tunnel().Pins(); len(got) != 1 || got[0] != srv.TLSPin() || !strings.HasPrefix(got[0], "sha256/") {
+		t.Errorf("self-signed welcome pins = %v, want exactly [%s]", got, srv.TLSPin())
+	}
+	if got := self(map[string]string{}).Tunnel().Pins(); len(got) != 0 {
+		t.Errorf("plain HTTP welcome pins = %v, want none", got)
+	}
+}
