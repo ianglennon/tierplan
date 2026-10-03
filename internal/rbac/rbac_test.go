@@ -16,6 +16,10 @@ import (
 	"github.com/ianglennon/bayplan/internal/store/storetest"
 )
 
+// retiredEnvironmentsWrite is the permission D-49 split up. It is spelled out
+// only here, so no production code can name it without this test noticing.
+const retiredEnvironmentsWrite = "environments" + ".write"
+
 func perms(t *testing.T) map[rbac.Perm]rbac.Permission {
 	t.Helper()
 	m := map[rbac.Perm]rbac.Permission{}
@@ -71,7 +75,7 @@ func TestRegistryHoldsThePhase1Permissions(t *testing.T) {
 }
 
 func TestTheRetiredEnvironmentsWritePermissionIsNoLongerRegistered(t *testing.T) {
-	if _, found := rbac.Lookup("environments.write"); found {
+	if _, found := rbac.Lookup(retiredEnvironmentsWrite); found {
 		t.Fatal("environments.write is still registered; D-49 split it into create, manage, token, revoke and delete")
 	}
 }
@@ -177,14 +181,14 @@ func TestSeedAdminRoleUpgradesAnAdminThatHoldsTheRetiredEnvironmentsWriteGrant(t
 			t.Fatal(err)
 		}
 	}
-	if err := s.Q.InsertRolePermission(ctx, sqlc.InsertRolePermissionParams{RoleID: "admin", Permission: "environments.write"}); err != nil {
+	if err := s.Q.InsertRolePermission(ctx, sqlc.InsertRolePermissionParams{RoleID: "admin", Permission: retiredEnvironmentsWrite}); err != nil {
 		t.Fatal(err)
 	}
 	if err := rbac.SeedAdminRole(ctx, s); err != nil {
 		t.Fatal(err)
 	}
 	got := rolePerms(t, s, "admin")
-	if slices.Contains(got, "environments.write") {
+	if slices.Contains(got, retiredEnvironmentsWrite) {
 		t.Error("the retired environments.write grant survived the re-seed")
 	}
 	for _, name := range []string{"environments.create", "environments.manage", "environments.token", "environments.revoke", "environments.delete"} {

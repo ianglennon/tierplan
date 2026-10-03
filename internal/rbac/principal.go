@@ -35,8 +35,7 @@ func (p *Principal) AuditActor() audit.Actor {
 }
 
 // SystemPrincipals maps each system principal to its explicit permission set
-// (D-51). No system actor runs in Phase 1, so every set is empty and every
-// check by one is denied. A later phase grants a set here, in code, where a
+// (D-51). Every set is empty, so every check by a system principal is denied. A later phase grants a set here, in code, where a
 // reviewer sees it; system principals never consult role assignments.
 var SystemPrincipals = map[string][]Perm{
 	"system:cli":     {},
@@ -46,6 +45,13 @@ var SystemPrincipals = map[string][]Perm{
 	// system:agent-enrol records an agent that enrolled with a join token. It
 	// holds no permission: it only appears as the actor of audit entries.
 	"system:agent-enrol": {},
+	// system:agent-update, -reaper and -hub are the actors of the agent
+	// auto-update, the revoke-on-leave sweep and the tunnel hub. Like
+	// system:agent-enrol they hold no permission and only appear in the audit
+	// log (D-13).
+	"system:agent-update": {},
+	"system:agent-reaper": {},
+	"system:agent-hub":    {},
 }
 
 // System returns the named system principal, or nil for a name that is not in

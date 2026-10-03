@@ -2389,7 +2389,7 @@
         ]
       },
       "post": {
-        "description": "kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the address the agent dials; 409 public_url_missing when Bayplan has no public URL. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Audited as environment.added.",
+        "description": "kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the address the agent dials; 409 public_url_missing when Bayplan has no public URL. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.",
         "operationId": "addEnvironment",
         "requestBody": {
           "content": {
@@ -2438,7 +2438,7 @@
     },
     "/api/environments/{envId}": {
       "delete": {
-        "description": "Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched (D-20). Audited as environment.removed.",
+        "description": "Needs environments.delete. Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched (D-20). Audited as environment.removed.",
         "operationId": "removeEnvironment",
         "parameters": [
           {
@@ -2473,7 +2473,7 @@
         ]
       },
       "patch": {
-        "description": "422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.",
+        "description": "Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.",
         "operationId": "renameEnvironment",
         "parameters": [
           {
@@ -2565,7 +2565,7 @@
     },
     "/api/local-host": {
       "get": {
-        "description": "Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.write because it is the context for adding the host.",
+        "description": "Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.create because it is the context for adding the host.",
         "operationId": "getLocalHost",
         "responses": {
           "200": {

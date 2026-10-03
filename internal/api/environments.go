@@ -184,7 +184,7 @@ func canRead(perEnv map[string][]rbac.Perm, id string) bool {
 // RegisterEnvironments registers the environment routes: list, add, rename,
 // remove, and the retry-now action under /api/env/{envId}. Adding the local
 // host is the admin's opt-in to managing a root-equivalent socket (D-19), so it
-// needs environments.write and nothing is added automatically.
+// needs environments.create and nothing is added automatically.
 func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
@@ -252,9 +252,9 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			"(unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the " +
 			"Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) " +
 			"and the address the agent dials; 409 public_url_missing when Bayplan has no public URL. 422 invalid_name. " +
-			"The name defaults to the hostname the daemon, or the first agent, reports. Audited as environment.added.",
+			"The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsCreate, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
@@ -274,9 +274,9 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		Method:      http.MethodPatch,
 		Path:        "/api/environments/{envId}",
 		Summary:     "Rename an environment",
-		Description: "422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.",
+		Description: "Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.",
 		Tags:        []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RenameEnvironmentInput) (*EnvironmentOutput, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RenameEnvironmentInput) (*EnvironmentOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
@@ -294,10 +294,10 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		Path:          "/api/environments/{envId}",
 		Summary:       "Remove an environment",
 		DefaultStatus: http.StatusNoContent,
-		Description: "Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched " +
+		Description: "Needs environments.delete. Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched " +
 			"(D-20). Audited as environment.removed.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RemoveEnvironmentInput) (*struct{}, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsDelete, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RemoveEnvironmentInput) (*struct{}, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
