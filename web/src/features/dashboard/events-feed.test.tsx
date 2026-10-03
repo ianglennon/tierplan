@@ -27,12 +27,12 @@ function ev(id: string, over: Partial<EventDTO> = {}): EventDTO {
 
 let recent: () => Promise<Response>;
 
-function show() {
+function show(showNode = false) {
   render(
     <QueryClientProvider client={new QueryClient()}>
       <TooltipProvider>
         <EnvEventsProvider envId="e1">
-          <EventsFeed />
+          <EventsFeed showNode={showNode} />
         </EnvEventsProvider>
       </TooltipProvider>
     </QueryClientProvider>,
@@ -243,5 +243,74 @@ describe("EventsFeed", () => {
     show();
     expect(await screen.findByText("<img src=x onerror=alert(1)>")).toBeTruthy();
     expect(document.querySelector("img")).toBeNull();
+  });
+});
+
+// A swarm's feed merges every node's events, so each row says where it happened
+// (plan 22, D-43); Bayplan's own row says it in its message instead.
+describe("EventsFeed on a swarm", () => {
+  it("shows each row's node in muted text", async () => {
+    recent = async () =>
+      Response.json({
+        items: [
+          ev("1", { name: "web.1", node: "worker-2", time: "2026-10-02T10:00:02Z" }),
+          ev("2", { name: "db", node: "mgr-1", time: "2026-10-02T10:00:01Z" }),
+        ],
+      });
+    show(true);
+    const items = await screen.findAllByRole("listitem");
+    const node = within(items[0] as HTMLElement).getByText("worker-2");
+    expect(node.className).toContain("text-muted-foreground");
+    expect(within(items[1] as HTMLElement).getByText("mgr-1")).toBeTruthy();
+  });
+
+  it("shows no node on a standalone host or the local socket, which have only one", async () => {
+    recent = async () => Response.json({ items: [ev("1", { name: "web", node: "lab" })] });
+    show(false);
+    await screen.findByText("web");
+    expect(screen.queryByText("lab")).toBeNull();
+  });
+
+  it("shows no node on Bayplan's own row, only its message and label, and it stays under All", async () => {
+    recent = async () =>
+      Response.json({
+        items: [
+          ev("1", {
+            type: "bayplan",
+            action: "failover",
+            name: "Manager m2 unreachable, using m1",
+            node: "m1",
+            actorId: "env-1",
+            time: "2026-10-02T10:00:02Z",
+          }),
+          ev("2", { type: "container", name: "web", node: "m2", time: "2026-10-02T10:00:01Z" }),
+        ],
+      });
+    show(true);
+    const items = await screen.findAllByRole("listitem");
+    const bayplan = items[0] as HTMLElement;
+    expect(within(bayplan).getByText("Bayplan")).toBeTruthy();
+    expect(within(bayplan).getByText("Manager m2 unreachable, using m1")).toBeTruthy();
+    expect(within(bayplan).queryByText("m1")).toBeNull();
+    expect(within(items[1] as HTMLElement).getByText("m2")).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Container" }));
+    expect(screen.queryByText("Manager m2 unreachable, using m1")).toBeNull();
+    expect(screen.getByText("m2")).toBeTruthy();
+  });
+
+  it("cuts a long node name and keeps the whole name in the tooltip", async () => {
+    const long = "worker-with-a-long-host-name.example.internal".repeat(3);
+    recent = async () => Response.json({ items: [ev("1", { name: "web", node: long })] });
+    show(true);
+    const node = await screen.findByText(long);
+    expect(node.className).toContain("truncate");
+  });
+
+  it("shows a hostile node name as text (T-02-75)", async () => {
+    const evil = "<img src=x onerror=alert(1)>";
+    recent = async () => Response.json({ items: [ev("1", { name: "web", node: evil })] });
+    show(true);
+    await screen.findByText(evil);
+    expect(document.querySelector("img[src='x']")).toBeNull();
   });
 });

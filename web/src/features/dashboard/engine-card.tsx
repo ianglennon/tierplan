@@ -11,6 +11,11 @@ interface EngineCardProps {
   // then shows "—".
   engine?: EnvironmentSummary["engine"];
   loading?: boolean;
+  // Agent environments only: how many agents are connected out of those the
+  // swarm should have (a swarm only), and the agent's version.
+  agents?: { connected: number; expected: number } | null;
+  agentVersion?: string | null;
+  isAgentEnvironment?: boolean;
 }
 
 const GIB = 1024 ** 3;

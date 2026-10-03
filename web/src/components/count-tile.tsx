@@ -21,6 +21,8 @@ interface CountTileProps {
   loading?: boolean;
   // The value shows "—" when the count could not be read.
   error?: boolean;
+  // A swarm's per-node share of the value, for a tooltip on desktop.
+  breakdown?: { node: string; value: number }[];
 }
 
 const FRAME =
@@ -28,7 +30,16 @@ const FRAME =
 
 // CountTile is one number on the dashboard: label, value and an optional
 // sub-line.
-export function CountTile({ label, value, subline, to, params, loading, error }: CountTileProps) {
+export function CountTile({
+  label,
+  value,
+  subline,
+  to,
+  params,
+  loading,
+  error,
+  breakdown: _breakdown,
+}: CountTileProps) {
   const t = useT();
   const shown =
     error || value === undefined

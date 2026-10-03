@@ -91,7 +91,7 @@ function EventRow({ event }: { event: EventDTO }) {
 // EventsFeed is the dashboard's "Recent events" card (D-55, D-57): the last
 // hour best effort, then new events at the top as they happen, 50 at most.
 // Filtering is client-side over what the provider holds.
-export function EventsFeed() {
+export function EventsFeed(_props: { showNode?: boolean }) {
   const t = useT();
   const { events, state, ready, retry } = useEnvEvents();
   const [filter, setFilter] = useState<Filter>("all");
