@@ -3,6 +3,11 @@
 
 PKG := github.com/ianglennon/bayplan/internal/buildinfo
 
+# The three Go modules: the server (the root), the agent and the shared wire
+# protocol they both import. Every Go gate (test, lint, tidy-check) loops over
+# them, so a new module is covered the day it is added to this list.
+GO_MODULES := . agent proto
+
 # Set VERSION (and optionally COMMIT) for a release build, for example
 #   make build VERSION=v0.1.0
 # Without VERSION the binary reports "dev (<commit>)" from Go's VCS data.
@@ -16,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check test test-int smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke edge-context e2e e2e-image
+.PHONY: web build gen gen-check tidy-check test test-int smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke edge-context e2e e2e-image
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -35,11 +40,22 @@ gen:
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	node scripts/gen-notices.mjs
 
-gen-check: gen
+gen-check: gen tidy-check
 	git diff --exit-code -- openapi.json web/src/api/schema.d.ts internal/store/sqlc web/public/third-party-notices.json
 
+# go.mod and go.sum of every module must already be tidy: `go mod tidy -diff`
+# prints what tidy would change and exits non-zero without touching the files.
+tidy-check:
+	@set -e; for m in $(GO_MODULES); do \
+	  echo "tidy-check: $$m"; \
+	  go -C $$m mod tidy -diff; \
+	done
+
 test:
-	go test ./... -race -count=1
+	@set -e; for m in $(GO_MODULES); do \
+	  echo "test: $$m"; \
+	  go -C $$m test ./... -race -count=1; \
+	done
 	pnpm -C web exec vitest run
 
 # Real-engine tests (D-28), build tag `integration`. With BAYPLAN_TEST_DOCKER_HOST
@@ -108,8 +124,14 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$
 lint-config:
 	$(GOLANGCI_LINT) config verify
 
+# golangci-lint has no -C flag, so each module is linted from inside a subshell.
+# The root module's ./... stops at the nested go.mod files, so no package is
+# linted twice.
 lint:
-	$(GOLANGCI_LINT) run ./...
+	@set -e; for m in $(GO_MODULES); do \
+	  echo "lint: $$m"; \
+	  (cd $$m && $(GOLANGCI_LINT) run ./...); \
+	done
 	pnpm -C web exec biome ci .
 	pnpm -C web exec tsc --noEmit
 

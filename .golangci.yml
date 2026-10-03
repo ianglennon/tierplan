@@ -49,9 +49,19 @@ linters:
           files:
             - $all
             - "!**/internal/dockerx/**"
+            # The agent module has its own rule below.
+            - "!**/agent/**"
           deny:
             - pkg: github.com/moby/moby/client
               desc: only internal/dockerx may import the Docker client, so negotiation, timeouts and the Transport seam stay in one place (D-52, T-01-14)
+        agent-docker-client-seam:
+          list-mode: lax
+          files:
+            - "**/agent/**"
+            - "!**/agent/internal/selfmaint/**"
+          deny:
+            - pkg: github.com/moby/moby/client
+              desc: the agent reaches the engine only through its allowlisting proxy (D-27); only agent/internal/selfmaint (self-maintenance, plan 27) may hold a Docker client
         forbidden-libraries:
           list-mode: lax
           files:

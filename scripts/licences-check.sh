@@ -31,6 +31,16 @@ for arch in amd64 arm64; do
     | node scripts/licence-check.mjs --format go-csv
 done
 
+# The agent is a separate module with its own dependency graph (yamux,
+# websocket), shipped as its own binary on both architectures. The shared proto
+# module is standard library only and is covered through the agent.
+for arch in amd64 arm64; do
+  echo "licences: agent go linux/${arch}"
+  (cd agent && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
+    "${TOOLS}/go-licenses" report ./cmd/bayplan-agent --ignore github.com/ianglennon/bayplan \
+    | node ../scripts/licence-check.mjs --format go-csv)
+done
+
 echo "licences: pnpm (production)"
 pnpm -C web licenses list --json --prod | node scripts/licence-check.mjs --format pnpm-json
 
