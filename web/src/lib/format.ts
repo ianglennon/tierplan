@@ -101,7 +101,13 @@ export function formatBytes(n: number): string {
   return `${number.format(unit === 0 ? Math.round(value) : value)} ${UNITS[unit]}`;
 }
 
-// formatClockOffset is how far a clock is from the server's, as a signed value.
-export function formatClockOffset(_seconds: number): string {
-  return "";
+// formatClockOffset is how far a clock is from the server's: a signed whole
+// number of seconds rounded toward zero, with a unit ("+2 s", "−45 s", and
+// "0 s" with no sign). The minus is U+2212, which lines up with the plus in a
+// column. A value that is not a finite number is an empty string.
+export function formatClockOffset(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "";
+  const whole = Math.trunc(seconds);
+  if (whole === 0) return "0 s";
+  return `${whole > 0 ? "+" : "−"}${Math.abs(whole)} s`;
 }

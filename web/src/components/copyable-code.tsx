@@ -44,7 +44,7 @@ function execCopy(text: string): boolean {
 
 // copyText tries the clipboard API, then the textarea fallback. It reports
 // whether either worked and never throws.
-async function copyText(text: string): Promise<boolean> {
+export async function copyText(text: string): Promise<boolean> {
   if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Server } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { tokenStatusQuery } from "@/api/agents";
 import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
 import { NoPermission } from "@/components/full-page-state";
 import { StatusDot, useHealthLabel } from "@/components/status-dot";
@@ -23,7 +24,9 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RenameDialog } from "@/features/environments/environments-settings";
+import { InstallDialog } from "@/features/environments/install-dialog";
 import { JoinTokenCard } from "@/features/environments/join-token-card";
+import { NodeTable } from "@/features/environments/node-table";
 import { ReasonText } from "@/features/environments/reason-text";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { settingsQuery } from "@/features/settings/general-form";
@@ -182,6 +185,10 @@ interface EnvSettingsPageProps {
 // and fold cards. Hiding a card is not access control; the server answers 403.
 export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   const t = useT();
+  const queryClient = useQueryClient();
+  // The toast after a revoke offers to rotate the join token; the install
+  // dialog it opens belongs to the page so the toast outlives the table's row.
+  const [rotating, setRotating] = useState(false);
   const { data: me } = useMe();
   const environments = useQuery(environmentsQuery);
   const items = environments.data?.items ?? [];
@@ -263,7 +270,28 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
       </header>
       {canManage ? <GeneralCard env={env} /> : null}
       {canRead ? <ConnectionCard env={env} canSettings={canSettings} /> : null}
+      {canRead ? (
+        <SettingsCard title={t("envsettings.sections.nodes")}>
+          <NodeTable
+            envId={env.id}
+            onRotateToken={canToken ? () => setRotating(true) : undefined}
+          />
+        </SettingsCard>
+      ) : null}
       {canToken && env.kind === "agent" ? <JoinTokenCard envId={env.id} /> : null}
+      {canToken && env.kind === "agent" ? (
+        <InstallDialog
+          open={rotating}
+          mode="rotate"
+          envId={env.id}
+          onOpenChange={(open) => {
+            setRotating(open);
+            // A rotation re-enables enrolment and makes a new token.
+            if (!open)
+              void queryClient.invalidateQueries({ queryKey: tokenStatusQuery(env.id).queryKey });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -3,6 +3,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -149,6 +150,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // The toast store is shared by every test in the file.
+  toast.dismiss();
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
