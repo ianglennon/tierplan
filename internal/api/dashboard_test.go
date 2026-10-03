@@ -4,9 +4,12 @@
 package api_test
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
@@ -571,4 +575,196 @@ func TestAnAgentThatRefusesARequestIs502AgentPolicyDeniedNamingTheEndpoint(t *te
 			t.Errorf("%s: detail %q does not name the endpoint", what, p.Detail)
 		}
 	}
+}
+
+// The dashboard, the lists and the events of an agent environment, read through
+// its agent's target (plan 02-11, ENV-01, ENV-06, D-33, D-40, P1 D-58).
+
+// agentProblem is the typed problem of a data route: the Phase 1 members plus the
+// environment's state.
+type agentProblem struct {
+	Type   string `json:"type"`
+	Status int    `json:"status"`
+	State  string `json:"state"`
+	Since  string `json:"since"`
+	Reason string `json:"reason"`
+	Engine struct {
+		Name       string `json:"name"`
+		Version    string `json:"version"`
+		APIVersion string `json:"apiVersion"`
+	} `json:"engine"`
+}
+
+func (f *agentFix) get(t *testing.T, envID, what string) *envRec {
+	t.Helper()
+	return f.req(t, http.MethodGet, "/api/env/"+envID+"/"+what, "")
+}
+
+func TestAgentEnvironmentSummaryAndListsAreReadThroughTheTunnel(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	f.connect(t, env, dockertest.FakeConfig{
+		Hostname: "edge-1", Version: "28.4.0",
+		Containers: []dockertest.FakeContainer{
+			{ID: "a1", Names: []string{"/web"}, Image: "nginx:1.27", State: "running", Status: "Up 2 hours"},
+			{ID: "a2", Names: []string{"/db"}, Image: "postgres:17", State: "exited", Status: "Exited (0) 3 hours ago"},
+		},
+		Images:   []dockertest.FakeImage{{ID: "sha256:0123456789abcdef0123456789abcdef", RepoTags: []string{"nginx:1.27"}, Size: 1234}},
+		Volumes:  []dockertest.FakeVolume{{Name: "data", Driver: "local"}},
+		Networks: []dockertest.FakeNetwork{{ID: "n1", Name: "bridge", Driver: "bridge", Scope: "local"}},
+	}, nil)
+	f.whenState(t, env.ID, "online")
+
+	var s summaryBody
+	waitFor(t, "the summary", func() bool {
+		rec := f.get(t, env.ID, "summary")
+		if rec.code != http.StatusOK {
+			return false
+		}
+		s = decode[summaryBody](t, rec)
+		return true
+	})
+	if s.Environment.ID != env.ID || s.Environment.Name != "edge-1" || s.Environment.Type != "standalone" || s.Environment.Status.State != "online" {
+		t.Errorf("environment = %+v", s.Environment)
+	}
+	if s.Engine.Version != "28.4.0" || s.Counts.Containers != 2 || s.Counts.ContainersRunning != 1 || s.Counts.Images != 1 || s.Counts.Volumes != 1 || s.Counts.Networks != 1 {
+		t.Errorf("engine %+v counts %+v, want what the agent's daemon reported", s.Engine, s.Counts)
+	}
+	containers := decode[listBody[containerItem]](t, f.get(t, env.ID, "containers"))
+	if containers.Total != 2 || containers.Items[0].Name != "db" || containers.Items[1].Name != "web" {
+		t.Errorf("containers = %+v", containers)
+	}
+	for what, total := range map[string]int{"images": 1, "volumes": 1, "networks": 1} {
+		rec := f.get(t, env.ID, what)
+		if rec.code != http.StatusOK {
+			t.Errorf("%s: %d %s", what, rec.code, rec.body)
+			continue
+		}
+		var l struct {
+			Total int `json:"total"`
+		}
+		if err := json.Unmarshal(rec.body, &l); err != nil || l.Total != total {
+			t.Errorf("%s: %s, want a total of %d", what, rec.body, total)
+		}
+	}
+}
+
+func TestPendingAgentEnvironmentDataRoutesAnswer503EnvironmentOfflineWithStatePending(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Waiting")
+	for _, what := range dataPaths {
+		rec := f.get(t, env.ID, what)
+		if rec.code != http.StatusServiceUnavailable || rec.ptyp != "environment_offline" {
+			t.Errorf("%s: %d %q, want 503 environment_offline: %s", what, rec.code, rec.ptyp, rec.body)
+			continue
+		}
+		if p := decode[agentProblem](t, rec); p.State != "pending" || p.Reason != "" || p.Since != "" {
+			t.Errorf("%s: problem = %+v, want state pending with no reason and no since", what, p)
+		}
+	}
+}
+
+func TestRevokedAgentEnvironmentDataRoutesAnswer503WithStateRevokedItsReasonAndSince(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
+	f.whenState(t, env.ID, "online")
+	f.srv.Events.WaitLen(t, 1)
+	_ = a.conn.WS.CloseNow()
+	f.srv.Events.WaitLen(t, 2)
+	f.tclk.Advance(time.Minute)
+	revokedAt := f.tclk.Now()
+	f.srv.Exec(t, `UPDATE agents SET status = 'revoked', revoked_at = ? WHERE id = ?`, revokedAt.UnixNano(), a.id)
+
+	for _, what := range dataPaths {
+		rec := f.get(t, env.ID, what)
+		if rec.code != http.StatusServiceUnavailable || rec.ptyp != "environment_offline" {
+			t.Errorf("%s: %d %q, want 503 environment_offline: %s", what, rec.code, rec.ptyp, rec.body)
+			continue
+		}
+		if p := decode[agentProblem](t, rec); p.State != "revoked" || p.Reason != "revoked" || p.Since != utc(revokedAt) {
+			t.Errorf("%s: problem = %+v, want revoked / revoked since %s", what, p, utc(revokedAt))
+		}
+	}
+}
+
+func TestOfflineAgentEnvironmentDataRoutesCarryTheReasonAndTheTimeTheContactWasLost(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
+	f.whenState(t, env.ID, "online")
+	f.srv.Events.WaitLen(t, 1)
+	_ = a.conn.WS.CloseNow()
+	f.srv.Events.WaitLen(t, 2)
+	droppedAt := f.tclk.Now()
+	f.tclk.Advance(31 * time.Second)
+
+	rec := f.get(t, env.ID, "summary")
+	if rec.code != http.StatusServiceUnavailable || rec.ptyp != "environment_offline" {
+		t.Fatalf("%d %q, want 503 environment_offline: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if p := decode[agentProblem](t, rec); p.State != "offline" || p.Reason != "agent_offline" || p.Since != utc(droppedAt) {
+		t.Fatalf("problem = %+v, want offline / agent_offline since %s", p, utc(droppedAt))
+	}
+}
+
+func TestUnsupportedAgentEngineAnswers409EnvironmentUnsupportedWithTheEngineAndTheD40Reason(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Old")
+	f.connect(t, env, dockertest.FakeConfig{APIVersion: "1.41", Version: "20.10.24", Hostname: "old"}, nil)
+	f.whenState(t, env.ID, "unsupported")
+	for _, what := range dataPaths {
+		rec := f.get(t, env.ID, what)
+		if rec.code != http.StatusConflict || rec.ptyp != "environment_unsupported" {
+			t.Errorf("%s: %d %q, want 409 environment_unsupported: %s", what, rec.code, rec.ptyp, rec.body)
+			continue
+		}
+		p := decode[agentProblem](t, rec)
+		if p.State != "unsupported" || p.Reason != "unsupported_engine" || p.Engine.Version != "20.10.24" || p.Engine.APIVersion != "1.41" {
+			t.Errorf("%s: problem = %+v", what, p)
+		}
+	}
+}
+
+func TestAgentEnvironmentEventsStreamDeliversAnEventPublishedOnTheAgentsDaemon(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
+	f.whenState(t, env.ID, "online")
+
+	ts := httptest.NewServer(f.h)
+	defer ts.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/env/"+env.ID+"/events/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: f.cookie}) //nolint:gosec // a request cookie as a browser sends it
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream: %d", resp.StatusCode)
+	}
+
+	a.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "abc123", Attributes: map[string]string{"name": "web"}})
+	sc := bufio.NewScanner(resp.Body)
+	got := false
+	for !got && sc.Scan() {
+		if line := sc.Text(); strings.HasPrefix(line, "data: ") && strings.Contains(line, `"action":"start"`) && strings.Contains(line, `"name":"web"`) {
+			got = true
+		}
+	}
+	if !got {
+		t.Fatalf("the event published on the agent's daemon never arrived (%v)", sc.Err())
+	}
+
+	// The polling fallback shows the same event.
+	waitFor(t, "the recent list", func() bool {
+		rec := f.get(t, env.ID, "events")
+		return rec.code == http.StatusOK && strings.Contains(string(rec.body), `"name":"web"`)
+	})
 }

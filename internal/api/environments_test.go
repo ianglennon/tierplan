@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -18,6 +19,9 @@ import (
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/wire"
 )
 
 // The environment endpoints (plan 16, ENV-04, PLAT-06, D-19, D-20, D-23, D-25,
@@ -731,5 +735,199 @@ func TestEnvironmentAddAgentNeverPutsTheJoinTokenInTheAudit(t *testing.T) {
 	}
 	if err := rows.Err(); err != nil || n == 0 {
 		t.Fatalf("scanned %d audit rows, %v", n, err)
+	}
+}
+
+// Agent environments over the real tunnel hub (plan 02-11, ENV-06, ENV-08, D-33,
+// D-40, D-41): the API is the production router, the agents are real sessions of
+// the real hub answering from fake daemons, and the clock is the tunnel's, which
+// the test moves.
+
+// agentFix is the API with the tunnel hub behind it. fake is nil: the environments
+// here are all agent environments.
+type agentFix struct {
+	*envFix
+	srv  *tunneltest.Server
+	tclk *tunneltest.Clock
+}
+
+func newAgentFix(t *testing.T) *agentFix {
+	t.Helper()
+	f := newAuthFixture(t, config.Config{})
+	log := slog.New(slog.DiscardHandler)
+	tclk := tunneltest.NewClock(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC))
+	mon := envs.NewMonitor(log, tclk.Now, nil)
+	t.Cleanup(mon.StopAll)
+	svc := envs.NewService(f.st, f.aud, mon, "", "0123456789ab", tclk.Now)
+	f.envSvc = svc
+	f.snaps = envs.NewSnapshots(mon, 5*time.Second, tclk.Now)
+	f.hub = envs.NewHub(mon, f.snaps, log, tclk.Now)
+	t.Cleanup(f.hub.Close)
+	srv := tunneltest.Start(t, tunneltest.Options{
+		Clock: tclk, Store: f.st, Observer: svc,
+		Configure: func(h *tunnel.Hub) *tunnel.Hub {
+			return h.WithTiming(10*time.Second, 30*time.Second).WithWatchInterval(5 * time.Millisecond)
+		},
+	})
+	svc.WithAgents(srv.Hub)
+	f.h = f.build(t)
+	cookie, csrf := f.signIn(t, "admin", false)
+	// The reconnect grace is long over, so a missing agent is offline, not reconnecting.
+	tclk.Advance(2 * time.Minute)
+	return &agentFix{envFix: &envFix{authFixture: f, svc: svc, mon: mon, cookie: cookie, csrf: csrf}, srv: srv, tclk: tclk}
+}
+
+// agentConn is one connected agent and the daemon behind it.
+type agentConn struct {
+	conn    *tunneltest.Conn
+	fake    *dockertest.Fake
+	control io.Writer
+	id      string
+}
+
+// connect enrols an agent in env, answers its Docker streams from a fake daemon
+// and sends a heartbeat.
+func (f *agentFix) connect(t *testing.T, env tunneltest.Environment, cfg dockertest.FakeConfig, facts *wire.Facts) *agentConn {
+	t.Helper()
+	fake := dockertest.NewFake(t, cfg)
+	if facts == nil {
+		facts = &wire.Facts{EngineID: "ENG:" + cfg.Hostname, Hostname: cfg.Hostname, EngineReachable: true}
+	}
+	c := f.srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: facts})
+	if c.Welcome == nil {
+		t.Fatalf("enrolment refused: %+v", c.Refuse)
+	}
+	c.ProxyDocker(t, fake.SocketPath())
+	control := c.OpenControl(t)
+	tunneltest.SendHeartbeat(t, control, true, f.tclk.Now().UnixMilli())
+	return &agentConn{conn: c, fake: fake, control: control, id: c.Identity.AgentID}
+}
+
+type agentStatus struct {
+	State  string `json:"state"`
+	Since  string `json:"since"`
+	Reason string `json:"reason"`
+	Issues []struct {
+		Code  string `json:"code"`
+		Node  string `json:"node"`
+		Since string `json:"since"`
+	} `json:"issues"`
+}
+
+type agentEnvBody struct {
+	ID     string      `json:"id"`
+	Name   string      `json:"name"`
+	Kind   string      `json:"kind"`
+	Type   string      `json:"type"`
+	Status agentStatus `json:"status"`
+	Engine struct {
+		Version string `json:"version"`
+	} `json:"engine"`
+}
+
+// environment reads one environment from GET /api/environments.
+func (f *agentFix) environment(t *testing.T, id string) agentEnvBody {
+	t.Helper()
+	rec := f.req(t, http.MethodGet, "/api/environments", "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("list: %d %s", rec.code, rec.body)
+	}
+	var list struct {
+		Items []agentEnvBody `json:"items"`
+	}
+	if err := json.Unmarshal(rec.body, &list); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range list.Items {
+		if e.ID == id {
+			return e
+		}
+	}
+	t.Fatalf("environment %s is not in %s", id, rec.body)
+	return agentEnvBody{}
+}
+
+func (f *agentFix) whenState(t *testing.T, id, state string) agentEnvBody {
+	t.Helper()
+	var e agentEnvBody
+	waitFor(t, "the environment to be "+state, func() bool {
+		e = f.environment(t, id)
+		return e.Status.State == state
+	})
+	return e
+}
+
+func utc(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+
+func TestAgentEnvironmentIsPendingThenOnlineThenOfflineWithReasonTimeoutAndSince(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	if e := f.environment(t, env.ID); e.Status.State != "pending" || e.Status.Reason != "" || e.Status.Since != "" || e.Kind != "agent" {
+		t.Fatalf("a new environment is %+v, want pending with no reason and no since", e)
+	}
+
+	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Version: "28.4.0"}, nil)
+	e := f.whenState(t, env.ID, "online")
+	waitFor(t, "the engine read through the tunnel", func() bool { return f.environment(t, env.ID).Engine.Version == "28.4.0" })
+	if e.Name != "edge-1" || e.Status.Reason != "" || len(e.Status.Issues) != 0 {
+		t.Fatalf("environment = %+v, want the first agent's hostname as its name and plain online", e)
+	}
+
+	f.srv.Events.WaitLen(t, 1)
+	s := f.srv.Hub.Session(a.id)
+	waitFor(t, "the heartbeat", func() bool { return !s.Status().LastHeartbeat.IsZero() })
+	f.tclk.Advance(31 * time.Second) // silent past the window: the hub closes it with the reason timeout
+	closedAt := f.tclk.Now()
+	f.srv.Events.WaitLen(t, 2)
+	e = f.environment(t, env.ID)
+	if e.Status.State != "offline" || e.Status.Reason != "timeout" || e.Status.Since != utc(closedAt) {
+		t.Fatalf("status = %+v, want offline / timeout since %s", e.Status, utc(closedAt))
+	}
+}
+
+func TestAgentEnvironmentWithAMissingNodeIsDegradedAndListsItsIssues(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Swarm")
+	manager := &wire.Facts{
+		EngineID: "ENG:m", Hostname: "manager-1", EngineReachable: true,
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-m", ClusterID: "cluster-1", Control: true},
+	}
+	worker := &wire.Facts{
+		EngineID: "ENG:w", Hostname: "worker-1", EngineReachable: true,
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-w", Control: false},
+	}
+	m := f.connect(t, env, dockertest.FakeConfig{Hostname: "manager-1", SwarmState: "active", SwarmControl: true}, manager)
+	w := f.connect(t, env, dockertest.FakeConfig{Hostname: "worker-1", SwarmState: "active"}, worker)
+	f.srv.Events.WaitLen(t, 2)
+	f.whenState(t, env.ID, "online")
+
+	f.tclk.Advance(20 * time.Second)
+	tunneltest.SendHeartbeat(t, m.control, true, f.tclk.Now().UnixMilli())
+	waitFor(t, "the manager's heartbeat", func() bool { return f.srv.Hub.Session(m.id).Status().LastHeartbeat.Equal(f.tclk.Now()) })
+	f.tclk.Advance(11 * time.Second) // the worker has been silent for 31 s, the manager for 11
+	f.srv.Events.WaitLen(t, 3)
+	droppedAt := f.tclk.Now()
+
+	e := f.environment(t, env.ID)
+	if e.Status.State != "degraded" || e.Status.Reason != "agent_offline" {
+		t.Fatalf("status = %+v, want degraded / agent_offline", e.Status)
+	}
+	if len(e.Status.Issues) != 1 || e.Status.Issues[0].Code != "agent_offline" || e.Status.Issues[0].Node != "worker-1" || e.Status.Issues[0].Since != utc(droppedAt) {
+		t.Fatalf("issues = %+v, want agent_offline on worker-1 since %s", e.Status.Issues, utc(droppedAt))
+	}
+	_ = w
+}
+
+func TestAnEnvironmentTheCallerMayNotReadIsNotListedWhateverItsAgentsDo(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Secret")
+	f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
+	f.whenState(t, env.ID, "online")
+
+	f.addUser(t, "viewer", false)
+	cookie, _ := f.signIn(t, "viewer", false)
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/environments", cookie: cookie})
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), env.ID) || strings.Contains(rec.Body.String(), "edge-1") {
+		t.Fatalf("a user with no grant saw the environment: %d %s", rec.Code, rec.Body)
 	}
 }
