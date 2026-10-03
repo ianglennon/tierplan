@@ -262,7 +262,7 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
         </div>
       </header>
       {canManage ? <GeneralCard env={env} /> : null}
-      {canRead || canManage ? <ConnectionCard env={env} canSettings={canSettings} /> : null}
+      {canRead ? <ConnectionCard env={env} canSettings={canSettings} /> : null}
       {canToken && env.kind === "agent" ? <JoinTokenCard envId={env.id} /> : null}
     </div>
   );

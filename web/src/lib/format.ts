@@ -100,3 +100,8 @@ export function formatBytes(n: number): string {
   }
   return `${number.format(unit === 0 ? Math.round(value) : value)} ${UNITS[unit]}`;
 }
+
+// formatClockOffset is how far a clock is from the server's, as a signed value.
+export function formatClockOffset(_seconds: number): string {
+  return "";
+}

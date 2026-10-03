@@ -70,6 +70,23 @@ const LOCAL = env({
   envType: "standalone",
 });
 
+const NODE = {
+  id: "a1",
+  node: "mgr-1",
+  role: "manager",
+  status: "active",
+  blocked: false,
+  connected: true,
+  agentVersion: "0.1.0",
+  engineVersion: "28.5.1",
+  certFingerprint: "ab".repeat(32),
+  certNotAfter: "2027-01-01T00:00:00Z",
+  clockOffsetSeconds: 1,
+  lastSeen: "2026-10-03T11:59:00Z",
+  readOnly: false,
+  selfUpdate: true,
+};
+
 let current: Record<string, unknown>;
 let items: Record<string, unknown>[];
 let seen: string[];
@@ -121,7 +138,9 @@ beforeEach(() => {
           disabled: false,
         });
       }
-      if (path === "/api/env/e2/agents") return Response.json({ items: [] });
+      if (path === "/api/env/e2/agents") return Response.json({ items: [NODE] });
+      if (path === "/api/environments/e2/agents/a1/revoke")
+        return new Response(null, { status: 204 });
       return Response.json({}, { status: 404 });
     }),
   );
@@ -188,11 +207,11 @@ describe("/settings/environments/$envId", () => {
     ).not.toBeNull();
   });
 
-  it("renders General, Connection and Join token in that order for a caller who holds all three permissions", async () => {
+  it("renders General, Connection, Nodes and agents and Join token in that order for a caller who holds every permission", async () => {
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "General" });
     await screen.findByRole("heading", { level: 3, name: "Join token" });
-    expect(headings()).toEqual(["General", "Connection", "Join token"]);
+    expect(headings()).toEqual(["General", "Connection", "Nodes and agents", "Join token"]);
   });
 
   it("shows the health dot with its label and the agent URL in use on the Connection card", async () => {
@@ -221,7 +240,7 @@ describe("/settings/environments/$envId", () => {
     current = me(["environments.read", "environments.manage", "environments.revoke"]);
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "General" });
-    expect(headings()).toEqual(["General", "Connection"]);
+    expect(headings()).toEqual(["General", "Connection", "Nodes and agents"]);
     expect(seen).not.toContain("GET /api/environments/e2/token");
   });
 
@@ -229,7 +248,7 @@ describe("/settings/environments/$envId", () => {
     current = me(["environments.read", "environments.token"]);
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "Join token" });
-    expect(headings()).toEqual(["Connection", "Join token"]);
+    expect(headings()).toEqual(["Connection", "Nodes and agents", "Join token"]);
     expect(screen.queryByRole("button", { name: /^Rename/ })).toBeNull();
   });
 
@@ -268,7 +287,7 @@ describe("/settings/environments/$envId", () => {
   it("has no Join token card, no Connects to and no token read for the local socket host", async () => {
     renderAt("/settings/environments/e1");
     await screen.findByRole("heading", { level: 3, name: "General" });
-    expect(headings()).toEqual(["General", "Connection"]);
+    expect(headings()).toEqual(["General", "Connection", "Nodes and agents"]);
     expect(screen.queryByText("Connects to")).toBeNull();
     await waitFor(() => expect(seen).toContain("GET /api/environments"));
     expect(seen).not.toContain("GET /api/environments/e1/token");
@@ -289,5 +308,31 @@ describe("/settings/environments/$envId", () => {
     );
     renderAt("/settings/environments/e2");
     expect(await screen.findByText("Loading the environment…")).toBeTruthy();
+  });
+
+  it("lists the environment's nodes in the Nodes and agents card", async () => {
+    renderAt("/settings/environments/e2");
+    const card = (await screen.findByRole("heading", { name: "Nodes and agents" })).closest(
+      "section",
+    );
+    expect(await within(card as HTMLElement).findByText("mgr-1")).toBeTruthy();
+    expect(within(card as HTMLElement).getByRole("table")).toBeTruthy();
+  });
+
+  it("opens the install dialog in rotate mode from the toast offered after a revoke", async () => {
+    renderAt("/settings/environments/e2");
+    const trigger = await screen.findByRole("button", { name: "Actions for mgr-1" });
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Revoke node" }));
+    const alertDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Revoke node" }));
+    expect(await screen.findByText("mgr-1 was revoked.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rotate join token" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Show install command" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Generate new token" })).toBeTruthy();
+    // Nothing is rotated by opening it.
+    expect(seen).not.toContain("POST /api/environments/e2/token");
   });
 });

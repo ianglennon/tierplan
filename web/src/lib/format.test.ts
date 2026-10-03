@@ -8,6 +8,7 @@ import {
   formatAbsoluteUtc,
   formatBytes,
   formatClock,
+  formatClockOffset,
   formatRelative,
 } from "@/lib/format";
 
@@ -116,5 +117,25 @@ describe("formatAbsoluteUtc", () => {
   it("is empty for a missing or unreadable time", () => {
     expect(formatAbsoluteUtc(undefined)).toBe("");
     expect(formatAbsoluteUtc("nope")).toBe("");
+  });
+});
+
+describe("formatClockOffset", () => {
+  it("is a signed whole number of seconds, rounded toward zero", () => {
+    expect(formatClockOffset(2.9)).toBe("+2 s");
+    expect(formatClockOffset(-45.4)).toBe("−45 s");
+    expect(formatClockOffset(-45.9)).toBe("−45 s");
+    expect(formatClockOffset(30)).toBe("+30 s");
+  });
+
+  it("has no sign for zero, however it was reached", () => {
+    expect(formatClockOffset(0)).toBe("0 s");
+    expect(formatClockOffset(0.4)).toBe("0 s");
+    expect(formatClockOffset(-0.4)).toBe("0 s");
+  });
+
+  it("is empty for a value that is not a number", () => {
+    expect(formatClockOffset(Number.NaN)).toBe("");
+    expect(formatClockOffset(Number.POSITIVE_INFINITY)).toBe("");
   });
 });
