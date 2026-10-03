@@ -223,12 +223,12 @@ function InstallStep({ info, envId, envName, envType, hasAgents, onClose }: Inst
 
       <dl
         aria-label={t("install.details.label")}
-        className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs"
+        className="grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs sm:grid-cols-[max-content_1fr] sm:gap-y-1"
       >
         <dt className="text-muted-foreground">{t("install.details.image")}</dt>
-        <dd className="font-mono break-all">{info.image}</dd>
+        <dd className="mb-1.5 font-mono break-all sm:mb-0">{info.image}</dd>
         <dt className="text-muted-foreground">{t("install.details.connectsTo")}</dt>
-        <dd className="flex min-w-0 flex-wrap items-baseline gap-x-3">
+        <dd className="mb-1.5 flex min-w-0 flex-wrap items-baseline gap-x-3 sm:mb-0">
           <span className="font-mono break-all">{info.agentUrl}</span>
           <Link to="/settings/general" className="underline underline-offset-3" onClick={onClose}>
             {t("install.details.changeUrl")}
