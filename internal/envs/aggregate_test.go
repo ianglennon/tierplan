@@ -561,3 +561,67 @@ func TestEveryVariantReadsThroughTheAggregator(t *testing.T) {
 		t.Fatalf("swarm counts = %+v, %v; want 1 node and 2 services from the manager", agg.Counts, err)
 	}
 }
+
+func rowCount(t *testing.T, r *tunRig, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := r.st.Read.QueryRow(query, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestRemovingAnAgentEnvironmentRevokesAndDisconnectsEveryAgentAndDeletesWhatItOwned(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Remote")
+	one := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
+	two := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-2"}, nil)
+	r.whenOnline(t, env.ID)
+	// A third agent that was revoked earlier leaves block rows behind.
+	three := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-3"}, nil)
+	if err := r.srv.Svc.Revoke(context.Background(), admin, env.ID, three.id, "old", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount(t, r, `SELECT COUNT(*) FROM agent_blocks WHERE env_id = ?`, env.ID) == 0 {
+		t.Fatal("the revoke left no block rows to cascade")
+	}
+	s1, s2 := r.srv.Hub.Session(one.id), r.srv.Hub.Session(two.id)
+	if s1 == nil || s2 == nil {
+		t.Fatal("the agents have no sessions")
+	}
+
+	if err := r.svc.Remove(context.Background(), admin, env.ID, "203.0.113.5", "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, s := range map[string]*tunnel.Session{"first": s1, "second": s2} {
+		select {
+		case <-s.Done():
+		case <-time.After(time.Second):
+			t.Errorf("the %s agent's session is still open a second after the environment was removed", name)
+		}
+	}
+	for _, table := range []string{"agents", "agent_blocks", "env_cas", "env_join_tokens"} {
+		if n := rowCount(t, r, `SELECT COUNT(*) FROM `+table+` WHERE env_id = ?`, env.ID); n != 0 {
+			t.Errorf("%s still has %d rows for the removed environment", table, n)
+		}
+	}
+	if n := rowCount(t, r, `SELECT COUNT(*) FROM environments WHERE id = ?`, env.ID); n != 0 {
+		t.Error("the environment row is still there")
+	}
+	// Two agents were still active: each is audited as revoked, with the reason.
+	if n := rowCount(t, r, `SELECT COUNT(*) FROM audit_log WHERE action = 'agent.revoked' AND env_id = ? AND details LIKE '%environment_removed%'`, env.ID); n != 2 {
+		t.Errorf("agent.revoked rows for the removal = %d, want 2", n)
+	}
+	if n := rowCount(t, r, `SELECT COUNT(*) FROM audit_log WHERE action = 'environment.removed' AND env_id = ?`, env.ID); n != 1 {
+		t.Errorf("environment.removed rows = %d", n)
+	}
+	// Neither agent can say hello again: the environment does not exist.
+	for _, a := range []*agentConn{one, two} {
+		c := r.srv.Hello(t, a.conn.Identity)
+		if c.Refuse == nil || c.Refuse.Code != wire.ReasonAuthRejected {
+			t.Errorf("hello after removal = %+v (err %v), want auth_rejected", c.Refuse, c.Err)
+		}
+	}
+}

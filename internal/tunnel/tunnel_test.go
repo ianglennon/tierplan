@@ -54,6 +54,9 @@ func (f *fakeVerifier) Hello(context.Context, tunnel.HelloRequest) (tunnel.Hello
 	return tunnel.HelloResult{}, &tunnel.Refusal{Code: wire.ReasonAuthRejected, Detail: "the fake verifier does not say hello"}
 }
 
+// StillActive says every agent is still active: the fake never revokes.
+func (f *fakeVerifier) StillActive(string) bool { return true }
+
 func (f *fakeVerifier) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

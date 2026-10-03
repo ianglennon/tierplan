@@ -964,3 +964,280 @@ func TestTokenStatusReportsGenerationCreatorAndTheDisabledFlagNeverTheToken(t *t
 		t.Error("the status holds the token")
 	}
 }
+
+// kicks is a SessionKicker that records what it was asked, and what the database
+// said at that moment, so a test can tell that the kick came after the commit.
+type kicks struct {
+	st     *store.Store
+	agents []string
+	envs   []string
+	codes  []string
+	// statusAtKick is the status the agent's row had when Kick ran.
+	statusAtKick string
+}
+
+func (k *kicks) Kick(agentID, code string) {
+	k.agents = append(k.agents, agentID)
+	k.codes = append(k.codes, code)
+	_ = k.st.Read.QueryRow(`SELECT status FROM agents WHERE id = ?`, agentID).Scan(&k.statusAtKick)
+}
+
+func (k *kicks) KickEnv(envID, code string) {
+	k.envs = append(k.envs, envID)
+	k.codes = append(k.codes, code)
+}
+
+// enrolWith enrols an agent that reports facts.
+func (r *rig) enrolWith(t *testing.T, token string, facts wire.Facts) (tunnel.EnrolResult, error) {
+	t.Helper()
+	p := newProof(t, "h")
+	req := p.request(token)
+	req.Facts = facts
+	return r.svc.Enrol(r.ctx, req)
+}
+
+var swarmWorker = wire.Facts{
+	EngineID: "ENG:worker-1", Hostname: "worker-1", EngineReachable: true,
+	Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-worker-1"},
+}
+
+var ops = audit.Actor{Type: audit.ActorUser, ID: "u-ops", Name: "ops"}
+
+func blockRows(t *testing.T, st *store.Store, envID string) map[string]string {
+	t.Helper()
+	rows, err := st.Read.Query(`SELECT kind, identity FROM agent_blocks WHERE env_id = ?`, envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	got := map[string]string{}
+	for rows.Next() {
+		var k, id string
+		if err := rows.Scan(&k, &id); err != nil {
+			t.Fatal(err)
+		}
+		got[k] = id
+	}
+	return got
+}
+
+func TestRevokeSetsTheAgentRevokedBlocksBothIdentitiesAuditsAndKicksAfterTheCommit(t *testing.T) {
+	r := newRig(t)
+	k := &kicks{st: r.st}
+	r.svc.WithKicker(k)
+	c := r.create(t, "Swarm")
+	res, err := r.enrolWith(t, c.JoinToken, swarmWorker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.clock = fixedNow.Add(time.Hour)
+
+	if err := r.svc.Revoke(r.ctx, ops, c.EnvID, res.AgentID, "decommissioned", "203.0.113.5", "test"); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	var status, by, reason string
+	var at int64
+	if err := r.st.Read.QueryRow(`SELECT status, revoked_by, revoke_reason, revoked_at FROM agents WHERE id = ?`, res.AgentID).Scan(&status, &by, &reason, &at); err != nil {
+		t.Fatal(err)
+	}
+	if status != "revoked" || by != "u-ops" || reason != "decommissioned" || at != fixedNow.Add(time.Hour).UnixNano() {
+		t.Errorf("row = %s by %s because %q at %d", status, by, reason, at)
+	}
+	if got := blockRows(t, r.st, c.EnvID); got["engine_id"] != "ENG:worker-1" || got["swarm_node_id"] != "node-worker-1" || len(got) != 2 {
+		t.Errorf("blocks = %v, want the engine ID and the swarm node ID", got)
+	}
+	if len(k.agents) != 1 || k.agents[0] != res.AgentID || k.codes[0] != "revoked" {
+		t.Errorf("kicks = %v %v, want one kick of the agent with the code revoked", k.agents, k.codes)
+	}
+	if k.statusAtKick != "revoked" {
+		t.Errorf("the agent was kicked while its row said %q: the kick must follow the commit", k.statusAtKick)
+	}
+
+	revoked := auditRows(t, r.st, "agent.revoked")
+	if len(revoked) != 1 || !strings.Contains(revoked[0], `"reason":"decommissioned"`) || !strings.Contains(revoked[0], `"node":"worker-1"`) || !strings.Contains(revoked[0], `"fingerprint":"`) {
+		t.Errorf("agent.revoked = %v", revoked)
+	}
+	blocked := auditRows(t, r.st, "agent.blocked")
+	if len(blocked) != 2 {
+		t.Fatalf("agent.blocked = %v, want one per identity", blocked)
+	}
+	joined := strings.Join(blocked, "\n")
+	for _, want := range []string{`"kind":"engine_id"`, `"identity":"ENG:worker-1"`, `"kind":"swarm_node_id"`, `"identity":"node-worker-1"`} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("agent.blocked lacks %s: %s", want, joined)
+		}
+	}
+}
+
+func TestRevokeOfAStandaloneAgentBlocksOnlyItsEngineID(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Edge")
+	res, err := r.enrolWith(t, c.JoinToken, wire.Facts{EngineID: "ENG:solo", Hostname: "solo", EngineReachable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Revoke(r.ctx, ops, c.EnvID, res.AgentID, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := blockRows(t, r.st, c.EnvID); len(got) != 1 || got["engine_id"] != "ENG:solo" {
+		t.Errorf("blocks = %v", got)
+	}
+}
+
+func TestRevokeRefusesAnAlreadyRevokedAgentAnUnknownOneAndOneOfAnotherEnvironmentAndChangesNothing(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "One")
+	other := r.create(t, "Two")
+	res, err := r.enrolWith(t, c.JoinToken, swarmWorker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Revoke(r.ctx, ops, c.EnvID, res.AgentID, "first", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	audits := len(auditRows(t, r.st, "agent.revoked"))
+
+	if err := r.svc.Revoke(r.ctx, ops, c.EnvID, res.AgentID, "second", "", ""); !errors.Is(err, agents.ErrAlreadyRevoked) {
+		t.Errorf("revoking twice = %v, want ErrAlreadyRevoked", err)
+	}
+	if err := r.svc.Revoke(r.ctx, ops, c.EnvID, "no-such-agent", "", "", ""); !errors.Is(err, agents.ErrAgentNotFound) {
+		t.Errorf("unknown agent = %v, want ErrAgentNotFound", err)
+	}
+	// An agent is only found through its own environment.
+	fresh, err := r.enrolWith(t, c.JoinToken, wire.Facts{EngineID: "ENG:fresh", Hostname: "fresh", EngineReachable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Revoke(r.ctx, ops, other.EnvID, fresh.AgentID, "", "", ""); !errors.Is(err, agents.ErrAgentNotFound) {
+		t.Errorf("an agent through another environment = %v, want ErrAgentNotFound", err)
+	}
+	if err := r.svc.Revoke(r.ctx, ops, "0197b8a0-0000-7000-8000-000000000000", fresh.AgentID, "", "", ""); !errors.Is(err, agents.ErrEnvironmentNotFound) {
+		t.Errorf("an unknown environment = %v, want ErrEnvironmentNotFound", err)
+	}
+	if got := len(auditRows(t, r.st, "agent.revoked")); got != audits {
+		t.Errorf("agent.revoked rows went from %d to %d", audits, got)
+	}
+	var status string
+	_ = r.st.Read.QueryRow(`SELECT status FROM agents WHERE id = ?`, fresh.AgentID).Scan(&status)
+	if status != "active" {
+		t.Errorf("the other environment's agent is %s", status)
+	}
+}
+
+func TestRevokeKeepsAnOverlongReasonToTheLimitAndStripsControlCharacters(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "One")
+	res, err := r.enrolWith(t, c.JoinToken, swarmWorker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := "ok\x00\x1b[31m" + strings.Repeat("é", 400)
+	if err := r.svc.Revoke(r.ctx, ops, c.EnvID, res.AgentID, long, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	var reason string
+	_ = r.st.Read.QueryRow(`SELECT revoke_reason FROM agents WHERE id = ?`, res.AgentID).Scan(&reason)
+	if n := len([]rune(reason)); n > 256 || strings.ContainsAny(reason, "\x00\x1b") {
+		t.Errorf("stored reason has %d runes and control characters: %q", n, reason)
+	}
+}
+
+func TestEnrolRefusesABlockedEngineIDAndABlockedSwarmNodeIDEvenWithAValidTokenUntilUnblocked(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Swarm")
+	res, err := r.enrolWith(t, c.JoinToken, swarmWorker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Revoke(r.ctx, ops, c.EnvID, res.AgentID, "gone", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	agentsBefore := count(t, r.st, `SELECT COUNT(*) FROM agents WHERE env_id = ?`, c.EnvID)
+
+	// The same engine under a new node ID, and the same node ID under a new engine:
+	// each identity blocks on its own.
+	sameEngine := swarmWorker
+	sameEngine.Swarm = &wire.SwarmFacts{State: "active", NodeID: "node-other"}
+	sameNode := swarmWorker
+	sameNode.EngineID = "ENG:other"
+	for name, f := range map[string]wire.Facts{"the same host": swarmWorker, "the same engine ID": sameEngine, "the same swarm node ID": sameNode} {
+		_, err := r.enrolWith(t, c.JoinToken, f)
+		re := refusal(t, err)
+		if re.Code != wire.ReasonBlocked {
+			t.Errorf("%s: %+v, want blocked", name, re)
+		}
+	}
+	if got := count(t, r.st, `SELECT COUNT(*) FROM agents WHERE env_id = ?`, c.EnvID); got != agentsBefore {
+		t.Errorf("a refused enrolment wrote an agent row: %d -> %d", agentsBefore, got)
+	}
+	// A different host with the same token is not affected.
+	if _, err := r.enrolWith(t, c.JoinToken, wire.Facts{EngineID: "ENG:new", Hostname: "new", EngineReachable: true}); err != nil {
+		t.Errorf("an unrelated host was refused: %v", err)
+	}
+
+	if err := r.svc.Unblock(r.ctx, ops, c.EnvID, res.AgentID, "203.0.113.5", "test"); err != nil {
+		t.Fatalf("Unblock: %v", err)
+	}
+	if got := blockRows(t, r.st, c.EnvID); len(got) != 0 {
+		t.Errorf("blocks after Unblock = %v", got)
+	}
+	again, err := r.enrolWith(t, c.JoinToken, swarmWorker)
+	if err != nil {
+		t.Fatalf("enrolling after Unblock: %v", err)
+	}
+	if again.AgentID == res.AgentID {
+		t.Error("the unblocked host got its old agent row back; it must get a new one")
+	}
+	var old string
+	_ = r.st.Read.QueryRow(`SELECT status FROM agents WHERE id = ?`, res.AgentID).Scan(&old)
+	if old != "revoked" {
+		t.Errorf("the old agent is %s after the host enrolled again", old)
+	}
+	un := auditRows(t, r.st, "agent.unblocked")
+	if len(un) != 2 || !strings.Contains(strings.Join(un, ""), `"identity":"node-worker-1"`) {
+		t.Errorf("agent.unblocked = %v", un)
+	}
+}
+
+func TestUnblockOfAnAgentWithNoBlocksIsNotBlockedAndOfAnUnknownOneIsNotFound(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "One")
+	res, err := r.enrolWith(t, c.JoinToken, swarmWorker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Unblock(r.ctx, ops, c.EnvID, res.AgentID, "", ""); !errors.Is(err, agents.ErrNotBlocked) {
+		t.Errorf("an active agent = %v, want ErrNotBlocked", err)
+	}
+	if err := r.svc.Unblock(r.ctx, ops, c.EnvID, "nope", "", ""); !errors.Is(err, agents.ErrAgentNotFound) {
+		t.Errorf("an unknown agent = %v, want ErrAgentNotFound", err)
+	}
+	if err := r.svc.Revoke(r.ctx, ops, c.EnvID, res.AgentID, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Unblock(r.ctx, ops, c.EnvID, res.AgentID, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Unblock(r.ctx, ops, c.EnvID, res.AgentID, "", ""); !errors.Is(err, agents.ErrNotBlocked) {
+		t.Errorf("unblocking twice = %v, want ErrNotBlocked", err)
+	}
+}
+
+func TestStillActiveIsTrueOnlyForAnActiveAgent(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "One")
+	m := r.enrolMember(t, c)
+	if !r.svc.StillActive(m.id) {
+		t.Error("an active agent is not active")
+	}
+	if r.svc.StillActive("no-such-agent") {
+		t.Error("an unknown agent is active")
+	}
+	if err := r.svc.Revoke(r.ctx, ops, c.EnvID, m.id, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if r.svc.StillActive(m.id) {
+		t.Error("a revoked agent is active")
+	}
+}
