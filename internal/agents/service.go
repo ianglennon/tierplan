@@ -151,14 +151,23 @@ type SessionKicker interface {
 	KickEnv(envID, code string)
 }
 
+// EnvNotifier is told when something about an environment changed that its health
+// shows, so the overview updates at once and not at the next tick. The health
+// broker is one. It never blocks.
+type EnvNotifier interface {
+	Notify(envID string)
+}
+
 // Service creates agent environments and enrols agents.
 type Service struct {
 	st  *store.Store
 	v   *vault.Vault
 	aud *audit.Writer
 	now func() time.Time
-	// kicker is set before the service is used (WithKicker).
-	kicker SessionKicker
+	// kicker and notifier are set before the service is used (WithKicker,
+	// WithNotifier).
+	kicker   SessionKicker
+	notifier EnvNotifier
 
 	// seen is when last_seen_at was last written for each agent, so TouchLastSeen
 	// can skip all but one write a minute.
@@ -179,6 +188,14 @@ func NewService(st *store.Store, v *vault.Vault, w *audit.Writer, now func() tim
 // service is used.
 func (s *Service) WithKicker(k SessionKicker) *Service {
 	s.kicker = k
+	return s
+}
+
+// WithNotifier tells the service who to tell when an environment's cluster
+// change is recorded or adopted. Without one the overview learns at its next
+// tick. Call it before the service is used.
+func (s *Service) WithNotifier(n EnvNotifier) *Service {
+	s.notifier = n
 	return s
 }
 
@@ -512,7 +529,7 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	// A blank environment name is the first agent's hostname (D-23); a name the
 	// admin typed is never overwritten.
 	if host != "" {
-		if _, err := q.NameEnvironmentIfBlank(ctx, sqlc.NameEnvironmentIfBlankParams{Name: host, UpdatedAt: ts, ID: envID}); err != nil {
+		if _, err := q.NameEnvironmentAuto(ctx, sqlc.NameEnvironmentAutoParams{Name: host, UpdatedAt: ts, ID: envID}); err != nil {
 			return tunnel.EnrolResult{}, fmt.Errorf("name the environment: %w", err)
 		}
 	}

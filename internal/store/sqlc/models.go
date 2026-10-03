@@ -95,6 +95,8 @@ type Environment struct {
 	EngineID         sql.NullString
 	ClusterChangedAt sql.NullInt64
 	AutoUpdate       int64
+	PendingClusterID sql.NullString
+	NameAuto         int64
 }
 
 type Role struct {

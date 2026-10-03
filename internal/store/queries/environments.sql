@@ -15,7 +15,7 @@ INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, upda
 VALUES (?, ?, ?, ?, 1, ?, ?);
 
 -- name: RenameEnvironment :execrows
-UPDATE environments SET name = ?, updated_at = ? WHERE id = ?;
+UPDATE environments SET name = ?, name_auto = 0, updated_at = ? WHERE id = ?;
 
 -- name: DeleteEnvironment :execrows
 DELETE FROM environments WHERE id = ?;

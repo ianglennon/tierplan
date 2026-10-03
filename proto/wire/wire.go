@@ -220,10 +220,13 @@ const (
 const (
 	RefuseDuplicateEnvironment = "duplicate_environment"
 	RefuseTypeMismatch         = "type_mismatch"
-	RefuseTokenDisabled        = "token_disabled"
-	RefuseTokenSuperseded      = "token_superseded"
-	RefuseInsecureTransport    = "insecure_transport"
-	RefuseRateLimited          = "rate_limited"
+	// RefuseHostMismatch means a standalone environment is bound to one host and a
+	// different host enrolled into it.
+	RefuseHostMismatch      = "host_mismatch"
+	RefuseTokenDisabled     = "token_disabled"
+	RefuseTokenSuperseded   = "token_superseded"
+	RefuseInsecureTransport = "insecure_transport"
+	RefuseRateLimited       = "rate_limited"
 	// RefuseInternal means the server failed while handling an otherwise valid
 	// handshake. The agent should retry with backoff.
 	RefuseInternal = "internal_error"

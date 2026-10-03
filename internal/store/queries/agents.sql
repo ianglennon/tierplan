@@ -2,11 +2,55 @@
    SPDX-FileCopyrightText: 2026 The Bayplan Authors */
 
 -- name: InsertAgentEnvironment :exec
-INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at)
-VALUES (?, 'agent', ?, '', 1, ?, ?);
+INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, name_auto)
+VALUES (?, 'agent', ?, '', 1, ?, ?, ?);
 
--- name: NameEnvironmentIfBlank :execrows
-UPDATE environments SET name = ?, updated_at = ? WHERE id = ? AND name = '';
+-- name: NameEnvironmentAuto :execrows
+UPDATE environments SET name = ?, name_auto = 0, updated_at = ?
+WHERE id = ? AND (name_auto = 1 OR name = '');
+
+-- name: BindEnvironmentType :execrows
+UPDATE environments SET env_type = ?, updated_at = ? WHERE id = ? AND env_type IS NULL;
+
+-- name: BindEnvironmentEngine :execrows
+UPDATE environments SET engine_id = ?, updated_at = ? WHERE id = ? AND engine_id IS NULL;
+
+-- name: BindEnvironmentCluster :execrows
+UPDATE environments SET swarm_cluster_id = ?, updated_at = ? WHERE id = ? AND swarm_cluster_id IS NULL;
+
+-- name: RecordClusterChange :execrows
+UPDATE environments SET cluster_changed_at = ?, pending_cluster_id = ?, updated_at = ?
+WHERE id = ? AND kind = 'agent' AND cluster_changed_at IS NULL;
+
+-- name: AdoptPendingCluster :execrows
+UPDATE environments
+SET swarm_cluster_id = pending_cluster_id, pending_cluster_id = NULL, cluster_changed_at = NULL, updated_at = ?
+WHERE id = ? AND kind = 'agent' AND cluster_changed_at IS NOT NULL AND pending_cluster_id IS NOT NULL;
+
+-- The duplicate checks of an enrolment. Each answers the name of another agent
+-- environment that already owns the identity, or no row. The local socket
+-- environment is never one of them (D-12, D-48).
+
+-- name: OtherEnvironmentWithEngine :one
+SELECT e.name FROM environments e
+WHERE e.kind = 'agent' AND e.id <> sqlc.arg(env_id)
+  AND (e.engine_id = sqlc.arg(engine_id)
+       OR EXISTS (SELECT 1 FROM agents a WHERE a.env_id = e.id AND a.status = 'active' AND a.engine_id = sqlc.arg(engine_id)))
+ORDER BY e.created_at, e.id
+LIMIT 1;
+
+-- name: OtherEnvironmentWithCluster :one
+SELECT e.name FROM environments e
+WHERE e.kind = 'agent' AND e.id <> sqlc.arg(env_id) AND e.swarm_cluster_id = sqlc.arg(cluster_id)
+ORDER BY e.created_at, e.id
+LIMIT 1;
+
+-- name: OtherEnvironmentWithSwarmNode :one
+SELECT e.name FROM agents a
+JOIN environments e ON e.id = a.env_id
+WHERE e.kind = 'agent' AND a.env_id <> sqlc.arg(env_id) AND a.status = 'active' AND a.swarm_node_id = sqlc.arg(node_id)
+ORDER BY e.created_at, e.id
+LIMIT 1;
 
 -- name: InsertJoinToken :exec
 INSERT INTO env_join_tokens (id, env_id, token_hash, generation, created_at, created_by)

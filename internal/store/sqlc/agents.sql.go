@@ -44,6 +44,25 @@ func (q *Queries) ActiveAgentRoles(ctx context.Context, envID string) ([]ActiveA
 	return items, nil
 }
 
+const adoptPendingCluster = `-- name: AdoptPendingCluster :execrows
+UPDATE environments
+SET swarm_cluster_id = pending_cluster_id, pending_cluster_id = NULL, cluster_changed_at = NULL, updated_at = ?
+WHERE id = ? AND kind = 'agent' AND cluster_changed_at IS NOT NULL AND pending_cluster_id IS NOT NULL
+`
+
+type AdoptPendingClusterParams struct {
+	UpdatedAt int64
+	ID        string
+}
+
+func (q *Queries) AdoptPendingCluster(ctx context.Context, arg AdoptPendingClusterParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, adoptPendingCluster, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const agentEnvironmentExists = `-- name: AgentEnvironmentExists :one
 SELECT COUNT(*) FROM environments WHERE id = ? AND kind = 'agent'
 `
@@ -53,6 +72,60 @@ func (q *Queries) AgentEnvironmentExists(ctx context.Context, id string) (int64,
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const bindEnvironmentCluster = `-- name: BindEnvironmentCluster :execrows
+UPDATE environments SET swarm_cluster_id = ?, updated_at = ? WHERE id = ? AND swarm_cluster_id IS NULL
+`
+
+type BindEnvironmentClusterParams struct {
+	SwarmClusterID sql.NullString
+	UpdatedAt      int64
+	ID             string
+}
+
+func (q *Queries) BindEnvironmentCluster(ctx context.Context, arg BindEnvironmentClusterParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindEnvironmentCluster, arg.SwarmClusterID, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const bindEnvironmentEngine = `-- name: BindEnvironmentEngine :execrows
+UPDATE environments SET engine_id = ?, updated_at = ? WHERE id = ? AND engine_id IS NULL
+`
+
+type BindEnvironmentEngineParams struct {
+	EngineID  sql.NullString
+	UpdatedAt int64
+	ID        string
+}
+
+func (q *Queries) BindEnvironmentEngine(ctx context.Context, arg BindEnvironmentEngineParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindEnvironmentEngine, arg.EngineID, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const bindEnvironmentType = `-- name: BindEnvironmentType :execrows
+UPDATE environments SET env_type = ?, updated_at = ? WHERE id = ? AND env_type IS NULL
+`
+
+type BindEnvironmentTypeParams struct {
+	EnvType   sql.NullString
+	UpdatedAt int64
+	ID        string
+}
+
+func (q *Queries) BindEnvironmentType(ctx context.Context, arg BindEnvironmentTypeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindEnvironmentType, arg.EnvType, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteBlocksForAgent = `-- name: DeleteBlocksForAgent :execrows
@@ -178,8 +251,8 @@ const insertAgentEnvironment = `-- name: InsertAgentEnvironment :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The Bayplan Authors */
 
-INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at)
-VALUES (?, 'agent', ?, '', 1, ?, ?)
+INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, name_auto)
+VALUES (?, 'agent', ?, '', 1, ?, ?, ?)
 `
 
 type InsertAgentEnvironmentParams struct {
@@ -187,6 +260,7 @@ type InsertAgentEnvironmentParams struct {
 	Name      string
 	CreatedAt int64
 	UpdatedAt int64
+	NameAuto  int64
 }
 
 func (q *Queries) InsertAgentEnvironment(ctx context.Context, arg InsertAgentEnvironmentParams) error {
@@ -195,6 +269,7 @@ func (q *Queries) InsertAgentEnvironment(ctx context.Context, arg InsertAgentEnv
 		arg.Name,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.NameAuto,
 	)
 	return err
 }
@@ -448,18 +523,19 @@ func (q *Queries) ListJoinTokens(ctx context.Context, envID string) ([]EnvJoinTo
 	return items, nil
 }
 
-const nameEnvironmentIfBlank = `-- name: NameEnvironmentIfBlank :execrows
-UPDATE environments SET name = ?, updated_at = ? WHERE id = ? AND name = ''
+const nameEnvironmentAuto = `-- name: NameEnvironmentAuto :execrows
+UPDATE environments SET name = ?, name_auto = 0, updated_at = ?
+WHERE id = ? AND (name_auto = 1 OR name = '')
 `
 
-type NameEnvironmentIfBlankParams struct {
+type NameEnvironmentAutoParams struct {
 	Name      string
 	UpdatedAt int64
 	ID        string
 }
 
-func (q *Queries) NameEnvironmentIfBlank(ctx context.Context, arg NameEnvironmentIfBlankParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, nameEnvironmentIfBlank, arg.Name, arg.UpdatedAt, arg.ID)
+func (q *Queries) NameEnvironmentAuto(ctx context.Context, arg NameEnvironmentAutoParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, nameEnvironmentAuto, arg.Name, arg.UpdatedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -477,6 +553,95 @@ func (q *Queries) NextGeneration(ctx context.Context, envID string) (int64, erro
 	var next_generation int64
 	err := row.Scan(&next_generation)
 	return next_generation, err
+}
+
+const otherEnvironmentWithCluster = `-- name: OtherEnvironmentWithCluster :one
+SELECT e.name FROM environments e
+WHERE e.kind = 'agent' AND e.id <> ?1 AND e.swarm_cluster_id = ?2
+ORDER BY e.created_at, e.id
+LIMIT 1
+`
+
+type OtherEnvironmentWithClusterParams struct {
+	EnvID     string
+	ClusterID sql.NullString
+}
+
+func (q *Queries) OtherEnvironmentWithCluster(ctx context.Context, arg OtherEnvironmentWithClusterParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, otherEnvironmentWithCluster, arg.EnvID, arg.ClusterID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
+const otherEnvironmentWithEngine = `-- name: OtherEnvironmentWithEngine :one
+
+SELECT e.name FROM environments e
+WHERE e.kind = 'agent' AND e.id <> ?1
+  AND (e.engine_id = ?2
+       OR EXISTS (SELECT 1 FROM agents a WHERE a.env_id = e.id AND a.status = 'active' AND a.engine_id = ?2))
+ORDER BY e.created_at, e.id
+LIMIT 1
+`
+
+type OtherEnvironmentWithEngineParams struct {
+	EnvID    string
+	EngineID sql.NullString
+}
+
+// The duplicate checks of an enrolment. Each answers the name of another agent
+// environment that already owns the identity, or no row. The local socket
+// environment is never one of them (D-12, D-48).
+func (q *Queries) OtherEnvironmentWithEngine(ctx context.Context, arg OtherEnvironmentWithEngineParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, otherEnvironmentWithEngine, arg.EnvID, arg.EngineID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
+const otherEnvironmentWithSwarmNode = `-- name: OtherEnvironmentWithSwarmNode :one
+SELECT e.name FROM agents a
+JOIN environments e ON e.id = a.env_id
+WHERE e.kind = 'agent' AND a.env_id <> ?1 AND a.status = 'active' AND a.swarm_node_id = ?2
+ORDER BY e.created_at, e.id
+LIMIT 1
+`
+
+type OtherEnvironmentWithSwarmNodeParams struct {
+	EnvID  string
+	NodeID sql.NullString
+}
+
+func (q *Queries) OtherEnvironmentWithSwarmNode(ctx context.Context, arg OtherEnvironmentWithSwarmNodeParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, otherEnvironmentWithSwarmNode, arg.EnvID, arg.NodeID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
+const recordClusterChange = `-- name: RecordClusterChange :execrows
+UPDATE environments SET cluster_changed_at = ?, pending_cluster_id = ?, updated_at = ?
+WHERE id = ? AND kind = 'agent' AND cluster_changed_at IS NULL
+`
+
+type RecordClusterChangeParams struct {
+	ClusterChangedAt sql.NullInt64
+	PendingClusterID sql.NullString
+	UpdatedAt        int64
+	ID               string
+}
+
+func (q *Queries) RecordClusterChange(ctx context.Context, arg RecordClusterChangeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordClusterChange,
+		arg.ClusterChangedAt,
+		arg.PendingClusterID,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const revokeAgent = `-- name: RevokeAgent :execrows
