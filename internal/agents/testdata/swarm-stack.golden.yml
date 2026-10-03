@@ -1,0 +1,40 @@
+# Create the secret first:  printf %s 'bpjt_E_S' | docker secret create bayplan-agent-token-g1 -
+# Then deploy this file:  docker stack deploy -c bayplan-agent.yml bayplan
+services:
+  bayplan-agent:
+    image: ghcr.io/ianglennon/bayplan-agent:0.2.0
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    labels:
+      bayplan.agent: "true"
+    environment:
+      BAYPLAN_AGENT_URL: "wss://example.com/bayplan/agent/connect"
+      BAYPLAN_AGENT_PIN: "sha256/P"
+      BAYPLAN_AGENT_JOIN_TOKEN_FILE: /run/secrets/bayplan-agent-token
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - bayplan-agent:/var/lib/bayplan-agent
+    secrets:
+      - source: bayplan-agent-token-g1
+        target: bayplan-agent-token
+        mode: 0400
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.platform.os == linux
+      update_config:
+        parallelism: 1
+        delay: 10s
+      labels:
+        bayplan.agent: "true"
+volumes:
+  bayplan-agent:
+    name: bayplan-agent
+secrets:
+  bayplan-agent-token-g1:
+    external: true

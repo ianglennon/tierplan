@@ -20,7 +20,7 @@ import (
 var update = flag.Bool("update", false, "rewrite the install golden files")
 
 const (
-	goldenToken    = "bpjt_E_S"
+	goldenToken    = "bpjt_E_S" //nolint:gosec // a made-up token for the golden files
 	goldenEndpoint = "wss://example.com/bayplan/agent/connect"
 	goldenPin      = "sha256/P"
 )
