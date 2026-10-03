@@ -70,6 +70,7 @@ interface Stub {
   environments: () => Response;
   summary: () => Response;
   reconnect: () => Response | Promise<Response>;
+  adopt?: () => Response | Promise<Response>;
 }
 
 let sent: { path: string; method: string; csrf: string | null }[] = [];
@@ -97,6 +98,7 @@ function stubApi() {
       if (path === "/api/environments") return stub.environments();
       if (path === "/api/env/e1/summary") return stub.summary();
       if (path === "/api/env/e1/reconnect") return stub.reconnect();
+      if (path === "/api/environments/e1/adopt-cluster" && stub.adopt) return stub.adopt();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -486,6 +488,50 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
     ).toBeTruthy();
     const remove = screen.getByRole("link", { name: "Remove environment" });
     expect(remove.getAttribute("href")).toBe("/settings/environments/e1#remove");
+  });
+
+  it("offers Adopt new cluster first and Remove environment second, and adopting posts once and brings the page back", async () => {
+    grant("environments.read", "environments.manage", "environments.delete");
+    withAgentEnv(
+      { state: "cluster_changed", reason: "cluster_changed" },
+      { pendingClusterId: "x3k2m9t0q4w5e6r7t8y9u0i1o" },
+    );
+    stub.summary = () =>
+      problem(503, "environment_offline", { state: "cluster_changed", reason: "cluster_changed" });
+    stub.adopt = () => Response.json({ clusterId: "x3k2m9t0q4w5e6r7t8y9u0i1o" });
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "This swarm was re-initialised" });
+    const adopt = screen.getByRole("button", { name: "Adopt new cluster" });
+    const remove = screen.getByRole("link", { name: "Remove environment" });
+    // The primary action comes first.
+    expect(adopt.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(adopt);
+    const dialog = await screen.findByRole("dialog", { name: "Adopt the new cluster?" });
+    expect(dialog.textContent).toContain("x3k2m9t0q4w5e6r7t8y9u0i1o");
+
+    // The adopt makes the environment whole again: the list and the summary say so.
+    stub.environments = () => Response.json({ items: [{ ...AGENT, status: { state: "online" } }] });
+    stub.summary = () => Response.json(SUMMARY);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Adopt new cluster" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(
+      sent.filter((s) => s.method === "POST" && s.path.endsWith("/adopt-cluster")),
+    ).toHaveLength(1);
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "This swarm was re-initialised" })).toBeNull(),
+    );
+  });
+
+  it("does not offer Adopt new cluster to someone who may not manage the environment", async () => {
+    grant("environments.read", "environments.delete");
+    withAgentEnv({ state: "cluster_changed", reason: "cluster_changed" });
+    stub.summary = () =>
+      problem(503, "environment_offline", { state: "cluster_changed", reason: "cluster_changed" });
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "This swarm was re-initialised" });
+    expect(screen.queryByRole("button", { name: "Adopt new cluster" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Remove environment" })).toBeTruthy();
   });
 
   it("returns to the page by itself when the stream reports the environment online", async () => {

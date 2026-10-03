@@ -211,3 +211,23 @@ export async function rotateToken(envId: string): Promise<RotateAnswer> {
   if (!data) throw new InstallRequestError(error, response);
   return data;
 }
+
+// AdoptClusterError is a failed adopt. It keeps the status and the problem type,
+// which is what the dialog picks its sentence from.
+export class AdoptClusterError extends Error {
+  readonly status: number;
+  readonly type?: string;
+
+  constructor(body: unknown, response?: { status: number }) {
+    const problem = readProblem(body, response);
+    super(`adopt failed with status ${problem.status}`);
+    this.name = "AdoptClusterError";
+    this.status = problem.status;
+    this.type = problem.type;
+  }
+}
+
+// adoptCluster binds the environment to the cluster its managers now report.
+export async function adoptCluster(_envId: string): Promise<void> {
+  throw new Error("adoptCluster is not implemented");
+}

@@ -139,6 +139,9 @@ beforeEach(() => {
         });
       }
       if (path === "/api/env/e2/agents") return Response.json({ items: [NODE] });
+      if (path === "/api/environments/e2/adopt-cluster") {
+        return Response.json({ clusterId: "x3k2m9t0q4w5e6r7t8y9u0i1o" });
+      }
       if (path === "/api/environments/e2/agents/a1/revoke")
         return new Response(null, { status: 204 });
       return Response.json({}, { status: 404 });
@@ -237,6 +240,52 @@ describe("/settings/environments/$envId", () => {
     expect(await within_.findByText("Degraded")).toBeTruthy();
     expect(within_.getByText(/The agent on db-2 isn't connected\./)).toBeTruthy();
     expect(within_.getByText("and 1 more issue")).toBeTruthy();
+  });
+
+  it("offers Adopt new cluster on the Connection card while the cluster is changed, and not otherwise", async () => {
+    items = [
+      env({
+        status: {
+          state: "cluster_changed",
+          reason: "cluster_changed",
+          since: "2026-10-03T09:00:00Z",
+        },
+        pendingClusterId: "x3k2m9t0q4w5e6r7t8y9u0i1o",
+      }),
+      LOCAL,
+    ];
+    renderAt("/settings/environments/e2");
+    const card = (await screen.findByRole("heading", { name: "Connection" })).closest("section");
+    const button = await within(card as HTMLElement).findByRole("button", {
+      name: "Adopt new cluster",
+    });
+    fireEvent.click(button);
+    const dialog = await screen.findByRole("dialog", { name: "Adopt the new cluster?" });
+    expect(dialog.textContent).toContain(
+      "edge will be bound to the swarm that now reports cluster ID x3k2m9t0q4w5e6r7t8y9u0i1o",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Adopt new cluster" }));
+    await waitFor(() => expect(seen).toContain("POST /api/environments/e2/adopt-cluster"));
+  });
+
+  it("does not offer Adopt new cluster on an online environment or to someone without environments.manage", async () => {
+    renderAt("/settings/environments/e2");
+    const card = (await screen.findByRole("heading", { name: "Connection" })).closest("section");
+    expect(
+      within(card as HTMLElement).queryByRole("button", { name: "Adopt new cluster" }),
+    ).toBeNull();
+    cleanup();
+
+    items = [env({ status: { state: "cluster_changed", reason: "cluster_changed" } }), LOCAL];
+    current = me(["environments.read", "environments.token"], ["settings.read"]);
+    renderAt("/settings/environments/e2");
+    const card2 = (await screen.findByRole("heading", { name: "Connection" })).closest("section");
+    expect(
+      await within(card2 as HTMLElement).findByText("This swarm was re-initialised."),
+    ).toBeTruthy();
+    expect(
+      within(card2 as HTMLElement).queryByRole("button", { name: "Adopt new cluster" }),
+    ).toBeNull();
   });
 
   it("shows only the check command that fits a swarm, not the standalone one too", async () => {

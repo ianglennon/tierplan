@@ -9,7 +9,7 @@ import "@/i18n";
 
 afterEach(cleanup);
 
-// Every D-40 code, then the two enrolment-only refusals, then the one extra
+// Every D-40 code, then the three enrolment-only refusals, then the one extra
 // issue code the health rollup can report.
 const D40 = [
   "agent_offline",
@@ -28,7 +28,7 @@ const D40 = [
   "unsupported_engine",
   "agent_policy_denied",
 ];
-const ENROLMENT = ["duplicate_environment", "type_mismatch"];
+const ENROLMENT = ["duplicate_environment", "type_mismatch", "host_mismatch"];
 const EXTRA = ["cert_expiring"];
 // The codes the local Docker socket reports (UI-SPEC Connection reason codes).
 const LOCAL = ["unreachable", "api_too_old", "podman", "rootless", "docker_desktop"];
@@ -169,6 +169,18 @@ describe("ReasonText", () => {
     );
   });
 
+  it("says what host_mismatch is, with or without the names", () => {
+    const { rerender, container } = render(
+      <ReasonText code="host_mismatch" params={{ host: "edge-2", environment: "lab" }} />,
+    );
+    expect(container.textContent).toContain("lab already manages a different host.");
+    expect(container.textContent).toContain("Add edge-2 as its own environment.");
+    rerender(<ReasonText code="host_mismatch" />);
+    expect(container.textContent).toContain("This environment already manages a different host.");
+    expect(container.textContent).toContain("Add this host as its own environment.");
+    expect(container.textContent).not.toContain("{{");
+  });
+
   it("gives a code it does not know a generic line and does not crash", () => {
     const { container } = render(<ReasonText code="teapot" />);
     expect(container.textContent).toContain("Connection problem (teapot)");
@@ -200,9 +212,9 @@ describe("ReasonText", () => {
       });
     }
 
-    it("covers 15 D-40 codes and the two enrolment refusals", () => {
+    it("covers 15 D-40 codes and the three enrolment refusals", () => {
       expect(D40).toHaveLength(15);
-      expect(ENROLMENT).toEqual(["duplicate_environment", "type_mismatch"]);
+      expect(ENROLMENT).toEqual(["duplicate_environment", "type_mismatch", "host_mismatch"]);
     });
   });
 
