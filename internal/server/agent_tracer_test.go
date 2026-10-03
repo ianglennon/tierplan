@@ -231,7 +231,9 @@ func TestAgentTracerStandaloneEnrolsAndComesOnline(t *testing.T) {
 				}
 			}
 		}
-		if got.Status.State == "online" {
+		// The engine comes from the target's probe, which can land a moment after the
+		// rollup says online: wait for both.
+		if got.Status.State == "online" && got.Engine.Version != "" {
 			break
 		}
 		select {
