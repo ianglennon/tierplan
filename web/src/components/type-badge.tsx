@@ -5,9 +5,15 @@ import type { EnvironmentItem } from "@/api/environments";
 import { Badge } from "@/components/ui/badge";
 import { useT } from "@/i18n/use-t";
 
+interface TypeBadgeProps {
+  type?: EnvironmentItem["type"];
+  envType?: EnvironmentItem["envType"];
+  isLocalSocket?: boolean;
+}
+
 // TypeBadge is the neutral outline badge naming what an environment is. It
 // never truncates, and it is left out until the engine has answered.
-export function TypeBadge({ type }: { type: EnvironmentItem["type"] }) {
+export function TypeBadge({ type }: TypeBadgeProps) {
   const t = useT();
   if (!type) return null;
   return (
