@@ -153,6 +153,17 @@ func Start(t testing.TB, o Options) *Server {
 	return s
 }
 
+// Row is the environment's database row: the swarm cluster ID it is bound to,
+// the engine ID, and the pending cluster after a re-initialisation.
+func (s *Server) Row(id string) sqlc.Environment {
+	s.t.Helper()
+	row, err := s.srv.Store().RQ.GetEnvironment(context.Background(), id)
+	if err != nil {
+		s.t.Fatalf("read environment %s: %v", id, err)
+	}
+	return row
+}
+
 // Core is the server, for a test that needs something the HTTP API does not say.
 func (s *Server) Core() *server.Server { return s.srv }
 

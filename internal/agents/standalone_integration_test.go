@@ -116,14 +116,3 @@ func TestStandaloneAgent(t *testing.T) {
 		t.Errorf("agent network mode and bindings = %q, want the default bridge with no published port", nm)
 	}
 }
-
-// fieldOf returns the value of a /proc/<pid>/status line, with the tabs of the
-// kernel's layout turned into single spaces.
-func fieldOf(status, key string) string {
-	for _, line := range strings.Split(status, "\n") {
-		if rest, ok := strings.CutPrefix(line, key); ok {
-			return strings.Join(strings.Fields(rest), " ")
-		}
-	}
-	return ""
-}

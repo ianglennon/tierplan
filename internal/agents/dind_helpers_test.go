@@ -44,8 +44,9 @@ func dumpOnFailure(t *testing.T, nodes ...*dockertest.Node) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			for _, line := range []string{
 				"docker ps -a --format '{{.Names}} {{.Image}} {{.Status}}'",
-				"docker logs --tail 40 bayplan-agent 2>&1",
-				"docker service ls 2>&1; docker service ps --no-trunc bayplan-agent 2>&1",
+				// Every agent container, a standalone one or a swarm task's, by its label.
+				"for c in $(docker ps -aq --filter label=bayplan.agent=true); do docker logs --tail 40 $c 2>&1; done",
+				"if [ \"$(docker info -f '{{.Swarm.ControlAvailable}}')\" = true ]; then docker service ls; docker service ps --no-trunc $(docker service ls -q) 2>&1 | head -30; fi",
 			} {
 				out, _ := n.Sh(ctx, line)
 				t.Logf("%s: %s\n%s", n.Hostname, line, strings.TrimSpace(out))
@@ -53,4 +54,15 @@ func dumpOnFailure(t *testing.T, nodes ...*dockertest.Node) {
 			cancel()
 		}
 	})
+}
+
+// fieldOf returns the value of a /proc/<pid>/status line, with the tabs of the
+// kernel's layout turned into single spaces.
+func fieldOf(status, key string) string {
+	for _, line := range strings.Split(status, "\n") {
+		if rest, ok := strings.CutPrefix(line, key); ok {
+			return strings.Join(strings.Fields(rest), " ")
+		}
+	}
+	return ""
 }

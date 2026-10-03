@@ -10,9 +10,10 @@ run:
   timeout: 5m
   # Lint the real-engine tests (internal/dockerx/integration_test.go) too: they
   # are only compiled with this tag, so without it depguard and errcheck never
-  # see them (plan 15).
+  # see them (plan 15). The swarm suite (plan 23) is tagged the same way.
   build-tags:
     - integration
+    - swarm
 
 linters:
   default: none
