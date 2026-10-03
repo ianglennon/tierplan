@@ -66,6 +66,10 @@ type EnrolRequest struct {
 	Facts        wire.Facts
 	// IP is the client address for the audit entry.
 	IP string
+	// ClockOffset is how far the agent's clock is ahead of the server's, measured
+	// in the handshake. The Verifier refuses it with CheckClock, after it has
+	// checked the token and before it issues a certificate.
+	ClockOffset time.Duration
 }
 
 // EnrolResult is what a successful enrolment hands back.
@@ -97,6 +101,9 @@ type HelloRequest struct {
 	Facts        wire.Facts
 	// IP is the client address for the audit trail.
 	IP string
+	// ClockOffset is how far the agent's clock is ahead of the server's. The
+	// Verifier refuses it with CheckClock once the signature has checked out.
+	ClockOffset time.Duration
 }
 
 // HelloResult is what a successful hello hands back.
@@ -244,6 +251,12 @@ type Hub struct {
 	refusals         auth.AuditRecorder
 	onUpgradeFailure func(peer string)
 	maxResponse      int64
+
+	// serverVersion is what Compatible measures agents against, and updateHint
+	// the manual update command added to a refusal for a version outside the
+	// window.
+	serverVersion string
+	updateHint    func(tooOld bool) string
 
 	// life serializes session lifecycle transitions together with the Observer
 	// calls they cause, so for one agent the Observer hears Connected, then

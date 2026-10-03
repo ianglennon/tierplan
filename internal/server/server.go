@@ -306,6 +306,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		WithPublicURL(inst.PublicURL).
 		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
 		WithLastSeen(agentSvc).
+		WithServerVersion(buildinfo.Get().Version).
 		WithAllowInsecure(cfg.AgentAllowInsecure).
 		WithConnectLimit(cfg.AgentConnectBurst).
 		WithRefusalAudit(agentAudit)

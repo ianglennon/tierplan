@@ -24,10 +24,11 @@ const (
 	// transcriptDomain separates this signature from any other use of the same
 	// key, and carries the transcript version.
 	transcriptDomain = "bayplan-agent-auth/v1\x00"
-	// ekmLabel is the TLS exporter label of the channel binding.
-	ekmLabel = "EXPORTER-bayplan-agent-auth-v1"
-	// ekmLen is the length of the exported keying material.
-	ekmLen = 32
+	// EKMLabel is the TLS exporter label of the channel binding (D-05). Both ends
+	// export with it, and the value is part of the signed transcript.
+	EKMLabel = "EXPORTER-bayplan-agent-auth-v1"
+	// EKMLength is the length of the exported keying material.
+	EKMLength = 32
 	// maxField is the longest field a two-byte length prefix can describe.
 	maxField = 0xFFFF
 )
@@ -83,12 +84,15 @@ func SPKIPin(c *x509.Certificate) string {
 }
 
 // EKM is the channel-binding material of a TLS connection, or nil when the
-// connection has none (plain HTTP, or a state that cannot export).
+// connection has none (plain HTTP, or a state that cannot export). It is
+// ExportKeyingMaterial(EKMLabel, nil, EKMLength). The agent calls it on the TLS
+// state of its dial response and the server on r.TLS, so the two agree exactly
+// when they are on the same TLS connection.
 func EKM(cs *tls.ConnectionState) []byte {
 	if cs == nil {
 		return nil
 	}
-	out, err := cs.ExportKeyingMaterial(ekmLabel, nil, ekmLen)
+	out, err := cs.ExportKeyingMaterial(EKMLabel, nil, EKMLength)
 	if err != nil {
 		return nil
 	}

@@ -302,7 +302,7 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	c.SetReadLimit(wire.MaxHandshakeBytes)
 
 	hctx, cancel := context.WithTimeout(ctx, wire.HandshakeTimeout)
-	welcome, err := handshake(hctx, c, resp, r.cfg.Version, r.aud, cr, facts)
+	welcome, err := handshake(hctx, c, resp, r.cfg.Version, r.aud, cr, facts, r.env.now)
 	cancel()
 	if err != nil {
 		return false, err
@@ -405,7 +405,7 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 // is made with the key the certificate was issued for, over a transcript that
 // carries the certificate.
 func handshake(ctx context.Context, c *websocket.Conn, resp *http.Response, version, aud string,
-	cr credentials, facts wire.Facts) (wire.Welcome, error) {
+	cr credentials, facts wire.Facts, now func() time.Time) (wire.Welcome, error) {
 	var ch wire.Challenge
 	var first json.RawMessage
 	if err := readJSON(ctx, c, &first); err != nil {
@@ -430,13 +430,16 @@ func handshake(ctx context.Context, c *websocket.Conn, resp *http.Response, vers
 	if _, err := rand.Read(nonce); err != nil {
 		return wire.Welcome{}, fmt.Errorf("generate a nonce: %w", err)
 	}
+	// The channel binding: ExportKeyingMaterial on the TLS state of the dial
+	// response. A server that terminates TLS itself computes the same value; behind
+	// a TLS-terminating proxy the two differ and the server does not compare them.
 	var ekm []byte
 	if resp != nil {
 		ekm = authn.EKM(resp.TLS)
 	}
 	auth := wire.Auth{
 		T: wire.TypeAuth, Mode: cr.mode, Proto: wire.ProtoVersion, AgentVersion: version,
-		Aud: aud, Nonce: nonce, TS: time.Now().UnixMilli(), EKM: ekm, Facts: facts,
+		Aud: aud, Nonce: nonce, TS: now().UnixMilli(), EKM: ekm, Facts: facts,
 	}
 	var signed []byte
 	if cr.mode == wire.ModeHello {

@@ -212,6 +212,14 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 		return tunnel.EnrolResult{}, reject("bad_proof_of_possession")
 	}
 
+	// The order of RESEARCH Pattern 2 for an enrolment is token, blocked identity,
+	// duplicates, version, clock, then issuance. The token is above; the version
+	// window was checked by the hub before it asked. Plan 02-15 adds the block list
+	// and plan 02-19 the duplicate check here, ahead of the clock.
+	if err := tunnel.CheckClock(req.ClockOffset); err != nil {
+		return tunnel.EnrolResult{}, err
+	}
+
 	caRow, err := s.st.RQ.GetCA(ctx, envID)
 	if err != nil {
 		return tunnel.EnrolResult{}, fmt.Errorf("load the CA: %w", err)
@@ -379,6 +387,10 @@ func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.He
 	}
 	if !authn.Verify(pub, req.Transcript, req.Sig) {
 		return tunnel.HelloResult{}, reject("bad_signature")
+	}
+	// Only an agent that has proved its identity is told its clock is wrong.
+	if err := tunnel.CheckClock(req.ClockOffset); err != nil {
+		return tunnel.HelloResult{}, err
 	}
 	return tunnel.HelloResult{AgentID: agentID, EnvID: envID, NotAfter: leaf.NotAfter}, nil
 }

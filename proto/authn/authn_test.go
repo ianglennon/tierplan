@@ -169,3 +169,11 @@ func TestAudienceIsTheSameForAWebSocketURLAndThePublicURLItCameFrom(t *testing.T
 		t.Error("an empty URL has an audience")
 	}
 }
+
+func TestTheExporterLabelAndLengthAreFixedByTheProtocol(t *testing.T) {
+	// Deployed agents compute the binding with these two values; changing either
+	// is a new transcript version, not an edit (D-05).
+	if EKMLabel != "EXPORTER-bayplan-agent-auth-v1" || EKMLength != 32 {
+		t.Fatalf("EKMLabel %q, EKMLength %d", EKMLabel, EKMLength)
+	}
+}

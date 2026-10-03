@@ -89,6 +89,11 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		AgentID: acc.AgentID, EnvID: acc.EnvID, AgentVersion: acc.AgentVersion, Facts: acc.Facts,
 		IP: acc.IP, ConnectedAt: h.now(), ym: ym, ws: c, done: make(chan struct{}),
 		streams: make(chan struct{}, MaxSessionStreams), maxResponse: h.maxResponse,
+		status: SessionStatus{ClockOffset: acc.ClockOffset, ClockWarning: abs(acc.ClockOffset) > ClockWarnOffset},
+	}
+	if s.status.ClockWarning {
+		h.log.Warn("an agent's clock is off by more than the warning threshold",
+			"agent_id", s.AgentID, "environment_id", s.EnvID, "offset", acc.ClockOffset.Round(time.Second).String())
 	}
 	go func() {
 		<-ym.CloseChan()

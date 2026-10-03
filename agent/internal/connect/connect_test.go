@@ -740,3 +740,20 @@ func TestARefusalInPlaceOfTheChallengeIsReadAndItsRetryAfterIsHonoured(t *testin
 		t.Errorf("the agent tried %d times, want it to retry", attempts)
 	}
 }
+
+// The server measures the agent's clock from the ts of the auth message, so it is
+// the agent's own wall clock and nothing adjusted.
+func TestTheHandshakeCarriesTheAgentsOwnClockAndTheExporterOfItsDial(t *testing.T) {
+	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
+	fixed := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	env := fastEnv()
+	env.now = func() time.Time { return fixed }
+	startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok"}, env)
+	a, _ := srv.authN(t, 1)
+	if a.TS != fixed.UnixMilli() {
+		t.Errorf("ts = %d, want the agent's clock %d", a.TS, fixed.UnixMilli())
+	}
+	if len(a.EKM) != 0 {
+		t.Errorf("a plain ws:// dial carried an exporter value: %x", a.EKM)
+	}
+}

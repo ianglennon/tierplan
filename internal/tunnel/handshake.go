@@ -10,7 +10,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -35,6 +34,9 @@ type peerInfo struct {
 	trusted bool
 	// aud is the host[:port] the agent must have addressed.
 	aud string
+	// sentAt is when the challenge was sent and recvAt when the answer arrived,
+	// on the server's clock; the agent's clock is measured against their midpoint.
+	sentAt, recvAt time.Time
 }
 
 // accepted is a handshake the verifier let through.
@@ -45,6 +47,8 @@ type accepted struct {
 	AgentVersion string
 	Facts        wire.Facts
 	IP           string
+	// ClockOffset is how far the agent's clock is ahead of the server's.
+	ClockOffset time.Duration
 }
 
 // handshake runs the challenge, auth and welcome exchange. It sends a refuse
@@ -59,13 +63,16 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 		h.refuse(ctx, c, wire.RefuseInternal, "the server could not start the handshake")
 		return accepted{}, false
 	}
+	sentAt := h.now()
 	if err := writeJSON(ctx, c, wire.Challenge{
-		T: wire.TypeChallenge, Proto: wire.ProtoVersion, Nonce: serverNonce, TS: h.now().UnixMilli(),
+		T: wire.TypeChallenge, Proto: wire.ProtoVersion, Nonce: serverNonce, TS: sentAt.UnixMilli(),
+		ServerVersion: h.serverVersion,
 	}); err != nil {
 		return accepted{}, false
 	}
 
 	typ, data, err := c.Read(ctx)
+	recvAt := h.now()
 	if err != nil {
 		h.log.Info("agent handshake did not complete", "ip", ip, "error", err)
 		return accepted{}, false
@@ -81,7 +88,7 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 	}
 
 	acc, err := h.verifyAuth(ctx, a, serverNonce, peerInfo{
-		ip: ip, tls: r.TLS, trusted: httpx.PeerTrusted(r.Context()), aud: aud,
+		ip: ip, tls: r.TLS, trusted: httpx.PeerTrusted(r.Context()), aud: aud, sentAt: sentAt, recvAt: recvAt,
 	})
 	if err != nil {
 		var re *RefuseError
@@ -112,13 +119,28 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 // supplied. A refusal is a *RefuseError; any other error is a server fault.
 func (h *Hub) verifyAuth(ctx context.Context, a wire.Auth, serverNonce []byte, p peerInfo) (accepted, error) {
 	malformed := &RefuseError{Code: wire.ReasonAuthRejected, Detail: "the handshake message is malformed", AuditReason: "malformed"}
-	switch {
-	case a.Proto != wire.ProtoVersion:
-		return accepted{}, &RefuseError{
-			Code:        wire.ReasonVersionIncompatible,
-			Detail:      fmt.Sprintf("this server speaks protocol %d, the agent sent %d", wire.ProtoVersion, a.Proto),
-			AuditReason: "protocol",
+
+	// The protocol and the version window come first, for both modes: they need no
+	// database and no key, and an agent that cannot work with this server should
+	// hear that before anything else about it (D-25).
+	agentVersion := clip(a.AgentVersion, 64)
+	if ok, tooOld, detail := Compatible(h.serverVersion, agentVersion, a.Proto); !ok {
+		reason := "too_new"
+		switch {
+		case a.Proto != wire.ProtoVersion:
+			reason = "protocol"
+		case tooOld:
+			reason = "too_old"
 		}
+		if h.updateHint != nil {
+			if hint := h.updateHint(tooOld); hint != "" {
+				detail += ". " + hint
+			}
+		}
+		return accepted{}, &RefuseError{Code: wire.ReasonVersionIncompatible, Detail: detail, AuditReason: reason}
+	}
+
+	switch {
 	case a.Mode != wire.ModeEnrol && a.Mode != wire.ModeHello:
 		return accepted{}, malformed
 	case len(a.Nonce) != nonceLen || len(a.Sig) != ed25519.SignatureSize:
@@ -137,8 +159,8 @@ func (h *Hub) verifyAuth(ctx context.Context, a wire.Auth, serverNonce []byte, p
 		}
 	}
 
-	// Channel binding. When Bayplan terminates TLS itself both ends compute the
-	// same exporter value; behind a TLS-terminating proxy they cannot, so the
+	// Channel binding (D-05). When Bayplan terminates TLS itself both ends compute
+	// the same exporter value, authn.EKM over tls.ConnectionState.ExportKeyingMaterial; behind a TLS-terminating proxy they cannot, so the
 	// comparison is made only for a peer that is not a trusted proxy (RESEARCH
 	// Pattern 2). A mismatch for such a peer means a proxy that is not listed in
 	// BAYPLAN_TRUSTED_PROXIES, or a relay.
@@ -155,24 +177,30 @@ func (h *Hub) verifyAuth(ctx context.Context, a wire.Auth, serverNonce []byte, p
 		}
 	}
 
+	// The agent's clock against the middle of the time the exchange took, so the
+	// round trip does not count as skew (D-45). The Verifier refuses an offset past
+	// MaxClockOffset at the right point of its own checks; the hub keeps it for
+	// the session, which warns past ClockWarnOffset.
+	offset := time.UnixMilli(a.TS).Sub(p.sentAt.Add(p.recvAt.Sub(p.sentAt) / 2))
+
 	if a.Mode == wire.ModeHello {
 		res, err := h.v.Hello(ctx, HelloRequest{
 			AgentID: a.AgentID, Cert: a.Cert, Sig: a.Sig,
 			Transcript:   authn.Transcript(a.Mode, a.Proto, serverNonce, a.Nonce, p.aud, a.Cert, ekm),
-			AgentVersion: clip(a.AgentVersion, 64), Facts: a.Facts, IP: p.ip,
+			AgentVersion: agentVersion, Facts: a.Facts, IP: p.ip, ClockOffset: offset,
 		})
 		if err != nil {
 			return accepted{}, err
 		}
 		return accepted{
-			AgentID: res.AgentID, EnvID: res.EnvID, AgentVersion: clip(a.AgentVersion, 64), Facts: a.Facts, IP: p.ip,
+			AgentID: res.AgentID, EnvID: res.EnvID, AgentVersion: agentVersion, Facts: a.Facts, IP: p.ip, ClockOffset: offset,
 		}, nil
 	}
 
 	req := EnrolRequest{
 		Token: a.Token, Pub: a.Pub, Sig: a.Sig,
 		Transcript:   authn.Transcript(a.Mode, a.Proto, serverNonce, a.Nonce, p.aud, a.Pub, ekm),
-		AgentVersion: clip(a.AgentVersion, 64), Facts: a.Facts, IP: p.ip,
+		AgentVersion: agentVersion, Facts: a.Facts, IP: p.ip, ClockOffset: offset,
 	}
 	res, err := h.v.Enrol(ctx, req)
 	if err != nil {
@@ -180,6 +208,7 @@ func (h *Hub) verifyAuth(ctx context.Context, a wire.Auth, serverNonce []byte, p
 	}
 	return accepted{
 		AgentID: res.AgentID, EnvID: res.EnvID, Cert: res.Cert, AgentVersion: req.AgentVersion, Facts: req.Facts, IP: p.ip,
+		ClockOffset: offset,
 	}, nil
 }
 

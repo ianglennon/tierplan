@@ -365,8 +365,9 @@ func TestClockSkewOfFortySecondsIsAcceptedWithAWarningAndTwentyWithout(t *testin
 			t.Fatalf("no session for the agent %v off", tc.skew)
 		}
 		st := s.Status()
-		if st.ClockOffset != tc.skew || st.ClockWarning != tc.warn {
-			t.Errorf("skew %v: session says offset %v warning %v, want %v and %v", tc.skew, st.ClockOffset, st.ClockWarning, tc.skew, tc.warn)
+		// The agent's ts is whole milliseconds, so the offset is exact to a millisecond.
+		if d := st.ClockOffset - tc.skew; d < -time.Millisecond || d > time.Millisecond || st.ClockWarning != tc.warn {
+			t.Errorf("skew %v: session says offset %v warning %v, want about %v and %v", tc.skew, st.ClockOffset, st.ClockWarning, tc.skew, tc.warn)
 		}
 	}
 }

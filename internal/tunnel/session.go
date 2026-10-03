@@ -207,7 +207,7 @@ func (h *Hub) readControl(s *Session, st io.Reader) {
 // beat records a heartbeat in memory and tells the last-seen recorder.
 func (h *Hub) beat(s *Session, hb wire.Heartbeat) {
 	s.hbMu.Lock()
-	s.status = SessionStatus{LastHeartbeat: h.now(), EngineReachable: hb.EngineReachable, ClockMs: hb.ClockMs}
+	s.status.LastHeartbeat, s.status.EngineReachable, s.status.ClockMs = h.now(), hb.EngineReachable, hb.ClockMs
 	s.hbMu.Unlock()
 	h.touch(s)
 }
