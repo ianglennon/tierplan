@@ -63,12 +63,18 @@ func managerConfig(i int, nodes []dockertest.FakeNode, services []dockertest.Fak
 
 func newSwarmRig(t *testing.T, nodes []dockertest.FakeNode, services []dockertest.FakeService) *swarmRig {
 	t.Helper()
+	return newSwarmRigWith(t, nodes, services, nil)
+}
+
+// newSwarmRigWith is newSwarmRig with a reaper watching the node lists.
+func newSwarmRigWith(t *testing.T, nodes []dockertest.FakeNode, services []dockertest.FakeService, reaper NodeObserver) *swarmRig {
+	t.Helper()
 	r := newTunRig(t, nil)
 	r.pastGrace()
 	s := &swarmRig{tunRig: r, nodes: nodes}
 	s.env = r.srv.NewEnvironment(t, "Swarm")
 	s.c = NewClusters(r.svc, r.snaps, ClusterOptions{
-		Now: r.clk.Now, Publisher: r.brk, Events: r.evs, Grace: 2 * time.Minute,
+		Now: r.clk.Now, Publisher: r.brk, Events: r.evs, Grace: 2 * time.Minute, Reaper: reaper,
 	})
 	r.svc.WithClusters(s.c)
 	for i := 1; i <= 3; i++ {
@@ -622,5 +628,96 @@ func TestForgetDropsTheStateOfARemovedEnvironment(t *testing.T) {
 	s.c.Forget(s.env.ID)
 	if _, ok := s.c.Cached(s.env.ID); ok {
 		t.Error("the state of a forgotten environment is still cached")
+	}
+}
+
+// observed is a NodeObserver that records every node list it was shown.
+type observed struct {
+	mu    sync.Mutex
+	calls []observation
+}
+
+type observation struct {
+	envID, answerer string
+	nodes           []string
+}
+
+func (o *observed) Observe(_ context.Context, envID string, list dockerx.ClusterRead, answeringNodeID string) {
+	var ids []string
+	for _, n := range list.Nodes {
+		ids = append(ids, n.ID)
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.calls = append(o.calls, observation{envID: envID, answerer: answeringNodeID, nodes: ids})
+}
+
+func (o *observed) list() []observation {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]observation(nil), o.calls...)
+}
+
+func TestEverySuccessfulNodeListIsShownToTheReaperWithTheNodeOfTheManagerThatAnswered(t *testing.T) {
+	obs := &observed{}
+	s := newSwarmRigWith(t, managerNodes(), nil, obs)
+	ctx := context.Background()
+	for range 2 {
+		if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := obs.list()
+	if len(got) != 2 {
+		t.Fatalf("the reaper saw %d lists, want 2: %+v", len(got), got)
+	}
+	for _, o := range got {
+		if o.envID != s.env.ID || strings.Join(o.nodes, ",") != "node-m1,node-m2,node-m3" {
+			t.Errorf("observation = %+v, want this environment's three nodes", o)
+		}
+	}
+	// The second read went to the leader, whose node answered.
+	if got[1].answerer != "node-m2" {
+		t.Errorf("the second list was answered by %q, want the leader's node-m2", got[1].answerer)
+	}
+}
+
+func TestAFailedNodeListAndALoneWorkerAreNotShownToTheReaper(t *testing.T) {
+	obs := &observed{}
+	s := newSwarmRigWith(t, managerNodes(), nil, obs)
+	ctx := context.Background()
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i, a := range s.m {
+		cfg := managerConfig(i+1, s.nodes, nil)
+		cfg.QuorumLost = true
+		a.fake.Reconfigure(cfg)
+	}
+	if err := s.c.Refresh(ctx, s.env.ID); err == nil {
+		t.Fatal("a read without quorum succeeded")
+	}
+	if n := len(obs.list()); n != 1 {
+		t.Fatalf("the reaper saw %d lists, want only the one that succeeded", n)
+	}
+}
+
+func TestLocalSwarmListsAreNotShownToTheReaperBecauseTheyHaveNoAgents(t *testing.T) {
+	obs := &observed{}
+	local := dockertest.NewFake(t, managerConfig(1, managerNodes(), nil))
+	r := newTunRig(t, local)
+	r.pastGrace()
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now, Publisher: r.brk, Events: r.evs, Reaper: obs})
+	r.svc.WithClusters(c)
+	env, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.whenOnline(t, env.ID)
+	if err := c.Refresh(context.Background(), env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(obs.list()); n != 0 {
+		t.Errorf("the reaper saw %d lists of the local socket's swarm", n)
 	}
 }

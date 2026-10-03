@@ -33,6 +33,10 @@ type AgentSessions interface {
 
 // AgentsDeps are the dependencies of the agent routes.
 type AgentsDeps struct {
+	// Cluster says which agent runs on the leading manager of a swarm, so the node
+	// list can call it the leader. Nil means none is known and every manager is
+	// listed as a manager.
+	Cluster AgentCluster
 	// Agents rotates and disables join tokens. Nil means the routes answer 409
 	// agents_unavailable.
 	Agents *agents.Service
@@ -220,6 +224,13 @@ func cmpOr(v, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// AgentCluster is what the node list asks of the cluster reader.
+type AgentCluster interface {
+	// LeaderAgent is the ID of the agent on the leading manager of the environment as
+	// of the last read of its cluster, or empty. It does no I/O.
+	LeaderAgent(envID string) string
 }
 
 // RegisterAgents registers the agent routes: the join token (rotate, disable and

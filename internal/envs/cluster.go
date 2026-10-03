@@ -52,6 +52,12 @@ const (
 // the reason not_a_manager (D-44).
 var ErrNoManager = errors.New("envs: no manager agent is connected")
 
+// NodeObserver is told each node list a manager answered with, and which node
+// answered: the agents service's reaper is one (D-10).
+type NodeObserver interface {
+	Observe(ctx context.Context, envID string, list dockerx.ClusterRead, answeringNodeID string)
+}
+
 // HealthPublisher is where a failover is announced and who is told that an
 // environment's health may have changed: the health broker.
 type HealthPublisher interface {
@@ -68,6 +74,8 @@ type ClusterOptions struct {
 	// Events is where a failover is also written as a row of the environment's
 	// feed; nil writes none.
 	Events *Hub
+	// Reaper is shown every successful node list of a swarm; nil shows it none.
+	Reaper NodeObserver
 	// Grace is how long after an update a service is not counted as failing; it
 	// defaults to DefaultFailingServiceGrace.
 	Grace time.Duration

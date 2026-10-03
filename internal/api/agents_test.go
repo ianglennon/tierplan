@@ -726,3 +726,38 @@ func TestAnAgentOfTheAdoptedClusterIsAcceptedOnItsNextHello(t *testing.T) {
 		t.Fatalf("hello after the adopt: %+v (err %v), want a welcome", c.Refuse, c.Err)
 	}
 }
+
+// leaderIs is the cluster reader's answer for the leading manager's agent.
+type leaderIs string
+
+func (l leaderIs) LeaderAgent(string) string { return string(l) }
+
+func TestAgentListCallsTheLeadersAgentLeaderAndTheOthersManagerOrWorker(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Swarm")
+	alpha := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}, swarmNode("alpha", true))
+	bravo := f.connect(t, env, dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true}, swarmNode("bravo", true))
+	charlie := f.connect(t, env, dockertest.FakeConfig{Hostname: "charlie", SwarmState: "active"}, swarmNode("charlie", false))
+
+	// No cluster reader, or one that knows no leader: every manager is a manager.
+	for _, id := range []string{alpha.id, bravo.id} {
+		if got := f.node(t, env.ID, id).Role; got != "manager" {
+			t.Fatalf("without a known leader %s is a %q, want manager", id, got)
+		}
+	}
+
+	f.agentCluster = leaderIs(bravo.id)
+	f.h = f.build(t)
+	for id, want := range map[string]string{alpha.id: "manager", bravo.id: "leader", charlie.id: "worker"} {
+		if got := f.node(t, env.ID, id).Role; got != want {
+			t.Errorf("role of %s = %q, want %q", id, got, want)
+		}
+	}
+
+	// Only a manager can be the leader: a worker named as one is still a worker.
+	f.agentCluster = leaderIs(charlie.id)
+	f.h = f.build(t)
+	if got := f.node(t, env.ID, charlie.id).Role; got != "worker" {
+		t.Errorf("a worker named as leader is listed as %q, want worker", got)
+	}
+}

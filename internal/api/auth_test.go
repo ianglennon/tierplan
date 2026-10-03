@@ -104,6 +104,8 @@ type authFixture struct {
 	// a real session.
 	agentSvc   *agents.Service
 	liveAgents api.AgentSessions
+	// agentCluster says which agent leads a swarm, for the role in the node list.
+	agentCluster api.AgentCluster
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -167,7 +169,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		agentSvc = agents.NewService(f.st, f.v, f.aud, f.clk.now)
 	}
 	api.RegisterAgents(r, api.AgentsDeps{
-		Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin }, Log: log,
+		Agents: agentSvc, Live: f.liveAgents, Cluster: f.agentCluster, Instance: f.inst, TLSPin: func() string { return f.tlsPin }, Log: log,
 	})
 	if f.envSvc != nil && f.agg != nil {
 		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
