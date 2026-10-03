@@ -72,6 +72,8 @@ type runEnv struct {
 // RefusedError is returned when the server answers the handshake with a refusal.
 type RefusedError struct {
 	Code, Detail string
+	// RetryAfter is how long the server asked the agent to wait, when it did.
+	RetryAfter time.Duration
 }
 
 func (e *RefusedError) Error() string {
@@ -87,6 +89,8 @@ const (
 	kindTimeout = 10 * time.Second
 	// factsTimeout bounds the two reads of the engine's own description.
 	factsTimeout = 5 * time.Second
+	// maxRetryAfter bounds how long the agent will wait because a server said so.
+	maxRetryAfter = 5 * time.Minute
 )
 
 // muxConfig is the yamux configuration of RESEARCH Pattern 1: detection of a
@@ -237,7 +241,9 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 		r.forceEnrol = true
 	}
 	*failures++
-	return backoff(*failures, r.cfg.BackoffMin, r.cfg.BackoffMax, r.env.rnd)
+	wait := backoff(*failures, r.cfg.BackoffMin, r.cfg.BackoffMax, r.env.rnd)
+	// A server that is busy says when to come back; never sooner than that.
+	return max(wait, min(re.RetryAfter, maxRetryAfter))
 }
 
 // transient reports whether a refusal is the server's trouble rather than the
@@ -401,8 +407,16 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 func handshake(ctx context.Context, c *websocket.Conn, resp *http.Response, version, aud string,
 	cr credentials, facts wire.Facts) (wire.Welcome, error) {
 	var ch wire.Challenge
-	if err := readJSON(ctx, c, &ch); err != nil {
+	var first json.RawMessage
+	if err := readJSON(ctx, c, &first); err != nil {
 		return wire.Welcome{}, fmt.Errorf("read the server challenge: %w", err)
+	}
+	if err := json.Unmarshal(first, &ch); err != nil {
+		return wire.Welcome{}, fmt.Errorf("the server challenge is not JSON: %w", err)
+	}
+	if ch.T == wire.TypeRefuse {
+		// A server that is busy turns the agent away before the challenge.
+		return wire.Welcome{}, refusal(first)
 	}
 	if ch.T != wire.TypeChallenge {
 		return wire.Welcome{}, fmt.Errorf("expected a challenge from the server, got %q", ch.T)
@@ -463,14 +477,19 @@ func handshake(ctx context.Context, c *websocket.Conn, resp *http.Response, vers
 		}
 		return w, nil
 	case wire.TypeRefuse:
-		var r wire.Refuse
-		if err := json.Unmarshal(raw, &r); err != nil {
-			return wire.Welcome{}, errors.New("the server refusal is malformed")
-		}
-		return wire.Welcome{}, &RefusedError{Code: r.Code, Detail: r.Detail}
+		return wire.Welcome{}, refusal(raw)
 	default:
 		return wire.Welcome{}, fmt.Errorf("unexpected message %q from the server", head.T)
 	}
+}
+
+// refusal is the error for a refuse message.
+func refusal(raw []byte) error {
+	var r wire.Refuse
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return errors.New("the server refusal is malformed")
+	}
+	return &RefusedError{Code: r.Code, Detail: r.Detail, RetryAfter: time.Duration(r.RetryAfterMs) * time.Millisecond}
 }
 
 // serve multiplexes the connection, opens the control stream and answers the

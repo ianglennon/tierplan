@@ -161,6 +161,13 @@ var settings = []setting{
 		apply: func(c *Config, raw string) (err error) { c.AgentOfflineAfter, err = parseDuration(raw); return err }},
 	{env: "BAYPLAN_AGENT_RECONNECT_GRACE", flag: "agent-reconnect-grace", def: "60s", desc: "after a start, how long an environment shows Reconnecting instead of offline while its agents come back",
 		apply: func(c *Config, raw string) (err error) { c.AgentReconnectGrace, err = parseDuration(raw); return err }},
+	{env: "BAYPLAN_AGENT_ALLOW_INSECURE", flag: "agent-allow-insecure", def: "false", desc: "development only: let agents connect over plain ws:// although the public URL is https, which sends join tokens and Docker answers unencrypted",
+		apply: func(c *Config, raw string) (err error) {
+			c.AgentAllowInsecure, err = strconv.ParseBool(raw)
+			return err
+		}},
+	{env: "BAYPLAN_AGENT_CONNECT_BURST", flag: "agent-connect-burst", def: "200", desc: "how many connection attempts one client address may make at once on the agent endpoint; sized so a whole swarm behind one NAT can reconnect together",
+		apply: func(c *Config, raw string) (err error) { c.AgentConnectBurst, err = parseInt(raw, 1); return err }},
 	{env: "BAYPLAN_LOG_LEVEL", flag: "log-level", def: "info", desc: "log level: debug, info, warn or error",
 		apply: func(c *Config, raw string) error {
 			switch strings.ToLower(raw) {

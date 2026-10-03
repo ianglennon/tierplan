@@ -296,10 +296,19 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// Agents heartbeat at cfg.AgentHeartbeatInterval, which the welcome tells
 	// them, and a session silent for cfg.AgentOfflineAfter is closed (D-41).
 	// Heartbeats stay in memory; last_seen_at is written at most once a minute.
+	// Refused handshakes are anonymous and cost an audit row each, so they go
+	// through a throttle of their own: 20 rows at once per address, then one every
+	// 6 seconds, with the rest counted into one summary row a minute (RESEARCH
+	// Pitfall 8, D-13). It is separate from anonAudit so that agents behind one
+	// address and people signing in do not spend each other's budget.
+	agentAudit := auth.NewAuditThrottle(aud, auth.NewIPLimiter(6*time.Second, 20, 10*time.Minute, nil), log, nil)
 	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
 		WithPublicURL(inst.PublicURL).
 		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
-		WithLastSeen(agentSvc)
+		WithLastSeen(agentSvc).
+		WithAllowInsecure(cfg.AgentAllowInsecure).
+		WithConnectLimit(cfg.AgentConnectBurst).
+		WithRefusalAudit(agentAudit)
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
 	router := NewRouter(httpx.Options{
@@ -395,6 +404,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// Suppressed anonymous refusals are written every minute, and once more when
 	// bg ends, which is before Close shuts the database.
 	srv.background.Go(func() { anonAudit.Run(bg, time.Minute) })
+	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
 	// Monitoring resumes for the environments an admin already added. The
 	// monitors live as long as bg, and Close waits for them.
 	if err := envSvc.StartAll(bg); err != nil {

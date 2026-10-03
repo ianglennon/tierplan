@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
@@ -31,33 +32,18 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the server is stopping", http.StatusServiceUnavailable)
 		return
 	}
-	// Browsers always send Origin and agents never do: a request with one is a
-	// web page trying to use this endpoint.
-	if r.Header.Get("Origin") != "" {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	if !isWebSocketUpgrade(r) {
-		// A proxy that strips the Upgrade headers lands here.
-		h.log.Warn("agent endpoint reached without a WebSocket upgrade; a reverse proxy may be dropping the Upgrade headers",
-			"ip", httpx.ClientIP(r.Context()))
-		http.Error(w, "a WebSocket upgrade is required", http.StatusUpgradeRequired)
-		return
-	}
-	aud, plainOK, err := h.audience()
-	if err != nil {
-		h.log.Error("agent connection refused: Bayplan has no usable public URL", "error", err)
-		http.Error(w, "this server has no public URL, so it cannot accept agents", http.StatusServiceUnavailable)
-		return
-	}
-	if !secureTransport(r) {
-		if !plainOK {
-			h.log.Warn("agent connection refused: it did not arrive over TLS", "ip", httpx.ClientIP(r.Context()))
-			http.Error(w, wire.RefuseInsecureTransport+": agents must connect over wss://", http.StatusForbidden)
-			return
+	ip := clientAddr(r)
+	aud, ref := h.preflight(r, ip)
+	if ref != nil {
+		if ref.audit {
+			h.recordRefusal(r.Context(), ip, ref.code, "", "", ref.code)
 		}
-		h.log.Warn("an agent connected over plain HTTP; the public URL is http, so the join token and Docker answers are not encrypted",
-			"ip", httpx.ClientIP(r.Context()))
+		http.Error(w, ref.msg, ref.status)
+		return
+	}
+	release, limited := h.admit(ip)
+	if release != nil {
+		defer release()
 	}
 
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{wire.Subprotocol}})
@@ -65,6 +51,15 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		return // Accept has answered the client
 	}
 	defer func() { _ = c.CloseNow() }()
+	if limited != nil {
+		// The refusal is a message, not an HTTP status, so that an agent reads it
+		// the same way as every other refusal and waits as long as it says.
+		h.recordRefusal(r.Context(), ip, limited.Code, "", "", limited.Code)
+		rctx, rcancel := context.WithTimeout(r.Context(), wire.HandshakeTimeout)
+		h.refuseAfter(rctx, c, limited.Code, limited.Detail, time.Duration(limited.RetryAfterMs)*time.Millisecond)
+		rcancel()
+		return
+	}
 	if c.Subprotocol() != wire.Subprotocol {
 		_ = c.Close(websocket.StatusPolicyViolation, "the subprotocol "+wire.Subprotocol+" is required")
 		return
@@ -79,6 +74,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	hctx, hcancel := context.WithTimeout(sctx, wire.HandshakeTimeout)
 	acc, ok := h.handshake(hctx, c, r, aud)
 	hcancel()
+	release() // the slot is for the handshake, not for the session that follows
 	if !ok {
 		return
 	}
@@ -92,6 +88,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	s := &Session{
 		AgentID: acc.AgentID, EnvID: acc.EnvID, AgentVersion: acc.AgentVersion, Facts: acc.Facts,
 		IP: acc.IP, ConnectedAt: h.now(), ym: ym, ws: c, done: make(chan struct{}),
+		streams: make(chan struct{}, MaxSessionStreams), maxResponse: h.maxResponse,
 	}
 	go func() {
 		<-ym.CloseChan()

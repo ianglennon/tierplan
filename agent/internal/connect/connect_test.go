@@ -703,3 +703,40 @@ func TestATransientRefusalOfTheFirstEnrolmentIsRetried(t *testing.T) {
 		}
 	}
 }
+
+// A server that is busy answers with a refusal in place of the challenge. The agent
+// reads it as the refusal it is, and waits at least as long as the server asked.
+func TestARefusalInPlaceOfTheChallengeIsReadAndItsRetryAfterIsHonoured(t *testing.T) {
+	var mu sync.Mutex
+	attempts := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{wire.Subprotocol}})
+		if err != nil {
+			return
+		}
+		mu.Lock()
+		attempts++
+		mu.Unlock()
+		b, _ := json.Marshal(wire.Refuse{T: wire.TypeRefuse, Code: wire.RefuseRateLimited, RetryAfterMs: 90_000})
+		_ = c.Write(r.Context(), websocket.MessageText, b)
+		_ = c.Close(websocket.StatusPolicyViolation, wire.RefuseRateLimited)
+	}))
+	defer ts.Close()
+	sl, err := runUntilSleeps(t, Config{
+		URL: "ws" + strings.TrimPrefix(ts.URL, "http") + "/agent/connect", JoinToken: "bpjt_tok",
+		SocketPath: filepath.Join(t.TempDir(), "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+	}, 2)
+	if err != nil {
+		t.Fatalf("Run = %v; a rate-limited first enrolment is retried", err)
+	}
+	for i, d := range sl.all() {
+		if d < 90*time.Second {
+			t.Errorf("wait %d = %v, want at least the 90s the server asked for", i+1, d)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts < 2 {
+		t.Errorf("the agent tried %d times, want it to retry", attempts)
+	}
+}

@@ -63,7 +63,7 @@ func plainServer(t *testing.T, publicScheme string, trustLoopback bool, configur
 	if configure != nil {
 		hub = configure(hub)
 	}
-	var h http.Handler = hub.Handler()
+	h := hub.Handler()
 	if trustLoopback {
 		h = httpx.ClientIPMiddleware([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")})(h)
 	} else {
@@ -79,7 +79,9 @@ func plainServer(t *testing.T, publicScheme string, trustLoopback bool, configur
 	return ts, v
 }
 
-func upgradeRequest(t *testing.T, url string, headers map[string]string) (*http.Response, string) {
+// upgradeRequest sends an upgrade request and returns the status and, when the
+// upgrade was not accepted, the start of the body.
+func upgradeRequest(t *testing.T, url string, headers map[string]string) (status int, body string) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, url+"/agent/connect", nil)
 	if err != nil {
@@ -100,21 +102,19 @@ func upgradeRequest(t *testing.T, url string, headers map[string]string) (*http.
 		t.Fatal(err)
 	}
 	// An accepted upgrade has no body to read: the connection is the WebSocket.
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusSwitchingProtocols {
-		_ = resp.Body.Close()
-		return resp, ""
+		return resp.StatusCode, ""
 	}
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
-	_ = resp.Body.Close()
-	return resp, string(b)
+	return resp.StatusCode, string(b)
 }
 
 func TestOriginHeaderIsRefusedBeforeTheUpgradeAndAudited(t *testing.T) {
 	sink := &auditSink{}
 	ts, v := plainServer(t, "http", false, func(h *tunnel.Hub) *tunnel.Hub { return h.WithRefusalAudit(sink) })
-	resp, _ := upgradeRequest(t, ts.URL, map[string]string{"Origin": "https://evil.example"})
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("a request with an Origin answered %d, want 403", resp.StatusCode)
+	if status, _ := upgradeRequest(t, ts.URL, map[string]string{"Origin": "https://evil.example"}); status != http.StatusForbidden {
+		t.Fatalf("a request with an Origin answered %d, want 403", status)
 	}
 	if v.callCount() != 0 {
 		t.Error("the verifier was asked about a browser request")
@@ -178,9 +178,9 @@ func TestInsecureTransportIsRefusedUnlessTrustedProxyOrAllowedByTheOperator(t *t
 				}
 				return h
 			})
-			resp, body := upgradeRequest(t, ts.URL, tc.headers)
-			if resp.StatusCode != tc.want {
-				t.Fatalf("status %d, want %d (%s)", resp.StatusCode, tc.want, body)
+			status, body := upgradeRequest(t, ts.URL, tc.headers)
+			if status != tc.want {
+				t.Fatalf("status %d, want %d (%s)", status, tc.want, body)
 			}
 			if tc.want == http.StatusForbidden {
 				if !strings.Contains(body, wire.RefuseInsecureTransport) {
@@ -293,9 +293,8 @@ func TestAuditThrottleKeepsFiveHundredRefusalsToTheAllowanceAndOneSummary(t *tes
 		return h.WithConnectLimit(100000).WithRefusalAudit(throttle)
 	})
 	for range 500 {
-		resp, _ := upgradeRequest(t, ts.URL, map[string]string{"Origin": "https://evil.example"})
-		if resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("status %d, want 403", resp.StatusCode)
+		if status, _ := upgradeRequest(t, ts.URL, map[string]string{"Origin": "https://evil.example"}); status != http.StatusForbidden {
+			t.Fatalf("status %d, want 403", status)
 		}
 	}
 	if n := len(sink.all()); n != 20 {
@@ -380,7 +379,7 @@ func TestTooLargeResponseFailsTypedWhileEventsAreExemptAndTheSessionStaysUsable(
 					}
 					_ = req.Body.Close()
 					body := "ok"
-					if req.URL.Path == "/containers/json" || req.URL.Path == "/events" {
+					if req.URL.Path == "/containers/json" || strings.HasSuffix(req.URL.Path, "/events") {
 						body = big
 					}
 					if _, err := io.WriteString(st, "HTTP/1.1 200 OK\r\nContent-Length: "+itoa(len(body))+"\r\n\r\n"+body); err != nil {

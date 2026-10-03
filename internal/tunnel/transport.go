@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
+	"sync/atomic"
 
 	"github.com/hashicorp/yamux"
 
@@ -38,13 +40,19 @@ func (t StreamTransport) DialContext(ctx context.Context, _, _ string) (net.Conn
 	if t.s.isGone() {
 		return nil, fmt.Errorf("open a stream to agent %s: %w", t.s.AgentID, ErrAgentGone)
 	}
+	// A slot is taken before the stream is opened and returned when the
+	// connection is closed. A full session says so at once instead of queueing.
+	if !t.s.acquire() {
+		return nil, fmt.Errorf("agent %s: %w (%d requests are in flight)", t.s.AgentID, ErrBusy, MaxSessionStreams)
+	}
 	st, err := t.s.ym.OpenStream()
 	if err != nil {
+		t.s.releaseStream()
 		return nil, t.wrap(err)
 	}
-	conn := streamConn{Conn: st, s: t.s}
+	conn := &streamConn{Conn: st, s: t.s}
 	if _, err := conn.Write([]byte{wire.StreamKindDockerHTTP}); err != nil {
-		_ = st.Close()
+		_ = conn.Close()
 		return nil, t.wrap(err)
 	}
 	return conn, nil
@@ -67,16 +75,50 @@ func (t StreamTransport) wrap(err error) error {
 type streamConn struct {
 	net.Conn
 	s *Session
+
+	// read counts the bytes received for the exchange in progress, and is reset
+	// when the next request is written, so a keep-alive connection is capped per
+	// answer and not for its lifetime. uncapped is set for the events feed.
+	read     atomic.Int64
+	uncapped atomic.Bool
+	tooLarge atomic.Bool
+	released sync.Once
 }
 
-func (c streamConn) Read(p []byte) (int, error) {
+func (c *streamConn) Read(p []byte) (int, error) {
+	if c.tooLarge.Load() {
+		return 0, c.errTooLarge()
+	}
 	n, err := c.Conn.Read(p)
+	if n > 0 && !c.uncapped.Load() && c.s.maxResponse > 0 && c.read.Add(int64(n)) > c.s.maxResponse {
+		// Close the stream so the agent stops sending. The session carries on.
+		c.tooLarge.Store(true)
+		_ = c.Conn.Close()
+		return 0, c.errTooLarge()
+	}
 	return n, c.s.mark(err)
 }
 
-func (c streamConn) Write(p []byte) (int, error) {
+func (c *streamConn) Write(p []byte) (int, error) {
+	// Each request starts a new exchange; the events feed is the one answer that
+	// is meant to be endless.
+	if events, ok := startsEventsRequest(p); ok {
+		c.read.Store(0)
+		c.uncapped.Store(events)
+	}
 	n, err := c.Conn.Write(p)
 	return n, c.s.mark(err)
+}
+
+// Close closes the stream and frees its slot in the session's budget.
+func (c *streamConn) Close() error {
+	err := c.Conn.Close()
+	c.released.Do(c.s.releaseStream)
+	return err
+}
+
+func (c *streamConn) errTooLarge() error {
+	return fmt.Errorf("agent %s: %w (more than %d bytes)", c.s.AgentID, ErrTooLarge, c.s.maxResponse)
 }
 
 // mark wraps err in ErrAgentGone when the session is gone, and returns it

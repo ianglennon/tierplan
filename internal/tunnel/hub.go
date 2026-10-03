@@ -25,6 +25,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 
+	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
@@ -152,6 +153,11 @@ type Session struct {
 	done chan struct{}
 	once sync.Once
 
+	// streams holds one token per server-opened stream in flight, and maxResponse
+	// is the cap on one Docker answer that is not the events feed.
+	streams     chan struct{}
+	maxResponse int64
+
 	// control is set once the agent's control stream has been accepted.
 	control atomic.Bool
 	hbMu    sync.Mutex
@@ -227,6 +233,18 @@ type Hub struct {
 	watchEvery   time.Duration
 	lastSeen     LastSeenRecorder
 
+	// allowInsecure lets plain ws:// in. connect is the per-address budget of
+	// connection attempts and handshakes the semaphore of handshakes in flight.
+	// refusals records refused attempts, onUpgradeFailure hears of requests that
+	// were not an upgrade and maxResponse caps one Docker answer. All are set
+	// before the hub serves and read-only after.
+	allowInsecure    bool
+	connect          *auth.IPLimiter
+	handshakes       chan struct{}
+	refusals         auth.AuditRecorder
+	onUpgradeFailure func(peer string)
+	maxResponse      int64
+
 	// life serializes session lifecycle transitions together with the Observer
 	// calls they cause, so for one agent the Observer hears Connected, then
 	// Disconnected, then Connected again, in that order, never a Disconnected
@@ -251,6 +269,9 @@ func NewHub(v Verifier, o Observer, log *slog.Logger, now func() time.Time) *Hub
 	return &Hub{
 		v: v, o: o, log: log, now: now, sessions: map[string]*Session{},
 		heartbeat: wire.DefaultHeartbeatMs * time.Millisecond, offlineAfter: DefaultOfflineAfter,
+		connect:     auth.NewIPLimiter(connectRefill, DefaultConnectBurst, connectLimiterTTL, now),
+		handshakes:  make(chan struct{}, maxHandshakes),
+		maxResponse: MaxResponseBytes,
 	}
 }
 

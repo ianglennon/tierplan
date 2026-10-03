@@ -51,7 +51,7 @@ type accepted struct {
 // message and closes the connection itself when the agent is turned away, and
 // then reports false.
 func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request, aud string) (accepted, bool) {
-	ip := httpx.ClientIP(r.Context())
+	ip := clientAddr(r)
 
 	serverNonce := make([]byte, nonceLen)
 	if _, err := rand.Read(serverNonce); err != nil {
@@ -71,12 +71,12 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 		return accepted{}, false
 	}
 	if typ != websocket.MessageText {
-		h.refuse(ctx, c, wire.ReasonAuthRejected, "a handshake message must be a text frame")
+		h.turnAway(ctx, c, ip, "", "", wire.ReasonAuthRejected, "a handshake message must be a text frame", "not_text")
 		return accepted{}, false
 	}
 	var a wire.Auth
 	if err := json.Unmarshal(data, &a); err != nil || a.T != wire.TypeAuth {
-		h.refuse(ctx, c, wire.ReasonAuthRejected, "the handshake message is malformed")
+		h.turnAway(ctx, c, ip, "", "", wire.ReasonAuthRejected, "the handshake message is malformed", "malformed")
 		return accepted{}, false
 	}
 
@@ -87,7 +87,7 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 		var re *RefuseError
 		if errors.As(err, &re) {
 			h.log.Info("agent handshake refused", "ip", ip, "mode", a.Mode, "code", re.Code, "reason", re.AuditReason)
-			h.refuse(ctx, c, re.Code, re.Detail)
+			h.turnAway(ctx, c, ip, a.Mode, a.Facts.Hostname, re.Code, re.Detail, re.AuditReason)
 		} else {
 			h.log.Error("agent handshake failed", "ip", ip, "mode", a.Mode, "error", err)
 			h.refuse(ctx, c, wire.RefuseInternal, "the server failed to verify this agent; it will retry")
@@ -183,9 +183,23 @@ func (h *Hub) verifyAuth(ctx context.Context, a wire.Auth, serverNonce []byte, p
 	}, nil
 }
 
+// turnAway records the refusal, through the throttle, and then tells the agent.
+func (h *Hub) turnAway(ctx context.Context, c *websocket.Conn, ip, mode, node, code, detail, reason string) {
+	h.recordRefusal(ctx, ip, code, mode, node, reason)
+	h.refuse(ctx, c, code, detail)
+}
+
 // refuse tells the agent why it is turned away, then closes the connection with
 // policy-violation status and the code as the reason.
 func (h *Hub) refuse(ctx context.Context, c *websocket.Conn, code, detail string) {
-	_ = writeJSON(ctx, c, wire.Refuse{T: wire.TypeRefuse, Code: code, Detail: detail})
+	h.refuseAfter(ctx, c, code, detail, 0)
+}
+
+// refuseAfter is refuse for a refusal that passes, with the time after which the
+// agent may try again.
+func (h *Hub) refuseAfter(ctx context.Context, c *websocket.Conn, code, detail string, retryAfter time.Duration) {
+	_ = writeJSON(ctx, c, wire.Refuse{
+		T: wire.TypeRefuse, Code: code, Detail: detail, RetryAfterMs: int(retryAfter / time.Millisecond),
+	})
 	_ = c.Close(websocket.StatusPolicyViolation, code)
 }
