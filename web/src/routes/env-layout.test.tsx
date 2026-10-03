@@ -262,22 +262,25 @@ describe("Retry", () => {
 });
 
 describe("environment switcher", () => {
-  it("shows the name, type badge and a health dot with text in the trigger and menu (D-54)", async () => {
+  // The list, the filter, Recent, the footer and navigation have their own
+  // tests in components/env-switcher.test.tsx; these cover the trigger and the
+  // list inside the full layout.
+  it("shows the name, type badge and a health dot in the trigger, and the item in the list (D-54)", async () => {
     renderAt("/env/e1");
     const trigger = await screen.findByRole("button", { name: "Switch environment" });
     await waitFor(() => expect(within(trigger).getByText("Lab host")).toBeTruthy());
     expect(within(trigger).getByText("Swarm")).toBeTruthy();
     expect(within(trigger).getByRole("img", { name: "Online" })).toBeTruthy();
 
-    fireEvent.keyDown(trigger, { key: "Enter" });
-    const menu = await screen.findByRole("menu");
-    expect(within(menu).getByText("Lab host")).toBeTruthy();
-    expect(within(menu).getByText("Swarm")).toBeTruthy();
-    expect(within(menu).getByText("Online")).toBeTruthy();
-    expect(within(menu).getByRole("menuitem", { name: /Manage environments/ })).toBeTruthy();
+    fireEvent.click(trigger);
+    const list = await screen.findByRole("listbox");
+    const item = within(list).getByRole("option", { name: /Lab host/ });
+    expect(within(item).getByText("Swarm")).toBeTruthy();
+    expect(within(item).getByRole("img", { name: "Online" })).toBeTruthy();
+    expect(within(list).getByRole("option", { name: "All environments" })).toBeTruthy();
   });
 
-  it("pairs an offline environment's dot with its text", async () => {
+  it("pairs an offline environment's dot with its health name", async () => {
     stub.environments = () =>
       Response.json({
         items: [{ ...LAB, status: { state: "offline", since: "2026-10-01T14:05:00Z" } }],
@@ -285,32 +288,19 @@ describe("environment switcher", () => {
     renderAt("/env/e1");
     const trigger = await screen.findByRole("button", { name: "Switch environment" });
     await waitFor(() => expect(within(trigger).getByRole("img", { name: "Offline" })).toBeTruthy());
-    fireEvent.keyDown(trigger, { key: "Enter" });
-    const menu = await screen.findByRole("menu");
-    expect(within(menu).getByText(/Offline since \d{1,2}:\d{2}/)).toBeTruthy();
+    fireEvent.click(trigger);
+    const list = await screen.findByRole("listbox");
+    expect(within(list).getByRole("img", { name: "Offline" })).toBeTruthy();
   });
 
-  it("shows No environment with Manage environments when there are none", async () => {
+  it("shows No environment and still offers All environments when there are none", async () => {
     stub.environments = () => Response.json({ items: [] });
     renderAt("/");
     const trigger = await screen.findByRole("button", { name: "Switch environment" });
-    expect(within(trigger).getByText("No environment")).toBeTruthy();
-    fireEvent.keyDown(trigger, { key: "Enter" });
-    expect(await screen.findByRole("menuitem", { name: /Manage environments/ })).toBeTruthy();
+    expect(await within(trigger).findByText("No environment")).toBeTruthy();
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("option", { name: "All environments" })).toBeTruthy();
   });
-
-  it("keeps the last known name and adds Couldn't load environments when the list fails", async () => {
-    renderAt("/env/e1");
-    const trigger = await screen.findByRole("button", { name: "Switch environment" });
-    await waitFor(() => expect(within(trigger).getByText("Lab host")).toBeTruthy());
-
-    stub.environments = () => new Response("boom", { status: 500 });
-    void queryClient.invalidateQueries({ queryKey: ["environments"] });
-    fireEvent.keyDown(trigger, { key: "Enter" });
-    const item = await screen.findByText("Couldn't load environments", {}, { timeout: 4000 });
-    expect(item.closest("[role=menuitem]")?.getAttribute("aria-disabled")).toBe("true");
-    expect(within(trigger).getByText("Lab host")).toBeTruthy();
-  }, 8000);
 
   it("truncates a long name with a title and keeps the badge and dot", async () => {
     const long = "a-very-long-environment-name-".repeat(4);

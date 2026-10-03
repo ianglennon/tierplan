@@ -27,3 +27,9 @@ if (typeof window.matchMedia === "undefined") {
       dispatchEvent: () => false,
     }) as MediaQueryList;
 }
+
+// jsdom does not lay anything out, so it has no scrollIntoView either; cmdk
+// calls it to keep the highlighted item in view.
+if (typeof Element.prototype.scrollIntoView === "undefined") {
+  Element.prototype.scrollIntoView = () => {};
+}

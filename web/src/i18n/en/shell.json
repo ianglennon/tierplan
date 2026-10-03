@@ -8,9 +8,6 @@
     },
     "switcher": {
       "none": "No environment",
-      "manage": "Manage environments",
-      "loadFailed": "Couldn't load environments",
-      "label": "Environment",
       "menu": "Switch environment"
     },
     "nav": {

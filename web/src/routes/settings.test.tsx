@@ -230,8 +230,8 @@ describe("navigation", () => {
   it("points the switcher's Manage environments item at /settings/environments", async () => {
     renderAt("/settings/environments");
     const trigger = await screen.findByRole("button", { name: "Switch environment" });
-    fireEvent.keyDown(trigger, { key: "Enter" });
-    const item = await screen.findByRole("menuitem", { name: "Manage environments" });
+    fireEvent.click(trigger);
+    const item = await screen.findByRole("option", { name: "Manage environments" });
     expect(item.getAttribute("href")).toBe("/settings/environments");
   });
 });

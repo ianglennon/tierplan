@@ -17,11 +17,12 @@ import reason from "./en/reason.json";
 import settings from "./en/settings.json";
 import setup from "./en/setup.json";
 import shell from "./en/shell.json";
+import switcher from "./en/switcher.json";
 
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher) and registers it
 // here, so parallel work never edits the same JSON. Keys are shaped
 // area.screen.element. Plural keys use the i18next _one and _other suffixes.
 export const resources = {
@@ -39,6 +40,7 @@ export const resources = {
     settings,
     setup,
     shell,
+    switcher,
   },
 } as const;
 

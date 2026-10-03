@@ -33,8 +33,11 @@ export const environmentsQuery = queryOptions({
 // The ["recent-environments"] query: the environments this user opened last,
 // newest first, at most 3, from the server so it follows them across devices
 // (D-31). Ones that were removed or are no longer readable are already left out.
+// It is not retried: the home redirect waits on it, and the switcher's Recent
+// group is only a shortcut, so a failure just leaves the group out.
 export const recentQuery = queryOptions({
   queryKey: ["recent-environments"],
+  retry: false,
   queryFn: async (): Promise<string[]> => {
     const { data } = await api.GET("/api/me/recent-environments");
     if (!data) throw new Error("GET /api/me/recent-environments failed");

@@ -313,7 +313,8 @@ describe("EnvSwitcher (D-35)", () => {
     expect(item.closest("[aria-disabled=true]")).toBeTruthy();
     expect(within(button).getByText("alpha")).toBeTruthy();
     // The last list is still there to choose from.
-    expect(screen.getByRole("option", { name: /Zulu/ })).toBeTruthy();
+    const group = screen.getByRole("group", { name: "Environments" });
+    expect(within(group).getByRole("option", { name: /Zulu/ })).toBeTruthy();
   }, 8000);
 
   it("shows only the type badge the trigger has room for on a local socket", async () => {
@@ -351,7 +352,7 @@ describe("EnvSwitcher (D-35)", () => {
     });
 
     it("offers Manage environments to environments.manage without settings.read", async () => {
-      account = me([], ["environments.read", "environments.manage"]);
+      account = me(["environments.manage"], ["environments.read"]);
       renderAt("/env/a");
       await openSwitcher();
       expect(screen.getByRole("option", { name: "Manage environments" })).toBeTruthy();
