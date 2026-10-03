@@ -9,6 +9,7 @@ import (
 	"errors"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -128,6 +129,15 @@ type Aggregator struct {
 	now    func() time.Time
 	// nodeTimeout is how long one node of a swarm may take.
 	nodeTimeout time.Duration
+	// feedPoll is how often a merged event feed looks for changes of target.
+	feedPoll time.Duration
+
+	// ctx ends the merged feeds; Close cancels it.
+	ctx    context.Context
+	cancel context.CancelFunc
+	fmu    sync.Mutex
+	feeds  map[string]*mergedFeed
+	closed bool
 }
 
 // NewAggregator returns the aggregator over the registry, the snapshot cache and
@@ -136,7 +146,11 @@ func NewAggregator(svc *Service, snaps *Snapshots, events *Hub, now func() time.
 	if now == nil {
 		now = time.Now
 	}
-	return &Aggregator{svc: svc, snaps: snaps, events: events, now: now, nodeTimeout: defaultNodeTimeout}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Aggregator{
+		svc: svc, snaps: snaps, events: events, now: now, nodeTimeout: defaultNodeTimeout,
+		ctx: ctx, cancel: cancel, feeds: map[string]*mergedFeed{},
+	}
 }
 
 // WithNodeTimeout sets how long one node of a swarm may take to answer before it is
@@ -508,61 +522,4 @@ func primaryStatus(svc *Service, in RollupInput) Status {
 		return svc.mon.Status(key)
 	}
 	return Status{State: StateUnknown}
-}
-
-// primaryKey is the target the events of an environment come from.
-func (a *Aggregator) primaryKey(ctx context.Context, envID string) (string, bool) {
-	in, err := a.svc.Input(ctx, envID, a.now())
-	if err != nil {
-		return "", false
-	}
-	return a.svc.primary(in)
-}
-
-// Close stops the merged feeds. A subscriber after it gets a closed channel.
-func (a *Aggregator) Close() {}
-
-// WithEventPoll sets how often an environment's merged feed looks for targets that
-// came or went; the default is one second.
-func (a *Aggregator) WithEventPoll(d time.Duration) *Aggregator { return a }
-
-// Events subscribes to the events of an environment; see Hub.Subscribe. An
-// environment with no target to read gets an empty backlog and a channel that is
-// already closed.
-func (a *Aggregator) Events(ctx context.Context, envID string) (backlog []NodeEvent, ch <-chan NodeEvent, cancel func()) {
-	closed := make(chan NodeEvent)
-	close(closed)
-	key, ok := a.primaryKey(ctx, envID)
-	if !ok {
-		return nil, closed, func() {}
-	}
-	in, _ := a.svc.Input(ctx, envID, a.now())
-	node := nodeOf(in, key, a.svc.mon.Status(key)).Name
-	rows, src, stop := a.events.Subscribe(ctx, key)
-	out := make(chan NodeEvent, subscriberBuffer)
-	go func() {
-		defer close(out)
-		for r := range src {
-			out <- NodeEvent{r, node}
-		}
-	}()
-	for _, r := range rows {
-		backlog = append(backlog, NodeEvent{r, node})
-	}
-	return backlog, out, stop
-}
-
-// Recent returns up to n buffered events of an environment, newest first.
-func (a *Aggregator) Recent(ctx context.Context, envID string, n int) []NodeEvent {
-	key, ok := a.primaryKey(ctx, envID)
-	if !ok {
-		return nil
-	}
-	in, _ := a.svc.Input(ctx, envID, a.now())
-	node := nodeOf(in, key, a.svc.mon.Status(key)).Name
-	var out []NodeEvent
-	for _, r := range a.events.Recent(key, n) {
-		out = append(out, NodeEvent{r, node})
-	}
-	return out
 }

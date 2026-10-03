@@ -148,6 +148,7 @@ func eventRow(m events.Message) (EventRow, bool) {
 		Time:     time.Unix(0, nano).UTC(),
 		TimeNano: nano,
 		Type:     typ,
+		Scope:    m.Scope,
 		Action:   action,
 		ActorID:  m.Actor.ID,
 		// Never nil, so a JSON consumer always sees an object.

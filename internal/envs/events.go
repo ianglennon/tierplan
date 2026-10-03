@@ -4,9 +4,11 @@
 package envs
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -33,13 +35,6 @@ const (
 	defaultRetryMin = 500 * time.Millisecond
 	defaultRetryMax = 15 * time.Second
 )
-
-// NodeEvent is a row of an environment's feed with the node it came from: the node
-// the Docker event happened on, or for a row of Bayplan's own the node it concerns.
-type NodeEvent struct {
-	dockerx.EventRow
-	Node string
-}
 
 // errNotOnline ends a stream because the monitor no longer calls the
 // environment online.
@@ -443,6 +438,446 @@ func (f *feed) subscribe() (backlog []dockerx.EventRow, ch <-chan dockerx.EventR
 
 // closeSubscribers closes every subscriber channel and refuses new ones.
 func (f *feed) closeSubscribers() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = true
+	for s := range f.subs {
+		close(s.ch)
+		delete(f.subs, s)
+	}
+}
+
+// Timing of the merged feed of an environment.
+const (
+	// defaultFeedPoll is how often a merged feed looks for targets that came or went
+	// and for a change of the manager in use.
+	defaultFeedPoll = time.Second
+	// feedIdleAfter is how long a merged feed that nobody asks for is kept.
+	feedIdleAfter = 5 * time.Minute
+	// swarmDupWindow is how far apart two managers' clocks may stamp one cluster event
+	// for it to still be recognised as the same event.
+	swarmDupWindow = 2 * time.Second
+)
+
+// NodeEvent is a row of an environment's feed with the node it came from: the node
+// the Docker event happened on, or for a row of Bayplan's own the node it concerns.
+type NodeEvent struct {
+	dockerx.EventRow
+	Node string
+	// from is the target the row was read from, to tell one manager's report of a
+	// cluster event from another's.
+	from string
+}
+
+// feedTarget is one target a merged feed reads and the name its rows carry.
+type feedTarget struct{ key, node string }
+
+// mergedFeed is the one live feed of an environment: the rows of every present
+// target, each with its node, in the order they arrived. It holds the ring that
+// Recent and a Last-Event-ID replay read, so they agree with the stream.
+//
+// A cluster event, one with scope swarm, is reported by every manager, each with
+// its own timestamp. The feed keeps it from the designated manager only, the one
+// serving the environment's cluster reads, so it appears once (Pitfall 18). When the
+// designated manager changes, the new one's ring is read for the cluster events it
+// saw while it was not designated, so none is lost, and what the old one already
+// showed is recognised and not shown again.
+type mergedFeed struct {
+	agg    *Aggregator
+	env    string
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+	wg     sync.WaitGroup
+
+	mu        sync.Mutex
+	ring      []NodeEvent
+	seen      map[string]struct{}
+	seenOrder []string
+	seenNext  int
+	subs      map[*mergedSub]struct{}
+	closed    bool
+	// attached are the targets being read, by key.
+	attached map[string]*attachment
+	// present is whether any target could be read at the last look.
+	present bool
+	// designated is the target whose cluster events are kept; swarmHigh is the newest
+	// cluster event shown.
+	designated string
+	swarmHigh  int64
+	// lastUse is when a caller last asked for the feed.
+	lastUse time.Time
+}
+
+// attachment is the subscription to one target's feed.
+type attachment struct{ cancel func() }
+
+// mergedSub is one subscriber's channel.
+type mergedSub struct{ ch chan NodeEvent }
+
+func (a *Aggregator) newFeed(env string) *mergedFeed {
+	ctx, cancel := context.WithCancel(a.ctx)
+	return &mergedFeed{
+		agg: a, env: env, ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		seen: map[string]struct{}{}, subs: map[*mergedSub]struct{}{}, attached: map[string]*attachment{},
+		lastUse: time.Now(),
+	}
+}
+
+// feedFor is the merged feed of env, started if it is new. It is nil for an
+// environment that does not exist, is closed over, or has nothing to read now, which
+// is what an offline environment gets: no events, rather than a stale ring.
+func (a *Aggregator) feedFor(ctx context.Context, env string) *mergedFeed {
+	a.fmu.Lock()
+	defer a.fmu.Unlock()
+	if a.closed {
+		return nil
+	}
+	f := a.feeds[env]
+	if f == nil {
+		f = a.newFeed(env)
+		if err := f.refresh(ctx); err != nil {
+			f.cancel()
+			f.wg.Wait()
+			return nil
+		}
+		a.feeds[env] = f
+		go f.run()
+	}
+	f.mu.Lock()
+	f.lastUse = time.Now()
+	present := f.present
+	f.mu.Unlock()
+	if !present {
+		return nil
+	}
+	return f
+}
+
+// drop forgets f, which has ended.
+func (a *Aggregator) drop(f *mergedFeed) {
+	a.fmu.Lock()
+	if a.feeds[f.env] == f {
+		delete(a.feeds, f.env)
+	}
+	a.fmu.Unlock()
+}
+
+// Close ends every merged feed and closes its subscribers, so open event streams do
+// not hold the server's shutdown up. A subscriber that arrives afterwards gets a
+// closed channel. It is safe to call twice.
+func (a *Aggregator) Close() {
+	a.fmu.Lock()
+	a.closed = true
+	feeds := make([]*mergedFeed, 0, len(a.feeds))
+	for id, f := range a.feeds {
+		feeds = append(feeds, f)
+		delete(a.feeds, id)
+	}
+	a.fmu.Unlock()
+	a.cancel()
+	for _, f := range feeds {
+		f.cancel()
+		<-f.done
+	}
+}
+
+// WithEventPoll sets how often an environment's merged feed looks for targets that
+// came or went; the default is one second. It returns a for chaining.
+func (a *Aggregator) WithEventPoll(d time.Duration) *Aggregator {
+	a.feedPoll = d
+	return a
+}
+
+// Events subscribes to the merged feed of an environment: the buffered rows, oldest
+// first, and a channel of the ones that follow, with no gap and no overlap between
+// the two. The channel is closed when the feed ends, the aggregator closes, the
+// subscriber falls more than 64 events behind, the context ends or cancel is called.
+// An environment with nothing to read gets an empty backlog and a channel that is
+// already closed.
+func (a *Aggregator) Events(ctx context.Context, envID string) (backlog []NodeEvent, ch <-chan NodeEvent, cancel func()) {
+	f := a.feedFor(ctx, envID)
+	if f == nil {
+		closed := make(chan NodeEvent)
+		close(closed)
+		return nil, closed, func() {}
+	}
+	backlog, ch, unsub := f.subscribe()
+	stop := context.AfterFunc(ctx, unsub)
+	return backlog, ch, func() {
+		stop()
+		unsub()
+	}
+}
+
+// Recent returns up to n of the newest buffered rows of an environment's merged
+// feed, newest first.
+func (a *Aggregator) Recent(ctx context.Context, envID string, n int) []NodeEvent {
+	f := a.feedFor(ctx, envID)
+	if f == nil || n <= 0 {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n = min(n, len(f.ring))
+	out := make([]NodeEvent, 0, n)
+	for i := len(f.ring) - 1; i >= len(f.ring)-n; i-- {
+		out = append(out, f.ring[i])
+	}
+	return out
+}
+
+// run keeps the feed attached to the environment's targets until the aggregator or
+// the events hub closes, the environment is removed, or nobody has asked for it for
+// a while.
+func (f *mergedFeed) run() {
+	defer func() {
+		f.cancel()
+		f.wg.Wait()
+		f.closeSubscribers()
+		f.agg.drop(f)
+		close(f.done)
+	}()
+	poll := f.agg.feedPoll
+	if poll <= 0 {
+		poll = defaultFeedPoll
+	}
+	t := time.NewTicker(poll)
+	defer t.Stop()
+	for {
+		select {
+		case <-f.ctx.Done():
+			return
+		case <-f.agg.events.ctx.Done():
+			// The hub is closing: its streams end, and so does this one.
+			return
+		case <-t.C:
+			if err := f.refresh(f.ctx); err != nil {
+				if f.ctx.Err() == nil && !errors.Is(err, ErrNotFound) {
+					f.agg.svc.log.Debug("refresh the merged event feed", "environment", f.env, "error", err)
+					continue
+				}
+				return
+			}
+			f.mu.Lock()
+			idle := len(f.subs) == 0 && time.Since(f.lastUse) > feedIdleAfter
+			f.mu.Unlock()
+			if idle {
+				return
+			}
+		}
+	}
+}
+
+// targets are the targets an environment's events are read from, with their node
+// names: the local socket, or each connected agent.
+func (f *mergedFeed) targets(in RollupInput) []feedTarget {
+	if in.Kind == KindLocal {
+		return []feedTarget{{in.EnvID, nodeOf(in, in.EnvID, in.Local).Name}}
+	}
+	var out []feedTarget
+	for _, a := range connectedAgents(in) {
+		out = append(out, feedTarget{AgentTarget(a.ID), nodeName(a)})
+	}
+	return out
+}
+
+// refresh attaches the targets that have appeared, forgets the ones that are gone
+// and follows the manager in use. It returns ErrNotFound for an environment that no
+// longer exists.
+func (f *mergedFeed) refresh(ctx context.Context) error {
+	in, err := f.agg.svc.Input(ctx, f.env, f.agg.now())
+	if err != nil {
+		return err
+	}
+	targets := f.targets(in)
+	inUse, _ := f.agg.svc.primary(in)
+
+	type fresh struct {
+		t       feedTarget
+		att     *attachment
+		backlog []dockerx.EventRow
+		ch      <-chan dockerx.EventRow
+	}
+	var added []fresh
+	want := make(map[string]bool, len(targets))
+	f.mu.Lock()
+	closed := f.closed
+	f.mu.Unlock()
+	if closed {
+		return context.Canceled
+	}
+	for _, t := range targets {
+		want[t.key] = true
+		f.mu.Lock()
+		_, have := f.attached[t.key]
+		f.mu.Unlock()
+		if have {
+			continue
+		}
+		backlog, ch, cancel := f.agg.events.Subscribe(f.ctx, t.key)
+		added = append(added, fresh{t: t, att: &attachment{cancel: cancel}, backlog: backlog, ch: ch})
+	}
+
+	f.mu.Lock()
+	for key, att := range f.attached {
+		if !want[key] {
+			att.cancel()
+			delete(f.attached, key)
+		}
+	}
+	prev := f.designated
+	f.designated = inUse
+	f.present = len(targets) > 0
+	for _, a := range added {
+		f.attached[a.t.key] = a.att
+	}
+	f.mu.Unlock()
+
+	// What the new targets already hold goes in as one stretch in time order, so the
+	// ring reads as one history however many targets joined at once.
+	var pending []NodeEvent
+	for _, a := range added {
+		for _, row := range a.backlog {
+			pending = append(pending, NodeEvent{EventRow: row, Node: a.t.node, from: a.t.key})
+		}
+	}
+	slices.SortStableFunc(pending, func(x, y NodeEvent) int { return cmp.Compare(x.TimeNano, y.TimeNano) })
+	for _, ev := range pending {
+		f.ingest(ev)
+	}
+	for _, a := range added {
+		f.wg.Go(func() { f.pump(a.t, a.att, a.ch) })
+	}
+	if prev != "" && inUse != prev {
+		f.catchUp(inUse, targets)
+	}
+	return nil
+}
+
+// pump feeds one target's rows into the merged feed until its subscription ends,
+// then lets the next refresh attach it again.
+func (f *mergedFeed) pump(t feedTarget, att *attachment, ch <-chan dockerx.EventRow) {
+	for row := range ch {
+		f.ingest(NodeEvent{EventRow: row, Node: t.node, from: t.key})
+	}
+	att.cancel()
+	f.mu.Lock()
+	if f.attached[t.key] == att {
+		delete(f.attached, t.key)
+	}
+	f.mu.Unlock()
+}
+
+// catchUp reads the cluster events the manager that is now designated saw while it
+// was not: they were not kept then, and its ring still holds them.
+func (f *mergedFeed) catchUp(key string, targets []feedTarget) {
+	var node string
+	for _, t := range targets {
+		if t.key == key {
+			node = t.node
+		}
+	}
+	rows := f.agg.events.Recent(key, ringSize) // newest first
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Scope == swarmScope {
+			f.ingest(NodeEvent{EventRow: rows[i], Node: node, from: key})
+		}
+	}
+}
+
+// ingest adds one row unless it is a repeat or a cluster event this manager is not
+// the one to report, and hands it to every subscriber.
+func (f *mergedFeed) ingest(ev NodeEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return
+	}
+	if ev.Scope == swarmScope && !f.keepSwarmLocked(ev) {
+		return
+	}
+	if _, dup := f.seen[ev.ID]; dup {
+		return
+	}
+	f.remember(ev.ID)
+	f.ring = append(f.ring, ev)
+	if len(f.ring) > ringSize {
+		n := copy(f.ring, f.ring[len(f.ring)-ringSize:])
+		clear(f.ring[n:])
+		f.ring = f.ring[:n]
+	}
+	for s := range f.subs {
+		select {
+		case s.ch <- ev:
+		default:
+			// Too far behind: the stream handler ends, and the browser reconnects
+			// with Last-Event-ID.
+			close(s.ch)
+			delete(f.subs, s)
+		}
+	}
+}
+
+// keepSwarmLocked decides whether a cluster event is shown: only from the designated
+// manager, not when it is older than what was already shown, and not when another
+// manager's report of the same event is already in the ring. The caller holds f.mu.
+func (f *mergedFeed) keepSwarmLocked(ev NodeEvent) bool {
+	if ev.from != f.designated {
+		return false
+	}
+	window := int64(swarmDupWindow)
+	if ev.TimeNano < f.swarmHigh-window {
+		return false
+	}
+	for i := len(f.ring) - 1; i >= 0; i-- {
+		r := f.ring[i]
+		if r.Scope != swarmScope || r.from == ev.from || r.Type != ev.Type || r.Action != ev.Action || r.ActorID != ev.ActorID {
+			continue
+		}
+		if d := r.TimeNano - ev.TimeNano; d <= window && d >= -window {
+			return false
+		}
+	}
+	f.swarmHigh = max(f.swarmHigh, ev.TimeNano)
+	return true
+}
+
+// remember adds id to the bounded seen set, forgetting the oldest when full. The
+// caller holds f.mu.
+func (f *mergedFeed) remember(id string) {
+	if len(f.seenOrder) < seenSize {
+		f.seenOrder = append(f.seenOrder, id)
+	} else {
+		delete(f.seen, f.seenOrder[f.seenNext])
+		f.seenOrder[f.seenNext] = id
+		f.seenNext = (f.seenNext + 1) % seenSize
+	}
+	f.seen[id] = struct{}{}
+}
+
+func (f *mergedFeed) subscribe() (backlog []NodeEvent, ch <-chan NodeEvent, unsub func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s := &mergedSub{ch: make(chan NodeEvent, subscriberBuffer)}
+	if f.closed {
+		close(s.ch)
+		return nil, s.ch, func() {}
+	}
+	backlog = append([]NodeEvent(nil), f.ring...)
+	f.subs[s] = struct{}{}
+	return backlog, s.ch, func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if _, ok := f.subs[s]; ok {
+			delete(f.subs, s)
+			close(s.ch)
+		}
+	}
+}
+
+// closeSubscribers closes every subscriber channel and refuses new ones.
+func (f *mergedFeed) closeSubscribers() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closed = true

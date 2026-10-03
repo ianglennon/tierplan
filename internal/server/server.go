@@ -84,6 +84,9 @@ type Server struct {
 	// hub holds one Docker events stream per online environment and fans it
 	// out to the browsers watching (plan 21).
 	hub *envs.Hub
+	// aggregator is the one read path to an environment's Docker data; it holds
+	// the merged event feeds (plan 02-21).
+	aggregator *envs.Aggregator
 	// broker turns agent connections and health changes into the global
 	// environments stream (plan 02-12).
 	broker *envs.Broker
@@ -425,30 +428,32 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		tunnelHub.Close()
+		aggregator.Close()
 		hub.Close()
 		monitor.StopAll()
 		_ = st.Close()
 		return nil, err
 	}
 	srv := &Server{
-		cfg:       cfg,
-		log:       log,
-		dataDir:   info,
-		store:     st,
-		vault:     vlt,
-		audit:     aud,
-		setup:     gate,
-		inst:      inst,
-		session:   sessions,
-		envs:      envSvc,
-		monitor:   monitor,
-		snapshots: snapshots,
-		hub:       hub,
-		broker:    broker,
-		tunnel:    tunnelHub,
-		agents:    agentSvc,
-		router:    router,
-		tlsConfig: tlsCfg,
+		cfg:        cfg,
+		log:        log,
+		dataDir:    info,
+		store:      st,
+		vault:      vlt,
+		audit:      aud,
+		setup:      gate,
+		inst:       inst,
+		session:    sessions,
+		envs:       envSvc,
+		monitor:    monitor,
+		snapshots:  snapshots,
+		hub:        hub,
+		aggregator: aggregator,
+		broker:     broker,
+		tunnel:     tunnelHub,
+		agents:     agentSvc,
+		router:     router,
+		tlsConfig:  tlsCfg,
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
@@ -469,6 +474,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		stop()
 		srv.background.Wait()
 		tunnelHub.Close()
+		aggregator.Close()
 		hub.Close()
 		monitor.StopAll()
 		_ = st.Close()
@@ -547,6 +553,7 @@ func (s *Server) Close() error {
 	s.background.Wait()
 	s.broker.Close()
 	s.tunnel.Close()
+	s.aggregator.Close()
 	s.hub.Close()
 	s.monitor.StopAll()
 	return s.store.Close()
@@ -577,6 +584,7 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	// Shutdown waits for open requests, and an events stream never ends by
 	// itself. Closing the hub ends every stream, so a restart is not held up for
 	// the whole shutdown timeout by a browser that has the feed open.
+	srv.RegisterOnShutdown(s.aggregator.Close)
 	srv.RegisterOnShutdown(s.hub.Close)
 	// The health stream is open as long as a tab is, so it ends the same way.
 	srv.RegisterOnShutdown(s.broker.Close)

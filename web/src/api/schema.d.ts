@@ -1145,6 +1145,8 @@ export interface components {
             id: string;
             /** @description The container, image, network or volume name; empty when Docker gave none */
             name: string;
+            /** @description The node the event happened on; for a row of Bayplan's own, the node it concerns, such as the manager that took over */
+            node: string;
             /**
              * Format: date-time
              * @description When it happened, in UTC, with sub-second precision

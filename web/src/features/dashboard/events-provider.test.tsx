@@ -55,6 +55,7 @@ describe("EnvEventsProvider", () => {
       instances()[0]?.open();
       instances()[0]?.send({
         id: "1",
+        node: "node-1",
         time: "2026-10-02T10:00:00Z",
         type: "volume",
         action: "create",

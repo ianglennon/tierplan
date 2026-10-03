@@ -323,6 +323,7 @@ describe("events feed (ENV-07, D-57)", () => {
     feedStream()?.open();
     feedStream()?.send({
       id: "ev1",
+      node: "node-1",
       time: "2026-10-02T10:00:00Z",
       type: "container",
       action: "start",

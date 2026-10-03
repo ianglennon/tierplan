@@ -19,6 +19,7 @@ type EventDTO = components["schemas"]["EventDTO"];
 function ev(id: string, time: string, over: Partial<EventDTO> = {}): EventDTO {
   return {
     id,
+    node: "node-1",
     time,
     type: "container",
     action: "start",

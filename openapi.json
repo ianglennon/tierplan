@@ -1237,6 +1237,10 @@
             "description": "The container, image, network or volume name; empty when Docker gave none",
             "type": "string"
           },
+          "node": {
+            "description": "The node the event happened on; for a row of Bayplan's own, the node it concerns, such as the manager that took over",
+            "type": "string"
+          },
           "time": {
             "description": "When it happened, in UTC, with sub-second precision",
             "format": "date-time",
@@ -1255,6 +1259,7 @@
           }
         },
         "required": [
+          "node",
           "id",
           "time",
           "type",

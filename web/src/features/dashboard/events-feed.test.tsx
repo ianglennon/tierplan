@@ -14,6 +14,7 @@ import "@/i18n";
 function ev(id: string, over: Partial<EventDTO> = {}): EventDTO {
   return {
     id,
+    node: "node-1",
     time: new Date(Date.now() - 60_000).toISOString(),
     type: "container",
     action: "start",
