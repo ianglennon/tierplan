@@ -188,7 +188,8 @@ describe("/environments", () => {
         "Add a swarm or a standalone Docker host. Bayplan gives you one command that installs a small agent on it. The host needs no open inbound port.",
       ),
     ).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "Add environment" }).length).toBeGreaterThan(0);
+    // One primary button per view: the header's gives way to the empty state's.
+    expect(screen.getAllByRole("button", { name: "Add environment" })).toHaveLength(1);
     expect(await screen.findByRole("heading", { name: "No Docker socket found" })).toBeTruthy();
   });
 

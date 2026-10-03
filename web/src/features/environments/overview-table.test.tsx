@@ -368,6 +368,9 @@ describe("EnvOverviewTable under 768px", () => {
     expect(within(first).getByRole("link", { name: "edge" })).toBeTruthy();
     expect(within(first).getByText("The agent isn't connected.")).toBeTruthy();
     expect(first.className).toContain("min-h-11");
+    // The whole row is the tap target, not just the line of text.
+    expect(first.className).toContain("relative");
+    expect(within(first).getByRole("link", { name: "edge" }).className).toContain("after:absolute");
     const second = items[1] as HTMLElement;
     expect(within(second).getByText("3/4 nodes · 1 failing · agent 0.2.0")).toBeTruthy();
     expect(within(second).queryByText(/isn't connected/)).toBeNull();

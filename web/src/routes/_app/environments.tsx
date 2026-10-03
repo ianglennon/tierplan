@@ -83,7 +83,8 @@ function EnvironmentsPage() {
           </span>
         ) : null}
         {live === "live" || live === "reconnecting" ? <LiveChip state={live} /> : null}
-        {canCreate ? (
+        {/* One primary button per view: the empty state carries its own. */}
+        {canCreate && !empty ? (
           <Button
             className="ms-auto max-md:order-last max-md:h-11 max-md:w-full"
             onClick={addEnvironment}

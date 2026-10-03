@@ -300,11 +300,14 @@ interface NameCellProps {
   env: EnvironmentItem;
   finish: boolean;
   onFinishSetup?: (envId: string) => void;
+  // Stretches the link over the whole stacked row, so the 44px row is the tap
+  // target and not just the line of text. The row must be `relative`.
+  stretch?: boolean;
 }
 
 // The name links to the environment. It truncates with an ellipsis and keeps
 // the whole name in its title; the badge and the dot never truncate.
-function NameCell({ env, finish, onFinishSetup }: NameCellProps) {
+function NameCell({ env, finish, onFinishSetup, stretch }: NameCellProps) {
   const t = useT();
   return (
     <div className="flex min-w-0 items-center gap-2">
@@ -312,7 +315,10 @@ function NameCell({ env, finish, onFinishSetup }: NameCellProps) {
         to="/env/$envId"
         params={{ envId: env.id }}
         title={env.name}
-        className="block max-w-64 truncate rounded-sm font-semibold hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-md:max-w-none"
+        className={cn(
+          "block max-w-48 min-w-0 truncate rounded-sm font-semibold hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-md:max-w-none",
+          stretch && "after:absolute after:inset-0 after:content-['']",
+        )}
       >
         {env.name}
       </Link>
@@ -320,7 +326,7 @@ function NameCell({ env, finish, onFinishSetup }: NameCellProps) {
         <Button
           variant="link"
           size="xs"
-          className="h-auto shrink-0 p-0"
+          className="relative z-10 h-auto shrink-0 p-0"
           onClick={() => onFinishSetup?.(env.id)}
         >
           {t("overview.finishSetup")}
@@ -502,16 +508,20 @@ function StackedRow({ env, finish, onFinishSetup, flash }: StackedRowProps) {
       variant="outline"
       data-flash={flash || undefined}
       className={cn(
-        "min-h-11 flex-col items-stretch gap-1 transition-colors duration-150",
+        "relative min-h-11 flex-col flex-nowrap items-stretch gap-1 transition-colors duration-150",
         flash && "bg-muted",
       )}
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <NameCell env={env} finish={finish} onFinishSetup={onFinishSetup} />
+      {/* The badges and the health label wrap to a second line before they can
+          squeeze the name to nothing. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <div className="min-w-0 flex-1 basis-28">
+          <NameCell env={env} finish={finish} onFinishSetup={onFinishSetup} stretch />
         </div>
-        <TypeBadge envType={env.envType} type={env.type} isLocalSocket={env.isLocalSocket} />
-        <StatusDot state={env.status.state} label={healthLabel(env.status)} className="shrink-0" />
+        <div className="flex flex-wrap items-center gap-2">
+          <TypeBadge envType={env.envType} type={env.type} isLocalSocket={env.isLocalSocket} />
+          <StatusDot state={env.status.state} label={healthLabel(env.status)} />
+        </div>
       </div>
       {summary ? <p className="text-xs text-muted-foreground">{summary}</p> : null}
       {reason ? (
@@ -624,7 +634,7 @@ export function EnvOverviewTable({
                           <NameCell env={env} finish={finish(env)} onFinishSetup={onFinishSetup} />
                         </TableCell>
                         <TableCell className="px-3 py-0">
-                          <span className="inline-flex flex-wrap items-center gap-1">
+                          <span className="inline-flex items-center gap-1">
                             <TypeBadge
                               envType={env.envType}
                               type={env.type}
