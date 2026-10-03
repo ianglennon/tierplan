@@ -259,7 +259,7 @@ export interface paths {
         put?: never;
         /**
          * Add an environment
-         * @description kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the address the agent dials; 409 public_url_missing when Bayplan has no public URL. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.
+         * @description kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, with its base path); 409 public_url_required when Bayplan has neither. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.
          */
         post: operations["addEnvironment"];
         delete?: never;
@@ -495,8 +495,8 @@ export interface components {
             engine: components["schemas"]["EnvironmentEngineBody"];
             /** @description The environment ID, used in /api/env/{envId}/... */
             id: string;
-            /** @description Present for an agent environment only: the join token and the address the agent dials */
-            install?: components["schemas"]["EnvironmentInstallBody"];
+            /** @description Present for an agent environment only: the join token, the address the agent dials, and the commands and files that install it */
+            install?: components["schemas"]["InstallBody"];
             /** @description True for the Docker host Bayplan itself runs on */
             isSelfHost: boolean;
             /**
@@ -667,12 +667,6 @@ export interface components {
             negotiatedApi?: string;
             /** @description The engine version */
             version?: string;
-        };
-        EnvironmentInstallBody: {
-            /** @description The address the agent dials, for example wss://bayplan.example.com/agent/connect */
-            agentUrl: string;
-            /** @description The join token the agent presents once to enrol. Shown only in this answer */
-            joinToken: string;
         };
         EnvironmentListBody: {
             items: components["schemas"]["EnvironmentBody"][] | null;
@@ -854,6 +848,49 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        InstallBody: {
+            /** @description The address the agent dials, for example wss://bayplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
+            agentUrl: string;
+            /**
+             * Format: int64
+             * @description Which token this is for the environment, from 1; each rotation adds one
+             */
+            generation: number;
+            /** @description The agent image. Its tag is this server's exact version, or edge for a development or edge server */
+            image: string;
+            /** @description The join token the agent presents once to enrol. Shown only in this answer; it is inside the commands and files below */
+            joinToken: string;
+            /** @description Commands that remove the agent by hand, for a host that is offline when its environment is removed */
+            manualCleanup: components["schemas"]["InstallCleanupBody"];
+            /** @description The SPKI pin of the self-signed certificate Bayplan serves, which the agent trusts instead of system roots. Present only when Bayplan serves its own self-signed certificate */
+            pin?: string;
+            /** @description The Docker secret the swarm install creates for this token, bayplan-agent-token-g followed by the generation */
+            secretName: string;
+            /** @description The install for a standalone host */
+            standalone: components["schemas"]["InstallStandaloneBody"];
+            /** @description The install for a swarm */
+            swarm: components["schemas"]["InstallSwarmBody"];
+        };
+        InstallCleanupBody: {
+            /** @description One line that removes the agent container and its volume */
+            standalone: string;
+            /** @description Commands that remove the service and the secret on a manager, and the agent volume on every node */
+            swarm: string;
+        };
+        InstallStandaloneBody: {
+            /** @description One line that starts the agent on a single Docker host. Starts with a space so a shell set to ignore space-led commands keeps it out of its history */
+            command: string;
+            /** @description The same container as a compose file for docker compose up, with the same environment as the command */
+            composeFile: string;
+        };
+        InstallSwarmBody: {
+            /** @description One line to run on any swarm manager. It creates a Docker secret from the join token and starts the agent as a global service. Starts with a space so a shell set to ignore space-led commands keeps it out of its history */
+            command: string;
+            /** @description One line that swaps a running service over to this token's secret without stopping it. Present only for a token that replaces an earlier one, never for a first install */
+            rotateCommand?: string;
+            /** @description The same service as a stack file for docker stack deploy. A stack file cannot create a secret from text, so it names the secret as external and its first comment line holds the one-line command that creates it */
+            stackFile: string;
         };
         InstanceBody: {
             /** @description Display name of this instance, empty before setup */

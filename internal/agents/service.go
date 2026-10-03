@@ -76,7 +76,10 @@ type Created struct {
 	EnvID     string
 	Name      string
 	JoinToken string
-	CreatedAt time.Time
+	// Generation numbers the join token for the environment: 1 for the first, one
+	// more for each rotation. It is in the name of the swarm secret.
+	Generation int
+	CreatedAt  time.Time
 }
 
 // Service creates agent environments and enrols agents.
@@ -166,7 +169,7 @@ func (s *Service) CreateEnvironment(ctx context.Context, actor audit.Actor, name
 	if err := tx.Commit(); err != nil {
 		return Created{}, fmt.Errorf("commit: %w", err)
 	}
-	return Created{EnvID: envID, Name: name, JoinToken: token, CreatedAt: now}, nil
+	return Created{EnvID: envID, Name: name, JoinToken: token, Generation: 1, CreatedAt: now}, nil
 }
 
 // Enrol turns a join token and a proof of key possession into a certificate. It

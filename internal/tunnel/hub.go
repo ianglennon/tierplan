@@ -265,7 +265,7 @@ type Hub struct {
 	// the manual update command added to a refusal for a version outside the
 	// window.
 	serverVersion string
-	updateHint    func(tooOld bool) string
+	updateHint    func(tooOld bool, envType string) string
 
 	// life serializes session lifecycle transitions together with the Observer
 	// calls they cause, so for one agent the Observer hears Connected, then

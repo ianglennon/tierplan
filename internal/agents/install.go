@@ -182,6 +182,9 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 	case "swarm":
 		return " docker service update --image " + image + " " + ServiceName
 	case "standalone":
+		if p.Endpoint == "" {
+			return "" // a recreated container with no address to dial would never connect
+		}
 		return " docker pull " + image + " && docker rm -f " + ServiceName +
 			" && docker run -d --name " + ServiceName + " --restart unless-stopped" +
 			hardening() +
@@ -192,6 +195,23 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 			" " + image
 	}
 	return ""
+}
+
+// UpdateHint is the sentence a version_incompatible refusal appends for an agent
+// that is too old: the manual command for the agent's environment type (D-25). An
+// agent that is too new needs the server updated, which no agent command fixes,
+// and an unknown type has no command, so both answer "". It carries no join
+// token: the refused agent either has its identity already or enrols again with
+// the token it was installed with.
+func UpdateHint(tooOld bool, envType string, p InstallParams) string {
+	if !tooOld {
+		return ""
+	}
+	cmd := ManualUpdateCommand(envType, AgentImage(p.ServerVersion), p)
+	if cmd == "" {
+		return ""
+	}
+	return "update the agent with: " + strings.TrimSpace(cmd)
 }
 
 // hardening is the flag set a standalone container shares with the swarm service

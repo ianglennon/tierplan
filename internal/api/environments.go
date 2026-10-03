@@ -14,8 +14,10 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/bayplan/internal/agents"
+	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
 )
 
@@ -27,7 +29,7 @@ const (
 	problemUnsupportedEngine      = "unsupported_engine"
 	problemInvalidName            = "invalid_name"
 	problemEnvironmentNotFound    = "environment_not_found"
-	problemPublicURLMissing       = "public_url_missing"
+	problemPublicURLRequired      = "public_url_required"
 	problemAgentsUnavailable      = "agents_unavailable"
 )
 
@@ -37,9 +39,14 @@ type EnvironmentsDeps struct {
 	// Agents creates agent environments and their join tokens. Nil means the
 	// server cannot add one.
 	Agents *agents.Service
-	// PublicURL returns Bayplan's public URL, from which the address agents dial
-	// is built. Nil or empty means no agent environment can be added.
-	PublicURL func() string
+	// Instance supplies the address agents dial: the agent URL, else the public
+	// URL, with its base path (D-18). Nil, or neither URL set, means no agent
+	// environment can be added.
+	Instance *instance.Instance
+	// TLSPin returns the SPKI pin of the self-signed certificate Bayplan serves, or
+	// "" when it serves a supplied certificate or plain HTTP, and then the install
+	// carries no pin (D-06). Nil means none.
+	TLSPin func() string
 	// Checker filters the list to the environments the caller may read.
 	Checker *rbac.Checker
 	// Log receives server-side failures. Nil means slog.Default().
@@ -75,19 +82,46 @@ type EnvironmentBody struct {
 	Engine     EnvironmentEngineBody `json:"engine"`
 }
 
-// EnvironmentInstallBody is what an admin needs to connect a host to a new agent
-// environment. It is in the answer to adding one and nowhere else: the join token
-// is stored only as a hash and cannot be shown again.
-type EnvironmentInstallBody struct {
-	JoinToken string `json:"joinToken" doc:"The join token the agent presents once to enrol. Shown only in this answer"`
-	AgentURL  string `json:"agentUrl" doc:"The address the agent dials, for example wss://bayplan.example.com/agent/connect"`
+// InstallSwarmBody is the swarm install: one command for a manager, or a stack file.
+type InstallSwarmBody struct {
+	Command       string `json:"command" doc:"One line to run on any swarm manager. It creates a Docker secret from the join token and starts the agent as a global service. Starts with a space so a shell set to ignore space-led commands keeps it out of its history"`
+	StackFile     string `json:"stackFile" doc:"The same service as a stack file for docker stack deploy. A stack file cannot create a secret from text, so it names the secret as external and its first comment line holds the one-line command that creates it"`
+	RotateCommand string `json:"rotateCommand,omitempty" doc:"One line that swaps a running service over to this token's secret without stopping it. Present only for a token that replaces an earlier one, never for a first install"`
+}
+
+// InstallStandaloneBody is the standalone install: one command, or a compose file.
+type InstallStandaloneBody struct {
+	Command     string `json:"command" doc:"One line that starts the agent on a single Docker host. Starts with a space so a shell set to ignore space-led commands keeps it out of its history"`
+	ComposeFile string `json:"composeFile" doc:"The same container as a compose file for docker compose up, with the same environment as the command"`
+}
+
+// InstallCleanupBody is how to take the agent off a host by hand.
+type InstallCleanupBody struct {
+	Swarm      string `json:"swarm" doc:"Commands that remove the service and the secret on a manager, and the agent volume on every node"`
+	Standalone string `json:"standalone" doc:"One line that removes the agent container and its volume"`
+}
+
+// InstallBody is what an admin needs to connect hosts to a new agent environment.
+// It is in the answer to adding one and nowhere else: the join token is stored
+// only as a hash and cannot be shown again. Every text is built in one place,
+// agents.BuildInstall.
+type InstallBody struct {
+	JoinToken     string                `json:"joinToken" doc:"The join token the agent presents once to enrol. Shown only in this answer; it is inside the commands and files below"`
+	AgentURL      string                `json:"agentUrl" doc:"The address the agent dials, for example wss://bayplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request"`
+	Image         string                `json:"image" doc:"The agent image. Its tag is this server's exact version, or edge for a development or edge server"`
+	Pin           string                `json:"pin,omitempty" doc:"The SPKI pin of the self-signed certificate Bayplan serves, which the agent trusts instead of system roots. Present only when Bayplan serves its own self-signed certificate"`
+	SecretName    string                `json:"secretName" doc:"The Docker secret the swarm install creates for this token, bayplan-agent-token-g followed by the generation"`
+	Generation    int                   `json:"generation" doc:"Which token this is for the environment, from 1; each rotation adds one"`
+	Swarm         InstallSwarmBody      `json:"swarm" doc:"The install for a swarm"`
+	Standalone    InstallStandaloneBody `json:"standalone" doc:"The install for a standalone host"`
+	ManualCleanup InstallCleanupBody    `json:"manualCleanup" doc:"Commands that remove the agent by hand, for a host that is offline when its environment is removed"`
 }
 
 // AddEnvironmentBody is the answer to adding an environment: the environment, and
 // for an agent environment the install details.
 type AddEnvironmentBody struct {
 	EnvironmentBody
-	Install *EnvironmentInstallBody `json:"install,omitempty" doc:"Present for an agent environment only: the join token and the address the agent dials"`
+	Install *InstallBody `json:"install,omitempty" doc:"Present for an agent environment only: the join token, the address the agent dials, and the commands and files that install it"`
 }
 
 // AddEnvironmentOutput wraps AddEnvironmentBody for huma.
@@ -251,7 +285,8 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			"added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine " +
 			"(unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the " +
 			"Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) " +
-			"and the address the agent dials; 409 public_url_missing when Bayplan has no public URL. 422 invalid_name. " +
+			"and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, " +
+			"with its base path); 409 " + problemPublicURLRequired + " when Bayplan has neither. 422 invalid_name. " +
 			"The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsCreate, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
@@ -330,19 +365,19 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 }
 
 // addAgentEnvironment creates an agent environment and answers with its join
-// token. The token is in this answer only: the server keeps its hash.
+// token and the install built from it. The token is in this answer only: the
+// server keeps its hash, and it is in no audit row.
 func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(string, error) error, p *rbac.Principal, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
 	if d.Agents == nil {
 		return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot add agent environments.")
 	}
-	publicURL := ""
-	if d.PublicURL != nil {
-		publicURL = d.PublicURL()
+	endpoint := ""
+	if d.Instance != nil {
+		endpoint = d.Instance.AgentEndpoint()
 	}
-	agentURL, err := agents.AgentURL(publicURL)
-	if publicURL == "" || err != nil {
-		return nil, httpx.Problem(http.StatusConflict, problemPublicURLMissing,
-			"Bayplan has no public URL, so it cannot tell an agent where to connect. Set one in Settings, or with BAYPLAN_PUBLIC_URL.")
+	if endpoint == "" {
+		return nil, httpx.Problem(http.StatusConflict, problemPublicURLRequired,
+			"Bayplan has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with BAYPLAN_PUBLIC_URL or BAYPLAN_AGENT_URL.")
 	}
 	created, err := d.Agents.CreateEnvironment(ctx, p.AuditActor(), in.Body.Name, httpx.ClientIP(ctx), in.UserAgent)
 	if err != nil {
@@ -352,8 +387,31 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 	if err != nil {
 		return nil, fail("read the new environment", err)
 	}
+	pin := ""
+	if d.TLSPin != nil {
+		pin = d.TLSPin()
+	}
+	install, err := agents.BuildInstall(agents.InstallParams{
+		Token: created.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: created.Generation,
+	})
+	if err != nil {
+		// The environment exists and its token cannot be shown again. A value that
+		// breaks the quoting is a server bug, so it is logged and not hidden.
+		return nil, fail("build the install", err)
+	}
 	return &AddEnvironmentOutput{CacheControl: "no-store", Body: AddEnvironmentBody{
 		EnvironmentBody: environmentBody(e),
-		Install:         &EnvironmentInstallBody{JoinToken: created.JoinToken, AgentURL: agentURL},
+		Install:         installBody(install),
 	}}, nil
+}
+
+// installBody maps the built install to its API shape.
+func installBody(in agents.Install) *InstallBody {
+	return &InstallBody{
+		JoinToken: in.JoinToken, AgentURL: in.AgentURL, Image: in.Image, Pin: in.Pin,
+		SecretName: in.SecretName, Generation: in.Generation,
+		Swarm:         InstallSwarmBody{Command: in.SwarmCommand, StackFile: in.SwarmStackFile, RotateCommand: in.SwarmRotateCommand},
+		Standalone:    InstallStandaloneBody{Command: in.StandaloneCommand, ComposeFile: in.StandaloneComposeFile},
+		ManualCleanup: InstallCleanupBody{Swarm: in.SwarmCleanup, Standalone: in.StandaloneCleanup},
+	}
 }

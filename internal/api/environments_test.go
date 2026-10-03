@@ -709,9 +709,9 @@ func TestEnvironmentAddAgentNeverPutsTheJoinTokenInTheAudit(t *testing.T) {
 	if rec.code != http.StatusCreated || got.Install == nil {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
-	secret := got.Install.JoinToken[strings.LastIndex(got.Install.JoinToken, "_")+1:]
-	if len(secret) < 40 {
-		t.Fatalf("the token secret %q is shorter than expected", secret)
+	_, secret, ok := agents.ParseToken(got.Install.JoinToken)
+	if !ok || len(secret) < 40 {
+		t.Fatalf("the token %q does not parse into a secret of the expected length", got.Install.JoinToken)
 	}
 	rows, err := f.st.Read.Query(`SELECT id, actor_name, action, target_type, target_id, COALESCE(env_id, ''), result, reason, ip, user_agent, details FROM audit_log`)
 	if err != nil {

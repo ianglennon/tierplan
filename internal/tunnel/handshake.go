@@ -133,7 +133,7 @@ func (h *Hub) verifyAuth(ctx context.Context, a wire.Auth, serverNonce []byte, p
 			reason = "too_old"
 		}
 		if h.updateHint != nil {
-			if hint := h.updateHint(tooOld); hint != "" {
+			if hint := h.updateHint(tooOld, environmentType(a.Facts)); hint != "" {
 				detail += ". " + hint
 			}
 		}
@@ -231,4 +231,14 @@ func (h *Hub) refuseAfter(ctx context.Context, c *websocket.Conn, code, detail s
 		T: wire.TypeRefuse, Code: code, Detail: detail, RetryAfterMs: int(retryAfter / time.Millisecond),
 	})
 	_ = c.Close(websocket.StatusPolicyViolation, code)
+}
+
+// environmentType is what kind of environment the agent's host belongs to, from
+// the facts it reported: a swarm node when its swarm is active, else a standalone
+// host. The refusal's update hint depends on it.
+func environmentType(f wire.Facts) string {
+	if f.Swarm != nil && f.Swarm.State == "active" {
+		return "swarm"
+	}
+	return "standalone"
 }

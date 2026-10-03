@@ -112,9 +112,11 @@ func (h *Hub) WithServerVersion(v string) *Hub {
 }
 
 // WithUpdateHint sets text added to a version_incompatible refusal: the manual
-// command that brings the agent up to date. tooOld says which side is behind. Nil
+// command that brings the agent up to date. tooOld says which side is behind, and
+// envType is "swarm" when the agent reported an active swarm and "standalone"
+// otherwise, so the hint can name the command for that kind of host (D-25). Nil
 // adds nothing. Call it before the hub serves.
-func (h *Hub) WithUpdateHint(f func(tooOld bool) string) *Hub {
+func (h *Hub) WithUpdateHint(f func(tooOld bool, envType string) string) *Hub {
 	h.updateHint = f
 	return h
 }

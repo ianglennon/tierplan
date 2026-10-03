@@ -303,6 +303,10 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// Pitfall 8, D-13). It is separate from anonAudit so that agents behind one
 	// address and people signing in do not spend each other's budget.
 	agentAudit := auth.NewAuditThrottle(aud, auth.NewIPLimiter(6*time.Second, 20, 10*time.Minute, nil), log, nil)
+	// The pin an install command carries, and the hint a refused agent gets, are
+	// both read when asked: the pin changes only if the self-signed key is
+	// replaced, and the endpoint follows Settings.
+	tlsPin := func() string { return firstSelfSignedPin(cfg, tlsCfg) }
 	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
 		// The hub checks each handshake against the address agents are told to dial:
 		// the agent URL when one is set, else the public URL (D-18).
@@ -311,6 +315,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
 		WithLastSeen(agentSvc).
 		WithServerVersion(buildinfo.Get().Version).
+		// An agent outside the version window is told the manual command that
+		// updates it, for its kind of environment (D-25).
+		WithUpdateHint(func(tooOld bool, envType string) string {
+			return agents.UpdateHint(tooOld, envType, agents.InstallParams{
+				Endpoint: inst.AgentEndpoint(), Pin: tlsPin(), ServerVersion: buildinfo.Get().Version,
+			})
+		}).
 		WithAllowInsecure(cfg.AgentAllowInsecure).
 		WithConnectLimit(cfg.AgentConnectBurst).
 		WithRefusalAudit(agentAudit)
@@ -367,7 +378,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
 		Log:     log,
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, PublicURL: inst.PublicURL, Checker: checker, Log: log},
+		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Log: log},
 		api.DashboardDeps{Snapshots: snapshots, SelfContainerID: selfID, Log: log},
 		api.EventsDeps{Hub: hub, Log: log},
 		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
@@ -457,8 +468,12 @@ func (s *Server) Hub() *envs.Hub { return s.hub }
 // generated for itself, which an install command carries so the agent can trust
 // it (D-06). It is empty when Bayplan serves a supplied certificate or plain
 // HTTP: the first is the operator's to pin, the second has nothing to pin.
-func (s *Server) TLSPin() string {
-	if p := selfSignedPins(s.cfg, s.tlsConfig); len(p) > 0 {
+func (s *Server) TLSPin() string { return firstSelfSignedPin(s.cfg, s.tlsConfig) }
+
+// firstSelfSignedPin is the pin an install command carries: the generated
+// certificate's, and "" when there is none.
+func firstSelfSignedPin(cfg config.Config, tlsCfg *tls.Config) string {
+	if p := selfSignedPins(cfg, tlsCfg); len(p) > 0 {
 		return p[0]
 	}
 	return ""

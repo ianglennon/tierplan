@@ -19,8 +19,8 @@
             "type": "string"
           },
           "install": {
-            "$ref": "#/components/schemas/EnvironmentInstallBody",
-            "description": "Present for an agent environment only: the join token and the address the agent dials"
+            "$ref": "#/components/schemas/InstallBody",
+            "description": "Present for an agent environment only: the join token, the address the agent dials, and the commands and files that install it"
           },
           "isSelfHost": {
             "description": "True for the Docker host Bayplan itself runs on",
@@ -486,24 +486,6 @@
         },
         "type": "object"
       },
-      "EnvironmentInstallBody": {
-        "additionalProperties": false,
-        "properties": {
-          "agentUrl": {
-            "description": "The address the agent dials, for example wss://bayplan.example.com/agent/connect",
-            "type": "string"
-          },
-          "joinToken": {
-            "description": "The join token the agent presents once to enrol. Shown only in this answer",
-            "type": "string"
-          }
-        },
-        "required": [
-          "joinToken",
-          "agentUrl"
-        ],
-        "type": "object"
-      },
       "EnvironmentListBody": {
         "additionalProperties": false,
         "properties": {
@@ -886,6 +868,117 @@
           "items",
           "total",
           "truncated"
+        ],
+        "type": "object"
+      },
+      "InstallBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agentUrl": {
+            "description": "The address the agent dials, for example wss://bayplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request",
+            "type": "string"
+          },
+          "generation": {
+            "description": "Which token this is for the environment, from 1; each rotation adds one",
+            "format": "int64",
+            "type": "integer"
+          },
+          "image": {
+            "description": "The agent image. Its tag is this server's exact version, or edge for a development or edge server",
+            "type": "string"
+          },
+          "joinToken": {
+            "description": "The join token the agent presents once to enrol. Shown only in this answer; it is inside the commands and files below",
+            "type": "string"
+          },
+          "manualCleanup": {
+            "$ref": "#/components/schemas/InstallCleanupBody",
+            "description": "Commands that remove the agent by hand, for a host that is offline when its environment is removed"
+          },
+          "pin": {
+            "description": "The SPKI pin of the self-signed certificate Bayplan serves, which the agent trusts instead of system roots. Present only when Bayplan serves its own self-signed certificate",
+            "type": "string"
+          },
+          "secretName": {
+            "description": "The Docker secret the swarm install creates for this token, bayplan-agent-token-g followed by the generation",
+            "type": "string"
+          },
+          "standalone": {
+            "$ref": "#/components/schemas/InstallStandaloneBody",
+            "description": "The install for a standalone host"
+          },
+          "swarm": {
+            "$ref": "#/components/schemas/InstallSwarmBody",
+            "description": "The install for a swarm"
+          }
+        },
+        "required": [
+          "joinToken",
+          "agentUrl",
+          "image",
+          "secretName",
+          "generation",
+          "swarm",
+          "standalone",
+          "manualCleanup"
+        ],
+        "type": "object"
+      },
+      "InstallCleanupBody": {
+        "additionalProperties": false,
+        "properties": {
+          "standalone": {
+            "description": "One line that removes the agent container and its volume",
+            "type": "string"
+          },
+          "swarm": {
+            "description": "Commands that remove the service and the secret on a manager, and the agent volume on every node",
+            "type": "string"
+          }
+        },
+        "required": [
+          "swarm",
+          "standalone"
+        ],
+        "type": "object"
+      },
+      "InstallStandaloneBody": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "One line that starts the agent on a single Docker host. Starts with a space so a shell set to ignore space-led commands keeps it out of its history",
+            "type": "string"
+          },
+          "composeFile": {
+            "description": "The same container as a compose file for docker compose up, with the same environment as the command",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "composeFile"
+        ],
+        "type": "object"
+      },
+      "InstallSwarmBody": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "One line to run on any swarm manager. It creates a Docker secret from the join token and starts the agent as a global service. Starts with a space so a shell set to ignore space-led commands keeps it out of its history",
+            "type": "string"
+          },
+          "rotateCommand": {
+            "description": "One line that swaps a running service over to this token's secret without stopping it. Present only for a token that replaces an earlier one, never for a first install",
+            "type": "string"
+          },
+          "stackFile": {
+            "description": "The same service as a stack file for docker stack deploy. A stack file cannot create a secret from text, so it names the secret as external and its first comment line holds the one-line command that creates it",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "stackFile"
         ],
         "type": "object"
       },
@@ -2458,7 +2551,7 @@
         ]
       },
       "post": {
-        "description": "kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the address the agent dials; 409 public_url_missing when Bayplan has no public URL. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.",
+        "description": "kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, with its base path); 409 public_url_required when Bayplan has neither. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.",
         "operationId": "addEnvironment",
         "requestBody": {
           "content": {
