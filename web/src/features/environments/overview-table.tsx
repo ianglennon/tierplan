@@ -15,6 +15,7 @@ import { Item, ItemGroup } from "@/components/ui/item";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isKnownReason, ReasonText } from "@/features/environments/reason-text";
 import { type SortDir, type SortKey, sortEnvironments } from "@/features/environments/sort";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useT } from "@/i18n/use-t";
@@ -63,55 +64,50 @@ const COLUMNS = [
   "lastSeen",
 ] as const;
 
-// The reason codes that have wording of their own (UI-SPEC Connection reason
-// codes). Anything else, including a code a newer server adds, falls back to
-// the wording for the state, so the overview never shows a raw code. Plan 17's
-// ReasonText replaces this with the full per-code component.
-const KNOWN_REASONS: ReadonlySet<string> = new Set([
-  "agent_offline",
-  "tls_untrusted",
-  "auth_rejected",
-  "cert_expired",
-  "cert_expiring",
-  "revoked",
-  "blocked",
-  "version_incompatible",
-  "clock_skew",
-  "timeout",
-  "not_a_manager",
-  "no_quorum",
-  "cluster_changed",
-  "engine_unreachable",
-  "unsupported_engine",
-  "agent_policy_denied",
-  "unreachable",
-  "api_too_old",
-  "podman",
-  "rootless",
-  "docker_desktop",
-]);
-
-interface Reason {
-  text: string;
-  hint: string;
+// What an overview row says about a state that is not online: ReasonText's
+// words for the code the server gave, or when it has none, or one this build
+// does not know, the wording for the state itself. Nothing for a state that is
+// fine or has not been probed. The server sends a code, not wording, and every
+// string comes from our own tables, so nothing an agent supplied is markup
+// (T-02-50, T-02-61).
+function OverviewReason({
+  status,
+  envType,
+  variant,
+}: {
+  status: EnvironmentStatus;
+  envType: EnvironmentItem["envType"];
+  variant: "tooltip" | "compact";
+}) {
+  const t = useT();
+  const { state, reason } = status;
+  if (state === "online" || state === "unknown") return null;
+  // Pending and reconnecting say what they are, whatever else is attached.
+  const code = state !== "pending" && state !== "reconnecting" ? reason : undefined;
+  if (isKnownReason(code)) {
+    return (
+      <ReasonText
+        code={code}
+        variant={variant}
+        params={{ envType }}
+        className={variant === "compact" ? "text-xs" : undefined}
+      />
+    );
+  }
+  const base = `overview.reason.states.${state}`;
+  return (
+    <div className="flex flex-col gap-0.5 text-xs">
+      <p>{t(`${base}.text`)}</p>
+      <p className={variant === "tooltip" ? "opacity-80" : "text-muted-foreground"}>
+        {t(`${base}.hint`)}
+      </p>
+    </div>
+  );
 }
 
-// useOverviewReason turns a status into plain wording and a one-line fix hint,
-// text only (a command never lives in a tooltip). Nothing for a state that is
-// fine or has not been probed. The server sends a code, not wording, and
-// every string here comes from our own table, so nothing an agent supplied
-// reaches the page (T-02-50).
-function useOverviewReason(): (status: EnvironmentStatus) => Reason | undefined {
-  const t = useT();
-  return (status) => {
-    const { state, reason } = status;
-    if (state === "online" || state === "unknown") return undefined;
-    // Pending and reconnecting say what they are, whatever else is attached.
-    const byCode =
-      state !== "pending" && state !== "reconnecting" && reason && KNOWN_REASONS.has(reason);
-    const base = byCode ? `overview.reason.codes.${reason}` : `overview.reason.states.${state}`;
-    return { text: t(`${base}.text`), hint: t(`${base}.hint`) };
-  };
+// Whether a status has anything to explain.
+function hasReason(status: EnvironmentStatus): boolean {
+  return status.state !== "online" && status.state !== "unknown";
 }
 
 // What makes a row worth a flash: anything it shows, but not the last-seen
@@ -273,10 +269,8 @@ function Dash() {
 // the only place it lives.
 function HealthCell({ env }: { env: EnvironmentItem }) {
   const healthLabel = useHealthLabel();
-  const reasonFor = useOverviewReason();
   const dot = <StatusDot state={env.status.state} label={healthLabel(env.status)} />;
-  const reason = reasonFor(env.status);
-  if (!reason) return dot;
+  if (!hasReason(env.status)) return dot;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -289,8 +283,7 @@ function HealthCell({ env }: { env: EnvironmentItem }) {
         </span>
       </TooltipTrigger>
       <TooltipContent className="max-w-72">
-        <p>{reason.text}</p>
-        <p className="opacity-80">{reason.hint}</p>
+        <OverviewReason status={env.status} envType={env.envType} variant="tooltip" />
       </TooltipContent>
     </Tooltip>
   );
@@ -499,9 +492,7 @@ interface StackedRowProps extends Omit<NameCellProps, "finish"> {
 // online, since touch has no hover for the tooltip.
 function StackedRow({ env, finish, onFinishSetup, flash }: StackedRowProps) {
   const healthLabel = useHealthLabel();
-  const reasonFor = useOverviewReason();
   const summary = useSummaryLine()(env);
-  const reason = reasonFor(env.status);
   return (
     <Item
       role="listitem"
@@ -524,10 +515,8 @@ function StackedRow({ env, finish, onFinishSetup, flash }: StackedRowProps) {
         </div>
       </div>
       {summary ? <p className="text-xs text-muted-foreground">{summary}</p> : null}
-      {reason ? (
-        <p className="text-xs">
-          <span>{reason.text}</span> <span className="text-muted-foreground">{reason.hint}</span>
-        </p>
+      {hasReason(env.status) ? (
+        <OverviewReason status={env.status} envType={env.envType} variant="compact" />
       ) : null}
     </Item>
   );

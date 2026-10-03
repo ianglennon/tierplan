@@ -30,6 +30,7 @@ import { useNow } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { EnvEventsProvider } from "@/features/dashboard/events";
+import { EnvDegradedBanner } from "@/features/environments/degraded-banner";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import { isKnownReason, ReasonText } from "@/features/environments/reason-text";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
@@ -409,10 +410,20 @@ function EnvironmentLayout() {
   // Only an environment with none of those problems gets here. The events subscription opens once the summary has answered,
   // so none is opened for an environment that cannot, and it sits around the
   // whole outlet so the dashboard's feed and every list view share it (D-57).
+  // A degraded environment still works, so its pages show, with the banner at
+  // the top of every one of them. It follows the health stream, so it goes away
+  // by itself when the environment recovers.
   return (
-    <EnvEventsProvider envId={envId} enabled={summary.data !== undefined}>
-      <Outlet />
-    </EnvEventsProvider>
+    <>
+      {item?.status.state === "degraded" ? (
+        <div className="mx-auto mb-6 w-full max-w-7xl">
+          <EnvDegradedBanner environment={item} />
+        </div>
+      ) : null}
+      <EnvEventsProvider envId={envId} enabled={summary.data !== undefined}>
+        <Outlet />
+      </EnvEventsProvider>
+    </>
   );
 }
 

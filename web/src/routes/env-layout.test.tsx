@@ -557,3 +557,58 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
     expect(screen.queryByRole("heading", { name: /Reconnecting/ })).toBeNull();
   });
 });
+
+describe("degraded banner in the environment layout (D-33)", () => {
+  const ISSUES = [
+    { code: "clock_skew", node: "n3", since: "2026-10-01T09:30:00Z" },
+    { code: "agent_offline", node: "n2", since: "2026-10-01T09:00:00Z" },
+  ];
+
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  it("sits on the dashboard of a degraded environment with the worst issue, and goes when the stream says online", async () => {
+    grant("environments.read", "environments.manage");
+    withAgentEnv({ state: "degraded", reason: "agent_offline", issues: ISSUES });
+    renderAt("/env/e1");
+    expect(await screen.findByText("Lab host is degraded")).toBeTruthy();
+    expect(screen.getByText("The agent on n2 isn't connected.")).toBeTruthy();
+    expect(screen.getByText("and 1 more issue")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "View nodes" }).getAttribute("href")).toBe(
+      "/settings/environments/e1",
+    );
+    // The page itself is still there under it.
+    expect(await screen.findByRole("heading", { name: "Lab host" })).toBeTruthy();
+
+    await waitFor(() =>
+      expect(FakeEventSource.instances.some((s) => s.url === "/api/environments/stream")).toBe(
+        true,
+      ),
+    );
+    const stream = FakeEventSource.instances.find((s) => s.url === "/api/environments/stream");
+    act(() => {
+      stream?.open();
+      stream?.sendFrame(
+        "env.status",
+        {
+          envId: "e1",
+          at: "2026-10-01T14:10:00Z",
+          environment: { ...AGENT, status: { state: "online" } },
+        },
+        "9",
+      );
+    });
+    await waitFor(() => expect(screen.queryByText("Lab host is degraded")).toBeNull());
+    expect(screen.getByRole("heading", { name: "Lab host" })).toBeTruthy();
+  });
+
+  it("shows no banner for an online environment", async () => {
+    grant("environments.read");
+    withAgentEnv({ state: "online" });
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "Lab host" });
+    expect(screen.queryByText(/is degraded/)).toBeNull();
+  });
+});
