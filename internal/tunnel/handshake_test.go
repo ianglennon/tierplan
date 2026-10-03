@@ -360,10 +360,9 @@ func TestClockSkewOfFortySecondsIsAcceptedWithAWarningAndTwentyWithout(t *testin
 		if c.Welcome == nil {
 			t.Fatalf("an agent %v off was refused: %+v", tc.skew, c.Refuse)
 		}
-		s := srv.Hub.Session(c.Welcome.AgentID)
-		if s == nil {
-			t.Fatalf("no session for the agent %v off", tc.skew)
-		}
+		// The session is registered just after the welcome is sent.
+		var s *tunnel.Session
+		waitFor(t, "the session to be registered", func() bool { s = srv.Hub.Session(c.Welcome.AgentID); return s != nil })
 		st := s.Status()
 		// The agent's ts is whole milliseconds, so the offset is exact to a millisecond.
 		if d := st.ClockOffset - tc.skew; d < -time.Millisecond || d > time.Millisecond || st.ClockWarning != tc.warn {

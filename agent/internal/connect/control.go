@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -31,7 +32,7 @@ const (
 // lines. It returns when ctx ends (nil) or the stream breaks. A line of a type
 // the agent does not know, or that is not JSON, is ignored so that later plans
 // can add server messages without breaking agents already in the field.
-func runControl(ctx context.Context, st net.Conn, socketPath string, every time.Duration, now func() time.Time, log *slog.Logger) error {
+func runControl(ctx context.Context, st net.Conn, socketPath string, every time.Duration, now func() time.Time, log *slog.Logger, den *denials) error {
 	defer func() { _ = st.Close() }()
 	if err := write(st, []byte{wire.StreamKindControl}); err != nil {
 		return fmt.Errorf("open the control stream: %w", err)
@@ -54,15 +55,38 @@ func runControl(ctx context.Context, st net.Conn, socketPath string, every time.
 			}
 			return fmt.Errorf("send a heartbeat: %w", err)
 		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case err := <-readErr:
+		if err := waitOrReport(ctx, st, t.C, readErr, den, log); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return err
-		case <-t.C:
+		}
+	}
+}
+
+// waitOrReport waits for the next heartbeat tick, and writes a denied message to
+// the control stream for every refusal that arrives meanwhile. It returns nil when
+// the tick comes or ctx ends, and an error when the stream breaks.
+func waitOrReport(ctx context.Context, st net.Conn, tick <-chan time.Time, readErr <-chan error, den *denials, log *slog.Logger) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-readErr:
+			return err
+		case m := <-den.ch:
+			b, err := json.Marshal(m)
+			if err != nil {
+				return err
+			}
+			if err := write(st, append(b, '\n')); err != nil {
+				return fmt.Errorf("report a refused request: %w", err)
+			}
+			if n := den.dropped.Swap(0); n > 0 {
+				log.Warn("refused requests were not reported to the server: too many at once", "dropped", n)
+			}
+		case <-tick:
+			return nil
 		}
 	}
 }
@@ -136,10 +160,18 @@ func newDenials() *denials { return &denials{ch: make(chan wire.Denied, 64)} }
 // report queues a refusal. It never blocks the request that was refused: when 64
 // are waiting the message is dropped and counted.
 func (d *denials) report(method, path, reason string) {
-	m := wire.Denied{T: wire.TypeDenied, Method: method, Path: path, Reason: reason}
+	m := wire.Denied{T: wire.TypeDenied, Method: capString(method, maxDeniedMethod), Path: capString(path, maxDeniedPath), Reason: reason}
 	select {
 	case d.ch <- m:
 	default:
 		d.dropped.Add(1)
 	}
+}
+
+// capString cuts s to at most n bytes on a character boundary.
+func capString(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "")
 }

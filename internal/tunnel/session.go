@@ -9,12 +9,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 
+	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -196,16 +199,30 @@ func (h *Hub) agentStream(s *Session, st *yamux.Stream) {
 // readControl reads the agent's newline-delimited JSON messages. The input is
 // authenticated but not trusted: a line is at most wire.MaxControlLine bytes, a
 // line that is not JSON or has a type this server does not know is ignored, and
-// nothing here touches the database except the rate-limited last-seen.
+// nothing here touches the database except the rate-limited last-seen and the
+// audit entry of a policy denial, which is rate-limited too.
 func (h *Hub) readControl(s *Session, st io.Reader) {
 	sc := bufio.NewScanner(st)
 	sc.Buffer(make([]byte, 0, 4096), wire.MaxControlLine)
 	for sc.Scan() {
-		var hb wire.Heartbeat
-		if err := json.Unmarshal(sc.Bytes(), &hb); err != nil || hb.T != wire.TypeHeartbeat {
+		var head struct {
+			T string `json:"t"`
+		}
+		if json.Unmarshal(sc.Bytes(), &head) != nil {
 			continue
 		}
-		h.beat(s, hb)
+		switch head.T {
+		case wire.TypeHeartbeat:
+			var hb wire.Heartbeat
+			if json.Unmarshal(sc.Bytes(), &hb) == nil {
+				h.beat(s, hb)
+			}
+		case wire.TypeDenied:
+			var d wire.Denied
+			if json.Unmarshal(sc.Bytes(), &d) == nil {
+				h.denied(s, d)
+			}
+		}
 	}
 	if errors.Is(sc.Err(), bufio.ErrTooLong) {
 		h.log.Warn("agent session closed: a control line was longer than the limit", "agent_id", s.AgentID, "limit", wire.MaxControlLine)
@@ -229,4 +246,60 @@ func (h *Hub) touch(s *Session) {
 	ctx, cancel := context.WithTimeout(context.Background(), touchTimeout)
 	defer cancel()
 	h.lastSeen.TouchLastSeen(ctx, s.AgentID)
+}
+
+const (
+	// maxDenialMethod, maxDenialEndpoint and maxDenialReason cap what an agent
+	// says about a refusal: it is authenticated but not trusted, and the text ends
+	// up in the audit log and the UI (T-02-30).
+	maxDenialMethod   = 16
+	maxDenialEndpoint = 256
+	maxDenialReason   = 32
+	// denyBurst audit rows may be written at once for one session, and then one
+	// every denyRefill. A compromised agent can send denied lines as fast as it
+	// likes; each audited one is a write on the single database writer.
+	denyBurst  = 20
+	denyRefill = time.Second
+)
+
+// agentHub is the principal under which what the hub notices about an agent is
+// audited (D-13, P1 D-51).
+const agentHub = "system:agent-hub"
+
+// denied handles an agent telling the server that its policy refused a request
+// (D-29): it means a bug in Bayplan or a server that asks for more than it
+// should, so it is remembered on the session for the node list and audited. Only
+// the audit is limited; the session always shows the latest denial.
+func (h *Hub) denied(s *Session, d wire.Denied) {
+	method, endpoint, reason := clip(d.Method, maxDenialMethod), clip(d.Path, maxDenialEndpoint), clip(d.Reason, maxDenialReason)
+	now := h.now()
+	s.hbMu.Lock()
+	s.status.LastDenial = &Denial{Method: method, Endpoint: endpoint, Reason: reason, At: now}
+	s.hbMu.Unlock()
+
+	if s.denyLimit != nil && !s.denyLimit.AllowN(now, 1) {
+		s.suppressed.Add(1)
+		return
+	}
+	h.log.Warn("an agent refused a request by policy", "agent_id", s.AgentID, "environment_id", s.EnvID,
+		"method", method, "endpoint", endpoint, "reason", reason)
+	if h.audit == nil {
+		return
+	}
+	details := map[string]string{
+		"node": clip(s.Facts.Hostname, maxAuditNode), "method": method, "endpoint": endpoint, "reason": reason,
+	}
+	if n := s.suppressed.Swap(0); n > 0 {
+		details["suppressed"] = strconv.FormatInt(n, 10)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), recordTimeout)
+	defer cancel()
+	err := h.audit.Record(ctx, audit.Entry{
+		Actor: rbac.System(agentHub).AuditActor(), Action: audit.ActionAgentPolicyDenied,
+		TargetType: "agent", TargetID: s.AgentID, EnvID: s.EnvID, Result: audit.ResultDenied,
+		Reason: reason, IP: s.IP, Details: details,
+	})
+	if err != nil {
+		h.log.Warn("could not record a policy denial", "agent_id", s.AgentID, "error", err)
+	}
 }

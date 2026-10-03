@@ -24,6 +24,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
+	"golang.org/x/time/rate"
 
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/engine"
@@ -165,6 +166,11 @@ type Session struct {
 	streams     chan struct{}
 	maxResponse int64
 
+	// denyLimit spends one token per audited policy denial, and suppressed counts
+	// the denials since the last audited one that were not written (D-29).
+	denyLimit  *rate.Limiter
+	suppressed atomic.Int64
+
 	// control is set once the agent's control stream has been accepted.
 	control atomic.Bool
 	hbMu    sync.Mutex
@@ -249,6 +255,7 @@ type Hub struct {
 	connect          *auth.IPLimiter
 	handshakes       chan struct{}
 	refusals         auth.AuditRecorder
+	audit            auth.AuditRecorder
 	onUpgradeFailure func(peer string)
 	maxResponse      int64
 

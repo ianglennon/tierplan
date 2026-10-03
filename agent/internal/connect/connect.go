@@ -282,6 +282,9 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	// waits on it. An engine that does not answer is reported, not fatal: the
 	// server shows engine_unreachable (D-40).
 	facts := readFacts(ctx, r.cfg.SocketPath, r.log)
+	// What the host owner set is part of the facts, so the UI can say "read-only
+	// (set on host)" and show the manual update commands (D-28).
+	facts.Policy = wire.PolicyFacts{ReadOnly: r.cfg.ReadOnly, SelfUpdate: r.cfg.SelfUpdate}
 
 	cr, err := r.credentials()
 	if err != nil {
@@ -322,7 +325,7 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	}
 	// A server cannot make the agent spin: the floor is far below any real setting.
 	every = max(every, minHeartbeat)
-	return true, serve(ctx, c, r.cfg.SocketPath, every, r.env.now, r.log)
+	return true, serve(ctx, c, r.cfg.SocketPath, every, r.env.now, r.log, proxy.Policy{ReadOnly: r.cfg.ReadOnly})
 }
 
 // minHeartbeat is the shortest interval the agent accepts from a server.
@@ -503,7 +506,7 @@ func refusal(raw []byte) error {
 // server's Docker streams until the session ends. It ends when the multiplexer
 // does, and when the control stream breaks, so a server that stopped reading
 // heartbeats is not served as if all were well.
-func serve(ctx context.Context, c *websocket.Conn, socketPath string, every time.Duration, now func() time.Time, log *slog.Logger) error {
+func serve(ctx context.Context, c *websocket.Conn, socketPath string, every time.Duration, now func() time.Time, log *slog.Logger, policy proxy.Policy) error {
 	conn := websocket.NetConn(ctx, c, websocket.MessageBinary)
 	sess, err := yamux.Server(conn, muxConfig())
 	if err != nil {
@@ -511,7 +514,10 @@ func serve(ctx context.Context, c *websocket.Conn, socketPath string, every time
 	}
 	defer func() { _ = sess.Close() }()
 
-	handler := proxy.Handler(socketPath, proxy.Policy{}, nil)
+	// Every request the proxy refuses is reported to the server on the control
+	// stream, which has one writer: the proxy hands it over without blocking.
+	den := newDenials()
+	handler := proxy.Handler(socketPath, policy, den.report)
 	go func() {
 		<-ctx.Done()
 		_ = sess.Close()
@@ -523,7 +529,7 @@ func serve(ctx context.Context, c *websocket.Conn, socketPath string, every time
 	}
 	controlErr := make(chan error, 1)
 	go func() {
-		err := runControl(ctx, ctl, socketPath, every, now, log)
+		err := runControl(ctx, ctl, socketPath, every, now, log, den)
 		controlErr <- err
 		_ = sess.Close() // ends Accept below
 	}()

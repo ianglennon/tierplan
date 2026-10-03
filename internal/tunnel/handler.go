@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
+	"golang.org/x/time/rate"
 
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/proto/authn"
@@ -89,7 +90,8 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		AgentID: acc.AgentID, EnvID: acc.EnvID, AgentVersion: acc.AgentVersion, Facts: acc.Facts,
 		IP: acc.IP, ConnectedAt: h.now(), ym: ym, ws: c, done: make(chan struct{}),
 		streams: make(chan struct{}, MaxSessionStreams), maxResponse: h.maxResponse,
-		status: SessionStatus{ClockOffset: acc.ClockOffset, ClockWarning: abs(acc.ClockOffset) > ClockWarnOffset},
+		denyLimit: rate.NewLimiter(rate.Every(denyRefill), denyBurst),
+		status:    SessionStatus{ClockOffset: acc.ClockOffset, ClockWarning: abs(acc.ClockOffset) > ClockWarnOffset},
 	}
 	if s.status.ClockWarning {
 		h.log.Warn("an agent's clock is off by more than the warning threshold",

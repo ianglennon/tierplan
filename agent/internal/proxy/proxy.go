@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ianglennon/bayplan/proto/wire"
 )
 
 // DeniedPrefix starts the message of every refusal. The server's Docker client
@@ -58,13 +60,37 @@ type Policy struct {
 	ReadOnly bool
 }
 
-// Allowed decides whether a request may be forwarded.
+// Allowed decides whether a request may be forwarded to the engine, and says why
+// not when it may not. It is the whole decision, kept free of http types so that a
+// table of tricky paths and a fuzz target can drive it directly.
+//
+// The reason is wire.DeniedReadOnly when the host set the read-only flag and the
+// method would change something, checked first so that no future growth of the
+// allowlist can reach a write on a read-only host (D-28); every other refusal is
+// wire.DeniedAllowlist. The request is allowed only when it is a GET or HEAD whose
+// raw path is already clean (no //, no .., no encoded slash) and is exactly one of
+// the allowlisted shapes, with no control character anywhere, a query within
+// maxQuery, no body and no upgrade.
 func Allowed(method, rawPath, rawQuery string, hasBody, hasUpgrade bool, p Policy) (ok bool, reason string) {
+	read := method == http.MethodGet || method == http.MethodHead
+	switch {
+	case p.ReadOnly && !read:
+		return false, wire.DeniedReadOnly
+	case !read,
+		len(rawQuery) > maxQuery,
+		hasControl(rawPath), hasControl(rawQuery),
+		rawPath != path.Clean(rawPath), !allowed.MatchString(rawPath),
+		hasBody, hasUpgrade:
+		return false, wire.DeniedAllowlist
+	}
 	return true, ""
 }
 
-// Handler returns the policy handler for the Docker socket at socketPath.
-func Handler(socketPath string, _ Policy, _ func(method, path, reason string)) http.Handler {
+// Handler returns the policy handler for the Docker socket at socketPath. Every
+// request it refuses is answered 403 with the typed message and reported once to
+// onDenied, which may be nil, with the method, the path (capped, without the query)
+// and the reason; onDenied runs on the request's goroutine and must not block.
+func Handler(socketPath string, policy Policy, onDenied func(method, path, reason string)) http.Handler {
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Rewrite, unlike Director, drops any X-Forwarded-* the server
@@ -72,6 +98,10 @@ func Handler(socketPath string, _ Policy, _ func(method, path, reason string)) h
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = "docker"
 			pr.Out.Host = "docker"
+			// ReverseProxy strips the hop-by-hop headers before Rewrite runs, but it
+			// puts `TE: trailers` back for backends that care about trailers. The
+			// engine does not, and nothing but the request itself should cross.
+			pr.Out.Header.Del("Te")
 		},
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -93,40 +123,18 @@ func Handler(socketPath string, _ Policy, _ func(method, path, reason string)) h
 		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if check(r) != "" {
+		rawPath, query, _ := strings.Cut(r.RequestURI, "?")
+		hasBody := r.ContentLength != 0 || len(r.TransferEncoding) > 0
+		hasUpgrade := r.Header.Get("Upgrade") != "" || connectionUpgrade(r.Header)
+		if ok, reason := Allowed(r.Method, rawPath, query, hasBody, hasUpgrade, policy); !ok {
+			if onDenied != nil {
+				onDenied(r.Method, shownPath(r), reason)
+			}
 			writeJSON(w, http.StatusForbidden, DeniedPrefix+": "+r.Method+" "+shownPath(r), true)
 			return
 		}
 		rp.ServeHTTP(w, r)
 	})
-}
-
-// check returns "" when the request may be forwarded, else a short reason. The
-// reason is for the agent's own log and tests; the answer to the server is always
-// the same stable message.
-func check(r *http.Request) string {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		return "method"
-	}
-	rawPath, query, _ := strings.Cut(r.RequestURI, "?")
-	if len(query) > maxQuery {
-		return "query"
-	}
-	if hasControl(r.RequestURI) {
-		return "control"
-	}
-	// The raw request target must already be clean: no //, no .., no encoded
-	// slash, no absolute-form URL. The expression only matches [a-z0-9_./].
-	if rawPath != path.Clean(rawPath) || !allowed.MatchString(rawPath) {
-		return "path"
-	}
-	if r.ContentLength != 0 || len(r.TransferEncoding) > 0 {
-		return "body"
-	}
-	if r.Header.Get("Upgrade") != "" || connectionUpgrade(r.Header) {
-		return "upgrade"
-	}
-	return ""
 }
 
 func connectionUpgrade(h http.Header) bool {

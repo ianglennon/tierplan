@@ -94,8 +94,13 @@ func (h *Hub) WithConnectLimit(burst int) *Hub {
 }
 
 // WithAudit sets where what an authenticated agent does is recorded, such as the
-// requests it refused by policy.
-func (h *Hub) WithAudit(auth.AuditRecorder) *Hub { return h }
+// requests it refused by policy. It is the audit writer itself: those agents are
+// authenticated, and the per-session limit on denials is what protects the writer.
+// Nil records nothing. Call it before the hub serves.
+func (h *Hub) WithAudit(r auth.AuditRecorder) *Hub {
+	h.audit = r
+	return h
+}
 
 // WithRefusalAudit sets where refused attempts are recorded as agent.enrol_refused.
 // It must be an auth.AuditThrottle, or something as careful: the actor is

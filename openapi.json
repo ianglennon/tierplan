@@ -1945,7 +1945,7 @@
     },
     "/api/env/{envId}/containers": {
       "get": {
-        "description": "Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+        "description": "Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "listContainers",
         "parameters": [
           {
@@ -1986,6 +1986,16 @@
               }
             },
             "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProblem"
+                }
+              }
+            },
+            "description": "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint."
           },
           "503": {
             "content": {
@@ -2057,7 +2067,7 @@
     },
     "/api/env/{envId}/images": {
       "get": {
-        "description": "Newest first. An untagged image is listed as \u003cnone\u003e. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+        "description": "Newest first. An untagged image is listed as \u003cnone\u003e. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "listImages",
         "parameters": [
           {
@@ -2099,6 +2109,16 @@
             },
             "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason."
           },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProblem"
+                }
+              }
+            },
+            "description": "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint."
+          },
           "503": {
             "content": {
               "application/problem+json": {
@@ -2118,7 +2138,7 @@
     },
     "/api/env/{envId}/networks": {
       "get": {
-        "description": "By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+        "description": "By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "listNetworks",
         "parameters": [
           {
@@ -2159,6 +2179,16 @@
               }
             },
             "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProblem"
+                }
+              }
+            },
+            "description": "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint."
           },
           "503": {
             "content": {
@@ -2230,7 +2260,7 @@
     },
     "/api/env/{envId}/summary": {
       "get": {
-        "description": "The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+        "description": "The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "getEnvironmentSummary",
         "parameters": [
           {
@@ -2272,6 +2302,16 @@
             },
             "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason."
           },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProblem"
+                }
+              }
+            },
+            "description": "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint."
+          },
           "503": {
             "content": {
               "application/problem+json": {
@@ -2291,7 +2331,7 @@
     },
     "/api/env/{envId}/volumes": {
       "get": {
-        "description": "By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+        "description": "By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "listVolumes",
         "parameters": [
           {
@@ -2332,6 +2372,16 @@
               }
             },
             "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProblem"
+                }
+              }
+            },
+            "description": "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint."
           },
           "503": {
             "content": {

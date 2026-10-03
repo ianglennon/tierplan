@@ -113,7 +113,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         * @description Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -153,7 +153,7 @@ export interface paths {
         };
         /**
          * List the images of an environment
-         * @description Newest first. An untagged image is listed as <none>. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         * @description Newest first. An untagged image is listed as <none>. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listImages"];
         put?: never;
@@ -173,7 +173,7 @@ export interface paths {
         };
         /**
          * List the networks of an environment
-         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listNetworks"];
         put?: never;
@@ -213,7 +213,7 @@ export interface paths {
         };
         /**
          * The dashboard of an environment
-         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["getEnvironmentSummary"];
         put?: never;
@@ -233,7 +233,7 @@ export interface paths {
         };
         /**
          * List the volumes of an environment
-         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listVolumes"];
         put?: never;
@@ -1332,6 +1332,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
+            /** @description agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
             /** @description environment_offline: the engine does not answer. Carries since and reason. */
             503: {
                 headers: {
@@ -1407,6 +1416,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
+            /** @description agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
             /** @description environment_offline: the engine does not answer. Carries since and reason. */
             503: {
                 headers: {
@@ -1442,6 +1460,15 @@ export interface operations {
             };
             /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint. */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1524,6 +1551,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
+            /** @description agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
             /** @description environment_offline: the engine does not answer. Carries since and reason. */
             503: {
                 headers: {
@@ -1559,6 +1595,15 @@ export interface operations {
             };
             /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint. */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

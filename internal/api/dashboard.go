@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -26,6 +27,9 @@ import (
 const (
 	problemEnvironmentOffline     = "environment_offline"
 	problemEnvironmentUnsupported = "environment_unsupported"
+	// problemAgentPolicyDenied is an agent that refused a read by its own policy:
+	// the engine is fine, and the detail names what was refused (D-29).
+	problemAgentPolicyDenied = "agent_policy_denied"
 )
 
 // maxListRows is the most rows a list answers with (D-56). The total is always
@@ -226,6 +230,7 @@ func problemResponses(r *httpx.Router) map[string]*huma.Response {
 	media := map[string]*huma.MediaType{"application/problem+json": {Schema: schema}}
 	return map[string]*huma.Response{
 		"503": {Description: "environment_offline: the engine does not answer. Carries since and reason.", Content: media},
+		"502": {Description: "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint.", Content: media},
 		"409": {Description: "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason.", Content: media},
 	}
 }
@@ -246,9 +251,18 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 	// the problems the SPA understands.
 	read := func(ctx context.Context, envID string) (dockerx.Snapshot, envs.Status, error) {
 		snap, st, err := d.Snapshots.Get(ctx, envID)
+		// An agent that refuses a read says so in the message of the Docker error.
+		err = envs.ClassifyDockerError(err)
+		var denied *envs.AgentPolicyDeniedError
 		switch {
 		case err == nil:
 			return snap, st, nil
+		case errors.As(err, &denied):
+			// Not an outage: the host's policy refused it, which is either a Bayplan
+			// bug or a server asking for more than it should.
+			d.Log.Warn("an agent refused a read of an environment", "environment", envID, "endpoint", denied.Endpoint)
+			return snap, st, httpx.Problem(http.StatusBadGateway, problemAgentPolicyDenied,
+				fmt.Sprintf("The agent refused a request (%s).", denied.Endpoint))
 		case errors.Is(err, envs.ErrUnsupported):
 			return snap, st, &EnvironmentProblem{
 				ErrorModel: huma.ErrorModel{
@@ -286,7 +300,8 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		return huma.Operation{
 			OperationID: id, Method: http.MethodGet, Path: path, Summary: summary,
 			Description: description + " 503 environment_offline (with since and reason) when the engine does not answer, " +
-				"409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+				"409 environment_unsupported (with the engine) when it is not one Bayplan manages, " +
+				"502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
 			Tags: []string{"environments"}, Responses: responses,
 		}
 	}

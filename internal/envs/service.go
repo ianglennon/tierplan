@@ -484,13 +484,17 @@ func defaultName(hostname string) string {
 
 var _ httpx.EnvResolver = (*Service)(nil)
 
-// ErrAgentPolicyDenied means an agent refused a Docker request by its own policy.
+// ErrAgentPolicyDenied means an agent refused a Docker request by its own policy
+// (D-29). It is a refusal, not an outage: the engine is fine and the agent is
+// doing what the host owner set.
 var ErrAgentPolicyDenied = errors.New("envs: the agent refused the request by policy")
 
 // AgentPolicyDeniedError is an ErrAgentPolicyDenied that names the request.
 type AgentPolicyDeniedError struct {
-	// Endpoint is "METHOD /path" as the agent reported it.
+	// Endpoint is "METHOD /path" as the agent reported it, capped and free of
+	// control characters. It is text for a person to read, nothing more.
 	Endpoint string
+	cause    error
 }
 
 func (e *AgentPolicyDeniedError) Error() string {
@@ -500,7 +504,37 @@ func (e *AgentPolicyDeniedError) Error() string {
 // Is makes errors.Is(err, ErrAgentPolicyDenied) true.
 func (e *AgentPolicyDeniedError) Is(target error) bool { return target == ErrAgentPolicyDenied }
 
+// Unwrap returns the error the refusal was read from.
+func (e *AgentPolicyDeniedError) Unwrap() error { return e.cause }
+
+// policyDeniedMarker starts the message of every refusal an agent gives. The
+// Docker client puts the daemon's message in its error, so the marker is how a
+// refusal is told from an engine error.
+const policyDeniedMarker = "agent_policy_denied:"
+
+// maxEndpoint caps the endpoint kept from a refusal message.
+const maxEndpoint = 256
+
 // ClassifyDockerError turns an error from a Docker call into an
-// *AgentPolicyDeniedError when its message is the agent's refusal, and returns
-// every other error unchanged.
-func ClassifyDockerError(err error) error { return err }
+// *AgentPolicyDeniedError when its message is an agent's refusal, and returns
+// every other error, and nil, unchanged.
+func ClassifyDockerError(err error) error {
+	if err == nil {
+		return nil
+	}
+	_, rest, ok := strings.Cut(err.Error(), policyDeniedMarker)
+	if !ok {
+		return err
+	}
+	endpoint, _, _ := strings.Cut(rest, "\n")
+	endpoint = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(endpoint))
+	if len(endpoint) > maxEndpoint {
+		endpoint = strings.ToValidUTF8(endpoint[:maxEndpoint], "")
+	}
+	return &AgentPolicyDeniedError{Endpoint: endpoint, cause: err}
+}

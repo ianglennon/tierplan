@@ -30,6 +30,13 @@ const (
 	DefaultBackoffMin = time.Second
 	DefaultBackoffMax = time.Minute
 
+	// envReadOnly makes the agent refuse every Docker call that is not a GET or
+	// HEAD, whatever the server's allowlist says (D-28). The default is false.
+	envReadOnly = "BAYPLAN_AGENT_READ_ONLY"
+	// envSelfUpdate says whether the agent may update or uninstall itself when the
+	// server asks (D-28). The default is true; a later plan implements what it gates.
+	envSelfUpdate = "BAYPLAN_AGENT_SELF_UPDATE"
+
 	// identityFile is written into the state directory when the agent enrols.
 	// Its presence means a join token is no longer needed.
 	identityFile = "identity.json"
@@ -69,6 +76,10 @@ type Config struct {
 //	BAYPLAN_AGENT_DOCKER_GID       non-negative integer; overrides the socket's group
 //	BAYPLAN_AGENT_BACKOFF_MIN      first reconnect delay, default 1s
 //	BAYPLAN_AGENT_BACKOFF_MAX      longest reconnect delay, default 60s; at least the minimum
+//
+// The two host policy flags (envReadOnly and envSelfUpdate) are true or false; a
+// value that is neither stops the agent, so that a restriction is never dropped
+// because it was misspelled.
 func Load(env func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
 	cfg := Config{
 		URL:        env("BAYPLAN_AGENT_URL"),
@@ -94,6 +105,13 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 
 	cfg.BackoffMin, cfg.BackoffMax, err = parseBackoff(env("BAYPLAN_AGENT_BACKOFF_MIN"), env("BAYPLAN_AGENT_BACKOFF_MAX"))
 	if err != nil {
+		return Config{}, err
+	}
+
+	if cfg.ReadOnly, err = parseFlag(env, envReadOnly, false); err != nil {
+		return Config{}, err
+	}
+	if cfg.SelfUpdate, err = parseFlag(env, envSelfUpdate, true); err != nil {
 		return Config{}, err
 	}
 
@@ -126,6 +144,19 @@ func checkURL(raw string) error {
 		return fmt.Errorf("BAYPLAN_AGENT_URL must be a ws:// or wss:// address with a host, got %q", raw)
 	}
 	return nil
+}
+
+// parseFlag reads a true/false variable, or its default when it is unset.
+func parseFlag(env func(string) string, name string, def bool) (bool, error) {
+	raw := strings.TrimSpace(env(name))
+	if raw == "" {
+		return def, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false, got %q", name, raw)
+	}
+	return v, nil
 }
 
 func parseGID(raw string) (*int, error) {
