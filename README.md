@@ -108,6 +108,9 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `BAYPLAN_TLS_KEY_FILE` | unset | no | Path to the TLS private key in PEM form. Needs `BAYPLAN_TLS_CERT_FILE`. |
 | `BAYPLAN_TLS_SELF_SIGNED` | `false` | no | Serve a generated self-signed certificate. Cannot be combined with the two file settings. |
 | `BAYPLAN_DOCKER_GID` | detected | no | Group ID of the Docker socket, overriding detection. |
+| `BAYPLAN_AGENT_HEARTBEAT_INTERVAL` | `10s` | no | How often each agent sends a heartbeat; the value is sent to the agent when it connects. |
+| `BAYPLAN_AGENT_OFFLINE_AFTER` | `30s` | no | Silence after which an agent connection is closed and the agent counts as offline. At least twice the heartbeat interval. |
+| `BAYPLAN_AGENT_RECONNECT_GRACE` | `60s` | no | After Bayplan starts, how long an environment shows "Reconnecting" instead of offline while its agents come back. |
 | `BAYPLAN_LOG_LEVEL` | `info` | no | `debug`, `info`, `warn` or `error`. Logs are JSON on standard error. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | no | Docker daemon address; `unix://` only. Pointing it at a different daemon still shows the "Bayplan (this instance)" badge on the one Bayplan runs in. |
 

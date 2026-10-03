@@ -252,3 +252,17 @@ func (q *Queries) NameEnvironmentIfBlank(ctx context.Context, arg NameEnvironmen
 	}
 	return result.RowsAffected()
 }
+
+const touchAgentLastSeen = `-- name: TouchAgentLastSeen :exec
+UPDATE agents SET last_seen_at = ? WHERE id = ?
+`
+
+type TouchAgentLastSeenParams struct {
+	LastSeenAt sql.NullInt64
+	ID         string
+}
+
+func (q *Queries) TouchAgentLastSeen(ctx context.Context, arg TouchAgentLastSeenParams) error {
+	_, err := q.db.ExecContext(ctx, touchAgentLastSeen, arg.LastSeenAt, arg.ID)
+	return err
+}

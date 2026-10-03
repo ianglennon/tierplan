@@ -35,3 +35,6 @@ SELECT * FROM agents WHERE id = ?;
 
 -- name: ListAgentsByEnv :many
 SELECT * FROM agents WHERE env_id = ? ORDER BY created_at, id;
+
+-- name: TouchAgentLastSeen :exec
+UPDATE agents SET last_seen_at = ? WHERE id = ?;

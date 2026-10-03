@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -54,6 +55,10 @@ const (
 	// maxAgentName caps the hostname an agent reports, which is untrusted input.
 	maxAgentName = 128
 
+	// lastSeenEvery is the shortest time between two writes of one agent's
+	// last_seen_at.
+	lastSeenEvery = time.Minute
+
 	// statusActive is the status of an agent that may connect.
 	statusActive = "active"
 
@@ -80,6 +85,11 @@ type Service struct {
 	v   *vault.Vault
 	aud *audit.Writer
 	now func() time.Time
+
+	// seen is when last_seen_at was last written for each agent, so TouchLastSeen
+	// can skip all but one write a minute.
+	seenMu sync.Mutex
+	seen   map[string]time.Time
 }
 
 // NewService returns the service. now defaults to time.Now.
@@ -87,10 +97,13 @@ func NewService(st *store.Store, v *vault.Vault, w *audit.Writer, now func() tim
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{st: st, v: v, aud: w, now: now}
+	return &Service{st: st, v: v, aud: w, now: now, seen: map[string]time.Time{}}
 }
 
-var _ tunnel.Verifier = (*Service)(nil)
+var (
+	_ tunnel.Verifier         = (*Service)(nil)
+	_ tunnel.LastSeenRecorder = (*Service)(nil)
+)
 
 // CreateEnvironment stores a new agent environment, its CA and its first join
 // token, and audits environment.added, in one transaction (D-01, D-07). A blank
@@ -263,8 +276,31 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	return tunnel.EnrolResult{AgentID: agentID, EnvID: envID, Cert: leaf.DER, NotAfter: leaf.NotAfter}, nil
 }
 
-// TouchLastSeen records that an agent was just heard from. Stub.
-func (s *Service) TouchLastSeen(_ context.Context, _ string) {}
+// TouchLastSeen records that an agent was just heard from, in agents.last_seen_at.
+// Heartbeats arrive every few seconds and the store has one writer, so a write
+// per heartbeat would starve sign-ins (RESEARCH Pitfall 8): the time is written
+// at most once a minute per agent, and the rest are dropped here, in memory. A
+// failed write is forgotten, so the next heartbeat tries again. It implements
+// tunnel.LastSeenRecorder.
+func (s *Service) TouchLastSeen(ctx context.Context, agentID string) {
+	now := s.now()
+	s.seenMu.Lock()
+	if last, ok := s.seen[agentID]; ok && now.Sub(last) < lastSeenEvery {
+		s.seenMu.Unlock()
+		return
+	}
+	s.seen[agentID] = now
+	s.seenMu.Unlock()
+
+	err := s.st.Q.TouchAgentLastSeen(ctx, sqlc.TouchAgentLastSeenParams{
+		LastSeenAt: sql.NullInt64{Int64: now.UnixNano(), Valid: true}, ID: agentID,
+	})
+	if err != nil {
+		s.seenMu.Lock()
+		delete(s.seen, agentID)
+		s.seenMu.Unlock()
+	}
+}
 
 // Hello checks the reconnect of an enrolled agent. It implements tunnel.Verifier.
 //

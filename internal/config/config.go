@@ -28,6 +28,13 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// The two agent timing settings are named in the table and in the check that
+// ties them together.
+const (
+	envAgentHeartbeatInterval = "BAYPLAN_AGENT_HEARTBEAT_INTERVAL"
+	envAgentOfflineAfter      = "BAYPLAN_AGENT_OFFLINE_AFTER"
+)
+
 // redactedMark replaces the value of a set secret in Redacted.
 const redactedMark = "[redacted]"
 
@@ -140,6 +147,15 @@ var settings = []setting{
 			c.DockerGID = &n
 			return nil
 		}},
+	{env: envAgentHeartbeatInterval, flag: "agent-heartbeat-interval", def: "10s", desc: "how often agents send a heartbeat; sent to each agent when it connects",
+		apply: func(c *Config, raw string) (err error) {
+			c.AgentHeartbeatInterval, err = parseDuration(raw)
+			return err
+		}},
+	{env: envAgentOfflineAfter, flag: "agent-offline-after", def: "30s", desc: "silence after which an agent connection is closed and the agent counts as offline; at least twice the heartbeat interval",
+		apply: func(c *Config, raw string) (err error) { c.AgentOfflineAfter, err = parseDuration(raw); return err }},
+	{env: "BAYPLAN_AGENT_RECONNECT_GRACE", flag: "agent-reconnect-grace", def: "60s", desc: "after a start, how long an environment shows Reconnecting instead of offline while its agents come back",
+		apply: func(c *Config, raw string) (err error) { c.AgentReconnectGrace, err = parseDuration(raw); return err }},
 	{env: "BAYPLAN_LOG_LEVEL", flag: "log-level", def: "info", desc: "log level: debug, info, warn or error",
 		apply: func(c *Config, raw string) error {
 			switch strings.ToLower(raw) {
@@ -239,6 +255,12 @@ func (c Config) crossCheck() error {
 	}
 	if c.TLSSelfSigned && c.TLSCertFile != "" {
 		return errors.New("BAYPLAN_TLS_SELF_SIGNED conflicts with BAYPLAN_TLS_CERT_FILE and BAYPLAN_TLS_KEY_FILE; use one or the other")
+	}
+	// A window shorter than two heartbeats would call an agent offline after one
+	// late or lost heartbeat.
+	if c.AgentOfflineAfter < 2*c.AgentHeartbeatInterval {
+		return fmt.Errorf("%s (%s) must be at least twice %s (%s)",
+			envAgentOfflineAfter, c.AgentOfflineAfter, envAgentHeartbeatInterval, c.AgentHeartbeatInterval)
 	}
 	return nil
 }

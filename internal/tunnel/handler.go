@@ -103,6 +103,8 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.log.Info("agent connected", "agent_id", s.AgentID, "environment_id", s.EnvID, "version", s.AgentVersion, "ip", s.IP)
+	h.runSession(sctx, s)
+	h.touch(s)
 
 	<-s.done
 	s.closeNow()

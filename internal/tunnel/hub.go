@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -151,6 +152,11 @@ type Session struct {
 	done chan struct{}
 	once sync.Once
 
+	// control is set once the agent's control stream has been accepted.
+	control atomic.Bool
+	hbMu    sync.Mutex
+	status  SessionStatus
+
 	reasonMu sync.Mutex
 	reason   string
 	// reported makes the Observer's Disconnected run once for this session, from
@@ -212,6 +218,15 @@ type Hub struct {
 
 	publicURL func() string
 
+	// heartbeat is the interval agents are told to use, offlineAfter how long a
+	// session may be silent, watchEvery how often silence is looked for (zero
+	// means a sixth of offlineAfter), and lastSeen where heartbeats are recorded.
+	// All are set before the hub serves and read-only after.
+	heartbeat    time.Duration
+	offlineAfter time.Duration
+	watchEvery   time.Duration
+	lastSeen     LastSeenRecorder
+
 	// life serializes session lifecycle transitions together with the Observer
 	// calls they cause, so for one agent the Observer hears Connected, then
 	// Disconnected, then Connected again, in that order, never a Disconnected
@@ -233,7 +248,10 @@ func NewHub(v Verifier, o Observer, log *slog.Logger, now func() time.Time) *Hub
 	if now == nil {
 		now = time.Now
 	}
-	return &Hub{v: v, o: o, log: log, now: now, sessions: map[string]*Session{}}
+	return &Hub{
+		v: v, o: o, log: log, now: now, sessions: map[string]*Session{},
+		heartbeat: wire.DefaultHeartbeatMs * time.Millisecond, offlineAfter: DefaultOfflineAfter,
+	}
 }
 
 // WithPublicURL tells the hub where Bayplan is reached from outside. The

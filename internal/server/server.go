@@ -293,7 +293,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// holds the live sessions and tells the environment registry about each, so
 	// a connected agent becomes a monitor target (RESEARCH Pattern 5).
 	agentSvc := agents.NewService(st, vlt, aud, nil)
-	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).WithPublicURL(inst.PublicURL)
+	// Agents heartbeat at cfg.AgentHeartbeatInterval, which the welcome tells
+	// them, and a session silent for cfg.AgentOfflineAfter is closed (D-41).
+	// Heartbeats stay in memory; last_seen_at is written at most once a minute.
+	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
+		WithPublicURL(inst.PublicURL).
+		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
+		WithLastSeen(agentSvc)
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
 	router := NewRouter(httpx.Options{
