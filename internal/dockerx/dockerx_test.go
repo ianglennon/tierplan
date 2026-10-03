@@ -1167,3 +1167,28 @@ func TestRestartPoliciesOfNoContainersAsksNothingAndAnUnknownIDIsAnError(t *test
 		t.Error("an unknown container was not an error")
 	}
 }
+
+func TestSnapshotOfAManagerThatLostItsQuorumKeepsTheNodeLocalListsAndLeavesTheClusterCountsOut(t *testing.T) {
+	cfg := clusterManager()
+	cfg.QuorumLost = true
+	cfg.Containers = []dockertest.FakeContainer{{ID: "c1", Names: []string{"/web"}, State: "running", Status: "Up 1 hour"}}
+	fake := dockertest.NewFake(t, cfg)
+	snap, err := newClient(t, fake).Snapshot(context.Background(), true)
+	if err != nil {
+		t.Fatalf("Snapshot: %v, want the node-local lists to survive a lost quorum (D-43)", err)
+	}
+	if len(snap.Containers) != 1 || snap.Counts.Containers != 1 {
+		t.Errorf("containers = %+v, want the one container", snap.Containers)
+	}
+	if snap.Counts.Nodes != nil || snap.Counts.Services != nil {
+		t.Errorf("counts = %+v, want no node or service counts without a quorum", snap.Counts)
+	}
+}
+
+func TestSnapshotStillFailsOnAnyOtherClusterError(t *testing.T) {
+	// A worker asked as a manager is a caller bug, not a lost quorum: say so loudly.
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{SwarmState: "active", SwarmControl: false})
+	if _, err := newClient(t, fake).Snapshot(context.Background(), true); err == nil {
+		t.Fatal("a worker answered a manager's snapshot without an error")
+	}
+}

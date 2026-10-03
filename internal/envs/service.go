@@ -131,9 +131,11 @@ type Service struct {
 	now        func() time.Time
 	log        *slog.Logger
 
-	// agents and health are set before the service is used (WithAgents, WithHealth).
-	agents AgentSource
-	health HealthConfig
+	// agents, health and clusters are set before the service is used (WithAgents,
+	// WithHealth, WithClusters).
+	agents   AgentSource
+	health   HealthConfig
+	clusters *Clusters
 
 	mu     sync.Mutex
 	runCtx context.Context
@@ -183,6 +185,17 @@ func (s *Service) WithHealth(c HealthConfig) *Service {
 	}
 	return s
 }
+
+// WithClusters tells the service where the cluster view of swarm environments
+// comes from. Without it the rollup decides from the agents alone. Call it before
+// the service is used.
+func (s *Service) WithClusters(c *Clusters) *Service {
+	s.clusters = c
+	return s
+}
+
+// primary is the target a one-engine read of the environment goes to.
+func (s *Service) primary(in RollupInput) (string, bool) { return Primary(in) }
 
 // Input is everything Rollup decides an environment's health from, read now: the
 // environment row, its agent rows, the hub's live view of each agent and the

@@ -76,6 +76,9 @@ type Config struct {
 	AgentHeartbeatInterval time.Duration
 	AgentOfflineAfter      time.Duration
 	AgentReconnectGrace    time.Duration
+	// FailingServiceGrace is how long after a swarm service was updated it is not
+	// counted as failing (D-34).
+	FailingServiceGrace time.Duration
 	// AgentAllowInsecure lets agents connect over plain ws:// although the public
 	// URL is https; for development only. AgentConnectBurst is how many
 	// connection attempts one client address may make at once.

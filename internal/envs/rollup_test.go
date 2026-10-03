@@ -380,3 +380,136 @@ func TestRollupMeasuresClocksInWholeSecondsTowardZeroAndCertificatesInWholeDaysR
 		}
 	}
 }
+
+// The cluster view in the rollup (plan 02-20, ENV-08, ENV-09, D-43, D-44, D-47).
+
+func mgr(id, node string) AgentView {
+	a := up(id, node)
+	a.Role = "manager"
+	return a
+}
+
+func wrk(id, node string) AgentView {
+	a := up(id, node)
+	a.Role = "worker"
+	return a
+}
+
+func issueList(h Health) string {
+	var out []string
+	for _, is := range h.Issues {
+		out = append(out, is.Code+"@"+is.Node)
+	}
+	return strings.Join(out, ",")
+}
+
+func TestRollupNoQuorumIsDegradedWithReasonNoQuorumWhileTheNodesStayPresent(t *testing.T) {
+	since := t0.Add(30 * time.Minute)
+	in := swarm(t0.Add(time.Hour), mgr("a", "m1"), mgr("b", "m2"), wrk("c", "w1"))
+	in.Cluster = &ClusterView{NoQuorum: true, NoQuorumSince: since}
+	got := Rollup(in)
+	if got.State != StateDegraded || got.Reason != ReasonNoQuorum || issueList(got) != "no_quorum@" {
+		t.Fatalf("got %+v (%s), want degraded / no_quorum with that one issue", got, issueList(got))
+	}
+	if !got.Since.Equal(since) {
+		t.Errorf("since = %v, want when the quorum was lost, %v", got.Since, since)
+	}
+}
+
+func TestRollupOnlyWorkersPresentIsDegradedWithNotAManagerRankedAboveAMissingNode(t *testing.T) {
+	gone := wrk("d", "w2")
+	gone.Connected, gone.LastSeen, gone.Ended = false, t0, t0
+	in := swarm(t0.Add(time.Hour), wrk("a", "w1"), wrk("b", "w3"), gone)
+	in.Cluster = &ClusterView{NotAManager: true}
+	got := Rollup(in)
+	if got.State != StateDegraded || got.Reason != ReasonNotAManager || issueList(got) != "not_a_manager@,agent_offline@w2" {
+		t.Fatalf("got %+v (%s), want degraded / not_a_manager first", got, issueList(got))
+	}
+}
+
+func TestRollupAManagerThatFailedOverIsAnIssueUntilItIsBack(t *testing.T) {
+	away := t0.Add(10 * time.Minute)
+	in := swarm(t0.Add(time.Hour), mgr("a", "m1"), mgr("b", "m2"), mgr("c", "m3"))
+	in.Cluster = &ClusterView{ManagersUnreachable: []NodeSince{{Node: "m2", Since: away}}}
+	got := Rollup(in)
+	if got.State != StateDegraded || got.Reason != ReasonAgentOffline || issueList(got) != "agent_offline@m2" || !got.Since.Equal(away) {
+		t.Fatalf("got %+v (%s), want degraded / agent_offline@m2 since %v", got, issueList(got), away)
+	}
+	// Back: the view no longer lists it.
+	in.Cluster = &ClusterView{}
+	if got := Rollup(in); got.State != StateOnline {
+		t.Fatalf("got %+v, want online once the manager is back", got)
+	}
+}
+
+func TestRollupDoesNotListANodeTwiceWhenItsAgentAndTheClusterViewBothSayItIsGone(t *testing.T) {
+	gone := mgr("b", "m2")
+	gone.Connected, gone.LastSeen, gone.Ended = false, t0, t0
+	in := swarm(t0.Add(time.Hour), mgr("a", "m1"), gone)
+	in.Cluster = &ClusterView{ManagersUnreachable: []NodeSince{{Node: "m2", Since: t0}}}
+	if got := Rollup(in); issueList(got) != "agent_offline@m2" {
+		t.Fatalf("issues = %s, want one agent_offline@m2", issueList(got))
+	}
+}
+
+func TestRollupANodeOnAnEngineBelow24IsAnIssueForThatNodeOnly(t *testing.T) {
+	in := swarm(t0.Add(time.Hour), mgr("a", "m1"), wrk("b", "w1"))
+	in.Cluster = &ClusterView{UnsupportedNodes: []NodeSince{{Node: "old-1", Since: t0}}}
+	got := Rollup(in)
+	if got.State != StateDegraded || got.Reason != ReasonUnsupportedEngine || issueList(got) != "unsupported_engine@old-1" {
+		t.Fatalf("got %+v (%s), want degraded / unsupported_engine@old-1", got, issueList(got))
+	}
+	// An agent whose own probe already found it unsupported is not listed twice.
+	unsupported := wrk("c", "old-1")
+	unsupported.Target = Status{State: StateUnsupported, Since: t0}
+	in = swarm(t0.Add(time.Hour), mgr("a", "m1"), unsupported)
+	in.Cluster = &ClusterView{UnsupportedNodes: []NodeSince{{Node: "old-1", Since: t0}}}
+	if got := Rollup(in); issueList(got) != "unsupported_engine@old-1" {
+		t.Fatalf("issues = %s, want one unsupported_engine@old-1", issueList(got))
+	}
+}
+
+func TestRollupIgnoresTheClusterViewOfAStandaloneHostAndWithoutOne(t *testing.T) {
+	in := standalone(t0.Add(time.Hour), up("a", "host"))
+	in.Cluster = &ClusterView{NoQuorum: true, NotAManager: true, UnsupportedNodes: []NodeSince{{Node: "x"}}}
+	if got := Rollup(in); got.State != StateOnline {
+		t.Fatalf("a standalone host got %+v from a cluster view", got)
+	}
+	sw := swarm(t0.Add(time.Hour), wrk("a", "w1"))
+	if got := Rollup(sw); got.State != StateOnline {
+		t.Fatalf("no cluster view must leave the agents' own rollup alone, got %+v", got)
+	}
+}
+
+func TestOverviewTakesNodesAgentsAndFailingFromAKnownClusterView(t *testing.T) {
+	in := swarm(t0.Add(time.Hour), mgr("a", "m1"), mgr("b", "m2"), wrk("c", "w1"))
+	in.Cluster = &ClusterView{
+		Known: true, NodesReady: 5, NodesTotal: 6, ExpectedAgents: 5,
+		Failing: &FailingCounts{Failing: 2, Total: 9},
+	}
+	o := overview(in, Status{}, "")
+	if o.Nodes == nil || *o.Nodes != (NodeCounts{Ready: 5, Total: 6}) {
+		t.Errorf("nodes = %+v, want 5 of 6 from the cluster", o.Nodes)
+	}
+	if o.Agents == nil || *o.Agents != (AgentCounts{Connected: 3, Expected: 5}) {
+		t.Errorf("agents = %+v, want 3 connected of 5 expected", o.Agents)
+	}
+	if o.Failing == nil || *o.Failing != (FailingCounts{Failing: 2, Total: 9}) {
+		t.Errorf("failing = %+v, want 2 of 9", o.Failing)
+	}
+
+	// An unknown view (no quorum, or not read yet) leaves the counts the agents'.
+	in.Cluster = &ClusterView{Failing: nil}
+	o = overview(in, Status{}, "")
+	if o.Nodes == nil || o.Nodes.Total != 3 || o.Agents == nil || o.Agents.Expected != 3 || o.Failing != nil {
+		t.Errorf("without a node list nodes %+v agents %+v failing %+v, want the agents' own counts and no failing", o.Nodes, o.Agents, o.Failing)
+	}
+
+	// A standalone host carries only the failing containers.
+	st := standalone(t0.Add(time.Hour), up("a", "host"))
+	st.Cluster = &ClusterView{Failing: &FailingCounts{Failing: 1, Total: 4}}
+	o = overview(st, Status{}, "")
+	if o.Failing == nil || *o.Failing != (FailingCounts{Failing: 1, Total: 4}) || o.Agents != nil {
+		t.Errorf("standalone overview = %+v, want failing 1 of 4 and no agent counts", o)
+	}
+}

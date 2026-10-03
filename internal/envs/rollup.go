@@ -78,9 +78,45 @@ type AgentView struct {
 	Version string
 }
 
-// ClusterView is what the swarm causes of degraded and offline are decided from.
-// Plan 20 fills it; nil in RollupInput means no cluster information.
-type ClusterView struct{}
+// NodeSince names a node and when it started to have a problem.
+type NodeSince struct {
+	Node  string
+	Since time.Time
+}
+
+// ClusterView is what the swarm causes of degraded are decided from, and what the
+// overview counts nodes, agents and failing services from. It is a snapshot of
+// what the last read of the cluster said, filled by Clusters.View; nil in
+// RollupInput means no cluster information, and the rollup then decides from the
+// agents alone.
+type ClusterView struct {
+	// Known is true while a node list from a manager is held and no quorum problem
+	// has made it stale. The counts below mean nothing otherwise.
+	Known bool
+	// NodesReady and NodesTotal count the nodes of the cluster that are ready and
+	// all of them.
+	NodesReady, NodesTotal int
+	// ExpectedAgents is how many nodes should run an agent: availability active
+	// and state ready or down (a drained or paused node gets no global task).
+	ExpectedAgents int
+	// LeaderPresent is true when the node list names a leader.
+	LeaderPresent bool
+	// NoQuorum is true when a manager answered the quorum-loss error; the cluster
+	// calls fail and node-local data keeps working. NoQuorumSince is when it began.
+	NoQuorum      bool
+	NoQuorumSince time.Time
+	// NotAManager is true when agents are present but none of them is a manager, so
+	// nothing can answer a cluster question (D-44).
+	NotAManager bool
+	// ManagersUnreachable are managers that failed over to another or that the node
+	// list calls unreachable, by name, until they are back.
+	ManagersUnreachable []NodeSince
+	// UnsupportedNodes are nodes on an engine older than Docker 24, by name (D-47).
+	UnsupportedNodes []NodeSince
+	// Failing counts failing services of a swarm, or failing containers of a
+	// standalone host; nil until it has been worked out.
+	Failing *FailingCounts
+}
 
 // RollupInput is everything Rollup decides from. All times are passed in, so the
 // same input always gives the same Health.

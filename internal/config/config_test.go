@@ -487,3 +487,32 @@ func TestAgentEndpointIsTheWebSocketAddressAgentsDial(t *testing.T) {
 		}
 	}
 }
+
+func TestTheFailingServiceGraceDefaultsToTwoMinutesAndIsListed(t *testing.T) {
+	if !strings.Contains(strings.Join(config.Names(), " "), "BAYPLAN_FAILING_SERVICE_GRACE") {
+		t.Error("Names() does not list BAYPLAN_FAILING_SERVICE_GRACE")
+	}
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FailingServiceGrace != 2*time.Minute {
+		t.Fatalf("FailingServiceGrace = %v, want 2m", c.FailingServiceGrace)
+	}
+}
+
+func TestTheFailingServiceGraceCanBeOverriddenAndMustBeAPositiveDuration(t *testing.T) {
+	c, err := load(t, nil, envMap{"BAYPLAN_FAILING_SERVICE_GRACE": "5m"}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FailingServiceGrace != 5*time.Minute {
+		t.Fatalf("FailingServiceGrace = %v, want 5m", c.FailingServiceGrace)
+	}
+	for name, v := range map[string]string{"not a duration": "soon", "zero": "0s", "negative": "-1m"} {
+		_, err := load(t, nil, envMap{"BAYPLAN_FAILING_SERVICE_GRACE": v}, files{})
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_FAILING_SERVICE_GRACE") {
+			t.Errorf("%s: error = %v, want one naming BAYPLAN_FAILING_SERVICE_GRACE", name, err)
+		}
+	}
+}

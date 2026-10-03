@@ -92,6 +92,13 @@ type AgentRefusedData struct {
 	IP string
 }
 
+// FailoverData is the data of a failover event: the manager that stopped answering
+// and the one that took over.
+type FailoverData struct {
+	FromAgentID, FromNode string
+	ToAgentID, ToNode     string
+}
+
 // healthSub is one subscriber's channel.
 type healthSub struct{ ch chan HealthEvent }
 
