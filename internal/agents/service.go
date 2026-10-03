@@ -49,6 +49,16 @@ var ErrInvalidName = errors.New("agents: the name must be at most 64 characters"
 // local host has no join token, so it is not found here either.
 var ErrEnvironmentNotFound = errors.New("agents: no such agent environment")
 
+// Errors of revoking and unblocking an agent.
+var (
+	// ErrAgentNotFound means the environment has no agent with that ID.
+	ErrAgentNotFound = errors.New("agents: no such agent in this environment")
+	// ErrAlreadyRevoked means the agent was revoked before, by this admin or another.
+	ErrAlreadyRevoked = errors.New("agents: the agent is already revoked")
+	// ErrNotBlocked means the agent has no block to lift.
+	ErrNotBlocked = errors.New("agents: the agent has no block to lift")
+)
+
 const (
 	// KindAgent is the kind of an environment reached through agents.
 	KindAgent = "agent"
@@ -60,6 +70,9 @@ const (
 	// maxAgentName caps the hostname an agent reports, which is untrusted input.
 	maxAgentName = 128
 
+	// stillActiveTimeout bounds the status read made as a session registers.
+	stillActiveTimeout = 5 * time.Second
+
 	// lastSeenEvery is the shortest time between two writes of one agent's
 	// last_seen_at.
 	lastSeenEvery = time.Minute
@@ -69,6 +82,13 @@ const (
 
 	targetEnvironment = "environment"
 	targetAgent       = "agent"
+
+	// Kinds of identity a revoke blocks (the CHECK of agent_blocks).
+	blockEngineID    = "engine_id"
+	blockSwarmNodeID = "swarm_node_id"
+
+	// maxRevokeReason is the longest reason an admin may give, in characters.
+	maxRevokeReason = 256
 
 	// enrolActor is the system principal under which an enrolment is audited,
 	// because the agent has no user behind it (D-13, P1 D-51).
@@ -121,12 +141,24 @@ const (
 	EnvTypeStandalone = "standalone"
 )
 
+// SessionKicker closes live agent sessions. The tunnel hub is one. The service
+// calls it after the change that makes a session unwelcome has committed, never
+// before, so a kicked agent that reconnects at once is judged by the new state.
+type SessionKicker interface {
+	// Kick closes the live session of one agent, recording code as why.
+	Kick(agentID, code string)
+	// KickEnv closes every live session of an environment's agents.
+	KickEnv(envID, code string)
+}
+
 // Service creates agent environments and enrols agents.
 type Service struct {
 	st  *store.Store
 	v   *vault.Vault
 	aud *audit.Writer
 	now func() time.Time
+	// kicker is set before the service is used (WithKicker).
+	kicker SessionKicker
 
 	// seen is when last_seen_at was last written for each agent, so TouchLastSeen
 	// can skip all but one write a minute.
@@ -140,6 +172,14 @@ func NewService(st *store.Store, v *vault.Vault, w *audit.Writer, now func() tim
 		now = time.Now
 	}
 	return &Service{st: st, v: v, aud: w, now: now, seen: map[string]time.Time{}}
+}
+
+// WithKicker tells the service who closes sessions after a revoke. Without one a
+// revoke still commits and is honoured at the next hello. Call it before the
+// service is used.
+func (s *Service) WithKicker(k SessionKicker) *Service {
+	s.kicker = k
+	return s
 }
 
 var (
@@ -410,8 +450,13 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 
 	// The order of RESEARCH Pattern 2 for an enrolment is token, blocked identity,
 	// duplicates, version, clock, then issuance. The token is above; the version
-	// window was checked by the hub before it asked. Plan 02-15 adds the block list
-	// and plan 02-19 the duplicate check here, ahead of the clock.
+	// window was checked by the hub before it asked. The block list is next. Plan
+	// 02-19 adds the duplicate check after it, ahead of the clock. The host proved
+	// it holds a valid token before it is told it is blocked, so the answer is
+	// nothing a probe could use.
+	if err := s.checkBlocked(ctx, s.st.RQ, envID, req.Facts); err != nil {
+		return tunnel.EnrolResult{}, err
+	}
 	if err := tunnel.CheckClock(req.ClockOffset); err != nil {
 		return tunnel.EnrolResult{}, err
 	}
@@ -451,6 +496,11 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	}
 	defer func() { _ = tx.Rollback() }() // a no-op once committed
 	q := s.st.Q.WithTx(tx)
+	// A revoke of this host's earlier agent may have committed since the check above;
+	// the writer is single, so this read sees everything committed before it.
+	if err := s.checkBlocked(ctx, q, envID, req.Facts); err != nil {
+		return tunnel.EnrolResult{}, err
+	}
 	ts := now.UnixNano()
 	if err := q.InsertAgent(ctx, sqlc.InsertAgentParams{
 		ID: agentID, EnvID: envID, Name: host, Role: role, EngineID: req.Facts.EngineID, SwarmNodeID: nodeID,
@@ -478,6 +528,202 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 		return tunnel.EnrolResult{}, fmt.Errorf("commit: %w", err)
 	}
 	return tunnel.EnrolResult{AgentID: agentID, EnvID: envID, Cert: leaf.DER, NotAfter: leaf.NotAfter}, nil
+}
+
+// Revoke makes an agent unwelcome for good: its row becomes revoked, the engine ID
+// and, on a swarm, the swarm node ID of its host are blocked so the host cannot
+// enrol again with a join token that is still valid, and agent.revoked and
+// agent.blocked are audited, all in one transaction. Once that has committed the
+// agent's live session is closed. It never changes anything on the host: removing
+// the agent from it is the admin's to do. reason is optional, at most 256
+// characters, and is shown in the audit log.
+//
+// A revoke of an agent that is already revoked, by this admin or another, is
+// ErrAlreadyRevoked and changes nothing.
+func (s *Service) Revoke(ctx context.Context, actor audit.Actor, envID, agentID, reason, ip, ua string) error {
+	reason = cleanReason(reason)
+	ts := s.now().UTC().UnixNano()
+
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	row, err := agentOf(ctx, q, envID, agentID)
+	if err != nil {
+		return err
+	}
+	changed, err := q.RevokeAgent(ctx, sqlc.RevokeAgentParams{
+		RevokedAt: sql.NullInt64{Int64: ts, Valid: true}, RevokedBy: sql.NullString{String: actor.ID, Valid: true},
+		RevokeReason: sql.NullString{String: reason, Valid: reason != ""}, ID: agentID, EnvID: envID,
+	})
+	if err != nil {
+		return fmt.Errorf("revoke the agent: %w", err)
+	}
+	if changed == 0 {
+		return ErrAlreadyRevoked
+	}
+	details := map[string]string{"node": row.Name, "fingerprint": row.CertFingerprint}
+	if reason != "" {
+		details["reason"] = reason
+	}
+	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: audit.ActionAgentRevoked, TargetType: targetAgent, TargetID: agentID,
+		EnvID: envID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua, Details: details,
+	}); err != nil {
+		return fmt.Errorf("audit agent revoked: %w", err)
+	}
+	for _, b := range identitiesOf(row) {
+		if err := q.InsertBlock(ctx, sqlc.InsertBlockParams{
+			EnvID: envID, Kind: b.kind, Identity: b.identity, AgentID: sql.NullString{String: agentID, Valid: true},
+			CreatedAt: ts, CreatedBy: actor.ID,
+		}); err != nil {
+			return fmt.Errorf("block the %s: %w", b.kind, err)
+		}
+		if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+			Actor: actor, Action: audit.ActionAgentBlocked, TargetType: targetAgent, TargetID: agentID,
+			EnvID: envID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
+			Details: map[string]string{"node": row.Name, "kind": b.kind, "identity": b.identity},
+		}); err != nil {
+			return fmt.Errorf("audit agent blocked: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	s.seenMu.Lock()
+	delete(s.seen, agentID)
+	s.seenMu.Unlock()
+	// After the commit, so the hub's check of the agent's status sees the revoke.
+	if s.kicker != nil {
+		s.kicker.Kick(agentID, tunnel.DisconnectRevoked)
+	}
+	return nil
+}
+
+// Unblock lifts the blocks a revoke of agentID made, so the host can enrol again
+// with the environment's join token, and audits agent.unblocked for each. The
+// revoked agent stays revoked and cannot come back: the host enrols as a new
+// agent. ErrNotBlocked means the agent has no block to lift.
+func (s *Service) Unblock(ctx context.Context, actor audit.Actor, envID, agentID, ip, ua string) error {
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	row, err := agentOf(ctx, q, envID, agentID)
+	if err != nil {
+		return err
+	}
+	blocks, err := q.ListBlocksForAgent(ctx, sqlc.ListBlocksForAgentParams{EnvID: envID, AgentID: sql.NullString{String: agentID, Valid: true}})
+	if err != nil {
+		return fmt.Errorf("list the blocks: %w", err)
+	}
+	if len(blocks) == 0 {
+		return ErrNotBlocked
+	}
+	if _, err := q.DeleteBlocksForAgent(ctx, sqlc.DeleteBlocksForAgentParams{EnvID: envID, AgentID: sql.NullString{String: agentID, Valid: true}}); err != nil {
+		return fmt.Errorf("delete the blocks: %w", err)
+	}
+	for _, b := range blocks {
+		if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+			Actor: actor, Action: audit.ActionAgentUnblocked, TargetType: targetAgent, TargetID: agentID,
+			EnvID: envID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
+			Details: map[string]string{"node": row.Name, "kind": b.Kind, "identity": b.Identity},
+		}); err != nil {
+			return fmt.Errorf("audit agent unblocked: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// StillActive reports whether the agent exists and has not been revoked. The hub
+// asks it when it registers a session. It implements tunnel.Verifier.
+func (s *Service) StillActive(agentID string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), stillActiveTimeout)
+	defer cancel()
+	row, err := s.st.RQ.GetAgent(ctx, agentID)
+	return err == nil && row.Status == statusActive
+}
+
+// agentOf loads an agent through its environment: an unknown environment is
+// ErrEnvironmentNotFound, and an agent that does not exist or belongs to another
+// environment is ErrAgentNotFound.
+func agentOf(ctx context.Context, q *sqlc.Queries, envID, agentID string) (sqlc.Agent, error) {
+	if err := requireAgentEnvironment(ctx, q, envID); err != nil {
+		return sqlc.Agent{}, err
+	}
+	row, err := q.GetAgent(ctx, agentID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return sqlc.Agent{}, ErrAgentNotFound
+	case err != nil:
+		return sqlc.Agent{}, fmt.Errorf("load the agent: %w", err)
+	case row.EnvID != envID:
+		return sqlc.Agent{}, ErrAgentNotFound
+	}
+	return row, nil
+}
+
+type identity struct{ kind, identity string }
+
+// identitiesOf is what a revoke blocks for an agent: its engine ID and, when it
+// was a swarm node, its swarm node ID. An empty value is not an identity.
+func identitiesOf(a sqlc.Agent) []identity {
+	var out []identity
+	if a.EngineID != "" {
+		out = append(out, identity{blockEngineID, a.EngineID})
+	}
+	if a.SwarmNodeID.Valid && a.SwarmNodeID.String != "" {
+		out = append(out, identity{blockSwarmNodeID, a.SwarmNodeID.String})
+	}
+	return out
+}
+
+// checkBlocked refuses a host whose engine ID or swarm node ID an admin blocked.
+func (s *Service) checkBlocked(ctx context.Context, q *sqlc.Queries, envID string, f wire.Facts) error {
+	var ids []identity
+	if f.EngineID != "" {
+		ids = append(ids, identity{blockEngineID, f.EngineID})
+	}
+	if f.Swarm != nil && f.Swarm.NodeID != "" {
+		ids = append(ids, identity{blockSwarmNodeID, f.Swarm.NodeID})
+	}
+	for _, id := range ids {
+		n, err := q.IsBlocked(ctx, sqlc.IsBlockedParams{EnvID: envID, Kind: id.kind, Identity: id.identity})
+		if err != nil {
+			return fmt.Errorf("look up the block list: %w", err)
+		}
+		if n > 0 {
+			return &tunnel.RefuseError{
+				Code:        wire.ReasonBlocked,
+				Detail:      "an administrator removed this host from the environment; it must be unblocked in Bayplan before it can enrol again",
+				AuditReason: "blocked_" + id.kind,
+			}
+		}
+	}
+	return nil
+}
+
+// cleanReason makes the reason an admin typed fit the audit log: no control
+// characters, valid UTF-8, at most maxRevokeReason characters.
+func cleanReason(s string) string {
+	s = strings.ToValidUTF8(strings.TrimSpace(s), "")
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+	if utf8.RuneCountInString(s) > maxRevokeReason {
+		s = string([]rune(s)[:maxRevokeReason])
+	}
+	return s
 }
 
 // TouchLastSeen records that an agent was just heard from, in agents.last_seen_at.

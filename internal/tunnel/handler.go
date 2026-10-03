@@ -102,7 +102,15 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		close(s.done)
 	}()
 
-	if !h.register(s) {
+	switch err := h.register(s); {
+	case errors.Is(err, errNoLongerActive):
+		// A revoke landed between the hello and the registration: the agent was
+		// welcomed, and is now told why it is being dropped.
+		h.log.Warn("an agent was revoked while it connected", "agent_id", s.AgentID, "environment_id", s.EnvID)
+		s.endWith(DisconnectRevoked)
+		s.kick(DisconnectRevoked)
+		return
+	case err != nil:
 		s.close(websocket.StatusGoingAway, "the server is stopping")
 		return
 	}

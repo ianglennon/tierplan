@@ -110,6 +110,9 @@ type AgentSource interface {
 	Views(envID string) []tunnel.AgentLive
 	// Forget drops what is known of the agents of a removed environment.
 	Forget(envID string)
+	// KickEnv closes every live session of the environment's agents, recording code
+	// as why.
+	KickEnv(envID, code string)
 }
 
 // Service is the environment registry: it stores the environments an admin
@@ -562,8 +565,18 @@ func (s *Service) Rename(ctx context.Context, actor audit.Actor, id, name, ip, u
 	return s.environment(ctx, row)
 }
 
+// removedReason is the reason recorded for each agent that removing its environment
+// revokes.
+const removedReason = "environment_removed"
+
 // Remove deletes the environment and stops its monitor. It changes nothing in
 // Docker (D-20): the host's containers, networks and volumes are untouched.
+//
+// An agent environment's agents are revoked with it (D-08, D-30): each agent that
+// was still active is audited as revoked, the join token is disabled, and once the
+// deletion has committed every live session is closed. The environment's CA, tokens,
+// agents and blocks go with the row through the foreign keys, so a later hello from
+// any of them finds no environment and is refused auth_rejected.
 func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua string) error {
 	tx, err := s.st.Write.BeginTx(ctx, nil)
 	if err != nil {
@@ -577,6 +590,11 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 	}
 	if err != nil {
 		return fmt.Errorf("get environment: %w", err)
+	}
+	if row.Kind == KindAgent {
+		if err := s.revokeAgentsOf(ctx, tx, q, actor, id, ip, ua); err != nil {
+			return err
+		}
 	}
 	if _, err := q.DeleteEnvironment(ctx, id); err != nil {
 		return fmt.Errorf("delete environment: %w", err)
@@ -592,6 +610,11 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 		return fmt.Errorf("commit: %w", err)
 	}
 	s.mon.Stop(id)
+	// The rows are gone, so a session that is still open would be talking for an
+	// environment that does not exist.
+	if s.agents != nil && row.Kind == KindAgent {
+		s.agents.KickEnv(id, tunnel.DisconnectRemoved)
+	}
 	// An agent environment is monitored through its agents' targets.
 	s.mu.Lock()
 	agents := s.connected[id]
@@ -602,6 +625,35 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 	}
 	if s.agents != nil {
 		s.agents.Forget(id)
+	}
+	return nil
+}
+
+// revokeAgentsOf disables an environment's join token and audits agent.revoked for
+// each of its agents that is still active, in the transaction that deletes the
+// environment. The rows themselves are deleted by the cascade, so only the audit
+// log remembers who was revoked and why.
+func (s *Service) revokeAgentsOf(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, actor audit.Actor, envID, ip, ua string) error {
+	if _, err := q.DisableCurrentToken(ctx, sqlc.DisableCurrentTokenParams{
+		DisabledAt: sql.NullInt64{Int64: s.now().UTC().UnixNano(), Valid: true}, EnvID: envID,
+	}); err != nil {
+		return fmt.Errorf("disable the join token: %w", err)
+	}
+	rows, err := q.ListAgentsByEnv(ctx, envID)
+	if err != nil {
+		return fmt.Errorf("list the agents: %w", err)
+	}
+	for _, a := range rows {
+		if a.Status != "active" {
+			continue
+		}
+		if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+			Actor: actor, Action: audit.ActionAgentRevoked, TargetType: "agent", TargetID: a.ID,
+			EnvID: envID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
+			Details: map[string]string{"node": a.Name, "fingerprint": a.CertFingerprint, "reason": removedReason},
+		}); err != nil {
+			return fmt.Errorf("audit agent revoked: %w", err)
+		}
 	}
 	return nil
 }

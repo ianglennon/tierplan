@@ -28,6 +28,15 @@ type Agent struct {
 	RevokeReason    sql.NullString
 }
 
+type AgentBlock struct {
+	EnvID     string
+	Kind      string
+	Identity  string
+	AgentID   sql.NullString
+	CreatedAt int64
+	CreatedBy string
+}
+
 type AppMetum struct {
 	Key       string
 	Value     string

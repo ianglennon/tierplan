@@ -123,6 +123,12 @@ type Verifier interface {
 	// the agent it names is active and holds the same key, and that the signature
 	// is made by that key. It returns a *Refusal to turn the agent away.
 	Hello(ctx context.Context, req HelloRequest) (HelloResult, error)
+	// StillActive reports whether the agent may still hold a session: it exists and
+	// has not been revoked. The hub asks it again at the moment it registers a
+	// session, under its lifecycle lock, so a revoke committed after Hello looked
+	// and before the registration is still honoured. It answers false when it
+	// cannot tell, so a failure closes a session the agent can simply reopen.
+	StillActive(agentID string) bool
 }
 
 // Why a session ended, the code Observer.Disconnected receives. The first reason
@@ -138,6 +144,10 @@ const (
 	DisconnectReplaced = "replaced"
 	// DisconnectShutdown means the server is stopping.
 	DisconnectShutdown = "shutdown"
+	// DisconnectRevoked means an administrator revoked the agent.
+	DisconnectRevoked = "revoked"
+	// DisconnectRemoved means the agent's environment was removed.
+	DisconnectRemoved = "removed"
 )
 
 // Observer is told when a session starts and ends.
@@ -229,6 +239,31 @@ func (s *Session) Done() <-chan struct{} { return s.done }
 func (s *Session) close(code websocket.StatusCode, reason string) {
 	s.once.Do(func() {
 		_ = s.ws.Close(code, reason)
+		_ = s.ym.Close()
+	})
+}
+
+// kickGrace is how long a kicked session waits for the agent to answer the close
+// frame before the connection is dropped.
+const kickGrace = time.Second
+
+// kick ends the session with policy-violation status and reason as the close
+// reason, then drops it if the agent has not answered within kickGrace. A session
+// that is already closing is left alone.
+func (s *Session) kick(reason string) {
+	s.once.Do(func() {
+		done := make(chan struct{})
+		go func() {
+			_ = s.ws.Close(websocket.StatusPolicyViolation, reason)
+			close(done)
+		}()
+		t := time.NewTimer(kickGrace)
+		defer t.Stop()
+		select {
+		case <-done:
+		case <-t.C:
+			_ = s.ws.CloseNow()
+		}
 		_ = s.ym.Close()
 	})
 }
@@ -434,19 +469,34 @@ func (h *Hub) isClosed() bool {
 	return h.closed
 }
 
+// errHubClosed and errNoLongerActive are why register turned a session away.
+var (
+	errHubClosed      = errors.New("tunnel: the hub is closed")
+	errNoLongerActive = errors.New("tunnel: the agent was revoked while it connected")
+)
+
 // register adds s, replacing any session of the same agent: a half-open stale
 // connection must not block the reconnect. The old session is closed and
 // reported Disconnected with the reason replaced before the new one is reported
 // Connected, all inside one critical section, so two simultaneous hellos for one
-// agent can never both remain. It reports false when the hub is closed.
-func (h *Hub) register(s *Session) bool {
+// agent can never both remain. It reports errHubClosed when the hub is closed.
+//
+// The agent's status is read again here, after the lifecycle lock is taken. A
+// revoke commits first and then calls Kick, and Kick takes the same lock, so
+// either the status read below sees the revoke, or the session is already in the
+// map when Kick looks and is closed by it. There is no order in which a session
+// of a revoked agent stays registered (T-02-55).
+func (h *Hub) register(s *Session) error {
 	h.life.Lock()
 	defer h.life.Unlock()
 
+	if !h.v.StillActive(s.AgentID) {
+		return errNoLongerActive
+	}
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
-		return false
+		return errHubClosed
 	}
 	old := h.sessions[s.AgentID]
 	h.sessions[s.AgentID] = s
@@ -464,7 +514,45 @@ func (h *Hub) register(s *Session) bool {
 	if h.notifier != nil {
 		h.notifier.AgentConnected(s)
 	}
-	return true
+	return nil
+}
+
+// Kick ends the live session of agentID, if it has one, with a close frame that
+// carries code as its reason, and records code as why it ended. It returns at
+// once; the session is closed within a second even if the agent never answers
+// the close frame. The agents service calls it after a revoke has committed.
+//
+// Kick takes the lifecycle lock briefly, which makes it wait for a registration
+// in progress: a session that registered before the revoke committed is in the
+// map by the time Kick looks (see register).
+func (h *Hub) Kick(agentID, code string) {
+	h.life.Lock()
+	h.mu.Lock()
+	s := h.sessions[agentID]
+	h.mu.Unlock()
+	h.life.Unlock()
+	if s != nil {
+		s.endWith(code)
+		go s.kick(code)
+	}
+}
+
+// KickEnv is Kick for every live session of the agents of envID.
+func (h *Hub) KickEnv(envID, code string) {
+	h.life.Lock()
+	h.mu.Lock()
+	var live []*Session
+	for _, s := range h.sessions {
+		if s.EnvID == envID {
+			live = append(live, s)
+		}
+	}
+	h.mu.Unlock()
+	h.life.Unlock()
+	for _, s := range live {
+		s.endWith(code)
+		go s.kick(code)
+	}
 }
 
 // finish removes s if it is still the current session of its agent and reports

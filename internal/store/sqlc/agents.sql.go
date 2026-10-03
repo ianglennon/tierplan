@@ -55,6 +55,23 @@ func (q *Queries) AgentEnvironmentExists(ctx context.Context, id string) (int64,
 	return count, err
 }
 
+const deleteBlocksForAgent = `-- name: DeleteBlocksForAgent :execrows
+DELETE FROM agent_blocks WHERE env_id = ? AND agent_id = ?
+`
+
+type DeleteBlocksForAgentParams struct {
+	EnvID   string
+	AgentID sql.NullString
+}
+
+func (q *Queries) DeleteBlocksForAgent(ctx context.Context, arg DeleteBlocksForAgentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteBlocksForAgent, arg.EnvID, arg.AgentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const disableCurrentToken = `-- name: DisableCurrentToken :execrows
 UPDATE env_join_tokens SET disabled_at = ?
 WHERE env_id = ? AND superseded_at IS NULL AND disabled_at IS NULL
@@ -182,6 +199,34 @@ func (q *Queries) InsertAgentEnvironment(ctx context.Context, arg InsertAgentEnv
 	return err
 }
 
+const insertBlock = `-- name: InsertBlock :exec
+INSERT INTO agent_blocks (env_id, kind, identity, agent_id, created_at, created_by)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (env_id, kind, identity)
+DO UPDATE SET agent_id = excluded.agent_id, created_at = excluded.created_at, created_by = excluded.created_by
+`
+
+type InsertBlockParams struct {
+	EnvID     string
+	Kind      string
+	Identity  string
+	AgentID   sql.NullString
+	CreatedAt int64
+	CreatedBy string
+}
+
+func (q *Queries) InsertBlock(ctx context.Context, arg InsertBlockParams) error {
+	_, err := q.db.ExecContext(ctx, insertBlock,
+		arg.EnvID,
+		arg.Kind,
+		arg.Identity,
+		arg.AgentID,
+		arg.CreatedAt,
+		arg.CreatedBy,
+	)
+	return err
+}
+
 const insertCA = `-- name: InsertCA :exec
 INSERT INTO env_cas (env_id, cert_pem, key_sealed, created_at)
 VALUES (?, ?, ?, ?)
@@ -230,6 +275,23 @@ func (q *Queries) InsertJoinToken(ctx context.Context, arg InsertJoinTokenParams
 	return err
 }
 
+const isBlocked = `-- name: IsBlocked :one
+SELECT COUNT(*) FROM agent_blocks WHERE env_id = ? AND kind = ? AND identity = ?
+`
+
+type IsBlockedParams struct {
+	EnvID    string
+	Kind     string
+	Identity string
+}
+
+func (q *Queries) IsBlocked(ctx context.Context, arg IsBlockedParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, isBlocked, arg.EnvID, arg.Kind, arg.Identity)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const listAgentsByEnv = `-- name: ListAgentsByEnv :many
 SELECT id, env_id, name, role, engine_id, swarm_node_id, public_key, cert_serial, cert_fingerprint, cert_not_after, agent_version, status, created_at, last_seen_at, revoked_at, revoked_by, revoke_reason FROM agents WHERE env_id = ? ORDER BY created_at, id
 `
@@ -261,6 +323,79 @@ func (q *Queries) ListAgentsByEnv(ctx context.Context, envID string) ([]Agent, e
 			&i.RevokedAt,
 			&i.RevokedBy,
 			&i.RevokeReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBlocks = `-- name: ListBlocks :many
+SELECT env_id, kind, identity, agent_id, created_at, created_by FROM agent_blocks WHERE env_id = ? ORDER BY kind, identity
+`
+
+func (q *Queries) ListBlocks(ctx context.Context, envID string) ([]AgentBlock, error) {
+	rows, err := q.db.QueryContext(ctx, listBlocks, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AgentBlock
+	for rows.Next() {
+		var i AgentBlock
+		if err := rows.Scan(
+			&i.EnvID,
+			&i.Kind,
+			&i.Identity,
+			&i.AgentID,
+			&i.CreatedAt,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBlocksForAgent = `-- name: ListBlocksForAgent :many
+SELECT env_id, kind, identity, agent_id, created_at, created_by FROM agent_blocks WHERE env_id = ? AND agent_id = ? ORDER BY kind
+`
+
+type ListBlocksForAgentParams struct {
+	EnvID   string
+	AgentID sql.NullString
+}
+
+func (q *Queries) ListBlocksForAgent(ctx context.Context, arg ListBlocksForAgentParams) ([]AgentBlock, error) {
+	rows, err := q.db.QueryContext(ctx, listBlocksForAgent, arg.EnvID, arg.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AgentBlock
+	for rows.Next() {
+		var i AgentBlock
+		if err := rows.Scan(
+			&i.EnvID,
+			&i.Kind,
+			&i.Identity,
+			&i.AgentID,
+			&i.CreatedAt,
+			&i.CreatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -342,6 +477,34 @@ func (q *Queries) NextGeneration(ctx context.Context, envID string) (int64, erro
 	var next_generation int64
 	err := row.Scan(&next_generation)
 	return next_generation, err
+}
+
+const revokeAgent = `-- name: RevokeAgent :execrows
+UPDATE agents
+SET status = 'revoked', revoked_at = ?, revoked_by = ?, revoke_reason = ?
+WHERE id = ? AND env_id = ? AND status = 'active'
+`
+
+type RevokeAgentParams struct {
+	RevokedAt    sql.NullInt64
+	RevokedBy    sql.NullString
+	RevokeReason sql.NullString
+	ID           string
+	EnvID        string
+}
+
+func (q *Queries) RevokeAgent(ctx context.Context, arg RevokeAgentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeAgent,
+		arg.RevokedAt,
+		arg.RevokedBy,
+		arg.RevokeReason,
+		arg.ID,
+		arg.EnvID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const supersedeCurrentToken = `-- name: SupersedeCurrentToken :execrows

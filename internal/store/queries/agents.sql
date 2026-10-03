@@ -66,3 +66,26 @@ SELECT * FROM agents WHERE env_id = ? ORDER BY created_at, id;
 
 -- name: TouchAgentLastSeen :exec
 UPDATE agents SET last_seen_at = ? WHERE id = ?;
+
+-- name: RevokeAgent :execrows
+UPDATE agents
+SET status = 'revoked', revoked_at = ?, revoked_by = ?, revoke_reason = ?
+WHERE id = ? AND env_id = ? AND status = 'active';
+
+-- name: InsertBlock :exec
+INSERT INTO agent_blocks (env_id, kind, identity, agent_id, created_at, created_by)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (env_id, kind, identity)
+DO UPDATE SET agent_id = excluded.agent_id, created_at = excluded.created_at, created_by = excluded.created_by;
+
+-- name: ListBlocksForAgent :many
+SELECT * FROM agent_blocks WHERE env_id = ? AND agent_id = ? ORDER BY kind;
+
+-- name: DeleteBlocksForAgent :execrows
+DELETE FROM agent_blocks WHERE env_id = ? AND agent_id = ?;
+
+-- name: IsBlocked :one
+SELECT COUNT(*) FROM agent_blocks WHERE env_id = ? AND kind = ? AND identity = ?;
+
+-- name: ListBlocks :many
+SELECT * FROM agent_blocks WHERE env_id = ? ORDER BY kind, identity;

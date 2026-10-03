@@ -96,6 +96,10 @@ type Options struct {
 	// Notifier is told what the hub's Notifier is told: connections, disconnections
 	// and refused handshakes.
 	Notifier tunnel.Notifier
+	// Verifier wraps the real agents service as the hub's Verifier, so a test can
+	// hold a handshake between its verification and the registration of the session.
+	// The wrapper must pass StillActive through.
+	Verifier func(real tunnel.Verifier) tunnel.Verifier
 }
 
 // Server is a running in-process Bayplan tunnel endpoint.
@@ -224,7 +228,11 @@ func Start(t *testing.T, opts Options) *Server {
 
 	ts := httptest.NewUnstartedServer(nil)
 	addr := ts.Listener.Addr().String()
-	hub := tunnel.NewHub(svc, rec, log, clock.Now).WithPublicURL(func() string { return "https://" + addr }).WithLastSeen(svc)
+	var verifier tunnel.Verifier = svc
+	if opts.Verifier != nil {
+		verifier = opts.Verifier(svc)
+	}
+	hub := tunnel.NewHub(verifier, rec, log, clock.Now).WithPublicURL(func() string { return "https://" + addr }).WithLastSeen(svc)
 	if opts.Notifier != nil {
 		hub = hub.WithNotifier(opts.Notifier)
 	}
@@ -234,6 +242,8 @@ func Start(t *testing.T, opts Options) *Server {
 	if opts.Configure != nil {
 		hub = opts.Configure(hub)
 	}
+	// A revoke closes the agent's live session through the hub, as in production.
+	svc.WithKicker(hub)
 	h := hub.Handler()
 	if opts.Wrap != nil {
 		h = opts.Wrap(h)

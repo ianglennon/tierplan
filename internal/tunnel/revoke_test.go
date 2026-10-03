@@ -240,8 +240,15 @@ func TestRevokeRacingAHelloFiftyTimesNeverLeavesASessionForTheRevokedAgent(t *te
 		} else if hello.Refuse == nil || hello.Refuse.Code != wire.ReasonRevoked {
 			t.Fatalf("round %d: hello = %+v (err %v), want a welcome that is then closed or a revoked refusal", i, hello.Refuse, hello.Err)
 		}
-		if srv.Hub.Session(id.AgentID) != nil {
-			t.Fatalf("round %d: a session for the revoked agent is registered", i)
+		// The close frame reaches the agent a moment before the hub has unregistered
+		// the session, so the registry is given a short while to settle. A session
+		// that was never closed would stay.
+		deadline := time.Now().Add(2 * time.Second)
+		for srv.Hub.Session(id.AgentID) != nil {
+			if time.Now().After(deadline) {
+				t.Fatalf("round %d: a session for the revoked agent is still registered", i)
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}
 }
