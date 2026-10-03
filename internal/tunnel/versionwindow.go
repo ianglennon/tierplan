@@ -75,6 +75,15 @@ func parseRelease(v string) (major, minor int, ok bool) {
 	return n[0], n[1], true
 }
 
+// Behind reports whether an agent of agentVersion is older than a server of
+// serverVersion by a minor or a patch: the agent could be updated. Both must be
+// releases, vMAJOR.MINOR.PATCH with an optional prerelease or build suffix; a
+// suffix is ignored, so v0.3.0-rc.1 is v0.3.0. Anything else, and an agent that is
+// the same or newer, is not behind.
+func Behind(serverVersion, agentVersion string) bool {
+	return false
+}
+
 // CheckClock refuses a clock that is further from the server's than
 // MaxClockOffset, with the code clock_skew. offset is how far the agent's clock is
 // ahead of the server's. A Verifier calls it at the point of its own checks where

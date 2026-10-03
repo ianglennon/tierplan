@@ -939,3 +939,262 @@ func TestAnEnvironmentTheCallerMayNotReadIsNotListedWhateverItsAgentsDo(t *testi
 		t.Fatalf("a user with no grant saw the environment: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// The overview columns of GET /api/environments (plan 02-12, ENV-06, D-32): what
+// the /environments table, the switcher and the mobile rows show for each
+// environment without asking for its resources.
+
+type countsBody struct {
+	Ready     int `json:"ready"`
+	Total     int `json:"total"`
+	Failing   int `json:"failing"`
+	Connected int `json:"connected"`
+	Expected  int `json:"expected"`
+}
+
+// overview is the overview part of one listed environment. A pointer field is nil
+// when the body said null.
+type overview struct {
+	ID              string      `json:"id"`
+	EnvType         *string     `json:"envType"`
+	IsLocalSocket   bool        `json:"isLocalSocket"`
+	Nodes           *countsBody `json:"nodes"`
+	FailingServices *countsBody `json:"failingServices"`
+	Agents          *countsBody `json:"agents"`
+	AgentVersion    *string     `json:"agentVersion"`
+	UpdateAvailable bool        `json:"updateAvailable"`
+	EngineVersion   *string     `json:"engineVersion"`
+	LastSeen        *string     `json:"lastSeen"`
+}
+
+// rawEnvironment is one listed environment as the raw fields of its JSON object, so
+// a test can tell null from absent.
+func rawEnvironment(t *testing.T, body []byte, id string) map[string]json.RawMessage {
+	t.Helper()
+	var list struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	for _, it := range list.Items {
+		if string(it["id"]) == `"`+id+`"` {
+			return it
+		}
+	}
+	t.Fatalf("environment %s is not in %s", id, body)
+	return nil
+}
+
+func overviewOf(t *testing.T, f *envFix, id string) overview {
+	t.Helper()
+	rec := f.req(t, http.MethodGet, "/api/environments", "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("list: %d %s", rec.code, rec.body)
+	}
+	var list struct {
+		Items []overview `json:"items"`
+	}
+	if err := json.Unmarshal(rec.body, &list); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range list.Items {
+		if o.ID == id {
+			return o
+		}
+	}
+	t.Fatalf("environment %s is not in %s", id, rec.body)
+	return overview{}
+}
+
+func counts(t *testing.T, what string, got *countsBody, ready, total int) {
+	t.Helper()
+	if got == nil || got.Ready != ready || got.Total != total {
+		t.Fatalf("%s = %+v, want ready %d of %d", what, got, ready, total)
+	}
+}
+
+func TestOverviewOfAStandaloneAgentEnvironmentFollowsItsAgentAndTheServerVersion(t *testing.T) {
+	f := newAgentFix(t)
+	f.svc.WithHealth(envs.HealthConfig{ServerVersion: "v0.2.0"})
+	env := f.srv.NewEnvironment(t, "Remote")
+	f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Version: "28.4.0"}, nil)
+	f.whenState(t, env.ID, "online")
+	waitFor(t, "the engine read through the tunnel", func() bool { return f.environment(t, env.ID).Engine.Version == "28.4.0" })
+	connectedAt := f.tclk.Now()
+
+	o := overviewOf(t, f.envFix, env.ID)
+	if o.EnvType == nil || *o.EnvType != "standalone" || o.IsLocalSocket {
+		t.Fatalf("envType = %v, isLocalSocket = %v, want standalone and false", o.EnvType, o.IsLocalSocket)
+	}
+	counts(t, "nodes", o.Nodes, 1, 1)
+	if o.Agents != nil || o.FailingServices != nil {
+		t.Fatalf("agents = %+v, failingServices = %+v, want null for both on a standalone host with no service data", o.Agents, o.FailingServices)
+	}
+	if o.AgentVersion == nil || *o.AgentVersion != "0.2.0" || o.UpdateAvailable {
+		t.Fatalf("agentVersion = %v, updateAvailable = %v, want 0.2.0 and false for an agent that matches the server", o.AgentVersion, o.UpdateAvailable)
+	}
+	if o.EngineVersion == nil || *o.EngineVersion != "28.4.0" {
+		t.Fatalf("engineVersion = %v, want the version its target reported", o.EngineVersion)
+	}
+	if o.LastSeen == nil || *o.LastSeen != utc(connectedAt) {
+		t.Fatalf("lastSeen = %v, want the hub's last sign of life %s", o.LastSeen, utc(connectedAt))
+	}
+	raw := rawEnvironment(t, f.req(t, http.MethodGet, "/api/environments", "").body, env.ID)
+	for _, k := range []string{"agents", "failingServices"} {
+		if string(raw[k]) != "null" {
+			t.Errorf("%s = %s, want the key present with null", k, raw[k])
+		}
+	}
+	for _, k := range []string{"updates", "pools", "addressPools"} {
+		if _, ok := raw[k]; ok {
+			t.Errorf("the list carries a %q column: D-32 leaves placeholder columns out", k)
+		}
+	}
+
+	// The agent goes quiet: still a node inside the 30 s window, gone after it, and
+	// the last sign of life stays the time it was last heard.
+	f.srv.Events.WaitLen(t, 1)
+	f.tclk.Advance(31 * time.Second)
+	f.srv.Events.WaitLen(t, 2)
+	o = overviewOf(t, f.envFix, env.ID)
+	counts(t, "nodes after the agent was lost", o.Nodes, 0, 1)
+	if o.LastSeen == nil || *o.LastSeen != utc(connectedAt) {
+		t.Fatalf("lastSeen = %v after the loss, want it unchanged at %s", o.LastSeen, utc(connectedAt))
+	}
+}
+
+func TestUpdateAvailableIsTrueWhenTheAgentIsOlderThanTheServerByAMinorOrAPatch(t *testing.T) {
+	for _, c := range []struct {
+		server, agent string
+		want          bool
+	}{
+		{"v0.3.1", "0.3.0", true},
+		{"v0.3.0", "0.2.9", true},
+		{"v0.3.0", "0.3.0", false},
+		{"v0.3.0", "0.3.1", false},
+		{"v0.3.0", "0.4.0", false},
+		{"v0.3.0-rc.1", "0.3.0", false},
+		{"edge", "0.3.0", false},
+		{"v0.3.0", "dev (abc123)", false},
+	} {
+		t.Run(c.server+" with agent "+c.agent, func(t *testing.T) {
+			f := newAgentFix(t)
+			f.svc.WithHealth(envs.HealthConfig{ServerVersion: c.server})
+			env := f.srv.NewEnvironment(t, "Remote")
+			conn := f.srv.Dial(t, tunneltest.Agent{Token: env.Token, Version: c.agent})
+			if conn.Welcome == nil {
+				t.Skipf("the hub refuses this pair (%+v), so there is no list row to read", conn.Refuse)
+			}
+			f.srv.Events.WaitLen(t, 1)
+			o := overviewOf(t, f.envFix, env.ID)
+			if o.AgentVersion == nil || *o.AgentVersion != c.agent || o.UpdateAvailable != c.want {
+				t.Fatalf("agentVersion = %v, updateAvailable = %v, want %s and %v", o.AgentVersion, o.UpdateAvailable, c.agent, c.want)
+			}
+		})
+	}
+}
+
+func TestOverviewOfAPendingEnvironmentIsNullWhereNothingIsKnown(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Waiting")
+	o := overviewOf(t, f.envFix, env.ID)
+	if o.Nodes != nil || o.FailingServices != nil || o.Agents != nil || o.AgentVersion != nil || o.EngineVersion != nil || o.LastSeen != nil || o.EnvType != nil {
+		t.Fatalf("overview = %+v, want null for every unknown value", o)
+	}
+	if o.UpdateAvailable || o.IsLocalSocket {
+		t.Fatalf("overview = %+v, want updateAvailable and isLocalSocket false", o)
+	}
+	raw := rawEnvironment(t, f.req(t, http.MethodGet, "/api/environments", "").body, env.ID)
+	for _, k := range []string{"nodes", "failingServices", "agents", "agentVersion"} {
+		if string(raw[k]) != "null" {
+			t.Errorf("%s = %s, want the key present with null", k, raw[k])
+		}
+	}
+}
+
+func TestOverviewOfASwarmCountsNodesAndAgentsSeparatelyAndTakesTheOldestAgentVersion(t *testing.T) {
+	f := newAgentFix(t)
+	f.svc.WithHealth(envs.HealthConfig{ServerVersion: "v0.3.0"})
+	env := f.srv.NewEnvironment(t, "Swarm")
+	manager := &wire.Facts{
+		EngineID: "ENG:m", Hostname: "manager-1", EngineReachable: true,
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-m", ClusterID: "cluster-1", Control: true},
+	}
+	worker := &wire.Facts{
+		EngineID: "ENG:w", Hostname: "worker-1", EngineReachable: true,
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-w", Control: false},
+	}
+	fm := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "manager-1", SwarmState: "active", SwarmControl: true})
+	fw := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "worker-1", SwarmState: "active"})
+	cm := f.srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: manager, Version: "0.3.0"})
+	cw := f.srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: worker, Version: "0.2.9"})
+	if cm.Welcome == nil || cw.Welcome == nil {
+		t.Fatalf("enrolment refused: %+v / %+v", cm.Refuse, cw.Refuse)
+	}
+	cm.ProxyDocker(t, fm.SocketPath())
+	cw.ProxyDocker(t, fw.SocketPath())
+	mc, wc := cm.OpenControl(t), cw.OpenControl(t)
+	tunneltest.SendHeartbeat(t, mc, true, f.tclk.Now().UnixMilli())
+	tunneltest.SendHeartbeat(t, wc, true, f.tclk.Now().UnixMilli())
+	f.srv.Events.WaitLen(t, 2)
+	f.whenState(t, env.ID, "online")
+
+	o := overviewOf(t, f.envFix, env.ID)
+	if o.EnvType == nil || *o.EnvType != "swarm" {
+		t.Fatalf("envType = %v, want swarm", o.EnvType)
+	}
+	counts(t, "nodes", o.Nodes, 2, 2)
+	if o.Agents == nil || o.Agents.Connected != 2 || o.Agents.Expected != 2 {
+		t.Fatalf("agents = %+v, want 2 connected of 2 expected", o.Agents)
+	}
+	if o.AgentVersion == nil || *o.AgentVersion != "0.2.9" || !o.UpdateAvailable {
+		t.Fatalf("agentVersion = %v, updateAvailable = %v, want the oldest agent's 0.2.9 and an update", o.AgentVersion, o.UpdateAvailable)
+	}
+
+	// The worker is lost: the manager keeps the environment up, and the counts show it.
+	f.tclk.Advance(20 * time.Second)
+	tunneltest.SendHeartbeat(t, mc, true, f.tclk.Now().UnixMilli())
+	var mid string
+	for _, s := range f.srv.Events.Sessions() {
+		if s.Facts.Swarm != nil && s.Facts.Swarm.Control {
+			mid = s.AgentID
+		}
+	}
+	waitFor(t, "the manager's heartbeat", func() bool { return f.srv.Hub.Session(mid).Status().LastHeartbeat.Equal(f.tclk.Now()) })
+	f.tclk.Advance(11 * time.Second)
+	f.srv.Events.WaitLen(t, 3)
+	o = overviewOf(t, f.envFix, env.ID)
+	counts(t, "nodes after the worker was lost", o.Nodes, 1, 2)
+	if o.Agents == nil || o.Agents.Connected != 1 || o.Agents.Expected != 2 {
+		t.Fatalf("agents = %+v, want 1 connected of 2 expected", o.Agents)
+	}
+}
+
+func TestOverviewOfTheLocalEnvironmentIsTheLocalSocketWithOneNodeAndNoAgent(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
+	e := f.add(t)
+	o := overviewOf(t, f, e.ID)
+	if !o.IsLocalSocket || o.EnvType == nil || *o.EnvType != "standalone" {
+		t.Fatalf("overview = %+v, want the local socket of a standalone engine", o)
+	}
+	counts(t, "nodes", o.Nodes, 1, 1)
+	if o.AgentVersion != nil || o.Agents != nil || o.UpdateAvailable {
+		t.Fatalf("overview = %+v, want no agent version, agents or update for the local socket", o)
+	}
+	if o.EngineVersion == nil || *o.EngineVersion != "29.1.0" {
+		t.Fatalf("engineVersion = %v, want 29.1.0", o.EngineVersion)
+	}
+}
+
+func TestOverviewOfALocalSwarmManagerDoesNotGuessItsNodeCount(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", SwarmState: "active", SwarmControl: true})
+	e := f.add(t)
+	o := overviewOf(t, f, e.ID)
+	if o.EnvType == nil || *o.EnvType != "swarm" || !o.IsLocalSocket {
+		t.Fatalf("overview = %+v, want the local socket of a swarm", o)
+	}
+	if o.Nodes != nil {
+		t.Fatalf("nodes = %+v, want null: the cluster's node count is not read here", o.Nodes)
+	}
+}

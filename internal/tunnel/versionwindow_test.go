@@ -70,3 +70,31 @@ func TestCompatibleReadsOnlyPlainReleaseVersions(t *testing.T) {
 		}
 	}
 }
+
+// Behind says an agent is older than its server by a minor or a patch (plan 02-12,
+// D-32): the "Update" badge of the environments overview. Anything that is not a
+// release on both sides, a prerelease suffix and a newer agent never say so.
+func TestBehindIsTrueOnlyForAnAgentOlderThanTheServerByAMinorOrAPatch(t *testing.T) {
+	for _, tc := range []struct {
+		server, agent string
+		want          bool
+	}{
+		{"v0.3.1", "0.3.0", true},
+		{"v0.3.0", "v0.2.9", true},
+		{"v1.0.0", "0.9.9", true},
+		{"v0.3.0", "0.3.0", false},
+		{"v0.3.0", "0.3.1", false},
+		{"v0.3.0", "0.4.0", false},
+		{"v0.3.0-rc.1", "0.3.0", false},
+		{"v0.3.0", "0.3.0-rc.1", false},
+		{"v0.3.10", "0.3.9", true},
+		{"edge", "0.3.0", false},
+		{"v0.3.0", "dev (abc123)", false},
+		{"", "0.3.0", false},
+		{"v0.3.0", "", false},
+	} {
+		if got := tunnel.Behind(tc.server, tc.agent); got != tc.want {
+			t.Errorf("Behind(%q, %q) = %v, want %v", tc.server, tc.agent, got, tc.want)
+		}
+	}
+}

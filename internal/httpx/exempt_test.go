@@ -24,7 +24,7 @@ import (
 func TestExemptRoutesOfTheProductionRouterAreExactlyTheFiveKnownPaths(t *testing.T) {
 	// The dependency-free router is what the openapi subcommand builds; every
 	// route exists in it, so the exempt set is complete.
-	r := server.NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.AgentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.EnvStreamDeps{}, api.AuditDeps{}, api.SettingsDeps{}, nil)
+	r := server.NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.AgentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.EnvStreamDeps{}, api.RecentDeps{}, api.AuditDeps{}, api.SettingsDeps{}, nil)
 
 	seen := map[string]bool{}
 	for _, rec := range r.Routes() {

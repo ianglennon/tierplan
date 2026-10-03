@@ -26,6 +26,8 @@ type AgentLive struct {
 	// EngineReachable is what the last heartbeat said about Docker. Until the first
 	// heartbeat of a session it is true: nothing has said otherwise.
 	EngineReachable bool
+	// Version is the agent version it reported when it last connected.
+	Version string
 	// ClockOffset is how far the agent's clock is ahead of the server's, measured at
 	// the last handshake, and ClockWarning says it is beyond ClockWarnOffset.
 	ClockOffset  time.Duration

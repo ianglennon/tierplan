@@ -110,7 +110,7 @@ type Server struct {
 // inside it is its own authentication. Nil mounts a handler that answers 404,
 // which is what the `openapi` subcommand and the router-walk tests pass: the route
 // exists in every router, so its exemption is always checked.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, agentsDeps api.AgentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, envStream api.EnvStreamDeps, auditDeps api.AuditDeps, settings api.SettingsDeps, agentConnect http.Handler) *httpx.Router {
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, agentsDeps api.AgentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, envStream api.EnvStreamDeps, recent api.RecentDeps, auditDeps api.AuditDeps, settings api.SettingsDeps, agentConnect http.Handler) *httpx.Router {
 	r := httpx.New(opts)
 	if agentConnect == nil {
 		agentConnect = http.NotFoundHandler()
@@ -127,6 +127,7 @@ func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, auth
 	api.RegisterDashboard(r, dashboard)
 	api.RegisterEvents(r, events)
 	api.RegisterEnvStream(r, envStream)
+	api.RegisterRecent(r, recent)
 	api.RegisterAudit(r, auditDeps)
 	return r
 }
@@ -401,6 +402,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
 		api.EventsDeps{Aggregator: aggregator, Log: log},
 		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
+		api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
 		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
 		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Log: log}, tunnelHub.Handler())
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).

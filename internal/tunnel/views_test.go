@@ -163,3 +163,23 @@ func TestViewsAreScopedToTheEnvironmentOrderedByAgentAndForgottenOnRequest(t *te
 		t.Fatalf("Forget of one environment touched another: %+v", got)
 	}
 }
+
+// The version an agent reported is remembered with the rest, so the overview can show
+// it after the agent has gone (plan 02-12).
+func TestViewsRememberTheVersionTheAgentReportedAfterItLeaves(t *testing.T) {
+	srv := timed(t, nil)
+	env := srv.NewEnvironment(t, "Production")
+	c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Version: "0.2.7"})
+	if c.Welcome == nil {
+		t.Fatalf("enrolment refused: %+v", c.Refuse)
+	}
+	srv.Events.WaitLen(t, 1)
+	if v := viewOf(t, srv, env.ID, c.Identity.AgentID); v.Version != "0.2.7" {
+		t.Fatalf("version = %q while connected, want 0.2.7", v.Version)
+	}
+	_ = c.WS.CloseNow()
+	srv.Events.WaitLen(t, 2)
+	if v := viewOf(t, srv, env.ID, c.Identity.AgentID); v.Version != "0.2.7" || v.Connected {
+		t.Fatalf("view = %+v after the agent left, want it disconnected and still 0.2.7", v)
+	}
+}

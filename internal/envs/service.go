@@ -97,6 +97,9 @@ type HealthConfig struct {
 	ServerStart  time.Time
 	OfflineAfter time.Duration
 	Grace        time.Duration
+	// ServerVersion is what an agent's version is measured against to say an update
+	// is available; empty or not a release version never says so.
+	ServerVersion string
 }
 
 // AgentSource is what the registry reads of the live agents: the tunnel hub.
@@ -165,6 +168,9 @@ func (s *Service) WithHealth(c HealthConfig) *Service {
 	}
 	if c.Grace > 0 {
 		s.health.Grace = c.Grace
+	}
+	if c.ServerVersion != "" {
+		s.health.ServerVersion = c.ServerVersion
 	}
 	return s
 }
