@@ -68,13 +68,35 @@ function text(v: unknown): string | undefined {
   return typeof v === "string" && v !== "" ? v : undefined;
 }
 
+// The states a problem answer can name (EnvironmentProblem.state): the ones in
+// which an environment's own pages cannot be shown.
+export type ProblemState = NonNullable<components["schemas"]["EnvironmentProblem"]["state"]>;
+
+const PROBLEM_STATES: readonly ProblemState[] = [
+  "offline",
+  "unsupported",
+  "pending",
+  "reconnecting",
+  "revoked",
+  "cluster_changed",
+];
+
+// isProblemState is true for a health state whose environment has no pages to
+// show: the full-page states of D-33. online, degraded and unknown are not.
+export function isProblemState(state: string | undefined): state is ProblemState {
+  return PROBLEM_STATES.some((s) => s === state);
+}
+
 // EnvironmentProblemError is a failed environment read with the members the
-// full-page states need: when the engine stopped answering, why, and which
+// full-page states need: the health state, when it began, why, and which
 // engine was found. Daemon-supplied strings are only ever rendered as text
 // (T-01-81).
 export class EnvironmentProblemError extends Error {
   readonly status: number;
   readonly type?: string;
+  // The environment's health state as the server rolled it up. Absent from a
+  // server that does not send it, and then the failure alone decides.
+  readonly state?: ProblemState;
   readonly since?: string;
   readonly reason?: string;
   readonly engine?: EnvironmentEngineFacts;
@@ -86,6 +108,8 @@ export class EnvironmentProblemError extends Error {
     this.status = base.status;
     this.type = base.type;
     const rec = isRecord(body) ? body : {};
+    const state = text(rec.state);
+    this.state = isProblemState(state) ? state : undefined;
     this.since = text(rec.since);
     this.reason = text(rec.reason);
     if (isRecord(rec.engine)) {

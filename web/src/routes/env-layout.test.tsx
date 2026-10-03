@@ -401,9 +401,9 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
     renderAt("/env/e1");
     expect(await screen.findByRole("heading", { name: "Lab host isn't reachable" })).toBeTruthy();
     expect(
-      screen.getByText(/Bayplan lost contact with the agent on Lab host at \d{1,2}:\d{2}\./),
+      screen.getByText(/Bayplan lost contact with the agent on Lab host at \d{1,2}:\d{2}/),
     ).toBeTruthy();
-    expect(screen.getByText("The agent stopped answering.")).toBeTruthy();
+    expect(screen.getByText("A node stopped answering.")).toBeTruthy();
     expect(screen.getByText(/The agent reconnects by itself\./)).toBeTruthy();
     // Phase 1's local-socket wording never appears for an agent environment.
     expect(screen.queryByText(/docker\.sock is mounted into the Bayplan container/)).toBeNull();

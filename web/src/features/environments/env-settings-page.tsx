@@ -46,10 +46,10 @@ interface ActiveReason {
 
 // activeReason is the one reason the Connection card explains: the status's own
 // code, else the worst issue of a degraded environment (the server lists them
-// worst first). The local socket's codes are worded by plan 02-17, so only an
-// agent environment has one here.
+// worst first). The local socket's codes (unreachable, api_too_old and the
+// rest) have wording in ReasonText too.
 function activeReason(env: EnvironmentItem): ActiveReason | undefined {
-  if (env.kind !== "agent" || env.status.state === "online") return undefined;
+  if (env.status.state === "online") return undefined;
   if (env.status.reason) return { code: env.status.reason, since: env.status.since, more: 0 };
   const issues = env.status.issues ?? [];
   const [first] = issues;
@@ -161,7 +161,7 @@ function ConnectionCard({ env, canSettings }: { env: EnvironmentItem; canSetting
         <div className="flex flex-col gap-2">
           <ReasonText
             code={reason.code}
-            params={reason.node ? { node: reason.node } : undefined}
+            params={{ node: reason.node, envType: env.envType }}
             since={reason.since}
           />
           {reason.more > 0 ? (

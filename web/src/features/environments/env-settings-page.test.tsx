@@ -239,6 +239,30 @@ describe("/settings/environments/$envId", () => {
     expect(within_.getByText("and 1 more issue")).toBeTruthy();
   });
 
+  it("shows only the check command that fits a swarm, not the standalone one too", async () => {
+    items = [DEGRADED, LOCAL];
+    renderAt("/settings/environments/e2");
+    const card = (await screen.findByRole("heading", { name: "Connection" })).closest("section");
+    const within_ = within(card as HTMLElement);
+    expect(await within_.findByText("docker service ps bayplan-agent")).toBeTruthy();
+    expect(within_.queryByText("docker ps --filter name=bayplan-agent")).toBeNull();
+  });
+
+  it("explains why the local Docker socket is offline in words", async () => {
+    items = [
+      AGENT_ENV,
+      {
+        ...LOCAL,
+        status: { state: "offline", reason: "unreachable", since: "2026-10-03T09:00:00Z" },
+      },
+    ];
+    renderAt("/settings/environments/e1");
+    const card = (await screen.findByRole("heading", { name: "Connection" })).closest("section");
+    const within_ = within(card as HTMLElement);
+    expect(await within_.findByText(/Docker isn't answering on the local socket\./)).toBeTruthy();
+    expect(within_.getByText(/mounted into Bayplan/)).toBeTruthy();
+  });
+
   it("hides the Join token card and never reads the token without environments.token", async () => {
     current = me(["environments.read", "environments.manage", "environments.revoke"]);
     renderAt("/settings/environments/e2");

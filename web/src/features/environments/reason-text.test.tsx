@@ -30,6 +30,8 @@ const D40 = [
 ];
 const ENROLMENT = ["duplicate_environment", "type_mismatch"];
 const EXTRA = ["cert_expiring"];
+// The codes the local Docker socket reports (UI-SPEC Connection reason codes).
+const LOCAL = ["unreachable", "api_too_old", "podman", "rootless", "docker_desktop"];
 
 const ALL_PARAMS: ReasonParams = {
   node: "edge-1",
@@ -181,7 +183,7 @@ describe("ReasonText", () => {
   });
 
   describe("every code", () => {
-    for (const code of [...D40, ...ENROLMENT, ...EXTRA]) {
+    for (const code of [...D40, ...ENROLMENT, ...EXTRA, ...LOCAL]) {
       it(`${code} has text and a fix hint, with every parameter and with none`, () => {
         const { result } = renderHook(() => useReasonText());
         for (const params of [ALL_PARAMS, undefined]) {
@@ -201,6 +203,27 @@ describe("ReasonText", () => {
     it("covers 15 D-40 codes and the two enrolment refusals", () => {
       expect(D40).toHaveLength(15);
       expect(ENROLMENT).toEqual(["duplicate_environment", "type_mismatch"]);
+    });
+  });
+
+  describe("the type of the environment", () => {
+    const STANDALONE = "docker ps --filter name=bayplan-agent";
+    const SWARM = "docker service ps bayplan-agent";
+
+    it("shows only the swarm check for a swarm and only the standalone check for a standalone host", () => {
+      render(<ReasonText code="agent_offline" params={{ envType: "swarm" }} />);
+      expect(screen.getByText(SWARM)).toBeTruthy();
+      expect(screen.queryByText(STANDALONE)).toBeNull();
+      cleanup();
+      render(<ReasonText code="agent_offline" params={{ envType: "standalone" }} />);
+      expect(screen.getByText(STANDALONE)).toBeTruthy();
+      expect(screen.queryByText(SWARM)).toBeNull();
+    });
+
+    it("shows both checks while the type is not known", () => {
+      render(<ReasonText code="agent_offline" />);
+      expect(screen.getByText(STANDALONE)).toBeTruthy();
+      expect(screen.getByText(SWARM)).toBeTruthy();
     });
   });
 

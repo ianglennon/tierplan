@@ -1,0 +1,36 @@
+{
+  "fullpage": {
+    "pending": {
+      "heading": "No agent has connected yet",
+      "body": "Install the Bayplan agent on a host to start managing {{name}}.",
+      "bodyNoToken": "Install the Bayplan agent on a host to start managing {{name}}. Ask an admin to finish setting it up.",
+      "action": "Show install command"
+    },
+    "reconnecting": {
+      "heading": "Reconnecting to {{name}}…",
+      "body": "Bayplan just started and is waiting for the agent to reconnect. This usually takes under a minute."
+    },
+    "offline": {
+      "heading": "{{name}} isn't reachable",
+      "body": "Bayplan lost contact with the agent on {{name}} at {{time}}.",
+      "bodyNoTime": "Bayplan lost contact with the agent on {{name}}."
+    },
+    "revoked": {
+      "heading": "This environment was revoked",
+      "body": "An admin revoked every agent on {{name}}, so Bayplan can't reach it.",
+      "openSettings": "Open node settings",
+      "remove": "Remove environment"
+    },
+    "clusterChanged": {
+      "heading": "This swarm was re-initialised",
+      "body": "The agents on {{name}} now report a different cluster, so Bayplan refused them. Nothing was changed on the old environment.",
+      "remove": "Remove environment"
+    },
+    "degraded": {
+      "title": "{{name}} is degraded",
+      "more_one": "and {{count}} more issue",
+      "more_other": "and {{count}} more issues",
+      "viewNodes": "View nodes"
+    }
+  }
+}

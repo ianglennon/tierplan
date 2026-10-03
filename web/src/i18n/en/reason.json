@@ -108,6 +108,26 @@
         "text": "{{host}} is a {{hostType}}, but {{environment}} is a {{envType}}.",
         "textGeneric": "This host is a different type from the environment it tried to join.",
         "hint": "Add it as a separate environment."
+      },
+      "unreachable": {
+        "text": "Docker isn't answering on the local socket.",
+        "hint": "Check that `/var/run/docker.sock` is mounted into Bayplan and that the Docker daemon is running."
+      },
+      "api_too_old": {
+        "text": "This Docker Engine is older than Bayplan supports.",
+        "hint": "Bayplan needs Docker Engine 24 or later. Upgrade Docker Engine, then retry."
+      },
+      "podman": {
+        "text": "Podman isn't supported.",
+        "hint": "Bayplan manages Docker Engine only."
+      },
+      "rootless": {
+        "text": "This Docker setup isn't supported.",
+        "hint": "Bayplan manages Docker Engine 24 or later."
+      },
+      "docker_desktop": {
+        "text": "This Docker setup isn't supported.",
+        "hint": "Bayplan manages Docker Engine 24 or later."
       }
     }
   }

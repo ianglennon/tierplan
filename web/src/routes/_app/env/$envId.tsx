@@ -3,12 +3,23 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
-import { FileQuestion, ServerCrash, ServerOff } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  FileQuestion,
+  Network,
+  RefreshCw,
+  ServerCrash,
+  ServerOff,
+  ShieldOff,
+  Unplug,
+} from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import {
+  type EnvironmentItem,
   EnvironmentProblemError,
   environmentsQuery,
+  isProblemState,
+  type ProblemState,
   recentQuery,
   reconnectEnvironment,
   recordRecent,
@@ -19,7 +30,9 @@ import { useNow } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { EnvEventsProvider } from "@/features/dashboard/events";
-import { useDocumentTitle } from "@/hooks/use-me";
+import { InstallDialog } from "@/features/environments/install-dialog";
+import { isKnownReason, ReasonText } from "@/features/environments/reason-text";
+import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatClock, formatRelative } from "@/lib/format";
 
@@ -68,10 +81,115 @@ function useRecordRecent(envId: string): void {
   }, [envId, queryClient]);
 }
 
+// The codes only the local Docker socket reports. With them, or with none, an
+// offline environment is the Phase 1 "Docker isn't reachable" page.
+const LOCAL_REASONS: ReadonlySet<string> = new Set([
+  "unreachable",
+  "api_too_old",
+  "podman",
+  "rootless",
+  "docker_desktop",
+]);
+
+// The states only an environment whose hosts dial in through an agent can be in.
+const AGENT_ONLY: ReadonlySet<string> = new Set([
+  "pending",
+  "reconnecting",
+  "revoked",
+  "cluster_changed",
+]);
+
+// isAgentEnvironment says whether the offline wording is the agent's ("Bayplan
+// lost contact with the agent") or the local socket's. The list knows; until it
+// has answered, the reason code tells.
+function isAgentEnvironment(item: EnvironmentItem | undefined, problem: EnvironmentProblemError) {
+  if (item) return item.kind === "agent";
+  if (problem.state && AGENT_ONLY.has(problem.state)) return true;
+  return problem.reason !== undefined && !LOCAL_REASONS.has(problem.reason);
+}
+
+// The destructive outline of a button that removes something (UI-SPEC).
+const DESTRUCTIVE_OUTLINE =
+  "border-destructive/40 text-status-offline-text hover:text-status-offline-text";
+
+interface StateProps {
+  envId: string;
+  name: string;
+}
+
+// PendingPage is an environment no agent has enrolled into yet. Someone who may
+// mint a token gets the install command (the dialog's rotate mode asks before it
+// rotates); anyone else is told whom to ask.
+function PendingPage({ envId, name }: StateProps) {
+  const t = useT();
+  const canToken = usePermission("environments.token", envId);
+  const [open, setOpen] = useState(false);
+  const heading = t("fullpage.pending.heading");
+  return (
+    <>
+      <PageTitle page={heading} />
+      <FullPageState
+        icon={Unplug}
+        heading={heading}
+        body={t(canToken ? "fullpage.pending.body" : "fullpage.pending.bodyNoToken", { name })}
+        action={
+          canToken ? (
+            <Button onClick={() => setOpen(true)}>{t("fullpage.pending.action")}</Button>
+          ) : undefined
+        }
+      />
+      {canToken ? (
+        <InstallDialog open={open} onOpenChange={setOpen} mode="rotate" envId={envId} />
+      ) : null}
+    </>
+  );
+}
+
+interface ProblemLinks {
+  envId: string;
+  // Whether this state offers the node list at all (a revoked environment does).
+  settings: boolean;
+  canManage: boolean;
+  canDelete: boolean;
+  t: ReturnType<typeof useT>;
+}
+
+// problemActions are the links of a revoked or re-initialised environment: the
+// node list in its settings and, for someone who may delete it, the Remove card
+// there. The Remove card is /settings/environments/$envId#remove (plan 29 builds
+// it; until then the link lands on the page). Undefined when the caller may do
+// neither, so the page has no empty row of actions.
+function problemActions({ envId, settings, canManage, canDelete, t }: ProblemLinks) {
+  const links: ReactNode[] = [];
+  if (settings && canManage) {
+    links.push(
+      <Button key="settings" asChild variant="secondary">
+        <Link to="/settings/environments/$envId" params={{ envId }}>
+          {t("fullpage.revoked.openSettings")}
+        </Link>
+      </Button>,
+    );
+  }
+  if (canDelete) {
+    links.push(
+      <Button key="remove" asChild variant="outline" className={DESTRUCTIVE_OUTLINE}>
+        <Link to="/settings/environments/$envId" params={{ envId }} hash="remove">
+          {t("fullpage.revoked.remove")}
+        </Link>
+      </Button>,
+    );
+  }
+  return links.length > 0 ? links : undefined;
+}
+
 // EnvironmentLayout wraps every page of one environment. It reads the summary
 // and turns the server's problem answers into full-page states: 503
-// environment_offline, 409 environment_unsupported, 404 environment_not_found
-// and 403. Anything else renders the page, which shows its own inline error.
+// environment_offline (pending, reconnecting, offline, revoked or
+// cluster_changed, told apart by the problem's state), 409
+// environment_unsupported, 404 environment_not_found and 403. Anything else
+// renders the page, which shows its own inline error. While one is showing, the
+// environments cache the health stream keeps current is watched, and the summary
+// is read again when it disagrees, so the page comes back by itself.
 function EnvironmentLayout() {
   const { envId } = Route.useParams();
   const t = useT();
@@ -81,9 +199,10 @@ function EnvironmentLayout() {
   useRecordRecent(envId);
   const [attempted, setAttempted] = useState<{ envId: string; at: number } | undefined>();
 
-  const name =
-    environments.data?.items?.find((e) => e.id === envId)?.name ??
-    t("dashboard.environmentFallback");
+  const item = environments.data?.items?.find((e) => e.id === envId);
+  const name = item?.name ?? t("dashboard.environmentFallback");
+  const canManage = usePermission("environments.manage", envId);
+  const canDelete = usePermission("environments.delete", envId);
 
   const retry = useMutation({
     mutationFn: async () => {
@@ -105,6 +224,28 @@ function EnvironmentLayout() {
   const failure = problem?.failure;
   const engine = problem?.engine;
   const podman = engine?.name?.toLowerCase().includes("podman") || problem?.reason === "podman";
+
+  // The state the layout is showing a full page for, if any.
+  const shown: ProblemState | undefined =
+    failure === "offline" || failure === "unsupported"
+      ? (problem?.state ?? (failure === "unsupported" ? "unsupported" : "offline"))
+      : undefined;
+  // What the health stream says, through the environments cache.
+  const live = item?.status.state;
+  const settled = summary.isSuccess || summary.isError;
+  const { refetch } = summary;
+  // The page follows the stream (D-33): when the stream's state is not the one
+  // this page was built for, read the summary again. That is how a page goes
+  // back to the dashboard once the agent returns, from Reconnecting to Offline
+  // when the grace ends, and from the dashboard to a full page when the
+  // environment drops. It runs once per change, so a server that still
+  // disagrees afterwards cannot make it loop.
+  useEffect(() => {
+    if (!settled || !live || live === "unknown") return;
+    if (failure === "forbidden" || failure === "not_found") return;
+    const stale = shown ? live !== shown : isProblemState(live);
+    if (stale) void refetch();
+  }, [live, shown, settled, failure, refetch]);
 
   // A failing environment never breaks the shell or other routes (D-26): only
   // this environment's own pages are replaced by a full-page state.
@@ -133,6 +274,52 @@ function EnvironmentLayout() {
       </>
     );
   }
+  if (shown === "pending") return <PendingPage envId={envId} name={name} />;
+  if (shown === "reconnecting") {
+    const heading = t("fullpage.reconnecting.heading", { name });
+    return (
+      <>
+        <PageTitle page={heading} />
+        <FullPageState
+          icon={RefreshCw}
+          tone="warning"
+          pulse
+          heading={heading}
+          body={t("fullpage.reconnecting.body")}
+        />
+      </>
+    );
+  }
+  if (shown === "revoked") {
+    const heading = t("fullpage.revoked.heading");
+    return (
+      <>
+        <PageTitle page={heading} />
+        <FullPageState
+          icon={ShieldOff}
+          tone="offline"
+          heading={heading}
+          body={t("fullpage.revoked.body", { name })}
+          action={problemActions({ envId, settings: true, canManage, canDelete, t })}
+        />
+      </>
+    );
+  }
+  if (shown === "cluster_changed") {
+    const heading = t("fullpage.clusterChanged.heading");
+    return (
+      <>
+        <PageTitle page={heading} />
+        <FullPageState
+          icon={Network}
+          tone="warning"
+          heading={heading}
+          body={t("fullpage.clusterChanged.body", { name })}
+          action={problemActions({ envId, settings: false, canManage, canDelete, t })}
+        />
+      </>
+    );
+  }
   if (failure === "offline" || failure === "unsupported") {
     const lastTry = attempted?.envId === envId ? attempted.at : undefined;
     const action = (
@@ -143,6 +330,31 @@ function EnvironmentLayout() {
     );
     const footnote = lastTry === undefined ? undefined : <Attempted at={lastTry} />;
 
+    if (failure === "offline" && problem && isAgentEnvironment(item, problem)) {
+      const heading = t("fullpage.offline.heading", { name });
+      const time = formatClock(problem.since);
+      // An agent's refusal is worded by ReasonText; with no code the agent
+      // simply isn't connected. The type picks which check command fits.
+      const code = isKnownReason(problem.reason) ? problem.reason : "agent_offline";
+      return (
+        <>
+          <PageTitle page={heading} />
+          <FullPageState
+            icon={ServerOff}
+            tone="offline"
+            heading={heading}
+            body={
+              time
+                ? t("fullpage.offline.body", { name, time })
+                : t("fullpage.offline.bodyNoTime", { name })
+            }
+            detail={<ReasonText code={code} params={{ envType: item?.envType }} />}
+            action={action}
+            footnote={footnote}
+          />
+        </>
+      );
+    }
     if (failure === "offline") {
       const heading = t("dashboard.fullPage.offline.heading");
       const time = formatClock(problem?.since);
@@ -194,8 +406,7 @@ function EnvironmentLayout() {
       </>
     );
   }
-  // Only an environment that is not offline, unsupported, missing or forbidden
-  // gets here. The events subscription opens once the summary has answered,
+  // Only an environment with none of those problems gets here. The events subscription opens once the summary has answered,
   // so none is opened for an environment that cannot, and it sits around the
   // whole outlet so the dashboard's feed and every list view share it (D-57).
   return (

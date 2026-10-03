@@ -112,20 +112,23 @@ function pick(
 
 function commandsFor(t: Translate, code: string, params: ReasonParams): ReasonCommand[] {
   if (code === "agent_offline") {
-    return [
-      {
-        id: "agentOfflineStandalone",
-        caption: t("reason.commands.agentOfflineStandalone.caption"),
-        label: t("reason.commands.agentOfflineStandalone.label"),
-        command: STANDALONE_CHECK,
-      },
-      {
-        id: "agentOfflineSwarm",
-        caption: t("reason.commands.agentOfflineSwarm.caption"),
-        label: t("reason.commands.agentOfflineSwarm.label"),
-        command: SWARM_CHECK,
-      },
-    ];
+    const standalone = {
+      id: "agentOfflineStandalone",
+      caption: t("reason.commands.agentOfflineStandalone.caption"),
+      label: t("reason.commands.agentOfflineStandalone.label"),
+      command: STANDALONE_CHECK,
+    };
+    const swarm = {
+      id: "agentOfflineSwarm",
+      caption: t("reason.commands.agentOfflineSwarm.caption"),
+      label: t("reason.commands.agentOfflineSwarm.label"),
+      command: SWARM_CHECK,
+    };
+    // Once the environment's type is known only the command that fits it is
+    // shown; with no agent enrolled yet it could be either, so both are.
+    if (params.envType === "swarm") return [swarm];
+    if (params.envType === "standalone") return [standalone];
+    return [standalone, swarm];
   }
   if (code === "version_incompatible" && params.command) {
     return [
@@ -140,6 +143,13 @@ function commandsFor(t: Translate, code: string, params: ReasonParams): ReasonCo
   return [];
 }
 
+// isKnownReason is true for a code this build has wording for. A caller that
+// would rather fall back to the wording for a state than show "Connection
+// problem ({code})" asks first.
+export function isKnownReason(code: string | undefined): code is string {
+  return code !== undefined && Object.hasOwn(resources.en.reason.reason.codes, code);
+}
+
 // useReasonText returns a function that words a connection reason code (D-40):
 // the text, the fix hint and the commands the hint points at. The SPA owns the
 // strings, keyed by code, so the server only ever sends a stable code. A code
@@ -147,7 +157,7 @@ function commandsFor(t: Translate, code: string, params: ReasonParams): ReasonCo
 export function useReasonText(): (code: string, params?: ReasonParams) => ReasonDescription {
   const t = useT();
   return (code, params = {}) => {
-    if (!Object.hasOwn(resources.en.reason.reason.codes, code)) {
+    if (!isKnownReason(code)) {
       const hint = t("reason.unknown.hint");
       return {
         text: t("reason.unknown.text", { code }),
