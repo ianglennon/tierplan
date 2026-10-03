@@ -453,8 +453,12 @@ func (s *Server) Close() error {
 // DataDir reports the prepared data directory, for the admin banner (plan 14).
 func (s *Server) DataDir() datadir.Info { return s.dataDir }
 
-// Handler is the root HTTP handler.
-func (s *Server) Handler() http.Handler { return s.router.Handler() }
+// Handler is the root HTTP handler: the router behind StripBasePath, so a
+// request under the public URL's path reaches the same routes whether or not a
+// proxy stripped the prefix. It runs before chi and every middleware (D-50).
+func (s *Server) Handler() http.Handler {
+	return httpx.StripBasePath(s.inst.BasePath)(s.router.Handler())
+}
 
 // Run serves until ctx is cancelled, then shuts down gracefully within 10s.
 func (s *Server) Run(ctx context.Context) error {

@@ -75,13 +75,17 @@ func TestStripBasePathDoesNotMutateTheCallersRequest(t *testing.T) {
 
 func TestStripBasePathReadsTheBaseOnEveryRequest(t *testing.T) {
 	base := "/one"
-	h := httpx.StripBasePath(func() string { return base })(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(r.URL.Path))
+	if got := serveThrough(t, base, "/two/x"); got.path != "/two/x" {
+		t.Fatalf("with base /one, /two/x = %q", got.path)
+	}
+	// One handler, a base that changes between requests.
+	var seenPath string
+	h := httpx.StripBasePath(func() string { return base })(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
 	}))
 	do := func() string {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/two/x", nil))
-		return rec.Body.String()
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/two/x", nil))
+		return seenPath
 	}
 	if got := do(); got != "/two/x" {
 		t.Fatalf("with base /one, /two/x = %q", got)

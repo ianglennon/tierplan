@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	neturl "net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -91,8 +92,18 @@ func (i *Instance) Secure() bool {
 	return strings.HasPrefix(i.PublicOrigin(), "https://")
 }
 
-// BasePath is a stub until the GREEN step.
-func (i *Instance) BasePath() string { return "" }
+// BasePath is the escaped path of the public URL, for example "/bayplan" for
+// https://example.com/bayplan, and "" when there is no public URL or it has no
+// path. It is the single source of the base every link, asset URL and cookie
+// scope derives from (D-50, D-51), and is read per request so a change takes
+// effect at once. PublicURL is already free of a trailing slash.
+func (i *Instance) BasePath() string {
+	u, err := neturl.Parse(i.PublicURL())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(u.EscapedPath(), "/")
+}
 
 // Locked reports whether BAYPLAN_PUBLIC_URL fixes the public URL.
 func (i *Instance) Locked() bool { return i.locked }
