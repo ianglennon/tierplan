@@ -167,7 +167,7 @@ func TestDropFailsWhenStillRootAfterSetuid(t *testing.T) {
 // The agent logs nothing from here, but a future change must not start
 // writing the socket path's neighbours or the token into a log (T-02-18).
 func TestDropLogsNothingSecret(t *testing.T) {
-	const secret = "bpjt_SECRETVALUE_zzz"
+	const secret = "bpjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
 	var logs bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))

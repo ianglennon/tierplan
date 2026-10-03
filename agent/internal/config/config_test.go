@@ -35,7 +35,7 @@ func TestLoadTrimsTheTokenFileNewline(t *testing.T) {
 			"BAYPLAN_AGENT_URL":             goodURL,
 			"BAYPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/bayplan-agent-token",
 		}),
-		files(map[string]string{"/run/secrets/bayplan-agent-token": "bpjt_x_y\n"}),
+		files(map[string]string{"/run/secrets/bayplan-agent-token": "bpjt_x_y\n"}), //nolint:gosec // a test fixture, not a credential
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestLoadTrimsTheTokenFileNewline(t *testing.T) {
 
 func TestLoadPrefersTheTokenFileOverTheEnvironmentVariable(t *testing.T) {
 	cfg, err := Load(
-		env(map[string]string{
+		env(map[string]string{ //nolint:gosec // a test fixture, not a credential
 			"BAYPLAN_AGENT_URL":             goodURL,
 			"BAYPLAN_AGENT_JOIN_TOKEN":      "from-env",
 			"BAYPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t",
@@ -64,7 +64,7 @@ func TestLoadPrefersTheTokenFileOverTheEnvironmentVariable(t *testing.T) {
 
 func TestLoadUsesTheEnvironmentTokenWhenThereIsNoFile(t *testing.T) {
 	cfg, err := Load(
-		env(map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "bpjt_a_b"}),
+		env(map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "bpjt_a_b"}), //nolint:gosec // a test fixture, not a credential
 		files(nil),
 	)
 	if err != nil {
@@ -123,7 +123,7 @@ func TestLoadRefusesAnEmptyOrUnreadableTokenFile(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(
-				env(map[string]string{
+				env(map[string]string{ //nolint:gosec // a test fixture, not a credential
 					"BAYPLAN_AGENT_URL":             goodURL,
 					"BAYPLAN_AGENT_JOIN_TOKEN":      "from-env",
 					"BAYPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t",
@@ -226,7 +226,7 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 
 // The secret must not leak through an error or a log line (T-02-18).
 func TestLoadNeverPutsTheTokenInAnErrorOrALogLine(t *testing.T) {
-	const secret = "bpjt_SECRETVALUE_zzz"
+	const secret = "bpjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
 	var logs bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
