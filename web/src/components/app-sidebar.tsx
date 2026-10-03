@@ -78,7 +78,7 @@ export function AppSidebar() {
   // Settings is for admins: the settings pages and the environment registry
   // are what it leads to (D-53). The server checks each of them again.
   const canReadSettings = usePermission("settings.read");
-  const canManageEnvironments = usePermission("environments.write");
+  const canManageEnvironments = usePermission("environments.manage");
   const canSettings = canReadSettings || canManageEnvironments;
   // Audit is global and admin only in this phase (D-43).
   const canAudit = usePermission("audit.read");

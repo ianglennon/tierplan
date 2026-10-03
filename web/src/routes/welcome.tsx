@@ -48,9 +48,9 @@ export const Route = createFileRoute("/welcome")({
       throw err;
     }
 
-    // Adding a host needs environments.write; for anyone else this step has
+    // Adding a host needs environments.create; for anyone else this step has
     // nothing to offer, and the server refuses /api/local-host to them.
-    if (!hasPermission(me, "environments.write")) throw redirect({ to: "/" });
+    if (!hasPermission(me, "environments.create")) throw redirect({ to: "/" });
 
     // Already managed (the admin came back to this address later): the choice
     // was made. A failed lookup is not a reason to block the page; the panel

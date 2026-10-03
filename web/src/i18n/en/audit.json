@@ -80,7 +80,26 @@
       "environment": {
         "added": "Added environment",
         "renamed": "Renamed environment",
-        "removed": "Removed environment"
+        "removed": "Removed environment",
+        "token_rotated": "Join token rotated",
+        "token_disabled": "Join token disabled",
+        "failover": "Manager failover",
+        "cluster_adopted": "Adopted a new cluster",
+        "local_folded": "Folded the local host",
+        "auto_update_changed": "Changed agent auto-update"
+      },
+      "agent": {
+        "enrolled": "Agent enrolled",
+        "enrol_refused": "Agent enrolment refused",
+        "cert_renewed": "Agent certificate renewed",
+        "revoked": "Agent revoked",
+        "blocked": "Node blocked",
+        "unblocked": "Node unblocked",
+        "auto_revoked": "Agent revoked (left the swarm)",
+        "updated": "Agent updated",
+        "update_failed": "Agent update failed",
+        "uninstalled": "Agent uninstalled",
+        "policy_denied": "Agent refused a request"
       },
       "warning": {
         "acknowledged": "Acknowledged warning"

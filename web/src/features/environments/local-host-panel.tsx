@@ -24,7 +24,7 @@ type Probe = components["schemas"]["ProbeResult"];
 const BUTTON = "w-full h-11 md:h-8";
 
 // The ["local-host"] query: what is behind the Docker socket and whether it is
-// already an environment. It needs environments.write, so only a caller that
+// already an environment. It needs environments.create, so only a caller that
 // has it may enable it.
 export const localHostQuery = queryOptions({
   queryKey: ["local-host"],

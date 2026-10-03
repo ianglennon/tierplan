@@ -28,7 +28,7 @@ import { useT } from "@/i18n/use-t";
 function Home() {
   const t = useT();
   useDocumentTitle(t("shell.home.tabTitle"));
-  const canAdd = usePermission("environments.write");
+  const canAdd = usePermission("environments.create");
   const environments = useQuery(environmentsQuery);
 
   if (environments.isError) {
