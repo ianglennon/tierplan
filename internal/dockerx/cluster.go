@@ -25,9 +25,27 @@ func IsQuorumLoss(err error) bool {
 	return err != nil && strings.Contains(err.Error(), quorumLossMarker)
 }
 
-// agentServiceName is the name of the swarm service the install command creates.
-// Its tasks are the agents, one per node.
+// agentServiceName is the name the install command gives the swarm service.
+// Its tasks are the agents, one per node. A service installed from the stack file
+// is named <stack>_bayplan-agent and the stack name is the user's, so the name
+// alone cannot find it; agentServiceLabel does.
 const agentServiceName = "bayplan-agent"
+
+// agentServiceLabel and agentServiceLabelValue are the label both installs put on
+// the service (--label of the command, deploy.labels of the stack file). It is
+// how Bayplan recognises its agent service. A service the install command created
+// before the label existed is still found by agentServiceName.
+const (
+	agentServiceLabel      = "bayplan.agent"
+	agentServiceLabelValue = "true"
+)
+
+// isAgentService reports whether s is a Bayplan agent service: it carries the
+// label, or it has the exact name the install command gives it. The image is
+// never looked at; anyone can run it under any name.
+func isAgentService(s swarm.Service) bool {
+	return s.Spec.Name == agentServiceName || s.Spec.Labels[agentServiceLabel] == agentServiceLabelValue
+}
 
 // NodeRow is one swarm node as the cluster view shows it.
 type NodeRow struct {
@@ -50,7 +68,7 @@ type ServiceRow struct {
 	UpdatedAt   time.Time
 }
 
-// AgentTaskRow is the state of the bayplan-agent service's current task on one node.
+// AgentTaskRow is the state of the agent service's current task on one node.
 type AgentTaskRow struct{ NodeID, State, Error string }
 
 // ClusterRead is what one manager says about the cluster.
@@ -61,7 +79,7 @@ type ClusterRead struct {
 }
 
 // Cluster reads the nodes, the services with their task counts and the tasks of
-// the bayplan-agent service from a swarm manager. It is read-only and has no
+// the agent service (found by its label, see isAgentService) from a swarm manager. It is read-only and has no
 // variant that changes anything. A worker, and a manager that has lost quorum,
 // answer with errors whose text carries the daemon's own message, which
 // envs.ReasonFor maps to not_a_manager and no_quorum.
@@ -99,7 +117,11 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		return ClusterRead{}, fmt.Errorf("list swarm services on %s: %w", c.t.Describe(), err)
 	}
 	out.Services = make([]ServiceRow, 0, len(ss.Items))
+	var agentServices []string
 	for _, s := range ss.Items {
+		if isAgentService(s) {
+			agentServices = append(agentServices, s.ID)
+		}
 		row := ServiceRow{ID: s.ID, Name: s.Spec.Name, Mode: serviceMode(s.Spec.Mode), UpdatedAt: s.UpdatedAt.UTC()}
 		if s.ServiceStatus != nil {
 			row.Running, row.Desired = s.ServiceStatus.RunningTasks, s.ServiceStatus.DesiredTasks
@@ -113,9 +135,14 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
 	})
 
-	ts, err := cli.TaskList(ctx, client.TaskListOptions{Filters: make(client.Filters).Add("service", agentServiceName)})
+	if len(agentServices) == 0 {
+		return out, nil // no agent service, so no agent tasks to ask for
+	}
+	// The services are named by ID: a service filter that names none would list
+	// every task, and an ID cannot be mistaken for another service's name.
+	ts, err := cli.TaskList(ctx, client.TaskListOptions{Filters: make(client.Filters).Add("service", agentServices...)})
 	if err != nil {
-		return ClusterRead{}, fmt.Errorf("list the %s tasks on %s: %w", agentServiceName, c.t.Describe(), err)
+		return ClusterRead{}, fmt.Errorf("list the agent service's tasks on %s: %w", c.t.Describe(), err)
 	}
 	out.AgentTasks = currentAgentTasks(ts.Items)
 	return out, nil
