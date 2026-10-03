@@ -43,6 +43,9 @@ var SystemPrincipals = map[string][]Perm{
 	"system:janitor": {},
 	"system:gitsync": {},
 	"system:webhook": {},
+	// system:agent-enrol records an agent that enrolled with a join token. It
+	// holds no permission: it only appears as the actor of audit entries.
+	"system:agent-enrol": {},
 }
 
 // System returns the named system principal, or nil for a name that is not in

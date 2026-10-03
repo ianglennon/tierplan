@@ -73,6 +73,7 @@ const (
 	ActionEnvironmentAdded    = "environment.added"
 	ActionEnvironmentRenamed  = "environment.renamed"
 	ActionEnvironmentRemoved  = "environment.removed"
+	ActionAgentEnrolled       = "agent.enrolled"
 	ActionWarningAcknowledged = "warning.acknowledged"
 	ActionAuditPruned         = "audit.pruned"
 	ActionPermissionDenied    = "permission.denied"

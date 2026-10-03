@@ -394,3 +394,85 @@ func TestEnvironmentLocalHostReportsManagedAndTheOwnContainerID(t *testing.T) {
 		t.Error("after removing: managed = true, want false")
 	}
 }
+
+// Agent environments (plan 02-01): kind agent creates an environment with its CA
+// and a join token, and the answer carries the install details once.
+
+type installBody struct {
+	envBody
+	Install *struct {
+		JoinToken string `json:"joinToken"`
+		AgentURL  string `json:"agentUrl"`
+	} `json:"install"`
+}
+
+func TestEnvironmentAddAgentAnswers201WithTheJoinTokenAndTheAgentURL(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.inst.Apply("Bayplan", "https://example.com/bayplan")
+	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"agent","name":"Production"}`)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	var got installBody
+	if err := json.Unmarshal(rec.body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != "agent" || got.Name != "Production" || got.IsSelfHost || !got.Enabled || got.Status.State != "unknown" {
+		t.Errorf("environment = %+v", got.envBody)
+	}
+	if got.Install == nil || !strings.HasPrefix(got.Install.JoinToken, "bpjt_"+got.ID+"_") {
+		t.Fatalf("install = %+v", got.Install)
+	}
+	if got.Install.AgentURL != "wss://example.com/bayplan/agent/connect" {
+		t.Errorf("agent URL = %q", got.Install.AgentURL)
+	}
+	if entries := f.audits(t, audit.ActionEnvironmentAdded); len(entries) != 1 || entries[0].TargetID != got.ID || entries[0].ActorID != "id-admin" {
+		t.Errorf("environment.added = %+v", entries)
+	}
+
+	// The token is never in a later answer, and the audit entry does not hold it.
+	list := f.req(t, http.MethodGet, "/api/environments", "")
+	if strings.Contains(string(list.body), got.Install.JoinToken) || strings.Contains(string(list.body), "joinToken") {
+		t.Errorf("the list shows the join token: %s", list.body)
+	}
+	var raw struct{ Items []installBody }
+	if err := json.Unmarshal(list.body, &raw); err != nil || len(raw.Items) != 1 || raw.Items[0].Kind != "agent" || raw.Items[0].Install != nil {
+		t.Errorf("list = %s (%v)", list.body, err)
+	}
+	var details string
+	if err := f.st.Read.QueryRow(`SELECT details FROM audit_log WHERE action = 'environment.added'`).Scan(&details); err != nil ||
+		strings.Contains(details, got.Install.JoinToken) {
+		t.Errorf("audit details = %q, %v", details, err)
+	}
+}
+
+func TestEnvironmentAddAgentWithoutAPublicURLIs409(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"agent"}`)
+	if rec.code != http.StatusConflict || rec.ptyp != "public_url_missing" {
+		t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if got := f.req(t, http.MethodGet, "/api/environments", ""); strings.Contains(string(got.body), `"id"`) {
+		t.Errorf("a refused add stored an environment: %s", got.body)
+	}
+}
+
+func TestEnvironmentAddAgentRejectsAnInvalidName(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.inst.Apply("Bayplan", "https://example.com")
+	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"agent","name":"`+strings.Repeat("x", 65)+`"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "invalid_name" {
+		t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+}
+
+func TestEnvironmentAddAgentNeedsTheWritePermission(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.inst.Apply("Bayplan", "https://example.com")
+	f.addUser(t, "viewer", false)
+	cookie, csrf := f.signIn(t, "viewer", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"agent"}`, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+}

@@ -320,7 +320,7 @@ func TestBuildSeedsTheAdminRoleAndEveryRouteIsGuarded(t *testing.T) {
 		t.Errorf("the assembled router has an unguarded route: %v", err)
 	}
 	// The openapi subcommand builds the same routes with no dependencies.
-	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.AuditDeps{}, api.SettingsDeps{})); err != nil {
+	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.AuditDeps{}, api.SettingsDeps{}, nil)); err != nil {
 		t.Errorf("the dependency-free router has an unguarded route: %v", err)
 	}
 }

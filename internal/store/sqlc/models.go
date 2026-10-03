@@ -8,6 +8,26 @@ import (
 	"database/sql"
 )
 
+type Agent struct {
+	ID              string
+	EnvID           string
+	Name            string
+	Role            string
+	EngineID        string
+	SwarmNodeID     sql.NullString
+	PublicKey       []byte
+	CertSerial      string
+	CertFingerprint string
+	CertNotAfter    int64
+	AgentVersion    string
+	Status          string
+	CreatedAt       int64
+	LastSeenAt      sql.NullInt64
+	RevokedAt       sql.NullInt64
+	RevokedBy       sql.NullString
+	RevokeReason    sql.NullString
+}
+
 type AppMetum struct {
 	Key       string
 	Value     string
@@ -35,14 +55,37 @@ type AuditLog struct {
 	Hmac       []byte
 }
 
+type EnvCa struct {
+	EnvID     string
+	CertPem   string
+	KeySealed string
+	CreatedAt int64
+}
+
+type EnvJoinToken struct {
+	ID           string
+	EnvID        string
+	TokenHash    []byte
+	Generation   int64
+	CreatedAt    int64
+	CreatedBy    string
+	SupersededAt sql.NullInt64
+	DisabledAt   sql.NullInt64
+}
+
 type Environment struct {
-	ID         string
-	Kind       string
-	Name       string
-	SocketPath string
-	Enabled    int64
-	CreatedAt  int64
-	UpdatedAt  int64
+	ID               string
+	Kind             string
+	Name             string
+	SocketPath       string
+	Enabled          int64
+	CreatedAt        int64
+	UpdatedAt        int64
+	EnvType          sql.NullString
+	SwarmClusterID   sql.NullString
+	EngineID         sql.NullString
+	ClusterChangedAt sql.NullInt64
+	AutoUpdate       int64
 }
 
 type Role struct {

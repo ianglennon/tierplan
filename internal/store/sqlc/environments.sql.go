@@ -33,7 +33,7 @@ func (q *Queries) DeleteEnvironment(ctx context.Context, id string) (int64, erro
 }
 
 const getEnvironment = `-- name: GetEnvironment :one
-SELECT id, kind, name, socket_path, enabled, created_at, updated_at FROM environments WHERE id = ?
+SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update FROM environments WHERE id = ?
 `
 
 func (q *Queries) GetEnvironment(ctx context.Context, id string) (Environment, error) {
@@ -47,6 +47,11 @@ func (q *Queries) GetEnvironment(ctx context.Context, id string) (Environment, e
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EnvType,
+		&i.SwarmClusterID,
+		&i.EngineID,
+		&i.ClusterChangedAt,
+		&i.AutoUpdate,
 	)
 	return i, err
 }
@@ -81,7 +86,7 @@ const listEnvironments = `-- name: ListEnvironments :many
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The Bayplan Authors */
 
-SELECT id, kind, name, socket_path, enabled, created_at, updated_at FROM environments ORDER BY created_at, id
+SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update FROM environments ORDER BY created_at, id
 `
 
 func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
@@ -101,6 +106,11 @@ func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
 			&i.Enabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.EnvType,
+			&i.SwarmClusterID,
+			&i.EngineID,
+			&i.ClusterChangedAt,
+			&i.AutoUpdate,
 		); err != nil {
 			return nil, err
 		}

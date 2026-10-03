@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
@@ -29,6 +30,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/vault"
 	"github.com/ianglennon/bayplan/internal/webui"
 	"github.com/ianglennon/bayplan/web"
@@ -81,7 +83,11 @@ type Server struct {
 	snapshots *envs.Snapshots
 	// hub holds one Docker events stream per online environment and fans it
 	// out to the browsers watching (plan 21).
-	hub    *envs.Hub
+	hub *envs.Hub
+	// tunnel holds the live agent connections; agents creates agent
+	// environments and enrols agents.
+	tunnel *tunnel.Hub
+	agents *agents.Service
 	router *httpx.Router
 	// tlsConfig is nil when the server speaks plain HTTP (D-12).
 	tlsConfig *tls.Config
@@ -95,8 +101,18 @@ type Server struct {
 // NewRouter wires every operation. It takes plain dependencies so the
 // `openapi` subcommand can build the same handlers without a database or a
 // socket.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, auditDeps api.AuditDeps, settings api.SettingsDeps) *httpx.Router {
+//
+// agentConnect serves the agent WebSocket at /agent/connect. It is the one route
+// outside the policy besides the probes and the setup page, because the handshake
+// inside it is its own authentication. Nil mounts a handler that answers 404,
+// which is what the `openapi` subcommand and the router-walk tests pass: the route
+// exists in every router, so its exemption is always checked.
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, auditDeps api.AuditDeps, settings api.SettingsDeps, agentConnect http.Handler) *httpx.Router {
 	r := httpx.New(opts)
+	if agentConnect == nil {
+		agentConnect = http.NotFoundHandler()
+	}
+	r.AgentConnect(agentConnect)
 	api.RegisterSystem(r, sys)
 	api.RegisterSetup(r, setup)
 	api.RegisterAuth(r, authDeps)
@@ -272,6 +288,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// and needs no wiring in the environment service.
 	hub := envs.NewHub(monitor, snapshots, log, time.Now)
 
+	// Agents dial in over /agent/connect. Enrolment checks the join token and
+	// issues a certificate from the environment's own CA (D-01, D-07); the hub
+	// holds the live sessions and tells the environment registry about each, so
+	// a connected agent becomes a monitor target (RESEARCH Pattern 5).
+	agentSvc := agents.NewService(st, vlt, aud, nil)
+	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).WithPublicURL(inst.PublicURL)
+
 	spa := webui.Handler(web.FS())
 	router := NewRouter(httpx.Options{
 		Fallback:       spa,
@@ -324,13 +347,14 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
 		Log:     log,
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		api.EnvironmentsDeps{Envs: envSvc, Checker: checker, Log: log},
+		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, PublicURL: inst.PublicURL, Checker: checker, Log: log},
 		api.DashboardDeps{Snapshots: snapshots, SelfContainerID: selfID, Log: log},
 		api.EventsDeps{Hub: hub, Log: log},
 		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
-		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Log: log})
+		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Log: log}, tunnelHub.Handler())
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
+		tunnelHub.Close()
 		hub.Close()
 		monitor.StopAll()
 		_ = st.Close()
@@ -350,6 +374,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		monitor:   monitor,
 		snapshots: snapshots,
 		hub:       hub,
+		tunnel:    tunnelHub,
+		agents:    agentSvc,
 		router:    router,
 		tlsConfig: tlsCfg,
 	}
@@ -368,6 +394,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	if err := envSvc.StartAll(bg); err != nil {
 		stop()
 		srv.background.Wait()
+		tunnelHub.Close()
 		hub.Close()
 		monitor.StopAll()
 		_ = st.Close()
@@ -405,12 +432,19 @@ func (s *Server) Snapshots() *envs.Snapshots { return s.snapshots }
 // Hub is the per-environment Docker events hub.
 func (s *Server) Hub() *envs.Hub { return s.hub }
 
+// Tunnel holds the live agent connections.
+func (s *Server) Tunnel() *tunnel.Hub { return s.tunnel }
+
+// Agents creates agent environments and enrols agents.
+func (s *Server) Agents() *agents.Service { return s.agents }
+
 // Close stops background work, including the events streams and the
 // environment monitors, and releases the database. Run calls it on exit; it is
 // safe to call again.
 func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
+	s.tunnel.Close()
 	s.hub.Close()
 	s.monitor.StopAll()
 	return s.store.Close()
@@ -438,6 +472,10 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	// itself. Closing the hub ends every stream, so a restart is not held up for
 	// the whole shutdown timeout by a browser that has the feed open.
 	srv.RegisterOnShutdown(s.hub.Close)
+	// http.Server.Shutdown ignores hijacked connections, and every agent
+	// tunnel is one. Closing the hub sends each a close frame so the agents
+	// reconnect with backoff instead of waiting on a dead session (Pitfall 5).
+	srv.RegisterOnShutdown(s.tunnel.Close)
 	errc := make(chan error, 1)
 	// With a TLS config the certificate is already in it, so the file names are empty.
 	scheme := "http"

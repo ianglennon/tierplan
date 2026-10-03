@@ -13,6 +13,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -26,11 +27,19 @@ const (
 	problemUnsupportedEngine      = "unsupported_engine"
 	problemInvalidName            = "invalid_name"
 	problemEnvironmentNotFound    = "environment_not_found"
+	problemPublicURLMissing       = "public_url_missing"
+	problemAgentsUnavailable      = "agents_unavailable"
 )
 
 // EnvironmentsDeps are the dependencies of the environment routes.
 type EnvironmentsDeps struct {
 	Envs *envs.Service
+	// Agents creates agent environments and their join tokens. Nil means the
+	// server cannot add one.
+	Agents *agents.Service
+	// PublicURL returns Bayplan's public URL, from which the address agents dial
+	// is built. Nil or empty means no agent environment can be added.
+	PublicURL func() string
 	// Checker filters the list to the environments the caller may read.
 	Checker *rbac.Checker
 	// Log receives server-side failures. Nil means slog.Default().
@@ -57,13 +66,34 @@ type EnvironmentEngineBody struct {
 type EnvironmentBody struct {
 	ID         string                `json:"id" doc:"The environment ID, used in /api/env/{envId}/..."`
 	Name       string                `json:"name" doc:"The display name; defaults to the daemon's hostname"`
-	Kind       string                `json:"kind" enum:"local" doc:"local: the Docker socket on the host Bayplan runs on"`
+	Kind       string                `json:"kind" enum:"local,agent" doc:"local: the Docker socket on the host Bayplan runs on. agent: one or more hosts that dial in through an agent"`
 	Type       string                `json:"type,omitempty" enum:"swarm-manager,swarm-worker,standalone" doc:"What the engine is; absent until it has answered"`
 	IsSelfHost bool                  `json:"isSelfHost" doc:"True for the Docker host Bayplan itself runs on"`
 	Enabled    bool                  `json:"enabled"`
 	CreatedAt  string                `json:"createdAt" format:"date-time"`
 	Status     EnvironmentStatusBody `json:"status"`
 	Engine     EnvironmentEngineBody `json:"engine"`
+}
+
+// EnvironmentInstallBody is what an admin needs to connect a host to a new agent
+// environment. It is in the answer to adding one and nowhere else: the join token
+// is stored only as a hash and cannot be shown again.
+type EnvironmentInstallBody struct {
+	JoinToken string `json:"joinToken" doc:"The join token the agent presents once to enrol. Shown only in this answer"`
+	AgentURL  string `json:"agentUrl" doc:"The address the agent dials, for example wss://bayplan.example.com/agent/connect"`
+}
+
+// AddEnvironmentBody is the answer to adding an environment: the environment, and
+// for an agent environment the install details.
+type AddEnvironmentBody struct {
+	EnvironmentBody
+	Install *EnvironmentInstallBody `json:"install,omitempty" doc:"Present for an agent environment only: the join token and the address the agent dials"`
+}
+
+// AddEnvironmentOutput wraps AddEnvironmentBody for huma.
+type AddEnvironmentOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         AddEnvironmentBody
 }
 
 // EnvironmentListBody lists the environments the caller may see.
@@ -88,9 +118,9 @@ type AddEnvironmentInput struct {
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      struct {
-		Kind             string `json:"kind" enum:"local" doc:"local is the only kind in this release: the Docker socket on this server's own host"`
-		Name             string `json:"name,omitempty" maxLength:"1024" doc:"1 to 64 characters; defaults to the hostname the daemon reports"`
-		AllowUnsupported bool   `json:"allowUnsupported,omitempty" doc:"Add the host even though its engine is not supported; it is stored and shown as unsupported"`
+		Kind             string `json:"kind" enum:"local,agent" doc:"local: the Docker socket on this server's own host. agent: a new environment whose hosts run the Bayplan agent and dial in; the answer carries the join token"`
+		Name             string `json:"name,omitempty" maxLength:"1024" doc:"1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent"`
+		AllowUnsupported bool   `json:"allowUnsupported,omitempty" doc:"Local only: add the host even though its engine is not supported; it is stored and shown as unsupported"`
 	}
 }
 
@@ -169,7 +199,7 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			return httpx.Problem(http.StatusConflict, problemEngineUnreachable, "A Docker socket exists but the engine did not answer. Check that Bayplan may open it.")
 		case errors.Is(err, envs.ErrUnsupportedEngine):
 			return httpx.Problem(http.StatusConflict, problemUnsupportedEngine, "Bayplan does not support the Docker engine on this host. Add it anyway to see it as unsupported.")
-		case errors.Is(err, envs.ErrInvalidName):
+		case errors.Is(err, envs.ErrInvalidName), errors.Is(err, agents.ErrInvalidName):
 			return httpx.Problem(http.StatusUnprocessableEntity, problemInvalidName, "The name must be 1 to 64 characters.")
 		case errors.Is(err, envs.ErrNotFound):
 			return httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
@@ -215,22 +245,28 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		OperationID:   "addEnvironment",
 		Method:        http.MethodPost,
 		Path:          "/api/environments",
-		Summary:       "Add the Docker host Bayplan runs on as an environment",
+		Summary:       "Add an environment",
 		DefaultStatus: http.StatusCreated,
-		Description: "The admin's explicit opt-in to managing this host (D-19): nothing is added at startup. Needs a Docker " +
-			"socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or " +
-			"local_environment_exists; 422 invalid_name. The name defaults to the hostname the daemon reports. Audited as environment.added.",
+		Description: "kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is " +
+			"added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine " +
+			"(unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the " +
+			"Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) " +
+			"and the address the agent dials; 409 public_url_missing when Bayplan has no public URL. 422 invalid_name. " +
+			"The name defaults to the hostname the daemon, or the first agent, reports. Audited as environment.added.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AddEnvironmentInput) (*EnvironmentOutput, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if in.Body.Kind == agents.KindAgent {
+			return addAgentEnvironment(ctx, d, fail, p, in)
 		}
 		e, err := d.Envs.AddLocal(ctx, p.AuditActor(), in.Body.Name, in.Body.AllowUnsupported, httpx.ClientIP(ctx), in.UserAgent)
 		if err != nil {
 			return nil, fail("add environment", err)
 		}
-		return one(e), nil
+		return &AddEnvironmentOutput{CacheControl: "no-store", Body: AddEnvironmentBody{EnvironmentBody: environmentBody(e)}}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -291,4 +327,33 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		}
 		return one(e), nil
 	})
+}
+
+// addAgentEnvironment creates an agent environment and answers with its join
+// token. The token is in this answer only: the server keeps its hash.
+func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(string, error) error, p *rbac.Principal, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
+	if d.Agents == nil {
+		return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot add agent environments.")
+	}
+	publicURL := ""
+	if d.PublicURL != nil {
+		publicURL = d.PublicURL()
+	}
+	agentURL, err := agents.AgentURL(publicURL)
+	if publicURL == "" || err != nil {
+		return nil, httpx.Problem(http.StatusConflict, problemPublicURLMissing,
+			"Bayplan has no public URL, so it cannot tell an agent where to connect. Set one in Settings, or with BAYPLAN_PUBLIC_URL.")
+	}
+	created, err := d.Agents.CreateEnvironment(ctx, p.AuditActor(), in.Body.Name, httpx.ClientIP(ctx), in.UserAgent)
+	if err != nil {
+		return nil, fail("add agent environment", err)
+	}
+	e, err := d.Envs.Get(ctx, created.EnvID)
+	if err != nil {
+		return nil, fail("read the new environment", err)
+	}
+	return &AddEnvironmentOutput{CacheControl: "no-store", Body: AddEnvironmentBody{
+		EnvironmentBody: environmentBody(e),
+		Install:         &EnvironmentInstallBody{JoinToken: created.JoinToken, AgentURL: agentURL},
+	}}, nil
 }

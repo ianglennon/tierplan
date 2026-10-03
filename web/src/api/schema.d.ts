@@ -258,8 +258,8 @@ export interface paths {
         get: operations["listEnvironments"];
         put?: never;
         /**
-         * Add the Docker host Bayplan runs on as an environment
-         * @description The admin's explicit opt-in to managing this host (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists; 422 invalid_name. The name defaults to the hostname the daemon reports. Audited as environment.added.
+         * Add an environment
+         * @description kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the address the agent dials; 409 public_url_missing when Bayplan has no public URL. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Audited as environment.added.
          */
         post: operations["addEnvironment"];
         delete?: never;
@@ -488,15 +488,40 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        AddEnvironmentInputBody: {
-            /** @description Add the host even though its engine is not supported; it is stored and shown as unsupported */
-            allowUnsupported?: boolean;
+        AddEnvironmentBody: {
+            /** Format: date-time */
+            createdAt: string;
+            enabled: boolean;
+            engine: components["schemas"]["EnvironmentEngineBody"];
+            /** @description The environment ID, used in /api/env/{envId}/... */
+            id: string;
+            /** @description Present for an agent environment only: the join token and the address the agent dials */
+            install?: components["schemas"]["EnvironmentInstallBody"];
+            /** @description True for the Docker host Bayplan itself runs on */
+            isSelfHost: boolean;
             /**
-             * @description local is the only kind in this release: the Docker socket on this server's own host
+             * @description local: the Docker socket on the host Bayplan runs on. agent: one or more hosts that dial in through an agent
              * @enum {string}
              */
-            kind: "local";
-            /** @description 1 to 64 characters; defaults to the hostname the daemon reports */
+            kind: "local" | "agent";
+            /** @description The display name; defaults to the daemon's hostname */
+            name: string;
+            status: components["schemas"]["EnvironmentStatusBody"];
+            /**
+             * @description What the engine is; absent until it has answered
+             * @enum {string}
+             */
+            type?: "swarm-manager" | "swarm-worker" | "standalone";
+        };
+        AddEnvironmentInputBody: {
+            /** @description Local only: add the host even though its engine is not supported; it is stored and shown as unsupported */
+            allowUnsupported?: boolean;
+            /**
+             * @description local: the Docker socket on this server's own host. agent: a new environment whose hosts run the Bayplan agent and dial in; the answer carries the join token
+             * @enum {string}
+             */
+            kind: "local" | "agent";
+            /** @description 1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent */
             name?: string;
         };
         AuditEntryDTO: {
@@ -620,10 +645,10 @@ export interface components {
             /** @description True for the Docker host Bayplan itself runs on */
             isSelfHost: boolean;
             /**
-             * @description local: the Docker socket on the host Bayplan runs on
+             * @description local: the Docker socket on the host Bayplan runs on. agent: one or more hosts that dial in through an agent
              * @enum {string}
              */
-            kind: "local";
+            kind: "local" | "agent";
             /** @description The display name; defaults to the daemon's hostname */
             name: string;
             status: components["schemas"]["EnvironmentStatusBody"];
@@ -642,6 +667,12 @@ export interface components {
             negotiatedApi?: string;
             /** @description The engine version */
             version?: string;
+        };
+        EnvironmentInstallBody: {
+            /** @description The address the agent dials, for example wss://bayplan.example.com/agent/connect */
+            agentUrl: string;
+            /** @description The join token the agent presents once to enrol. Shown only in this answer */
+            joinToken: string;
         };
         EnvironmentListBody: {
             items: components["schemas"]["EnvironmentBody"][] | null;
@@ -1596,7 +1627,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EnvironmentBody"];
+                    "application/json": components["schemas"]["AddEnvironmentBody"];
                 };
             };
             /** @description Error */

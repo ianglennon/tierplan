@@ -153,6 +153,17 @@ func (r *Router) Exempt(method, path string, h http.HandlerFunc) {
 	r.mux.MethodFunc(method, path, h)
 }
 
+// AgentConnectPath is the WebSocket endpoint agents dial (D-18). The path is
+// stored in every enrolled agent, so it never changes.
+const AgentConnectPath = "/agent/connect"
+
+// AgentConnect mounts the agent WebSocket endpoint. It is the only route besides
+// the probes and the setup page that is outside the policy seam: the handshake
+// inside it is the authentication, and an agent has no session or CSRF token.
+func (r *Router) AgentConnect(h http.Handler) {
+	r.Exempt(http.MethodGet, AgentConnectPath, h.ServeHTTP)
+}
+
 func (r *Router) record(rec RouteRecord) {
 	r.mu.Lock()
 	r.routes = append(r.routes, rec)
@@ -191,13 +202,15 @@ func (r *Router) methodNotAllowed(w http.ResponseWriter, req *http.Request) {
 func isAPIPath(p string) bool { return p == "/api" || strings.HasPrefix(p, "/api/") }
 
 // isReservedPath names the paths huma would serve by default (spec, docs,
-// schemas). They are never SPA routes: they answer 404 instead of falling
-// through to index.html, so a client probing for an API description gets an
-// honest answer (T-01-02).
+// schemas) and the agent endpoint's prefix. They are never SPA routes: they
+// answer 404 instead of falling through to index.html, so a client probing for
+// an API description gets an honest answer (T-01-02), and an agent that dials a
+// wrong path under /agent is not handed the SPA.
 func isReservedPath(p string) bool {
 	return p == "/openapi" || strings.HasPrefix(p, "/openapi.") ||
 		p == "/docs" || strings.HasPrefix(p, "/docs/") ||
-		p == "/schemas" || strings.HasPrefix(p, "/schemas/")
+		p == "/schemas" || strings.HasPrefix(p, "/schemas/") ||
+		p == "/agent" || strings.HasPrefix(p, "/agent/")
 }
 
 // writeProblem writes an RFC 9457 problem body, the same shape huma emits.

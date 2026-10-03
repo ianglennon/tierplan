@@ -185,6 +185,11 @@ func peerTrusted(ctx context.Context) bool {
 	return c.trustedPeer
 }
 
+// PeerTrusted reports whether the TCP peer of the request is one of
+// BAYPLAN_TRUSTED_PROXIES. The agent endpoint uses it to decide whether a
+// forwarded scheme and a TLS exporter value can be believed.
+func PeerTrusted(ctx context.Context) bool { return peerTrusted(ctx) }
+
 // Problem types the policy emits. The SPA maps them to copy.
 const (
 	problemOriginMismatch = "origin_mismatch"
@@ -536,7 +541,12 @@ func (r *Router) Guarded(method, path string, need rbac.Requirement, h http.Hand
 // operation: it serves the SPA while setup is needed and redirects to /login
 // once an admin exists (D-06). /login is an SPA route served by the fallback,
 // and /api/version is registered as Public.
-var exemptPaths = map[string]bool{"/healthz": true, "/readyz": true, "/setup": true, "/setup/*": true}
+//
+// /agent/connect is the fifth: the WebSocket an agent dials. It is exempt from
+// user authentication because the agent handshake is its own authentication
+// (join token or certificate, proof of possession, per-environment CA), and it
+// is not in the OpenAPI contract.
+var exemptPaths = map[string]bool{"/healthz": true, "/readyz": true, "/setup": true, "/setup/*": true, "/agent/connect": true}
 
 // Problem builds the RFC 9457 error a huma handler returns when it must answer
 // with a specific status and a stable machine-readable type the SPA maps to
@@ -562,7 +572,7 @@ func VerifyAllGuarded(r *Router) error {
 		case !ok:
 			problems = append(problems, "unguarded route "+key+" (register it with httpx.Register or Router.Guarded)")
 		case rec.Exempt && !exemptPaths[rec.Path]:
-			problems = append(problems, "route "+key+" is exempt from the policy but is not on the D-47 list (/healthz, /readyz, /setup)")
+			problems = append(problems, "route "+key+" is exempt from the policy but is not on the D-47 list (/healthz, /readyz, /setup, /agent/connect)")
 		}
 		return nil
 	})

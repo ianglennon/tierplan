@@ -1,22 +1,85 @@
 {
   "components": {
     "schemas": {
-      "AddEnvironmentInputBody": {
+      "AddEnvironmentBody": {
         "additionalProperties": false,
         "properties": {
-          "allowUnsupported": {
-            "description": "Add the host even though its engine is not supported; it is stored and shown as unsupported",
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/EnvironmentEngineBody"
+          },
+          "id": {
+            "description": "The environment ID, used in /api/env/{envId}/...",
+            "type": "string"
+          },
+          "install": {
+            "$ref": "#/components/schemas/EnvironmentInstallBody",
+            "description": "Present for an agent environment only: the join token and the address the agent dials"
+          },
+          "isSelfHost": {
+            "description": "True for the Docker host Bayplan itself runs on",
             "type": "boolean"
           },
           "kind": {
-            "description": "local is the only kind in this release: the Docker socket on this server's own host",
+            "description": "local: the Docker socket on the host Bayplan runs on. agent: one or more hosts that dial in through an agent",
             "enum": [
-              "local"
+              "local",
+              "agent"
             ],
             "type": "string"
           },
           "name": {
-            "description": "1 to 64 characters; defaults to the hostname the daemon reports",
+            "description": "The display name; defaults to the daemon's hostname",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EnvironmentStatusBody"
+          },
+          "type": {
+            "description": "What the engine is; absent until it has answered",
+            "enum": [
+              "swarm-manager",
+              "swarm-worker",
+              "standalone"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "isSelfHost",
+          "enabled",
+          "createdAt",
+          "status",
+          "engine"
+        ],
+        "type": "object"
+      },
+      "AddEnvironmentInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "allowUnsupported": {
+            "description": "Local only: add the host even though its engine is not supported; it is stored and shown as unsupported",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "local: the Docker socket on this server's own host. agent: a new environment whose hosts run the Bayplan agent and dial in; the answer carries the join token",
+            "enum": [
+              "local",
+              "agent"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent",
             "maxLength": 1024,
             "type": "string"
           }
@@ -365,9 +428,10 @@
             "type": "boolean"
           },
           "kind": {
-            "description": "local: the Docker socket on the host Bayplan runs on",
+            "description": "local: the Docker socket on the host Bayplan runs on. agent: one or more hosts that dial in through an agent",
             "enum": [
-              "local"
+              "local",
+              "agent"
             ],
             "type": "string"
           },
@@ -420,6 +484,24 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "EnvironmentInstallBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agentUrl": {
+            "description": "The address the agent dials, for example wss://bayplan.example.com/agent/connect",
+            "type": "string"
+          },
+          "joinToken": {
+            "description": "The join token the agent presents once to enrol. Shown only in this answer",
+            "type": "string"
+          }
+        },
+        "required": [
+          "joinToken",
+          "agentUrl"
+        ],
         "type": "object"
       },
       "EnvironmentListBody": {
@@ -2307,7 +2389,7 @@
         ]
       },
       "post": {
-        "description": "The admin's explicit opt-in to managing this host (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists; 422 invalid_name. The name defaults to the hostname the daemon reports. Audited as environment.added.",
+        "description": "kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the address the agent dials; 409 public_url_missing when Bayplan has no public URL. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Audited as environment.added.",
         "operationId": "addEnvironment",
         "requestBody": {
           "content": {
@@ -2324,7 +2406,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EnvironmentBody"
+                  "$ref": "#/components/schemas/AddEnvironmentBody"
                 }
               }
             },
@@ -2348,7 +2430,7 @@
             "description": "Error"
           }
         },
-        "summary": "Add the Docker host Bayplan runs on as an environment",
+        "summary": "Add an environment",
         "tags": [
           "environments"
         ]

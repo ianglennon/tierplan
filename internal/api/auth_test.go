@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
@@ -139,7 +140,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	})
 	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Log: log})
 	api.RegisterLocalHost(r, f.localHost)
-	api.RegisterEnvironments(r, api.EnvironmentsDeps{Envs: f.envSvc, Checker: checker, Log: log})
+	api.RegisterEnvironments(r, api.EnvironmentsDeps{
+		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), PublicURL: f.inst.PublicURL, Checker: checker, Log: log,
+	})
 	if f.envSvc != nil && f.snaps != nil {
 		api.RegisterDashboard(r, api.DashboardDeps{Snapshots: f.snaps, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 	}

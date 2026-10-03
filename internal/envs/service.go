@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
 // Errors of the registry. The API maps each to a stable problem type.
@@ -43,17 +44,26 @@ var (
 )
 
 const (
-	// KindLocal is the Docker socket on the server's own host. Phase 2 adds
-	// agent environments.
+	// KindLocal is the Docker socket on the server's own host.
 	KindLocal = "local"
+	// KindAgent is an environment reached through one or more agents that dial
+	// in (D-18). Its monitors are keyed by agent, not by environment.
+	KindAgent = "agent"
 
 	maxNameLen = 64
 	// fallbackName names an environment whose engine reported no hostname,
 	// which only an unsupported engine can do.
 	fallbackName = "Local Docker"
+	// pendingName is shown for an environment that has no name yet.
+	pendingName = "New environment"
 
 	targetEnvironment = "environment"
 )
+
+// AgentTarget is the monitor key of one agent. An agent environment has no
+// monitor of its own: each connected agent is a target, and the environment's
+// status is read from its targets (RESEARCH Pattern 5).
+func AgentTarget(agentID string) string { return "agent:" + agentID }
 
 // Environment is a managed environment with its live status.
 type Environment struct {
@@ -77,6 +87,9 @@ type Service struct {
 
 	mu     sync.Mutex
 	runCtx context.Context
+	// connected holds the live agent sessions by environment and agent ID, the
+	// map the status of an agent environment is read through.
+	connected map[string]map[string]*tunnel.Session
 }
 
 // NewService returns the registry. dockerHost is the raw DOCKER_HOST setting
@@ -89,6 +102,7 @@ func NewService(s *store.Store, w *audit.Writer, m *Monitor, dockerHost string, 
 	return &Service{
 		st: s, aud: w, mon: m, dockerHost: dockerHost, selfID: selfID, now: now,
 		log: m.log, runCtx: context.Background(),
+		connected: map[string]map[string]*tunnel.Session{},
 	}
 }
 
@@ -113,7 +127,9 @@ func (s *Service) StartAll(ctx context.Context) error {
 		return fmt.Errorf("list environments: %w", err)
 	}
 	for _, row := range rows {
-		if row.Enabled == 0 {
+		// An agent environment has no socket here: its agents connect after a
+		// start and become monitor targets then (Connected).
+		if row.Enabled == 0 || row.Kind != KindLocal {
 			continue
 		}
 		if err := s.mon.Start(ctx, row.ID, engine.LocalSocketTransport{Path: row.SocketPath}); err != nil {
@@ -149,13 +165,89 @@ func (s *Service) Get(ctx context.Context, id string) (Environment, error) {
 }
 
 func (s *Service) environment(row sqlc.Environment) Environment {
+	name := row.Name
+	if name == "" {
+		// An agent environment the admin did not name stays blank in the
+		// database until its first agent enrols and names it (D-23).
+		name = pendingName
+	}
 	return Environment{
-		ID: row.ID, Kind: row.Kind, Name: row.Name, SocketPath: row.SocketPath,
+		ID: row.ID, Kind: row.Kind, Name: name, SocketPath: row.SocketPath,
 		Enabled:   row.Enabled != 0,
 		CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
-		Status:    s.mon.Status(row.ID),
+		Status:    s.status(row),
 	}
 }
+
+// status is the monitor's view of a local environment, and for an agent
+// environment the view of its connected agent. With no agent connected it is
+// unknown; plan 11 replaces this with the D-33 rollup over every agent.
+func (s *Service) status(row sqlc.Environment) Status {
+	if row.Kind != KindAgent {
+		return s.mon.Status(row.ID)
+	}
+	if id := s.firstConnectedAgent(row.ID); id != "" {
+		return s.mon.Status(AgentTarget(id))
+	}
+	return Status{State: StateUnknown}
+}
+
+// firstConnectedAgent is the connected agent of envID with the lowest ID, or
+// empty when none is connected.
+func (s *Service) firstConnectedAgent(envID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	first := ""
+	for id := range s.connected[envID] {
+		if first == "" || id < first {
+			first = id
+		}
+	}
+	return first
+}
+
+// Connected implements tunnel.Observer: a session that is ready becomes a
+// monitor target, probed through its own tunnel exactly as the local socket is.
+func (s *Service) Connected(sess *tunnel.Session) {
+	s.mu.Lock()
+	byAgent := s.connected[sess.EnvID]
+	if byAgent == nil {
+		byAgent = map[string]*tunnel.Session{}
+		s.connected[sess.EnvID] = byAgent
+	}
+	byAgent[sess.AgentID] = sess
+	ctx := s.runCtx
+	s.mu.Unlock()
+
+	key := AgentTarget(sess.AgentID)
+	// A session that replaces an older one of the same agent must not keep the
+	// old transport: Start does nothing for a key that is already monitored.
+	s.mon.Stop(key)
+	if err := s.mon.Start(ctx, key, sess.Transport()); err != nil {
+		s.log.Error("monitor an agent", "agent", sess.AgentID, "environment", sess.EnvID, "error", err)
+	}
+}
+
+// Disconnected implements tunnel.Observer.
+func (s *Service) Disconnected(sess *tunnel.Session, code string) {
+	s.mu.Lock()
+	if byAgent := s.connected[sess.EnvID]; byAgent != nil && byAgent[sess.AgentID] == sess {
+		delete(byAgent, sess.AgentID)
+		if len(byAgent) == 0 {
+			delete(s.connected, sess.EnvID)
+		}
+	} else {
+		// A newer session of the same agent has already taken its place, and
+		// its monitor must keep running.
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	s.mon.Stop(AgentTarget(sess.AgentID))
+	s.log.Info("agent target stopped", "agent", sess.AgentID, "environment", sess.EnvID, "reason", code)
+}
+
+var _ tunnel.Observer = (*Service)(nil)
 
 // HasLocal reports whether the local host is already an environment, for the
 // "managed" flag of GET /api/local-host.
@@ -350,6 +442,14 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 		return fmt.Errorf("commit: %w", err)
 	}
 	s.mon.Stop(id)
+	// An agent environment is monitored through its agents' targets.
+	s.mu.Lock()
+	agents := s.connected[id]
+	delete(s.connected, id)
+	s.mu.Unlock()
+	for agentID := range agents {
+		s.mon.Stop(AgentTarget(agentID))
+	}
 	return nil
 }
 
