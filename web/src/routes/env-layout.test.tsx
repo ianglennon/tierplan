@@ -257,13 +257,13 @@ describe("environment switcher", () => {
     renderAt("/env/e1");
     const trigger = await screen.findByRole("button", { name: "Switch environment" });
     await waitFor(() => expect(within(trigger).getByText("Lab host")).toBeTruthy());
-    expect(within(trigger).getByText("Swarm manager")).toBeTruthy();
+    expect(within(trigger).getByText("Swarm")).toBeTruthy();
     expect(within(trigger).getByRole("img", { name: "Online" })).toBeTruthy();
 
     fireEvent.keyDown(trigger, { key: "Enter" });
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByText("Lab host")).toBeTruthy();
-    expect(within(menu).getByText("Swarm manager")).toBeTruthy();
+    expect(within(menu).getByText("Swarm")).toBeTruthy();
     expect(within(menu).getByText("Online")).toBeTruthy();
     expect(within(menu).getByRole("menuitem", { name: /Manage environments/ })).toBeTruthy();
   });
@@ -310,7 +310,7 @@ describe("environment switcher", () => {
     const trigger = await screen.findByRole("button", { name: "Switch environment" });
     const name = await within(trigger).findByText(long);
     expect(name.className).toContain("truncate");
-    expect(within(trigger).getByText("Swarm manager").className).toContain("shrink-0");
+    expect(within(trigger).getByText("Swarm").className).toContain("shrink-0");
     expect(within(trigger).getByRole("img", { name: "Online" }).className).toContain("shrink-0");
   });
 });

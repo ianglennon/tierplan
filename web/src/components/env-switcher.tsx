@@ -75,7 +75,11 @@ export function EnvSwitcher() {
                     </TooltipTrigger>
                     <TooltipContent side="right">{selected.name}</TooltipContent>
                   </Tooltip>
-                  <TypeBadge type={selected.type} />
+                  <TypeBadge
+                    envType={selected.envType}
+                    type={selected.type}
+                    isLocalSocket={selected.isLocalSocket}
+                  />
                   <StatusDot state={selected.status.state} />
                 </>
               ) : (
@@ -98,7 +102,11 @@ export function EnvSwitcher() {
                       <span className="min-w-0 flex-1 truncate" title={env.name}>
                         {env.name}
                       </span>
-                      <TypeBadge type={env.type} />
+                      <TypeBadge
+                        envType={env.envType}
+                        type={env.type}
+                        isLocalSocket={env.isLocalSocket}
+                      />
                     </span>
                     <StatusDot state={env.status.state} label={healthLabel(env.status)} />
                   </span>

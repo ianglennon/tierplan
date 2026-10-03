@@ -249,7 +249,11 @@ function EnvironmentRow({
           <span className="min-w-0 break-words" title={environment.name}>
             {environment.name}
           </span>
-          <TypeBadge type={environment.type} />
+          <TypeBadge
+            envType={environment.envType}
+            type={environment.type}
+            isLocalSocket={environment.isLocalSocket}
+          />
           {environment.isSelfHost ? (
             <Badge variant="outline" className="shrink-0">
               {t("dashboard.selfBadge")}

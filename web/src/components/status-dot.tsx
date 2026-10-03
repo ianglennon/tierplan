@@ -6,32 +6,33 @@ import { useT } from "@/i18n/use-t";
 import { formatClock } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-// The status colours are for health only (UI-SPEC Color): online, unsupported
-// and degraded as the warning amber, offline, revoked and a changed cluster as
-// the offline red, and a neutral grey for unknown, pending and reconnecting.
-// The agent states get their own wording and ordering with the overview.
+// The status colours are for health only (UI-SPEC Color, D-33): online is
+// green, the states that still work or are mending (degraded, reconnecting,
+// unsupported, cluster_changed) are the warning amber, offline and revoked are
+// the offline red, pending is a hollow neutral ring because it is expected and
+// not a fault, and unknown is a solid neutral grey.
 const DOT: Record<HealthState, string> = {
   online: "bg-status-online",
-  unsupported: "bg-status-warning",
   degraded: "bg-status-warning",
+  reconnecting: "bg-status-warning animate-pulse motion-reduce:animate-none",
+  unsupported: "bg-status-warning",
+  cluster_changed: "bg-status-warning",
   offline: "bg-status-offline",
   revoked: "bg-status-offline",
-  cluster_changed: "bg-status-offline",
+  pending: "border-2 border-status-unknown bg-transparent",
   unknown: "bg-status-unknown",
-  pending: "bg-status-unknown",
-  reconnecting: "bg-status-unknown",
 };
 
 const TEXT: Record<HealthState, string> = {
   online: "text-status-online-text",
-  unsupported: "text-status-warning-text",
   degraded: "text-status-warning-text",
+  reconnecting: "text-status-warning-text",
+  unsupported: "text-status-warning-text",
+  cluster_changed: "text-status-warning-text",
   offline: "text-status-offline-text",
   revoked: "text-status-offline-text",
-  cluster_changed: "text-status-offline-text",
-  unknown: "text-muted-foreground",
   pending: "text-muted-foreground",
-  reconnecting: "text-muted-foreground",
+  unknown: "text-muted-foreground",
 };
 
 interface StatusDotProps {
@@ -66,9 +67,9 @@ export function StatusDot({ state, label, className }: StatusDotProps) {
   );
 }
 
-// useHealthLabel turns an environment's status into the health text:
-// "Online", "Offline since 14:05" (just "Offline" when the engine never
-// answered or the time is unknown), "Unsupported" or "Unknown".
+// useHealthLabel turns an environment's status into the health text for any of
+// the nine states: "Online", "Offline since 14:05" (just "Offline" when the
+// time is unknown), "Pending", "Reconnecting…" and so on.
 export function useHealthLabel(): (status: EnvironmentStatus | undefined) => string {
   const t = useT();
   return (status) => {

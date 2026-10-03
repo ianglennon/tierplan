@@ -285,6 +285,11 @@ describe("dashboard", () => {
   });
 });
 
+// The signed-in layout opens the app's one health stream as well, so the
+// environment's own events stream is found by its address.
+const feedStream = () =>
+  FakeEventSource.instances.find((s) => s.url === "/api/env/e1/events/stream");
+
 describe("events feed (ENV-07, D-57)", () => {
   beforeEach(() => {
     FakeEventSource.reset();
@@ -296,8 +301,8 @@ describe("events feed (ENV-07, D-57)", () => {
     await screen.findByRole("heading", { name: "Lab host" });
     expect(await screen.findByText("Recent events")).toBeTruthy();
     expect(screen.getByText("Docker engine")).toBeTruthy();
-    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-    expect(FakeEventSource.instances[0]?.url).toBe("/api/env/e1/events/stream");
+    await waitFor(() => expect(feedStream()).toBeTruthy());
+    expect(FakeEventSource.instances.map((s) => s.url)).toContain("/api/environments/stream");
     expect(within(tile("Containers")).getByText("7")).toBeTruthy();
 
     summary = () =>
@@ -306,8 +311,8 @@ describe("events feed (ENV-07, D-57)", () => {
         counts: { ...SUMMARY.counts, containers: 8, containersRunning: 6 },
       });
     const before = sent.filter((p) => p === "/api/env/e1/summary").length;
-    FakeEventSource.instances[0]?.open();
-    FakeEventSource.instances[0]?.send({
+    feedStream()?.open();
+    feedStream()?.send({
       id: "ev1",
       time: "2026-10-02T10:00:00Z",
       type: "container",
@@ -331,6 +336,6 @@ describe("events feed (ENV-07, D-57)", () => {
       );
     renderAt("/env/e1");
     await screen.findByText("Docker isn't reachable");
-    expect(FakeEventSource.instances).toHaveLength(0);
+    expect(feedStream()).toBeUndefined();
   });
 });

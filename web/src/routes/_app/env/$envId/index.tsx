@@ -54,7 +54,11 @@ function Dashboard() {
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h1 className="min-w-0 text-2xl font-semibold break-words">{name}</h1>
-        <TypeBadge type={data?.environment.type ?? listed?.type} />
+        <TypeBadge
+          envType={listed?.envType}
+          type={data?.environment.type ?? listed?.type}
+          isLocalSocket={listed?.isLocalSocket}
+        />
         {status ? <StatusDot state={status.state} label={healthLabel(status)} /> : null}
         {isSelf ? <Badge variant="outline">{t("dashboard.selfBadge")}</Badge> : null}
       </header>

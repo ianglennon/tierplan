@@ -6,19 +6,34 @@ import { Badge } from "@/components/ui/badge";
 import { useT } from "@/i18n/use-t";
 
 interface TypeBadgeProps {
-  type?: EnvironmentItem["type"];
+  // What the environment is, from the agents or the local engine.
   envType?: EnvironmentItem["envType"];
+  // The engine's own role. Only used to tell swarm from standalone when
+  // envType is not there (the dashboard summary carries this and nothing else).
+  type?: EnvironmentItem["type"];
   isLocalSocket?: boolean;
 }
 
-// TypeBadge is the neutral outline badge naming what an environment is. It
-// never truncates, and it is left out until the engine has answered.
-export function TypeBadge({ type }: TypeBadgeProps) {
+// TypeBadge names what an environment is (UI-SPEC TypeBadge, D-32): "Swarm" or
+// "Standalone", plus a second outline badge "Local socket" for the host Bayplan
+// runs on. The engine roles (manager, worker) belong to the node list, not
+// here. Neither badge ever truncates, and nothing shows until the type is known.
+export function TypeBadge({ envType, type, isLocalSocket }: TypeBadgeProps) {
   const t = useT();
-  if (!type) return null;
+  const kind = envType ?? (type ? (type === "standalone" ? "standalone" : "swarm") : undefined);
+  if (!kind && !isLocalSocket) return null;
   return (
-    <Badge variant="outline" className="shrink-0">
-      {t(`env.type.${type}`)}
-    </Badge>
+    <>
+      {kind ? (
+        <Badge variant="outline" className="shrink-0">
+          {t(`env.type.${kind}`)}
+        </Badge>
+      ) : null}
+      {isLocalSocket ? (
+        <Badge variant="outline" className="shrink-0">
+          {t("env.type.localSocket")}
+        </Badge>
+      ) : null}
+    </>
   );
 }

@@ -13,6 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UserMenu } from "@/components/user-menu";
 import { VersionFooter } from "@/components/version-footer";
 import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
+import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { meQueryOptions, UnauthenticatedError, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { getSidebarOpen, setSidebarOpen } from "@/lib/sidebar-state";
@@ -86,16 +87,20 @@ function AppLayout() {
       >
         {t("shell.skipLink")}
       </a>
-      <SidebarProvider
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          setSidebarOpen(next);
-        }}
-      >
-        <AppSidebar />
-        <ShellBody />
-      </SidebarProvider>
+      {/* One health stream for the whole signed-in app (D-36): the overview,
+          the switcher and the bell all read what it keeps current. */}
+      <EnvHealthStreamProvider>
+        <SidebarProvider
+          open={open}
+          onOpenChange={(next) => {
+            setOpen(next);
+            setSidebarOpen(next);
+          }}
+        >
+          <AppSidebar />
+          <ShellBody />
+        </SidebarProvider>
+      </EnvHealthStreamProvider>
     </TooltipProvider>
   );
 }

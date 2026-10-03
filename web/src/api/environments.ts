@@ -28,6 +28,31 @@ export const environmentsQuery = queryOptions({
   },
 });
 
+// The ["recent-environments"] query: the environments this user opened last,
+// newest first, at most 3, from the server so it follows them across devices
+// (D-31). Ones that were removed or are no longer readable are already left out.
+export const recentQuery = queryOptions({
+  queryKey: ["recent-environments"],
+  queryFn: async (): Promise<string[]> => {
+    const { data } = await api.GET("/api/me/recent-environments");
+    if (!data) throw new Error("GET /api/me/recent-environments failed");
+    return data.environmentIds ?? [];
+  },
+});
+
+// recordRecent tells the server this environment was just opened. A failure
+// is of no use to the person who opened it, so it never throws.
+export async function recordRecent(envId: string): Promise<boolean> {
+  try {
+    const { response } = await api.PUT("/api/me/recent-environments/{envId}", {
+      params: { path: { envId } },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export type EnvironmentEngineFacts = components["schemas"]["EnvironmentProblemEngine"];
 
 // What the environment pages turn a failed environment read into.
