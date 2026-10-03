@@ -12,11 +12,39 @@ UPDATE environments SET name = ?, updated_at = ? WHERE id = ? AND name = '';
 INSERT INTO env_join_tokens (id, env_id, token_hash, generation, created_at, created_by)
 VALUES (?, ?, ?, ?, ?, ?);
 
--- name: CurrentJoinToken :one
+-- name: ListJoinTokens :many
 SELECT * FROM env_join_tokens
-WHERE env_id = ? AND superseded_at IS NULL
-ORDER BY generation DESC
+WHERE env_id = ?
+ORDER BY generation DESC;
+
+-- name: AgentEnvironmentExists :one
+SELECT COUNT(*) FROM environments WHERE id = ? AND kind = 'agent';
+
+-- name: NextGeneration :one
+SELECT CAST(COALESCE(MAX(generation), 0) + 1 AS INTEGER) AS next_generation
+FROM env_join_tokens
+WHERE env_id = ?;
+
+-- name: SupersedeCurrentToken :execrows
+UPDATE env_join_tokens SET superseded_at = ?
+WHERE env_id = ? AND superseded_at IS NULL;
+
+-- name: DisableCurrentToken :execrows
+UPDATE env_join_tokens SET disabled_at = ?
+WHERE env_id = ? AND superseded_at IS NULL AND disabled_at IS NULL;
+
+-- name: TokenStatus :one
+SELECT t.generation, t.created_at, t.disabled_at, COALESCE(u.username, t.created_by) AS created_by
+FROM env_join_tokens t
+LEFT JOIN users u ON u.id = t.created_by
+WHERE t.env_id = ? AND t.superseded_at IS NULL
+ORDER BY t.generation DESC
 LIMIT 1;
+
+-- name: ActiveAgentRoles :many
+SELECT role, COUNT(*) AS agents FROM agents
+WHERE env_id = ? AND status = 'active'
+GROUP BY role;
 
 -- name: InsertCA :exec
 INSERT INTO env_cas (env_id, cert_pem, key_sealed, created_at)

@@ -10,27 +10,67 @@ import (
 	"database/sql"
 )
 
-const currentJoinToken = `-- name: CurrentJoinToken :one
-SELECT id, env_id, token_hash, generation, created_at, created_by, superseded_at, disabled_at FROM env_join_tokens
-WHERE env_id = ? AND superseded_at IS NULL
-ORDER BY generation DESC
-LIMIT 1
+const activeAgentRoles = `-- name: ActiveAgentRoles :many
+SELECT role, COUNT(*) AS agents FROM agents
+WHERE env_id = ? AND status = 'active'
+GROUP BY role
 `
 
-func (q *Queries) CurrentJoinToken(ctx context.Context, envID string) (EnvJoinToken, error) {
-	row := q.db.QueryRowContext(ctx, currentJoinToken, envID)
-	var i EnvJoinToken
-	err := row.Scan(
-		&i.ID,
-		&i.EnvID,
-		&i.TokenHash,
-		&i.Generation,
-		&i.CreatedAt,
-		&i.CreatedBy,
-		&i.SupersededAt,
-		&i.DisabledAt,
-	)
-	return i, err
+type ActiveAgentRolesRow struct {
+	Role   string
+	Agents int64
+}
+
+func (q *Queries) ActiveAgentRoles(ctx context.Context, envID string) ([]ActiveAgentRolesRow, error) {
+	rows, err := q.db.QueryContext(ctx, activeAgentRoles, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ActiveAgentRolesRow
+	for rows.Next() {
+		var i ActiveAgentRolesRow
+		if err := rows.Scan(&i.Role, &i.Agents); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const agentEnvironmentExists = `-- name: AgentEnvironmentExists :one
+SELECT COUNT(*) FROM environments WHERE id = ? AND kind = 'agent'
+`
+
+func (q *Queries) AgentEnvironmentExists(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, agentEnvironmentExists, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const disableCurrentToken = `-- name: DisableCurrentToken :execrows
+UPDATE env_join_tokens SET disabled_at = ?
+WHERE env_id = ? AND superseded_at IS NULL AND disabled_at IS NULL
+`
+
+type DisableCurrentTokenParams struct {
+	DisabledAt sql.NullInt64
+	EnvID      string
+}
+
+func (q *Queries) DisableCurrentToken(ctx context.Context, arg DisableCurrentTokenParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, disableCurrentToken, arg.DisabledAt, arg.EnvID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getAgent = `-- name: GetAgent :one
@@ -235,6 +275,44 @@ func (q *Queries) ListAgentsByEnv(ctx context.Context, envID string) ([]Agent, e
 	return items, nil
 }
 
+const listJoinTokens = `-- name: ListJoinTokens :many
+SELECT id, env_id, token_hash, generation, created_at, created_by, superseded_at, disabled_at FROM env_join_tokens
+WHERE env_id = ?
+ORDER BY generation DESC
+`
+
+func (q *Queries) ListJoinTokens(ctx context.Context, envID string) ([]EnvJoinToken, error) {
+	rows, err := q.db.QueryContext(ctx, listJoinTokens, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EnvJoinToken
+	for rows.Next() {
+		var i EnvJoinToken
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnvID,
+			&i.TokenHash,
+			&i.Generation,
+			&i.CreatedAt,
+			&i.CreatedBy,
+			&i.SupersededAt,
+			&i.DisabledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const nameEnvironmentIfBlank = `-- name: NameEnvironmentIfBlank :execrows
 UPDATE environments SET name = ?, updated_at = ? WHERE id = ? AND name = ''
 `
@@ -251,6 +329,65 @@ func (q *Queries) NameEnvironmentIfBlank(ctx context.Context, arg NameEnvironmen
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const nextGeneration = `-- name: NextGeneration :one
+SELECT CAST(COALESCE(MAX(generation), 0) + 1 AS INTEGER) AS next_generation
+FROM env_join_tokens
+WHERE env_id = ?
+`
+
+func (q *Queries) NextGeneration(ctx context.Context, envID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextGeneration, envID)
+	var next_generation int64
+	err := row.Scan(&next_generation)
+	return next_generation, err
+}
+
+const supersedeCurrentToken = `-- name: SupersedeCurrentToken :execrows
+UPDATE env_join_tokens SET superseded_at = ?
+WHERE env_id = ? AND superseded_at IS NULL
+`
+
+type SupersedeCurrentTokenParams struct {
+	SupersededAt sql.NullInt64
+	EnvID        string
+}
+
+func (q *Queries) SupersedeCurrentToken(ctx context.Context, arg SupersedeCurrentTokenParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, supersedeCurrentToken, arg.SupersededAt, arg.EnvID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const tokenStatus = `-- name: TokenStatus :one
+SELECT t.generation, t.created_at, t.disabled_at, COALESCE(u.username, t.created_by) AS created_by
+FROM env_join_tokens t
+LEFT JOIN users u ON u.id = t.created_by
+WHERE t.env_id = ? AND t.superseded_at IS NULL
+ORDER BY t.generation DESC
+LIMIT 1
+`
+
+type TokenStatusRow struct {
+	Generation int64
+	CreatedAt  int64
+	DisabledAt sql.NullInt64
+	CreatedBy  string
+}
+
+func (q *Queries) TokenStatus(ctx context.Context, envID string) (TokenStatusRow, error) {
+	row := q.db.QueryRowContext(ctx, tokenStatus, envID)
+	var i TokenStatusRow
+	err := row.Scan(
+		&i.Generation,
+		&i.CreatedAt,
+		&i.DisabledAt,
+		&i.CreatedBy,
+	)
+	return i, err
 }
 
 const touchAgentLastSeen = `-- name: TouchAgentLastSeen :exec

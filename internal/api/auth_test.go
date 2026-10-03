@@ -147,6 +147,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,
 		TLSPin: func() string { return f.tlsPin }, Checker: checker, Log: log,
 	})
+	api.RegisterAgents(r, api.AgentsDeps{
+		Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst, TLSPin: func() string { return f.tlsPin }, Log: log,
+	})
 	if f.envSvc != nil && f.snaps != nil {
 		api.RegisterDashboard(r, api.DashboardDeps{Snapshots: f.snaps, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 	}

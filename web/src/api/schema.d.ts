@@ -292,6 +292,34 @@ export interface paths {
         patch: operations["renameEnvironment"];
         trace?: never;
     };
+    "/api/environments/{envId}/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Show which join token an environment has
+         * @description The generation, when and by whom it was made, and whether it is disabled. Never the token: it is stored only as a hash. 404 environment_not_found. Needs environments.token.
+         */
+        get: operations["getEnvironmentToken"];
+        put?: never;
+        /**
+         * Rotate an environment's join token
+         * @description Makes a new join token and retires the current one in the same transaction. The old install command stops enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents it carries the one-line rotate command. 404 environment_not_found; 409 public_url_required when Bayplan has no address to give agents. Needs environments.token. Audited as environment.token_rotated with the new generation.
+         */
+        post: operations["rotateEnvironmentToken"];
+        /**
+         * Disable an environment's join token
+         * @description The current join token enrols nobody from now on. Agents that are already enrolled keep working. Rotating the token makes a new one and enables enrolment again. Disabling a disabled token changes nothing. 404 environment_not_found. Needs environments.token. Audited as environment.token_disabled.
+         */
+        delete: operations["disableEnvironmentToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instance": {
         parameters: {
             query?: never;
@@ -995,6 +1023,17 @@ export interface components {
             /** @description The new name, 1 to 64 characters */
             name: string;
         };
+        RotateTokenBody: {
+            /**
+             * @description What the environment's active agents run on. Absent while it has none
+             * @enum {string}
+             */
+            envType?: "swarm" | "standalone";
+            /** @description Whether the environment has an active agent. A swarm that has agents is moved to the new token with install.swarm.rotateCommand, which is present only then; otherwise a first install needs the new token's command */
+            hasAgents: boolean;
+            /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
+            install: components["schemas"]["InstallBody"];
+        };
         SettingsBody: {
             /** @description The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set */
             agentEndpoint: string;
@@ -1093,6 +1132,22 @@ export interface components {
              * @enum {string}
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
+        };
+        TokenStatusBody: {
+            /**
+             * Format: date-time
+             * @description When the token was made
+             */
+            createdAt: string;
+            /** @description The username of the admin who made it, or the principal as recorded when that is not an account */
+            createdBy: string;
+            /** @description True while the token enrols nobody, until the next rotation */
+            disabled: boolean;
+            /**
+             * Format: int64
+             * @description Which token this is for the environment, from 1
+             */
+            generation: number;
         };
         UpdateSettingsInputBody: {
             /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while BAYPLAN_AGENT_URL is set */
@@ -1786,6 +1841,102 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getEnvironmentToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rotateEnvironmentToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateTokenBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableEnvironmentToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

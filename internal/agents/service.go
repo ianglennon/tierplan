@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,10 @@ import (
 
 // ErrInvalidName means an environment name is longer than 64 characters.
 var ErrInvalidName = errors.New("agents: the name must be at most 64 characters")
+
+// ErrEnvironmentNotFound means there is no agent environment with that ID. The
+// local host has no join token, so it is not found here either.
+var ErrEnvironmentNotFound = errors.New("agents: no such agent environment")
 
 const (
 	// KindAgent is the kind of an environment reached through agents.
@@ -81,6 +86,40 @@ type Created struct {
 	Generation int
 	CreatedAt  time.Time
 }
+
+// Rotation is a new join token for an environment. JoinToken is shown once: only
+// its hash is stored.
+type Rotation struct {
+	JoinToken string
+	// Generation is the new token's number: one more than the one it replaced. It is
+	// in the name of the swarm secret.
+	Generation int
+	// EnvType is "swarm" when an active agent runs on a swarm node, "standalone"
+	// when one runs on a plain host, and "" while the environment has no active
+	// agent, so there is nothing to rotate on.
+	EnvType string
+	// HasAgents is whether the environment has an active agent.
+	HasAgents bool
+}
+
+// TokenStatus is what an admin may see of the current join token. The token itself
+// cannot be recovered and is not here.
+type TokenStatus struct {
+	Generation int
+	CreatedAt  time.Time
+	// CreatedBy is the username of the admin who made the token, or the principal as
+	// it was recorded when that is not an account (the CLI, a deleted user).
+	CreatedBy string
+	// Disabled is true while the token enrols nobody, until the next rotation.
+	Disabled bool
+}
+
+// Environment types reported by Rotation.
+const (
+	// EnvTypeSwarm and EnvTypeStandalone are the values of Rotation.EnvType.
+	EnvTypeSwarm      = "swarm"
+	EnvTypeStandalone = "standalone"
+)
 
 // Service creates agent environments and enrols agents.
 type Service struct {
@@ -172,6 +211,154 @@ func (s *Service) CreateEnvironment(ctx context.Context, actor audit.Actor, name
 	return Created{EnvID: envID, Name: name, JoinToken: token, Generation: 1, CreatedAt: now}, nil
 }
 
+// RotateToken makes a new join token for an environment and retires the current
+// one in the same transaction, so there is never a moment with two (D-02). Agents
+// that are already enrolled keep their certificates and reconnect as before; only
+// an enrolment with the old token stops working. It audits
+// environment.token_rotated with the new generation, never the token.
+func (s *Service) RotateToken(ctx context.Context, actor audit.Actor, envID, ip, ua string) (Rotation, error) {
+	tokenUUID, err := uuid.NewV7()
+	if err != nil {
+		return Rotation{}, fmt.Errorf("generate token id: %w", err)
+	}
+	now := s.now().UTC()
+
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Rotation{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	if err := requireAgentEnvironment(ctx, q, envID); err != nil {
+		return Rotation{}, err
+	}
+	// The store has one writer, so no other rotation runs between this read and the
+	// insert below.
+	next, err := q.NextGeneration(ctx, envID)
+	if err != nil {
+		return Rotation{}, fmt.Errorf("next generation: %w", err)
+	}
+	token, secret, err := newToken(envID)
+	if err != nil {
+		return Rotation{}, err
+	}
+	hash := sha256.Sum256([]byte(secret))
+	ts := now.UnixNano()
+	if _, err := q.SupersedeCurrentToken(ctx, sqlc.SupersedeCurrentTokenParams{SupersededAt: sql.NullInt64{Int64: ts, Valid: true}, EnvID: envID}); err != nil {
+		return Rotation{}, fmt.Errorf("supersede the join token: %w", err)
+	}
+	if err := q.InsertJoinToken(ctx, sqlc.InsertJoinTokenParams{
+		ID: tokenUUID.String(), EnvID: envID, TokenHash: hash[:], Generation: next, CreatedAt: ts, CreatedBy: actor.ID,
+	}); err != nil {
+		return Rotation{}, fmt.Errorf("insert the join token: %w", err)
+	}
+	roles, err := q.ActiveAgentRoles(ctx, envID)
+	if err != nil {
+		return Rotation{}, fmt.Errorf("count the agents: %w", err)
+	}
+	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: audit.ActionEnvironmentTokenRotated, TargetType: targetEnvironment, TargetID: envID,
+		EnvID: envID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
+		Details: map[string]string{"generation": strconv.FormatInt(next, 10)},
+	}); err != nil {
+		return Rotation{}, fmt.Errorf("audit token rotated: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Rotation{}, fmt.Errorf("commit: %w", err)
+	}
+	envType, has := envTypeOf(roles)
+	return Rotation{JoinToken: token, Generation: int(next), EnvType: envType, HasAgents: has}, nil
+}
+
+// DisableToken stops the current join token enrolling anyone, until the next
+// rotation makes a new one. Agents already enrolled are not affected. Disabling a
+// token that is already disabled changes nothing and is not audited again.
+func (s *Service) DisableToken(ctx context.Context, actor audit.Actor, envID, ip, ua string) error {
+	now := s.now().UTC()
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	if err := requireAgentEnvironment(ctx, q, envID); err != nil {
+		return err
+	}
+	cur, err := q.TokenStatus(ctx, envID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("load the join token: %w", err)
+	}
+	rows, err := q.DisableCurrentToken(ctx, sqlc.DisableCurrentTokenParams{DisabledAt: sql.NullInt64{Int64: now.UnixNano(), Valid: true}, EnvID: envID})
+	if err != nil {
+		return fmt.Errorf("disable the join token: %w", err)
+	}
+	if rows == 0 {
+		return nil
+	}
+	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: audit.ActionEnvironmentTokenDisabled, TargetType: targetEnvironment, TargetID: envID,
+		EnvID: envID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
+		Details: map[string]string{"generation": strconv.FormatInt(cur.Generation, 10)},
+	}); err != nil {
+		return fmt.Errorf("audit token disabled: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// TokenStatus reports which join token is current and whether it is disabled.
+func (s *Service) TokenStatus(ctx context.Context, envID string) (TokenStatus, error) {
+	if err := requireAgentEnvironment(ctx, s.st.RQ, envID); err != nil {
+		return TokenStatus{}, err
+	}
+	row, err := s.st.RQ.TokenStatus(ctx, envID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return TokenStatus{}, ErrEnvironmentNotFound
+	case err != nil:
+		return TokenStatus{}, fmt.Errorf("load the join token: %w", err)
+	}
+	return TokenStatus{
+		Generation: int(row.Generation), CreatedAt: time.Unix(0, row.CreatedAt).UTC(), CreatedBy: row.CreatedBy, Disabled: row.DisabledAt.Valid,
+	}, nil
+}
+
+// requireAgentEnvironment reports ErrEnvironmentNotFound unless envID is an agent
+// environment.
+func requireAgentEnvironment(ctx context.Context, q *sqlc.Queries, envID string) error {
+	n, err := q.AgentEnvironmentExists(ctx, envID)
+	if err != nil {
+		return fmt.Errorf("look up the environment: %w", err)
+	}
+	if n == 0 {
+		return ErrEnvironmentNotFound
+	}
+	return nil
+}
+
+// envTypeOf says what kind of host the active agents run on. A swarm node makes
+// it a swarm; with no active agent there is no type.
+func envTypeOf(roles []sqlc.ActiveAgentRolesRow) (envType string, hasAgents bool) {
+	for _, r := range roles {
+		if r.Agents == 0 {
+			continue
+		}
+		hasAgents = true
+		if r.Role == "manager" || r.Role == "worker" {
+			return EnvTypeSwarm, true
+		}
+	}
+	if hasAgents {
+		return EnvTypeStandalone, true
+	}
+	return "", false
+}
+
 // Enrol turns a join token and a proof of key possession into a certificate. It
 // implements tunnel.Verifier. Every way of being refused for the token looks the
 // same to the agent (auth_rejected), so a probe learns neither which
@@ -188,24 +375,30 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 		return tunnel.EnrolResult{}, reject("malformed_token")
 	}
 
-	// The hash is computed and compared whether or not the environment exists,
-	// so the time taken does not say.
-	row, err := s.st.RQ.CurrentJoinToken(ctx, envID)
-	stored := make([]byte, sha256.Size)
-	found := true
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		found = false
-	case err != nil:
-		return tunnel.EnrolResult{}, fmt.Errorf("load the join token: %w", err)
-	default:
-		stored = row.TokenHash
+	// The hash is computed and compared against every token the environment has
+	// ever had, whether or not the environment exists, so the time taken does not
+	// say which one matched. Only the audit learns whether a token that matched was
+	// replaced or disabled; the agent is told the same thing for all of them.
+	tokens, err := s.st.RQ.ListJoinTokens(ctx, envID)
+	if err != nil {
+		return tunnel.EnrolResult{}, fmt.Errorf("load the join tokens: %w", err)
 	}
 	got := sha256.Sum256([]byte(secret))
-	if subtle.ConstantTimeCompare(got[:], stored) != 1 || !found {
-		return tunnel.EnrolResult{}, reject("token_mismatch")
+	var matched *sqlc.EnvJoinToken
+	for i := range tokens {
+		if subtle.ConstantTimeCompare(got[:], tokens[i].TokenHash) == 1 && matched == nil {
+			matched = &tokens[i]
+		}
 	}
-	if row.DisabledAt.Valid {
+	if len(tokens) == 0 {
+		_ = subtle.ConstantTimeCompare(got[:], make([]byte, sha256.Size))
+	}
+	switch {
+	case matched == nil:
+		return tunnel.EnrolResult{}, reject("token_mismatch")
+	case matched.SupersededAt.Valid:
+		return tunnel.EnrolResult{}, reject(wire.RefuseTokenSuperseded)
+	case matched.DisabledAt.Valid:
 		return tunnel.EnrolResult{}, reject(wire.RefuseTokenDisabled)
 	}
 

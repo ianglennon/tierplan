@@ -107,7 +107,7 @@ type Server struct {
 // inside it is its own authentication. Nil mounts a handler that answers 404,
 // which is what the `openapi` subcommand and the router-walk tests pass: the route
 // exists in every router, so its exemption is always checked.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, auditDeps api.AuditDeps, settings api.SettingsDeps, agentConnect http.Handler) *httpx.Router {
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, agentsDeps api.AgentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, auditDeps api.AuditDeps, settings api.SettingsDeps, agentConnect http.Handler) *httpx.Router {
 	r := httpx.New(opts)
 	if agentConnect == nil {
 		agentConnect = http.NotFoundHandler()
@@ -120,6 +120,7 @@ func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, auth
 	api.RegisterSettings(r, settings)
 	api.RegisterLocalHost(r, localHost)
 	api.RegisterEnvironments(r, environments)
+	api.RegisterAgents(r, agentsDeps)
 	api.RegisterDashboard(r, dashboard)
 	api.RegisterEvents(r, events)
 	api.RegisterAudit(r, auditDeps)
@@ -379,6 +380,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Log:     log,
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
 		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Log: log},
+		api.AgentsDeps{Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Log: log},
 		api.DashboardDeps{Snapshots: snapshots, SelfContainerID: selfID, Log: log},
 		api.EventsDeps{Hub: hub, Log: log},
 		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},

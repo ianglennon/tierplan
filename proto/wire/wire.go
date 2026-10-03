@@ -213,13 +213,15 @@ const (
 	ReasonAgentPolicyDenied   = "agent_policy_denied"
 )
 
-// Refusals only an enrolment can meet. token_disabled is never sent to the
-// agent: it is reported as auth_rejected and kept specific in the audit detail,
-// so a probe cannot tell a disabled token from a wrong one.
+// Refusals only an enrolment can meet. token_disabled and token_superseded are
+// never sent to the agent: each is reported as auth_rejected and kept specific
+// in the audit detail, so a probe cannot tell a disabled or replaced token from
+// a wrong one.
 const (
 	RefuseDuplicateEnvironment = "duplicate_environment"
 	RefuseTypeMismatch         = "type_mismatch"
 	RefuseTokenDisabled        = "token_disabled"
+	RefuseTokenSuperseded      = "token_superseded"
 	RefuseInsecureTransport    = "insecure_transport"
 	RefuseRateLimited          = "rate_limited"
 	// RefuseInternal means the server failed while handling an otherwise valid
