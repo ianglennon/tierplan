@@ -328,6 +328,54 @@ describe("EnvOverviewTable health cell", () => {
     expect(screen.getAllByText(/It reconnects by itself/).length).toBeGreaterThan(0);
   });
 
+  it("words every reason with ReasonText: its text and hint, with a path in the hint as code", async () => {
+    await mount({
+      items: [
+        env("g1", "gone", "offline", {
+          status: { state: "offline", reason: "engine_unreachable", since: "2026-10-03T09:00:00Z" },
+        }),
+      ],
+    });
+    const trigger = screen.getByText(/^Offline since/).closest("[tabindex]") as HTMLElement;
+    await act(async () => {
+      fireEvent.focus(trigger);
+    });
+    const tip = (await screen.findAllByText("The agent can't reach Docker."))[0] as HTMLElement;
+    const box = tip.closest("[data-slot=tooltip-content]") as HTMLElement;
+    expect(box.textContent).toContain("that the Docker daemon is running");
+    expect(within(box).getByText("/var/run/docker.sock").tagName).toBe("CODE");
+  });
+
+  it("never puts a command in the tooltip, for a reason whose full view has one", async () => {
+    await mount({ items: [OFFLINE] });
+    const trigger = screen.getByText(/^Offline since/).closest("[tabindex]") as HTMLElement;
+    await act(async () => {
+      fireEvent.focus(trigger);
+    });
+    await screen.findAllByText("The agent isn't connected.");
+    expect(screen.queryByText(/docker ps/)).toBeNull();
+    expect(screen.queryByText(/docker service ps/)).toBeNull();
+  });
+
+  it("words the local socket's codes, which the agent codes do not cover", async () => {
+    await mount({
+      items: [
+        env("l1", "this host", "offline", {
+          kind: "local",
+          isLocalSocket: true,
+          status: { state: "offline", reason: "unreachable", since: "2026-10-03T09:00:00Z" },
+        }),
+      ],
+    });
+    const trigger = screen.getByText(/^Offline since/).closest("[tabindex]") as HTMLElement;
+    await act(async () => {
+      fireEvent.focus(trigger);
+    });
+    expect(
+      (await screen.findAllByText("Docker isn't answering on the local socket."))[0],
+    ).toBeTruthy();
+  });
+
   it("falls back to wording for the state when the reason is not one it knows", async () => {
     await mount({
       items: [
@@ -371,6 +419,12 @@ describe("EnvOverviewTable under 768px", () => {
     // The whole row is the tap target, not just the line of text.
     expect(first.className).toContain("relative");
     expect(within(first).getByRole("link", { name: "edge" }).className).toContain("after:absolute");
+    // Line 3 is ReasonText's compact variant: the text and the hint, two lines.
+    expect(
+      within(first).getByText(/It reconnects by itself when it can reach Bayplan\./),
+    ).toBeTruthy();
+    const line = within(first).getByText("The agent isn't connected.").closest("p");
+    expect(line?.textContent).not.toContain("reconnects by itself");
     const second = items[1] as HTMLElement;
     expect(within(second).getByText("3/4 nodes · 1 failing · agent 0.2.0")).toBeTruthy();
     expect(within(second).queryByText(/isn't connected/)).toBeNull();
