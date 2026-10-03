@@ -177,7 +177,7 @@ describe("CopyableCode with a secret", () => {
   });
 
   it("copies the real, complete command with its leading space while it is masked", async () => {
-    const writeText = vi.fn(async () => {});
+    const writeText = vi.fn(async (_text: string) => {});
     stubClipboard(writeText);
     render(<CopyableCode code={COMMAND} secret={TOKEN} label="command" />);
 

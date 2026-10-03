@@ -4,6 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Server } from "lucide-react";
+import { useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
 import { NoPermission } from "@/components/full-page-state";
@@ -21,6 +22,7 @@ import {
 } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { useHealthLive } from "@/features/environments/health-stream";
+import { InstallDialog } from "@/features/environments/install-dialog";
 import { LocalHostPanel } from "@/features/environments/local-host-panel";
 import { EnvOverviewTable } from "@/features/environments/overview-table";
 import { SORT_KEYS, type SortDir, type SortKey } from "@/features/environments/sort";
@@ -61,6 +63,13 @@ function EnvironmentsPage() {
   const canCreate = usePermission("environments.create");
   const environments = useQuery(environmentsQuery);
   const live = useHealthLive();
+  // One install dialog serves "Add environment" and "Finish setup" (D-15).
+  const [install, setInstall] = useState<{ open: boolean; mode: "add" | "rotate"; envId?: string }>(
+    {
+      open: false,
+      mode: "add",
+    },
+  );
 
   if (!allowed) return <NoPermission />;
 
@@ -69,9 +78,8 @@ function EnvironmentsPage() {
   const failed = environments.isError && !loaded;
   const empty = loaded && items.length === 0;
 
-  // The install dialog arrives with the next plan, which replaces these two.
-  const addEnvironment = () => {};
-  const finishSetup = (_envId: string) => {};
+  const addEnvironment = () => setInstall({ open: true, mode: "add" });
+  const finishSetup = (envId: string) => setInstall({ open: true, mode: "rotate", envId });
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
@@ -159,6 +167,13 @@ function EnvironmentsPage() {
           onFinishSetup={finishSetup}
         />
       ) : null}
+
+      <InstallDialog
+        open={install.open}
+        mode={install.mode}
+        envId={install.envId}
+        onOpenChange={(open) => setInstall((current) => ({ ...current, open }))}
+      />
     </div>
   );
 }

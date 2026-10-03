@@ -278,6 +278,39 @@ describe("/environments", () => {
   });
 });
 
+describe("the install dialog on /environments", () => {
+  const PENDING = env("e3", "new host", "pending");
+
+  it("Add environment opens the dialog on step 1 and Cancel closes it", async () => {
+    renderAt("/environments");
+    await screen.findByRole("table");
+    fireEvent.click(screen.getByRole("button", { name: "Add environment" }));
+    expect(await screen.findByRole("heading", { name: "Add environment", level: 2 })).toBeTruthy();
+    expect(screen.getByLabelText("Name (optional)")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(sent.filter((s) => s.startsWith("POST"))).toEqual([]);
+  });
+
+  it("the empty state's Add environment opens it too", async () => {
+    list = () => Response.json({ items: [] });
+    renderAt("/environments");
+    fireEvent.click(await screen.findByRole("button", { name: "Add environment" }));
+    expect(await screen.findByLabelText("Name (optional)")).toBeTruthy();
+  });
+
+  it("Finish setup opens the rotate confirm for that environment and posts nothing until confirmed", async () => {
+    list = () => Response.json({ items: [ONLINE, PENDING] });
+    renderAt("/environments");
+    fireEvent.click(await screen.findByRole("button", { name: "Finish setup" }));
+    expect(
+      await screen.findByRole("heading", { name: "Show install command", level: 2 }),
+    ).toBeTruthy();
+    expect(screen.getByText(/This replaces the previous token\./)).toBeTruthy();
+    expect(sent.filter((s) => s.startsWith("POST"))).toEqual([]);
+  });
+});
+
 describe("the sidebar's Environments item", () => {
   it("sits above the environment's own sections and is active only on /environments", async () => {
     renderAt("/environments");

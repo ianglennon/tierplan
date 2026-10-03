@@ -65,7 +65,11 @@
     "errors": {
       "create": "Couldn't create the environment. Try again, and check the Bayplan logs if it keeps happening.",
       "rotate": "Couldn't generate a new token. Try again, and check the Bayplan logs if it keeps happening.",
-      "publicUrlRequired": "Bayplan doesn't know what address to give the agent. Set the public URL or the agent URL in Settings, then try again."
+      "publicUrlRequired": {
+        "before": "Bayplan doesn't know what address to give the agent. Set the public URL or the agent URL in",
+        "link": "Settings",
+        "after": ", then try again."
+      }
     }
   }
 }

@@ -59,9 +59,9 @@ interface Sent {
 let sent: Sent[];
 let createResponse: () => Response | Promise<Response>;
 let rotateResponse: () => Response | Promise<Response>;
-let writeText: ReturnType<typeof vi.fn>;
+let writeText: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
 let client: QueryClient;
-let onOpenChange: ReturnType<typeof vi.fn>;
+let onOpenChange: ReturnType<typeof vi.fn<(open: boolean) => void>>;
 let router: ReturnType<typeof makeRouter>;
 
 type Props = { mode: "add" | "rotate"; envId?: string };
@@ -142,13 +142,13 @@ function created(extra: Partial<InstallInfo> = {}) {
 
 beforeEach(() => {
   sent = [];
-  onOpenChange = vi.fn();
+  onOpenChange = vi.fn<(open: boolean) => void>();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   createResponse = created();
   rotateResponse = () =>
     Response.json({ install: install({}, 2), envType: undefined, hasAgents: false });
-  writeText = vi.fn(async () => {});
+  writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
   vi.stubGlobal(
     "fetch",
@@ -240,10 +240,10 @@ describe("InstallDialog add flow, step 1", () => {
     fireEvent.click(button);
     fireEvent.submit(button.closest("form") as HTMLFormElement);
 
-    await waitFor(() => expect(nameField().disabled).toBe(true));
+    await waitFor(() => expect(nameField().matches(":disabled")).toBe(true));
     const pending = screen.getByRole("button", { name: "Generating…" });
     expect(pending.querySelector("[data-slot=spinner], svg")).toBeTruthy();
-    expect((pending as HTMLButtonElement).disabled).toBe(true);
+    expect(pending.matches(":disabled")).toBe(true);
     // The dialog cannot be dismissed while the call runs.
     fireEvent.keyDown(dialog(), { key: "Escape" });
     expect(onOpenChange).not.toHaveBeenCalled();
@@ -272,7 +272,7 @@ describe("InstallDialog add flow, step 1", () => {
       "Couldn't create the environment. Try again, and check the Bayplan logs if it keeps happening.",
     );
     expect(screen.queryByRole("heading", { name: "Install the agent" })).toBeNull();
-    expect(nameField().disabled).toBe(false);
+    expect(nameField().matches(":disabled")).toBe(false);
     expect(nameField().value).toBe("edge");
     expect(screen.getByRole("button", { name: "Generate install command" })).toBeTruthy();
   });
@@ -504,9 +504,15 @@ describe("InstallDialog rotate flow", () => {
     rotateResponse = () => Response.json({ status: 500, title: "boom" }, { status: 500 });
     await mount({ mode: "rotate", envId: "e1" });
     fireEvent.click(screen.getByRole("button", { name: "Generate new token" }));
-    const alert = await screen.findAllByRole("alert");
-    expect(alert.map((a) => a.textContent).join("|")).toContain(
-      "Couldn't generate a new token. Try again, and check the Bayplan logs if it keeps happening.",
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("alert")
+          .map((a) => a.textContent)
+          .join("|"),
+      ).toContain(
+        "Couldn't generate a new token. Try again, and check the Bayplan logs if it keeps happening.",
+      ),
     );
     expect(screen.getByRole("button", { name: "Generate new token" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Install the agent" })).toBeNull();
