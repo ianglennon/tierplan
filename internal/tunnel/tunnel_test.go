@@ -50,6 +50,10 @@ func (f *fakeVerifier) Enrol(_ context.Context, req tunnel.EnrolRequest) (tunnel
 	return tunnel.EnrolResult{AgentID: id, EnvID: "env-1", Cert: []byte("cert-der")}, nil
 }
 
+func (f *fakeVerifier) Hello(context.Context, tunnel.HelloRequest) (tunnel.HelloResult, error) {
+	return tunnel.HelloResult{}, &tunnel.Refusal{Code: wire.ReasonAuthRejected, Detail: "the fake verifier does not say hello"}
+}
+
 func (f *fakeVerifier) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -331,7 +335,7 @@ func TestAHandshakeWelcomesTheAgentAndTheServerOpensStreamsToIt(t *testing.T) {
 	// now fails at once with ErrAgentGone instead of hanging (D-42).
 	_ = ac.ws.CloseNow()
 	waitFor(t, "the disconnect", func() bool { return len(f.o.log()) == 2 })
-	if got := f.o.log(); got[0] != "connected:agent-1" || got[1] != "disconnected:agent-1:"+wire.ReasonAgentOffline {
+	if got := f.o.log(); got[0] != "connected:agent-1" || got[1] != "disconnected:agent-1:"+tunnel.DisconnectClosed {
 		t.Fatalf("lifecycle = %v", got)
 	}
 	if f.hub.Session("agent-1") != nil {
@@ -370,7 +374,7 @@ func TestTheHandshakeRefusesWhatItShould(t *testing.T) {
 	}{
 		{"a different audience", hs{aud: "evil.example"}, nil, wire.ReasonAuthRejected, "different host"},
 		{"another protocol version", hs{proto: 2}, nil, wire.ReasonVersionIncompatible, "protocol"},
-		{"hello mode, which is not built yet", hs{mode: wire.ModeHello}, nil, wire.ReasonAuthRejected, ""},
+		{"hello mode without a certificate", hs{mode: wire.ModeHello}, nil, wire.ReasonAuthRejected, "malformed"},
 		{"a short key", hs{pubLen: 10}, nil, wire.ReasonAuthRejected, "malformed"},
 		{"a binary frame", hs{binary: true}, nil, wire.ReasonAuthRejected, "text frame"},
 		{"a binding that does not match this TLS connection", hs{ekm: make([]byte, 32)}, nil, wire.ReasonAuthRejected, "BAYPLAN_TRUSTED_PROXIES"},
@@ -528,8 +532,9 @@ func TestANewSessionOfTheSameAgentReplacesTheOldOne(t *testing.T) {
 		}
 	})
 	waitFor(t, "the old session's disconnect", func() bool { return len(f.o.log()) == 3 })
-	// The old one ended after the new one connected, and the hub still has the new one.
-	if got := f.o.log(); got[0] != "connected:agent-1" || got[1] != "connected:agent-1" || !strings.HasPrefix(got[2], "disconnected:agent-1") {
+	// The old session is reported gone, with the reason replaced, before the new
+	// one is reported connected, and the hub still has the new one.
+	if got := f.o.log(); got[0] != "connected:agent-1" || got[1] != "disconnected:agent-1:"+tunnel.DisconnectReplaced || got[2] != "connected:agent-1" {
 		t.Fatalf("lifecycle = %v", got)
 	}
 	if f.hub.Session("agent-1") != newSess {

@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
 	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/bayplan/internal/vault"
 	"github.com/ianglennon/bayplan/proto/authn"
 	"github.com/ianglennon/bayplan/proto/wire"
@@ -36,6 +37,8 @@ type rig struct {
 	vlt *vault.Vault
 	svc *agents.Service
 	ctx context.Context
+	// clock is the service's clock; a test moves it to expire a certificate.
+	clock time.Time
 }
 
 func newRig(t *testing.T) *rig {
@@ -45,11 +48,10 @@ func newRig(t *testing.T) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := func() time.Time { return fixedNow }
-	return &rig{
-		st: st, vlt: vlt, ctx: context.Background(),
-		svc: agents.NewService(st, vlt, audit.NewWriter(st, vlt, slog.New(slog.DiscardHandler), now), now),
-	}
+	r := &rig{st: st, vlt: vlt, ctx: context.Background(), clock: fixedNow}
+	now := func() time.Time { return r.clock }
+	r.svc = agents.NewService(st, vlt, audit.NewWriter(st, vlt, slog.New(slog.DiscardHandler), now), now)
+	return r
 }
 
 func (r *rig) create(t *testing.T, name string) agents.Created {
@@ -463,5 +465,135 @@ func TestAgentURLFollowsThePublicURL(t *testing.T) {
 		if got, err := agents.AgentURL(bad); err == nil {
 			t.Errorf("AgentURL(%q) = %q, want an error", bad, got)
 		}
+	}
+}
+
+// member is an enrolled agent: its key and the certificate it was issued.
+type member struct {
+	id, env string
+	priv    ed25519.PrivateKey
+	pub     ed25519.PublicKey
+	cert    []byte
+}
+
+func (r *rig) enrolMember(t *testing.T, c agents.Created) member {
+	t.Helper()
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	tr := authn.Transcript(wire.ModeEnrol, wire.ProtoVersion, make([]byte, 32), make([]byte, 32), "h", pub, nil)
+	res, err := r.svc.Enrol(r.ctx, tunnel.EnrolRequest{
+		Token: c.JoinToken, Pub: pub, Sig: authn.Sign(priv, tr), Transcript: tr, AgentVersion: "0.2.0", IP: "198.51.100.7",
+		Facts: wire.Facts{EngineID: "ENG:" + c.EnvID[:8], Hostname: "node-1", EngineReachable: true},
+	})
+	if err != nil {
+		t.Fatalf("Enrol: %v", err)
+	}
+	return member{id: res.AgentID, env: res.EnvID, priv: priv, pub: pub, cert: res.Cert}
+}
+
+// hello builds the request the handler would: a transcript for hello over the
+// certificate, signed by key.
+func (m member) hello(cert []byte, key ed25519.PrivateKey) tunnel.HelloRequest {
+	tr := authn.Transcript(wire.ModeHello, wire.ProtoVersion, make([]byte, 32), make([]byte, 32), "h", cert, nil)
+	return tunnel.HelloRequest{AgentID: m.id, Cert: cert, Transcript: tr, Sig: authn.Sign(key, tr), AgentVersion: "0.2.0", IP: "198.51.100.7"}
+}
+
+func refusal(t *testing.T, err error) *tunnel.Refusal {
+	t.Helper()
+	var re *tunnel.Refusal
+	if !errors.As(err, &re) {
+		t.Fatalf("err = %v, want a *tunnel.Refusal", err)
+	}
+	return re
+}
+
+func TestHelloAcceptsTheCertificateAndSignatureOfAnEnrolledAgent(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	m := r.enrolMember(t, c)
+
+	res, err := r.svc.Hello(r.ctx, m.hello(m.cert, m.priv))
+	if err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if res.AgentID != m.id || res.EnvID != c.EnvID || !res.NotAfter.Equal(fixedNow.Add(30*24*time.Hour)) {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestHelloGivesAnUnknownEnvironmentAndAnotherCATheSameRefusal(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	m := r.enrolMember(t, c)
+
+	unknown := tunneltest.ForeignCert(t, "0197b8a0-0000-7000-8000-000000000000", m.id, m.pub, fixedNow)
+	otherCA := tunneltest.ForeignCert(t, c.EnvID, m.id, m.pub, fixedNow)
+	_, e1 := r.svc.Hello(r.ctx, m.hello(unknown, m.priv))
+	_, e2 := r.svc.Hello(r.ctx, m.hello(otherCA, m.priv))
+	a, b := refusal(t, e1), refusal(t, e2)
+	if a.Code != wire.ReasonAuthRejected || a.Code != b.Code || a.Detail != b.Detail {
+		t.Fatalf("an unknown environment gets %+v, another CA gets %+v; they must be identical auth_rejected", a, b)
+	}
+	if strings.Contains(a.Detail, c.EnvID) {
+		t.Errorf("the refusal names the environment: %q", a.Detail)
+	}
+}
+
+func TestHelloRefusesAnExpiredCertificateARevokedAgentAndAChangedKey(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	m := r.enrolMember(t, c)
+
+	// A key that is not the stored one: the certificate is still valid, so this
+	// is only caught by comparing it with the row.
+	pub2, _, _ := ed25519.GenerateKey(rand.Reader)
+	if _, err := r.st.Write.Exec(`UPDATE agents SET public_key = ? WHERE id = ?`, []byte(pub2), m.id); err != nil {
+		t.Fatal(err)
+	}
+	if re := refusal(t, func() error { _, err := r.svc.Hello(r.ctx, m.hello(m.cert, m.priv)); return err }()); re.Code != wire.ReasonAuthRejected {
+		t.Errorf("a changed key: %+v, want auth_rejected", re)
+	}
+	if _, err := r.st.Write.Exec(`UPDATE agents SET public_key = ? WHERE id = ?`, []byte(m.pub), m.id); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := r.st.Write.Exec(`UPDATE agents SET status = 'revoked' WHERE id = ?`, m.id); err != nil {
+		t.Fatal(err)
+	}
+	if re := refusal(t, func() error { _, err := r.svc.Hello(r.ctx, m.hello(m.cert, m.priv)); return err }()); re.Code != wire.ReasonRevoked {
+		t.Errorf("a revoked agent: %+v, want revoked", re)
+	}
+
+	// Expiry is reported before the row is looked at, even for a revoked agent.
+	r.clock = fixedNow.Add(31 * 24 * time.Hour)
+	if re := refusal(t, func() error { _, err := r.svc.Hello(r.ctx, m.hello(m.cert, m.priv)); return err }()); re.Code != wire.ReasonCertExpired {
+		t.Errorf("an expired certificate: %+v, want cert_expired", re)
+	}
+}
+
+func TestHelloRefusesABadSignatureAClaimedIDThatIsNotTheCertificatesAndGarbage(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	m := r.enrolMember(t, c)
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+
+	wrongID := m.hello(m.cert, m.priv)
+	wrongID.AgentID = "someone-else"
+	for name, req := range map[string]tunnel.HelloRequest{
+		"a signature by another key":                 m.hello(m.cert, other),
+		"a claimed ID that is not the certificate's": wrongID,
+		"garbage instead of a certificate":           m.hello([]byte("nope"), m.priv),
+		"no certificate":                             m.hello(nil, m.priv),
+	} {
+		_, err := r.svc.Hello(r.ctx, req)
+		if re := refusal(t, err); re.Code != wire.ReasonAuthRejected {
+			t.Errorf("%s: %+v, want auth_rejected", name, re)
+		}
+	}
+	// The transcript is the one the handler built: a signature over another
+	// transcript does not verify even by the right key.
+	req := m.hello(m.cert, m.priv)
+	req.Transcript = authn.Transcript(wire.ModeHello, wire.ProtoVersion, make([]byte, 32), make([]byte, 32), "evil", m.cert, nil)
+	if _, err := r.svc.Hello(r.ctx, req); refusal(t, err).Code != wire.ReasonAuthRejected {
+		t.Error("a signature that does not cover the transcript was accepted")
 	}
 }

@@ -258,6 +258,11 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	return tunnel.EnrolResult{AgentID: agentID, EnvID: envID, Cert: leaf.DER, NotAfter: leaf.NotAfter}, nil
 }
 
+// Hello checks the reconnect of an enrolled agent. Stub.
+func (s *Service) Hello(_ context.Context, _ tunnel.HelloRequest) (tunnel.HelloResult, error) {
+	return tunnel.HelloResult{}, &tunnel.Refusal{Code: wire.ReasonAuthRejected, Detail: "hello is not implemented"}
+}
+
 // newToken makes a join token bpjt_<envId>_<base64url of 32 random bytes> and
 // returns it with its secret part, the only part that is hashed.
 func newToken(envID string) (token, secret string, err error) {

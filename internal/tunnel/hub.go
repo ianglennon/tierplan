@@ -74,12 +74,61 @@ type EnrolResult struct {
 	NotAfter time.Time
 }
 
+// Refusal is what a Verifier returns to turn a handshake away; the handler
+// answers refuse with its Code and Detail. It is the same type as RefuseError,
+// under the name the hello path uses.
+type Refusal = RefuseError
+
+// HelloRequest is a reconnect of an enrolled agent: the certificate it was issued
+// and a signature made with the key behind it.
+type HelloRequest struct {
+	// AgentID is the ID the agent claims. The certificate's CN is what counts.
+	AgentID string
+	// Cert is the DER certificate the agent presented.
+	Cert []byte
+	// Sig is the agent's signature over Transcript.
+	Sig []byte
+	// Transcript is the digest the handler rebuilt from the challenge, the
+	// agent's nonce, the audience and the certificate, never taken from the agent.
+	Transcript   []byte
+	AgentVersion string
+	Facts        wire.Facts
+	// IP is the client address for the audit trail.
+	IP string
+}
+
+// HelloResult is what a successful hello hands back.
+type HelloResult struct {
+	AgentID, EnvID string
+	// NotAfter is when the certificate presented expires.
+	NotAfter time.Time
+}
+
 // Verifier decides whether a handshake is accepted.
 type Verifier interface {
 	// Enrol checks the token and the proof of possession, issues a certificate
-	// and records the agent. It returns a *RefuseError to turn the agent away.
+	// and records the agent. It returns a *Refusal to turn the agent away.
 	Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, error)
+	// Hello checks that the certificate chains to the environment it names, that
+	// the agent it names is active and holds the same key, and that the signature
+	// is made by that key. It returns a *Refusal to turn the agent away.
+	Hello(ctx context.Context, req HelloRequest) (HelloResult, error)
 }
+
+// Why a session ended, the code Observer.Disconnected receives. The first reason
+// set for a session wins.
+const (
+	// DisconnectClosed means the connection ended: the agent went away or the
+	// network dropped.
+	DisconnectClosed = "closed"
+	// DisconnectTimeout means no heartbeat arrived within the offline window.
+	DisconnectTimeout = "timeout"
+	// DisconnectReplaced means the same agent connected again and the new session
+	// took its place.
+	DisconnectReplaced = "replaced"
+	// DisconnectShutdown means the server is stopping.
+	DisconnectShutdown = "shutdown"
+)
 
 // Observer is told when a session starts and ends.
 type Observer interface {
