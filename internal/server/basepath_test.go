@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -18,8 +19,8 @@ import (
 )
 
 // TestBasePathInvariant runs the same assertions at the root and under a base
-// path, over http and https, through the real router (D-50). Plan 09 adds the
-// agent URL in the install commands to it.
+// path, over http and https, through the real router (D-50). The address in the
+// agent install commands is built from the same base path (plan 02-09).
 func TestBasePathInvariant(t *testing.T) {
 	cases := []struct {
 		name, publicURL, base string
@@ -96,6 +97,12 @@ func TestBasePathInvariant(t *testing.T) {
 				t.Fatalf("login set %d cookies, want 1", len(cookies))
 			}
 			c := cookies[0]
+			var session struct {
+				CSRFToken string `json:"csrfToken"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &session); err != nil || session.CSRFToken == "" {
+				t.Fatalf("login body has no csrfToken: %s (%v)", rec.Body, err)
+			}
 			if c.Name != tc.wantCookie || c.Path != tc.wantPath || c.Secure != strings.HasPrefix(tc.publicURL, "https://") || !c.HttpOnly {
 				t.Fatalf("cookie = %+v, want name %q path %q", c, tc.wantCookie, tc.wantPath)
 			}
@@ -108,6 +115,43 @@ func TestBasePathInvariant(t *testing.T) {
 				if rec.Code != http.StatusOK {
 					t.Errorf("GET %s with the cookie = %d %s", p, rec.Code, rec.Body)
 				}
+			}
+
+			// The address agents are told to dial carries the same base path, with
+			// wss for https and ws for http, and the commands are built from it.
+			req := httptest.NewRequest(http.MethodPost, tc.base+"/api/environments", strings.NewReader(`{"kind":"agent","name":"edge"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Origin", srv.Instance().PublicOrigin())
+			req.Header.Set("X-CSRF-Token", session.CSRFToken)
+			req.AddCookie(c)
+			rec = httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("add agent environment = %d %s", rec.Code, rec.Body)
+			}
+			var added struct {
+				Install struct {
+					AgentURL string `json:"agentUrl"`
+					Swarm    struct {
+						Command string `json:"command"`
+					} `json:"swarm"`
+				} `json:"install"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &added); err != nil {
+				t.Fatal(err)
+			}
+			wantScheme := "wss://"
+			if strings.HasPrefix(tc.publicURL, "http://") {
+				wantScheme = "ws://"
+			}
+			if want := wantScheme + "bayplan.test" + tc.base + "/agent/connect"; added.Install.AgentURL != want {
+				t.Errorf("install.agentUrl = %q, want %q", added.Install.AgentURL, want)
+			}
+			if !strings.HasSuffix(added.Install.AgentURL, tc.base+"/agent/connect") {
+				t.Errorf("install.agentUrl = %q does not end in %q", added.Install.AgentURL, tc.base+"/agent/connect")
+			}
+			if !strings.Contains(added.Install.Swarm.Command, "BAYPLAN_AGENT_URL="+added.Install.AgentURL) {
+				t.Errorf("the swarm command does not dial %q:\n%s", added.Install.AgentURL, added.Install.Swarm.Command)
 			}
 		})
 	}

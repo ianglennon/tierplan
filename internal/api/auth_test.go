@@ -86,6 +86,9 @@ type authFixture struct {
 	eventsMaxLifetime time.Duration
 	// auditRetention feeds GET /api/audit (plan 24).
 	auditRetention int
+	// tlsPin is the pin Bayplan's own self-signed certificate would have; empty
+	// means it serves none (plan 02-09).
+	tlsPin string
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -141,7 +144,8 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Log: log})
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{
-		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), PublicURL: f.inst.PublicURL, Checker: checker, Log: log,
+		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,
+		TLSPin: func() string { return f.tlsPin }, Checker: checker, Log: log,
 	})
 	if f.envSvc != nil && f.snaps != nil {
 		api.RegisterDashboard(r, api.DashboardDeps{Snapshots: f.snaps, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})

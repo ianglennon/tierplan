@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
@@ -449,7 +451,7 @@ func TestEnvironmentAddAgentAnswers201WithTheJoinTokenAndTheAgentURL(t *testing.
 func TestEnvironmentAddAgentWithoutAPublicURLIs409(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"agent"}`)
-	if rec.code != http.StatusConflict || rec.ptyp != "public_url_missing" {
+	if rec.code != http.StatusConflict || rec.ptyp != "public_url_required" {
 		t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
 	}
 	if got := f.req(t, http.MethodGet, "/api/environments", ""); strings.Contains(string(got.body), `"id"`) {
@@ -560,5 +562,174 @@ func TestEnvironmentRemoveNeedsEnvironmentsDelete(t *testing.T) {
 	rec = f.call(t, authReq{method: http.MethodDelete, path: "/api/environments/" + e.ID, cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("remove with environments.delete: %d %s, want 204", rec.Code, rec.Body)
+	}
+}
+
+// The install object (plan 02-09): one call gives every command and file.
+
+type fullInstall struct {
+	envBody
+	Install *struct {
+		JoinToken  string `json:"joinToken"`
+		AgentURL   string `json:"agentUrl"`
+		Image      string `json:"image"`
+		Pin        string `json:"pin"`
+		SecretName string `json:"secretName"`
+		Generation int    `json:"generation"`
+		Swarm      struct {
+			Command       string `json:"command"`
+			StackFile     string `json:"stackFile"`
+			RotateCommand string `json:"rotateCommand"`
+		} `json:"swarm"`
+		Standalone struct {
+			Command     string `json:"command"`
+			ComposeFile string `json:"composeFile"`
+		} `json:"standalone"`
+		ManualCleanup struct {
+			Swarm      string `json:"swarm"`
+			Standalone string `json:"standalone"`
+		} `json:"manualCleanup"`
+	} `json:"install"`
+}
+
+func (f *envFix) addAgent(t *testing.T) (fullInstall, *envRec) {
+	t.Helper()
+	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"agent","name":"edge"}`)
+	var got fullInstall
+	if rec.code == http.StatusCreated {
+		if err := json.Unmarshal(rec.body, &got); err != nil {
+			t.Fatalf("decode %s: %v", rec.body, err)
+		}
+	}
+	return got, rec
+}
+
+func TestEnvironmentAddAgentAnswersTheFullInstallObject(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.inst.Apply("Bayplan", "https://example.com/bayplan")
+	f.tlsPin = "sha256/PINPINPIN"
+	got, rec := f.addAgent(t)
+	if rec.code != http.StatusCreated || got.Install == nil {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	in := got.Install
+	if !strings.HasPrefix(in.JoinToken, "bpjt_"+got.ID+"_") || in.Generation != 1 || in.SecretName != "bayplan-agent-token-g1" {
+		t.Errorf("token %q generation %d secret %q", in.JoinToken, in.Generation, in.SecretName)
+	}
+	if in.AgentURL != "wss://example.com/bayplan/agent/connect" || in.Pin != "sha256/PINPINPIN" {
+		t.Errorf("agent URL %q pin %q", in.AgentURL, in.Pin)
+	}
+	if want := agents.AgentImage(buildinfo.Get().Version); in.Image != want {
+		t.Errorf("image = %q, want the server's own version %q", in.Image, want)
+	}
+	for name, want := range map[string]struct{ text, sub string }{
+		"swarm command":      {in.Swarm.Command, "--mode global"},
+		"swarm stack file":   {in.Swarm.StackFile, "external: true"},
+		"standalone command": {in.Standalone.Command, "docker run -d --name bayplan-agent"},
+		"compose file":       {in.Standalone.ComposeFile, "restart: unless-stopped"},
+		"swarm cleanup":      {in.ManualCleanup.Swarm, "docker service rm bayplan-agent"},
+		"standalone cleanup": {in.ManualCleanup.Standalone, "docker rm -f bayplan-agent"},
+	} {
+		if !strings.Contains(want.text, want.sub) {
+			t.Errorf("%s lacks %q:\n%s", name, want.sub, want.text)
+		}
+	}
+	for name, text := range map[string]string{"swarm command": in.Swarm.Command, "standalone command": in.Standalone.Command} {
+		if !strings.Contains(text, in.JoinToken) || !strings.Contains(text, "BAYPLAN_AGENT_PIN=sha256/PINPINPIN") ||
+			!strings.Contains(text, "BAYPLAN_AGENT_URL=wss://example.com/bayplan/agent/connect") {
+			t.Errorf("%s does not carry the token, the pin and the endpoint:\n%s", name, text)
+		}
+	}
+	if in.Swarm.RotateCommand != "" {
+		t.Errorf("a first install has no rotate command, got %q", in.Swarm.RotateCommand)
+	}
+}
+
+func TestEnvironmentAddAgentLeavesThePinOutWhenBayplanServesNoSelfSignedCertificate(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.inst.Apply("Bayplan", "https://example.com")
+	f.tlsPin = ""
+	got, rec := f.addAgent(t)
+	if rec.code != http.StatusCreated || got.Install == nil {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	if strings.Contains(string(rec.body), `"pin"`) {
+		t.Errorf("the answer names a pin: %s", rec.body)
+	}
+	for _, text := range []string{got.Install.Swarm.Command, got.Install.Swarm.StackFile, got.Install.Standalone.Command, got.Install.Standalone.ComposeFile} {
+		if strings.Contains(text, "BAYPLAN_AGENT_PIN") {
+			t.Errorf("a text carries a pin although there is none:\n%s", text)
+		}
+	}
+}
+
+func TestEnvironmentAddAgentUsesTheAgentURLWhenOneIsSet(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.inst.Apply("Bayplan", "https://example.com/bayplan")
+	f.inst.ApplyAgentURL("https://bayplan.lan:7480")
+	got, rec := f.addAgent(t)
+	if rec.code != http.StatusCreated || got.Install == nil || got.Install.AgentURL != "wss://bayplan.lan:7480/agent/connect" {
+		t.Fatalf("status = %d: %s, want the agent URL's endpoint", rec.code, rec.body)
+	}
+	if !strings.Contains(got.Install.Swarm.Command, "BAYPLAN_AGENT_URL=wss://bayplan.lan:7480/agent/connect") {
+		t.Errorf("the swarm command does not dial the agent URL:\n%s", got.Install.Swarm.Command)
+	}
+}
+
+func TestEnvironmentAddAgentWithOnlyAnAgentURLIsAllowed(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.inst.ApplyAgentURL("http://10.0.0.5:7480")
+	got, rec := f.addAgent(t)
+	if rec.code != http.StatusCreated || got.Install == nil || got.Install.AgentURL != "ws://10.0.0.5:7480/agent/connect" {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+}
+
+func TestEnvironmentAddAgentNeedsAUsableURLAndCreatesNothingWithoutOne(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	_, rec := f.addAgent(t)
+	if rec.code != http.StatusConflict || rec.ptyp != "public_url_required" {
+		t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	for _, table := range []string{"environments", "env_join_tokens", "env_cas"} {
+		var n int
+		if err := f.st.Read.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); err != nil || n != 0 {
+			t.Errorf("%s holds %d rows after a refused add (%v), want none", table, n, err)
+		}
+	}
+	if n := len(f.audits(t, audit.ActionEnvironmentAdded)); n != 0 {
+		t.Errorf("%d environment.added entries after a refused add", n)
+	}
+}
+
+func TestEnvironmentAddAgentNeverPutsTheJoinTokenInTheAudit(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.inst.Apply("Bayplan", "https://example.com")
+	got, rec := f.addAgent(t)
+	if rec.code != http.StatusCreated || got.Install == nil {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	secret := got.Install.JoinToken[strings.LastIndex(got.Install.JoinToken, "_")+1:]
+	if len(secret) < 40 {
+		t.Fatalf("the token secret %q is shorter than expected", secret)
+	}
+	rows, err := f.st.Read.Query(`SELECT id, actor_name, action, target_type, target_id, COALESCE(env_id, ''), result, reason, ip, user_agent, details FROM audit_log`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	n := 0
+	for rows.Next() {
+		var cols [11]string
+		if err := rows.Scan(&cols[0], &cols[1], &cols[2], &cols[3], &cols[4], &cols[5], &cols[6], &cols[7], &cols[8], &cols[9], &cols[10]); err != nil {
+			t.Fatal(err)
+		}
+		n++
+		if row := strings.Join(cols[:], "|"); strings.Contains(row, secret) {
+			t.Errorf("an audit row holds the join token's secret: %s", row)
+		}
+	}
+	if err := rows.Err(); err != nil || n == 0 {
+		t.Fatalf("scanned %d audit rows, %v", n, err)
 	}
 }

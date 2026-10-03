@@ -399,3 +399,29 @@ func TestManualUpdateCommandTargetsTheAgentOfTheEnvironmentType(t *testing.T) {
 		t.Errorf("an image that could escape its quotes answered %q", got)
 	}
 }
+
+func TestManualUpdateCommandUpdateHintCarriesTheCommandForTheEnvironmentType(t *testing.T) {
+	p := goldenParams()
+	p.Token = "" // a refusal has no join token to give
+	swarm := agents.UpdateHint(true, "swarm", p)
+	if want := "docker service update --image ghcr.io/ianglennon/bayplan-agent:0.2.0 bayplan-agent"; !strings.Contains(swarm, want) {
+		t.Errorf("swarm hint = %q, want it to hold %q", swarm, want)
+	}
+	standalone := agents.UpdateHint(true, "standalone", p)
+	if !strings.Contains(standalone, "docker run -d --name bayplan-agent") || strings.Contains(standalone, "JOIN_TOKEN") {
+		t.Errorf("standalone hint = %q, want a recreate with no join token", standalone)
+	}
+	for _, h := range []string{swarm, standalone} {
+		if strings.HasPrefix(h, " ") || strings.Contains(h, "\n") {
+			t.Errorf("a hint is a sentence in a refusal, not a command line: %q", h)
+		}
+	}
+	// A server that is behind cannot be fixed with an agent command, and an
+	// unknown type has no command.
+	if h := agents.UpdateHint(false, "swarm", p); h != "" {
+		t.Errorf("hint for an agent that is too new = %q, want none", h)
+	}
+	if h := agents.UpdateHint(true, "", p); h != "" {
+		t.Errorf("hint for an unknown type = %q, want none", h)
+	}
+}

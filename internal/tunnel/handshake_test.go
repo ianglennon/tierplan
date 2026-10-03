@@ -304,7 +304,7 @@ func TestCompatibleDevAndEdgeServersAcceptAnyAgentOfTheSameProtocol(t *testing.T
 
 func TestCompatibleRefusalCarriesTheUpdateHintWhenOneIsSet(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub {
-		return h.WithServerVersion("v0.3.1").WithUpdateHint(func(tooOld bool) string {
+		return h.WithServerVersion("v0.3.1").WithUpdateHint(func(tooOld bool, _ string) string {
 			if tooOld {
 				return "run: docker pull bayplan-agent"
 			}
@@ -315,6 +315,38 @@ func TestCompatibleRefusalCarriesTheUpdateHintWhenOneIsSet(t *testing.T) {
 	c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Version: "0.1.0"})
 	if c.Refuse == nil || !strings.Contains(c.Refuse.Detail, "run: docker pull bayplan-agent") {
 		t.Fatalf("refusal = %+v, want the update command in the detail", c.Refuse)
+	}
+}
+
+// The hint names the agent's environment type, taken from the facts it reported:
+// a swarm whose state is active, else a standalone host (D-25).
+func TestUpdateHintIsGivenTheEnvironmentTypeFromTheAgentsFacts(t *testing.T) {
+	var got []string
+	srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub {
+		return h.WithServerVersion("v0.3.1").WithUpdateHint(func(tooOld bool, envType string) string {
+			got = append(got, envType)
+			return "update this " + envType
+		})
+	}})
+	env := srv.NewEnvironment(t, "Production")
+	for _, tc := range []struct {
+		name  string
+		facts *wire.Facts
+		want  string
+	}{
+		{"swarm manager", &wire.Facts{EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", Control: true, NodeID: "n1", ClusterID: "c1"}}, "swarm"},
+		{"swarm worker", &wire.Facts{EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "n2"}}, "swarm"},
+		{"standalone", &wire.Facts{EngineReachable: true}, "standalone"},
+		{"inactive swarm", &wire.Facts{EngineReachable: true, Swarm: &wire.SwarmFacts{State: "inactive"}}, "standalone"},
+	} {
+		got = nil
+		c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Version: "0.1.0", Facts: tc.facts})
+		if c.Refuse == nil || !strings.Contains(c.Refuse.Detail, "update this "+tc.want) {
+			t.Errorf("%s: refusal = %+v, want the hint for %q in the detail", tc.name, c.Refuse, tc.want)
+		}
+		if len(got) != 1 || got[0] != tc.want {
+			t.Errorf("%s: the hint was asked for %v, want [%s]", tc.name, got, tc.want)
+		}
 	}
 }
 
