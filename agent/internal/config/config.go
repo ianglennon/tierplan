@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -42,6 +43,8 @@ type Config struct {
 	StateDir string
 	// DockerGID overrides the group detected from the Docker socket.
 	DockerGID *int
+	// BackoffMin and BackoffMax bound the reconnect delay (D-41).
+	BackoffMin, BackoffMax time.Duration
 	// Enrolled is true when the state directory already holds an identity, so
 	// a join token is not required.
 	Enrolled bool

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // env builds a lookup function from a map.
@@ -256,5 +257,45 @@ func TestLoadNeverPutsTheTokenInAnErrorOrALogLine(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), secret) {
 		t.Errorf("the log leaks the token: %s", logs.String())
+	}
+}
+
+func TestLoadDefaultsTheReconnectBackoffToOneAndSixtySeconds(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "t"}), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BackoffMin != time.Second || cfg.BackoffMax != time.Minute {
+		t.Fatalf("backoff = %v..%v, want 1s..1m0s", cfg.BackoffMin, cfg.BackoffMax)
+	}
+}
+
+func TestLoadReadsTheBackoffOverrides(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "t",
+		"BAYPLAN_AGENT_BACKOFF_MIN": "250ms", "BAYPLAN_AGENT_BACKOFF_MAX": "5s",
+	}), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BackoffMin != 250*time.Millisecond || cfg.BackoffMax != 5*time.Second {
+		t.Fatalf("backoff = %v..%v, want 250ms..5s", cfg.BackoffMin, cfg.BackoffMax)
+	}
+}
+
+func TestLoadRejectsABackoffThatIsInvalidOrInverted(t *testing.T) {
+	for name, vars := range map[string]map[string]string{
+		"min above max":             {"BAYPLAN_AGENT_BACKOFF_MIN": "30s", "BAYPLAN_AGENT_BACKOFF_MAX": "10s"},
+		"min not a time":            {"BAYPLAN_AGENT_BACKOFF_MIN": "soon"},
+		"max not a time":            {"BAYPLAN_AGENT_BACKOFF_MAX": "1 minute"},
+		"min zero":                  {"BAYPLAN_AGENT_BACKOFF_MIN": "0s"},
+		"max negative":              {"BAYPLAN_AGENT_BACKOFF_MAX": "-5s"},
+		"min above the default max": {"BAYPLAN_AGENT_BACKOFF_MIN": "2m"},
+	} {
+		vars["BAYPLAN_AGENT_URL"], vars["BAYPLAN_AGENT_JOIN_TOKEN"] = goodURL, "t"
+		_, err := Load(env(vars), files(nil))
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_BACKOFF") {
+			t.Errorf("%s: Load error = %v, want one naming BAYPLAN_AGENT_BACKOFF_*", name, err)
+		}
 	}
 }

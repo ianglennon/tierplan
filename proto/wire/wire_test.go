@@ -104,3 +104,17 @@ func TestEveryD40ReasonCodeIsDefinedOnce(t *testing.T) {
 		seen[c] = true
 	}
 }
+
+func TestAHeartbeatRoundTripsAndTheStreamKindsDiffer(t *testing.T) {
+	in := Heartbeat{T: TypeHeartbeat, EngineReachable: true, ClockMs: 1700000000003}
+	if out := roundTrip(t, in); out != in {
+		t.Fatalf("heartbeat = %+v, want %+v", out, in)
+	}
+	b, _ := json.Marshal(in)
+	if !bytes.Contains(b, []byte(`"t":"heartbeat"`)) || !bytes.Contains(b, []byte(`"engineReachable":true`)) {
+		t.Errorf("the heartbeat's JSON names changed: %s", b)
+	}
+	if StreamKindControl == StreamKindDockerHTTP || StreamKindControl != 0x02 {
+		t.Errorf("control stream kind = %#x", StreamKindControl)
+	}
+}

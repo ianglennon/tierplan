@@ -37,12 +37,29 @@ const (
 // socket. A stream that starts with any other byte is closed by the agent.
 const StreamKindDockerHTTP byte = 0x01
 
+// StreamKindControl is the first byte of the one stream the agent opens after
+// the welcome. It carries newline-delimited JSON, an agent message per line
+// (heartbeats), and the server may write lines back. Each side ignores a line
+// whose type it does not know, so later plans add messages without a protocol
+// change.
+const StreamKindControl byte = 0x02
+
+// MaxControlLine is the longest line either side accepts on the control stream.
+// The agent is authenticated by then, but not trusted to be well behaved.
+const MaxControlLine = 64 << 10
+
 // Message types, the value of the "t" field.
 const (
 	TypeChallenge = "challenge"
 	TypeAuth      = "auth"
 	TypeWelcome   = "welcome"
 	TypeRefuse    = "refuse"
+)
+
+// Control-stream message types, the value of the "t" field of a line.
+const (
+	// TypeHeartbeat is sent by the agent every heartbeatMs.
+	TypeHeartbeat = "heartbeat"
 )
 
 // Modes of an auth message.
@@ -142,6 +159,16 @@ type Refuse struct {
 	Code         string `json:"code"`
 	Detail       string `json:"detail,omitempty"`
 	RetryAfterMs int    `json:"retryAfterMs,omitempty"`
+}
+
+// Heartbeat is the agent's proof of life on the control stream. The server keeps
+// it in memory only (RESEARCH Pitfall 8).
+type Heartbeat struct {
+	T string `json:"t"`
+	// EngineReachable is whether GET /_ping on the Docker socket answered.
+	EngineReachable bool `json:"engineReachable"`
+	// ClockMs is the agent's clock in Unix milliseconds, for the clock-skew hint.
+	ClockMs int64 `json:"clockMs"`
 }
 
 // Reasons are the connection failure codes of D-40. They are what the UI and

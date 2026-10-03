@@ -47,6 +47,19 @@ type Config struct {
 	// HTTPClient dials the server. Nil means the default client, which trusts
 	// the system roots and honours SSL_CERT_FILE.
 	HTTPClient *http.Client
+	// StateDir holds the agent's identity (key, certificate, IDs). Empty keeps
+	// the identity in memory only, so a restart enrols again.
+	StateDir string
+	// BackoffMin and BackoffMax bound the reconnect delay. Zero means 1 s and 60 s.
+	BackoffMin, BackoffMax time.Duration
+}
+
+// runEnv is what a test replaces: the wait between attempts, the jitter and the
+// clock the heartbeat reports.
+type runEnv struct {
+	sleep func(context.Context, time.Duration) error
+	rnd   func() float64
+	now   func() time.Time
 }
 
 // RefusedError is returned when the server answers the handshake with a refusal.
@@ -85,6 +98,10 @@ func muxConfig() *yamux.Config {
 // Run connects, enrols and serves until the session ends or ctx does. It
 // returns nil only when ctx ended; a refused handshake is a *RefusedError.
 func Run(ctx context.Context, cfg Config) error {
+	return runWith(ctx, cfg, runEnv{})
+}
+
+func runWith(ctx context.Context, cfg Config, _ runEnv) error {
 	log := cfg.Log
 	if log == nil {
 		log = slog.Default()
