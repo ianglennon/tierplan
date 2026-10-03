@@ -57,6 +57,12 @@ var (
 	ErrAlreadyRevoked = errors.New("agents: the agent is already revoked")
 	// ErrNotBlocked means the agent has no block to lift.
 	ErrNotBlocked = errors.New("agents: the agent has no block to lift")
+	// ErrNoClusterChange means the environment has no recorded change of cluster to
+	// adopt, for example because another admin adopted it a moment ago.
+	ErrNoClusterChange = errors.New("agents: the environment has no cluster change to adopt")
+	// ErrClusterInUse means another environment has bound the cluster since the change
+	// was recorded, so this one cannot adopt it.
+	ErrClusterInUse = errors.New("agents: another environment already manages that cluster")
 )
 
 const (
@@ -703,6 +709,20 @@ func (s *Service) Unblock(ctx context.Context, actor audit.Actor, envID, agentID
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// Adopted is a cluster change an admin accepted.
+type Adopted struct {
+	// From is the cluster the environment was bound to; empty if it had none.
+	From string
+	// To is the cluster it is bound to now.
+	To string
+}
+
+// AdoptCluster is the audited admin action that binds an environment to the cluster
+// its managers now report.
+func (s *Service) AdoptCluster(_ context.Context, _ audit.Actor, _, _, _ string) (Adopted, error) {
+	return Adopted{}, errors.New("agents: adopting a cluster is not implemented")
 }
 
 // Node is one enrolled agent as the database knows it: what the node list shows

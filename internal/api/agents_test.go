@@ -592,3 +592,137 @@ func TestUnblockLiftsTheBlocksOfARevokedAgentAndIsNotBlockedOtherwise(t *testing
 		t.Errorf("the unblocked host was refused: %+v", c.Refuse)
 	}
 }
+
+// The adopt-cluster endpoint (plan 02-19, D-14).
+
+// pendingView is the part of an environment the cluster change shows in.
+type pendingView struct {
+	ID               string  `json:"id"`
+	PendingClusterID *string `json:"pendingClusterId"`
+	Status           struct {
+		State string `json:"state"`
+	} `json:"status"`
+}
+
+func (f *agentFix) environmentView(t *testing.T, envID string) pendingView {
+	t.Helper()
+	rec := f.req(t, http.MethodGet, "/api/environments", "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("list environments: %d %s", rec.code, rec.body)
+	}
+	var got struct {
+		Items []pendingView `json:"items"`
+	}
+	if err := json.Unmarshal(rec.body, &got); err != nil {
+		t.Fatalf("decode %s: %v", rec.body, err)
+	}
+	for _, e := range got.Items {
+		if e.ID == envID {
+			return e
+		}
+	}
+	t.Fatalf("environment %s is not listed", envID)
+	return pendingView{}
+}
+
+// clusterChanged records a change of cluster the way the handshake does.
+func (f *agentFix) clusterChanged(t *testing.T, envID, pending string) {
+	t.Helper()
+	if _, err := f.st.Write.Exec(`UPDATE environments SET cluster_changed_at = ?, pending_cluster_id = ? WHERE id = ?`,
+		f.tclk.Now().UnixNano(), pending, envID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnvironmentsListShowsThePendingClusterOnlyWhileTheClusterIsChanged(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Swarm")
+	f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}, swarmNode("alpha", true))
+	f.srv.Events.WaitLen(t, 1)
+
+	if got := f.environmentView(t, env.ID); got.PendingClusterID != nil || got.Status.State == "cluster_changed" {
+		t.Fatalf("before a change: %+v, want no pending cluster", got)
+	}
+	f.clusterChanged(t, env.ID, "cluster-2")
+	got := f.environmentView(t, env.ID)
+	if got.PendingClusterID == nil || *got.PendingClusterID != "cluster-2" || got.Status.State != "cluster_changed" {
+		t.Fatalf("after a change: %+v, want cluster-2 pending and state cluster_changed", got)
+	}
+	// A leftover pending ID with no change recorded is not shown.
+	if _, err := f.st.Write.Exec(`UPDATE environments SET cluster_changed_at = NULL WHERE id = ?`, env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.environmentView(t, env.ID); got.PendingClusterID != nil {
+		t.Fatalf("with no change recorded the pending cluster is %q", *got.PendingClusterID)
+	}
+}
+
+func TestAdoptClusterNeedsEnvironmentsManageAndRebindsThroughAnAuditedAction(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Swarm")
+	f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}, swarmNode("alpha", true))
+	f.srv.Events.WaitLen(t, 1)
+	path := "/api/environments/" + env.ID + "/adopt-cluster"
+	f.clusterChanged(t, env.ID, "cluster-2")
+
+	f.addUserWithGlobalPerms(t, "ops", "environments.read", "environments.revoke", "environments.token")
+	cookie, csrf := f.signIn(t, "ops", false)
+	if rec := f.call(t, authReq{method: http.MethodPost, path: path, cookie: cookie, csrf: csrf}); rec.Code != http.StatusForbidden {
+		t.Fatalf("adopt without environments.manage: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-ops" {
+		t.Fatalf("permission.denied entries = %+v", denied)
+	}
+	if got := f.environmentView(t, env.ID); got.PendingClusterID == nil {
+		t.Fatal("a refused adopt changed the environment")
+	}
+
+	rec := f.req(t, http.MethodPost, path, "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("adopt: %d %s", rec.code, rec.body)
+	}
+	var body struct {
+		ClusterID         string `json:"clusterId"`
+		PreviousClusterID string `json:"previousClusterId"`
+	}
+	if err := json.Unmarshal(rec.body, &body); err != nil || body.ClusterID != "cluster-2" || body.PreviousClusterID != "cluster-1" {
+		t.Fatalf("body = %s (%v), want the new and the previous cluster", rec.body, err)
+	}
+	if got := f.environmentView(t, env.ID); got.PendingClusterID != nil || got.Status.State == "cluster_changed" {
+		t.Fatalf("after the adopt: %+v, want the change cleared", got)
+	}
+	entries := f.audits(t, audit.ActionEnvironmentClusterAdopted)
+	if len(entries) != 1 || entries[0].ActorID != "id-admin" || entries[0].TargetID != env.ID {
+		t.Fatalf("environment.cluster_adopted = %+v", entries)
+	}
+
+	// A second adopt, or one for an environment that does not exist, says so.
+	if rec := f.req(t, http.MethodPost, path, ""); rec.code != http.StatusConflict || rec.ptyp != "no_cluster_change" {
+		t.Errorf("a second adopt: %d type %q %s, want 409 no_cluster_change", rec.code, rec.ptyp, rec.body)
+	}
+	if rec := f.req(t, http.MethodPost, "/api/environments/0197b8a0-0000-7000-8000-000000000000/adopt-cluster", ""); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Errorf("an unknown environment: %d type %q", rec.code, rec.ptyp)
+	}
+}
+
+func TestAnAgentOfTheAdoptedClusterIsAcceptedOnItsNextHello(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Swarm")
+	first := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}, swarmNode("alpha", true))
+	f.srv.Events.WaitLen(t, 1)
+
+	reinit := swarmNode("alpha", true)
+	reinit.Swarm.ClusterID = "cluster-2"
+	if c := f.srv.Dial(t, tunneltest.Agent{Identity: &first.conn.Identity, Facts: reinit}); c.Refuse == nil || c.Refuse.Code != wire.ReasonClusterChanged {
+		t.Fatalf("hello after the swarm was re-initialised: %+v (err %v), want cluster_changed", c.Refuse, c.Err)
+	}
+	if got := f.environmentView(t, env.ID); got.PendingClusterID == nil || *got.PendingClusterID != "cluster-2" {
+		t.Fatalf("the handshake did not record the change: %+v", got)
+	}
+	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/adopt-cluster", ""); rec.code != http.StatusOK {
+		t.Fatalf("adopt: %d %s", rec.code, rec.body)
+	}
+	if c := f.srv.Dial(t, tunneltest.Agent{Identity: &first.conn.Identity, Facts: reinit}); c.Welcome == nil {
+		t.Fatalf("hello after the adopt: %+v (err %v), want a welcome", c.Refuse, c.Err)
+	}
+}

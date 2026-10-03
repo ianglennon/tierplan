@@ -632,3 +632,71 @@ func TestAManagerOfAReinitialisedSwarmIsRefusedOnItsNextHelloAndTheEnvironmentRe
 		t.Fatalf("environment = %v %v %v, want CL1 bound, CL2 pending, recorded", cluster, pending, at)
 	}
 }
+
+func TestAdoptClusterRebindsClearsTheFlagAuditsFromAndToAndTellsTheBroker(t *testing.T) {
+	r := newRig(t)
+	n := &notices{}
+	r.svc.WithNotifier(n)
+	c := r.create(t, "prod")
+	r.bind(t, c.EnvID, "swarm", "", "CL1")
+	r.markChanged(t, c.EnvID, "CL2")
+
+	got, err := r.svc.AdoptCluster(r.ctx, ops, c.EnvID, "203.0.113.5", "test")
+	if err != nil {
+		t.Fatalf("AdoptCluster: %v", err)
+	}
+	if got.From != "CL1" || got.To != "CL2" {
+		t.Fatalf("adopted = %+v, want CL1 to CL2", got)
+	}
+	if s := r.state(t, c.EnvID); s.cluster != "CL2" || s.pending != "" || s.changedAt.Valid {
+		t.Fatalf("state = %+v, want CL2 bound and the change cleared", s)
+	}
+	rows := auditRows(t, r.st, "environment.cluster_adopted")
+	if len(rows) != 1 || !strings.Contains(rows[0], `"from":"CL1"`) || !strings.Contains(rows[0], `"to":"CL2"`) {
+		t.Fatalf("environment.cluster_adopted = %v", rows)
+	}
+	var actor, target string
+	if err := r.st.Read.QueryRow(`SELECT actor_id, target_id FROM audit_log WHERE action = 'environment.cluster_adopted'`).Scan(&actor, &target); err != nil || actor != "u-ops" || target != c.EnvID {
+		t.Fatalf("actor %q target %q, %v", actor, target, err)
+	}
+	if got := n.list(); len(got) != 1 || got[0] != c.EnvID {
+		t.Fatalf("notified %v, want the environment once", got)
+	}
+
+	// The same manager is now accepted, and a second adopt has nothing to adopt.
+	m := r.enrolFacts(t, c, manager("ENG:M2", "node-m2", "CL2", "mgr-2"))
+	req := m.hello(m.cert, m.priv)
+	req.Facts = manager("ENG:M2", "node-m2", "CL2", "mgr-2")
+	if _, err := r.svc.Hello(r.ctx, req); err != nil {
+		t.Fatalf("hello of the adopted cluster: %v", err)
+	}
+	if _, err := r.svc.AdoptCluster(r.ctx, ops, c.EnvID, "", ""); !errors.Is(err, agents.ErrNoClusterChange) {
+		t.Fatalf("a second adopt = %v, want ErrNoClusterChange", err)
+	}
+}
+
+func TestAdoptClusterWithNothingToAdoptAnUnknownEnvironmentAndAClusterAnotherEnvironmentHoldsChangesNothing(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "prod")
+	r.bind(t, c.EnvID, "swarm", "", "CL1")
+	if _, err := r.svc.AdoptCluster(r.ctx, ops, c.EnvID, "", ""); !errors.Is(err, agents.ErrNoClusterChange) {
+		t.Fatalf("no recorded change = %v, want ErrNoClusterChange", err)
+	}
+	if _, err := r.svc.AdoptCluster(r.ctx, ops, "0197b8a0-0000-7000-8000-000000000000", "", ""); !errors.Is(err, agents.ErrEnvironmentNotFound) {
+		t.Fatalf("unknown environment = %v, want ErrEnvironmentNotFound", err)
+	}
+
+	// CL2 became another environment's while this one waited.
+	other := r.create(t, "other")
+	r.bind(t, other.EnvID, "swarm", "", "CL2")
+	r.markChanged(t, c.EnvID, "CL2")
+	if _, err := r.svc.AdoptCluster(r.ctx, ops, c.EnvID, "", ""); !errors.Is(err, agents.ErrClusterInUse) {
+		t.Fatalf("a cluster another environment holds = %v, want ErrClusterInUse", err)
+	}
+	if s := r.state(t, c.EnvID); s.cluster != "CL1" || s.pending != "CL2" || !s.changedAt.Valid {
+		t.Fatalf("state = %+v, want it as it was", s)
+	}
+	if n := len(auditRows(t, r.st, "environment.cluster_adopted")); n != 0 {
+		t.Fatalf("%d adopt entries for refused adopts", n)
+	}
+}
