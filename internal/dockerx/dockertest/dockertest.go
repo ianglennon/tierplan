@@ -103,6 +103,10 @@ type FakeConfig struct {
 	// ListDelay is how long /containers/json takes to answer, so a test can
 	// make concurrent callers overlap.
 	ListDelay time.Duration
+	// PolicyDeny makes the four list endpoints answer 403 with the message an
+	// agent gives for a request its policy refuses: agent_policy_denied: followed
+	// by the method and path.
+	PolicyDeny bool
 	// Events is the history the daemon has buffered when it starts, oldest
 	// first, as /events replays it to a client that passes since.
 	Events []FakeEvent
@@ -380,6 +384,14 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p = m[3]
+	}
+
+	if cfg.PolicyDeny {
+		switch p {
+		case "/containers/json", "/images/json", "/volumes", "/networks":
+			writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+			return
+		}
 	}
 
 	switch p {

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/ianglennon/bayplan/proto/wire"
@@ -114,4 +115,31 @@ func ping(ctx context.Context, socketPath string) bool {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode == http.StatusOK
+}
+
+// denials carries refusals from the proxy, which runs on a stream per request,
+// to the control stream, which has a single writer.
+type denials struct {
+	ch      chan wire.Denied
+	dropped atomic.Int64
+}
+
+// maxDeniedMethod and maxDeniedPath cap what the server sent before it is sent
+// back: both come from the server's own request.
+const (
+	maxDeniedMethod = 16
+	maxDeniedPath   = 256
+)
+
+func newDenials() *denials { return &denials{ch: make(chan wire.Denied, 64)} }
+
+// report queues a refusal. It never blocks the request that was refused: when 64
+// are waiting the message is dropped and counted.
+func (d *denials) report(method, path, reason string) {
+	m := wire.Denied{T: wire.TypeDenied, Method: method, Path: path, Reason: reason}
+	select {
+	case d.ch <- m:
+	default:
+		d.dropped.Add(1)
+	}
 }

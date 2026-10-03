@@ -430,3 +430,100 @@ func itoa(n int) string {
 	b, _ := json.Marshal(n)
 	return string(b)
 }
+
+// denied writes one denied line on the agent's control stream.
+func sendDenied(t *testing.T, control io.Writer, method, path, reason string) {
+	t.Helper()
+	b, _ := json.Marshal(wire.Denied{T: wire.TypeDenied, Method: method, Path: path, Reason: reason})
+	if _, err := control.Write(append(b, '\n')); err != nil {
+		t.Fatalf("send a denied message: %v", err)
+	}
+}
+
+func waitEntries(t *testing.T, sink *auditSink, n int) []audit.Entry {
+	t.Helper()
+	var got []audit.Entry
+	waitFor(t, "audit entries", func() bool { got = sink.all(); return len(got) >= n })
+	return got
+}
+
+func TestADeniedMessageIsAuditedUnderTheAgentHubAndRemembered(t *testing.T) {
+	sink := &auditSink{}
+	srv := timed(t, func(h *tunnel.Hub) *tunnel.Hub { return h.WithAudit(sink) })
+	env := srv.NewEnvironment(t, "Production")
+	c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: &wire.Facts{Hostname: "node-1", EngineReachable: true}})
+	if c.Welcome == nil {
+		t.Fatalf("refused: %+v", c.Refuse)
+	}
+	srv.Events.WaitLen(t, 1)
+	control := c.OpenControl(t)
+
+	long := "/" + strings.Repeat("p", 1000)
+	sendDenied(t, control, "POST", "/containers/create", wire.DeniedReadOnly)
+	got := waitEntries(t, sink, 1)
+	e := got[0]
+	if e.Action != audit.ActionAgentPolicyDenied || e.Actor.Type != audit.ActorSystem || e.Actor.ID != "system:agent-hub" {
+		t.Errorf("entry = %+v, want agent.policy_denied under system:agent-hub", e)
+	}
+	if e.TargetID != c.Identity.AgentID || e.EnvID != env.ID || e.Result != audit.ResultDenied {
+		t.Errorf("entry target %q env %q result %q, want the agent, its environment and denied", e.TargetID, e.EnvID, e.Result)
+	}
+	for k, want := range map[string]string{"node": "node-1", "method": "POST", "endpoint": "/containers/create", "reason": wire.DeniedReadOnly} {
+		if e.Details[k] != want {
+			t.Errorf("details[%s] = %q, want %q (%v)", k, e.Details[k], want, e.Details)
+		}
+	}
+	for k := range e.Details {
+		for _, bad := range []string{"token", "key", "secret"} {
+			if strings.Contains(strings.ToLower(k), bad) {
+				t.Errorf("detail key %q names a secret", k)
+			}
+		}
+	}
+
+	s := srv.Hub.Session(c.Identity.AgentID)
+	waitFor(t, "the last denial on the session", func() bool { return s.Status().LastDenial != nil })
+	if d := s.Status().LastDenial; d.Method != "POST" || d.Endpoint != "/containers/create" || d.Reason != wire.DeniedReadOnly || d.At.IsZero() {
+		t.Errorf("last denial = %+v", d)
+	}
+
+	// What the agent sends is not trusted to be short.
+	sendDenied(t, control, strings.Repeat("M", 100), long, strings.Repeat("r", 100))
+	got = waitEntries(t, sink, 2)
+	e = got[1]
+	if len(e.Details["endpoint"]) > 256 || len(e.Details["method"]) > 16 || len(e.Details["reason"]) > 32 {
+		t.Errorf("uncapped details: endpoint %d, method %d, reason %d bytes", len(e.Details["endpoint"]), len(e.Details["method"]), len(e.Details["reason"]))
+	}
+	if isDone(s) {
+		t.Error("a denied message ended the session")
+	}
+}
+
+// An authenticated agent is not trusted to behave: a flood of denied messages must
+// not become a flood of writes on the single database writer (Pitfall 8).
+func TestAFloodOfDeniedMessagesCostsAtMostTheBurstOfAuditRowsThenOneSummary(t *testing.T) {
+	sink := &auditSink{}
+	srv := timed(t, func(h *tunnel.Hub) *tunnel.Hub { return h.WithAudit(sink) })
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	srv.Events.WaitLen(t, 1)
+	control := c.OpenControl(t)
+	s := srv.Hub.Session(c.Identity.AgentID)
+
+	for range 100 {
+		sendDenied(t, control, "GET", "/swarm", wire.DeniedAllowlist)
+	}
+	// Heartbeat after them: heartbeats and denials share one reader, so when it has
+	// seen the heartbeat it has handled every denial before it.
+	tunneltest.SendHeartbeat(t, control, true, 1)
+	waitFor(t, "the reader to catch up", func() bool { return !s.Status().LastHeartbeat.IsZero() })
+	if n := len(sink.all()); n != 20 {
+		t.Fatalf("%d audit rows for 100 denials, want the burst of 20", n)
+	}
+
+	srv.Clock.Advance(2 * time.Second)
+	sendDenied(t, control, "GET", "/swarm", wire.DeniedAllowlist)
+	got := waitEntries(t, sink, 21)
+	if got[20].Details["suppressed"] != "80" {
+		t.Errorf("the next row says suppressed=%q, want 80", got[20].Details["suppressed"])
+	}
+}

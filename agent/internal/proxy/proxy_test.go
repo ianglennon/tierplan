@@ -26,6 +26,8 @@ type fakeSocket struct {
 
 	mu   sync.Mutex
 	seen []string
+	// headers are the headers of the requests seen, in the same order.
+	headers []http.Header
 	// release lets the /events handler finish.
 	release chan struct{}
 }
@@ -58,6 +60,7 @@ func newFakeSocket(t *testing.T) *fakeSocket {
 func (f *fakeSocket) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.seen = append(f.seen, r.Method+" "+r.URL.RequestURI())
+	f.headers = append(f.headers, r.Header.Clone())
 	f.mu.Unlock()
 	w.Header().Set("Api-Version", "1.52")
 	w.Header().Set("Ostype", "linux")
@@ -112,7 +115,7 @@ func request(method, path string, headers ...string) string {
 
 func TestReadOnlyCallsReachTheEngine(t *testing.T) {
 	sock := newFakeSocket(t)
-	h := Handler(sock.path)
+	h := Handler(sock.path, Policy{}, nil)
 	for _, tc := range []struct{ method, path string }{
 		{"GET", "/_ping"},
 		{"HEAD", "/_ping"},
@@ -145,7 +148,7 @@ func TestReadOnlyCallsReachTheEngine(t *testing.T) {
 
 func TestEventsStreamIsFlushedAsItArrives(t *testing.T) {
 	sock := newFakeSocket(t)
-	resp := do(t, Handler(sock.path), get("/events")) //nolint:bodyclose // closing would drain an endless stream; the helper closes the connection
+	resp := do(t, Handler(sock.path, Policy{}, nil), get("/events")) //nolint:bodyclose // closing would drain an endless stream; the helper closes the connection
 	// The body is never closed here: Close would drain a stream that has no
 	// end. The helper closes the connection when the test finishes.
 	if resp.StatusCode != http.StatusOK {
@@ -161,7 +164,7 @@ func TestEventsStreamIsFlushedAsItArrives(t *testing.T) {
 
 func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *testing.T) {
 	sock := newFakeSocket(t)
-	h := Handler(sock.path)
+	h := Handler(sock.path, Policy{}, nil)
 	for _, tc := range []struct {
 		name, raw, wantMessage string
 	}{
@@ -207,7 +210,7 @@ func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *test
 
 func TestAnOversizedQueryIsRefused(t *testing.T) {
 	sock := newFakeSocket(t)
-	resp := do(t, Handler(sock.path), get("/containers/json?x="+strings.Repeat("a", maxQuery+1)))
+	resp := do(t, Handler(sock.path, Policy{}, nil), get("/containers/json?x="+strings.Repeat("a", maxQuery+1)))
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status %d, want 403", resp.StatusCode)
@@ -219,7 +222,7 @@ func TestAnOversizedQueryIsRefused(t *testing.T) {
 
 func TestAControlCharacterInTheTargetIsRefused(t *testing.T) {
 	sock := newFakeSocket(t)
-	resp := do(t, Handler(sock.path), "GET /info?a=\x01 HTTP/1.1\r\nHost: docker\r\n\r\n")
+	resp := do(t, Handler(sock.path, Policy{}, nil), "GET /info?a=\x01 HTTP/1.1\r\nHost: docker\r\n\r\n")
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status %d, want a refusal", resp.StatusCode)
@@ -230,7 +233,7 @@ func TestAControlCharacterInTheTargetIsRefused(t *testing.T) {
 }
 
 func TestAnUnreachableEngineAnswers502NotAPolicyDenial(t *testing.T) {
-	h := Handler(filepath.Join(t.TempDir(), "missing.sock"))
+	h := Handler(filepath.Join(t.TempDir(), "missing.sock"), Policy{}, nil)
 	resp := do(t, h, get("/_ping"))
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusBadGateway {
@@ -246,7 +249,7 @@ func TestServeConnReturnsWhenTheStreamCloses(t *testing.T) {
 	client, server := net.Pipe()
 	done := make(chan struct{})
 	go func() {
-		ServeConn(server, Handler(filepath.Join(t.TempDir(), "x.sock")))
+		ServeConn(server, Handler(filepath.Join(t.TempDir(), "x.sock"), Policy{}, nil))
 		close(done)
 	}()
 	_ = client.Close()
@@ -260,7 +263,7 @@ func TestServeConnReturnsWhenTheStreamCloses(t *testing.T) {
 func TestAKeepAliveStreamServesSeveralRequests(t *testing.T) {
 	sock := newFakeSocket(t)
 	client, server := net.Pipe()
-	go ServeConn(server, Handler(sock.path))
+	go ServeConn(server, Handler(sock.path, Policy{}, nil))
 	defer func() { _ = client.Close() }()
 	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
 	br := bufio.NewReader(client)
@@ -277,5 +280,189 @@ func TestAKeepAliveStreamServesSeveralRequests(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("request %d: %d", i, resp.StatusCode)
 		}
+	}
+}
+
+func TestReadOnlyRefusesEveryChangeWhateverTheAllowlistSays(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		method, path   string
+		policy         Policy
+		wantOK         bool
+		wantReason     string
+		hasBody, upgra bool
+	}{
+		{name: "a read with the flag set", method: "GET", path: "/info", policy: Policy{ReadOnly: true}, wantOK: true},
+		{name: "a head with the flag set", method: "HEAD", path: "/_ping", policy: Policy{ReadOnly: true}, wantOK: true},
+		{name: "a POST on an allowlisted path with the flag set", method: "POST", path: "/info", policy: Policy{ReadOnly: true}, wantReason: "read_only_flag"},
+		{name: "a POST on any other path with the flag set", method: "POST", path: "/containers/create", policy: Policy{ReadOnly: true}, hasBody: true, wantReason: "read_only_flag"},
+		{name: "a DELETE with the flag set", method: "DELETE", path: "/containers/abc", policy: Policy{ReadOnly: true}, wantReason: "read_only_flag"},
+		{name: "a POST on a non-allowlisted path without the flag", method: "POST", path: "/containers/create", hasBody: true, wantReason: "allowlist"},
+		{name: "a POST on an allowlisted path without the flag", method: "POST", path: "/info", wantReason: "allowlist"},
+		{name: "a GET off the allowlist without the flag", method: "GET", path: "/swarm", wantReason: "allowlist"},
+		{name: "a GET off the allowlist with the flag", method: "GET", path: "/swarm", policy: Policy{ReadOnly: true}, wantReason: "allowlist"},
+		{name: "an upgrade on an allowed path", method: "GET", path: "/info", upgra: true, wantReason: "allowlist"},
+		{name: "a body on a GET", method: "GET", path: "/info", hasBody: true, wantReason: "allowlist"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, reason := Allowed(tc.method, tc.path, "", tc.hasBody, tc.upgra, tc.policy)
+			if ok != tc.wantOK || reason != tc.wantReason {
+				t.Fatalf("Allowed = %v %q, want %v %q", ok, reason, tc.wantOK, tc.wantReason)
+			}
+		})
+	}
+}
+
+// Every one of these has been used to get past a path filter somewhere. None may
+// be allowed, whatever the policy.
+func TestAllowedRejectsTheTrickyPaths(t *testing.T) {
+	for _, tc := range []struct{ name, path, query string }{
+		{"a double slash", "//info", ""},
+		{"a trailing slash", "/info/", ""},
+		{"a dot segment", "/./info", ""},
+		{"an encoded dot-dot", "/%2e%2e/info", ""},
+		{"a double slash after the version", "/v1.47//info", ""},
+		{"an encoded NUL", "/info%00", ""},
+		{"a raw NUL", "/info\x00", ""},
+		{"a control character in the path", "/info\x01", ""},
+		{"a control character in the query", "/info", "a=\x01"},
+		{"a newline in the query", "/info", "a=b\nHost: evil"},
+		{"a DEL character", "/info\x7f", ""},
+		{"a five KiB query", "/containers/json", strings.Repeat("a", 5<<10)},
+		{"an encoded slash", "/containers%2Fjson", ""},
+		{"a backslash", "/containers\\json", ""},
+		{"an upper-case path", "/INFO", ""},
+		{"an absolute-form target", "http://docker/info", ""},
+		{"a path that is only a version", "/v1.47", ""},
+		{"a version with a letter", "/v1.4x/info", ""},
+		{"an empty path", "", ""},
+		{"no leading slash", "info", ""},
+		{"a unicode look-alike", "/info\u2215x", ""},
+	} {
+		for _, readOnly := range []bool{false, true} {
+			if ok, _ := Allowed("GET", tc.path, tc.query, false, false, Policy{ReadOnly: readOnly}); ok {
+				t.Errorf("%s: %q?%q was allowed (read-only %v)", tc.name, tc.path, tc.query, readOnly)
+			}
+		}
+	}
+	// And the plain forms of the same paths are allowed, so the table tests the
+	// trick and not the path.
+	for _, p := range []string{"/info", "/v1.47/info", "/_ping", "/containers/json", "/v1.52/events"} {
+		if ok, reason := Allowed("GET", p, "all=1", false, false, Policy{}); !ok {
+			t.Errorf("%s was refused (%s)", p, reason)
+		}
+	}
+}
+
+func TestEveryRefusalReportsOnDeniedOnceAndAnAllowedRequestReportsNothing(t *testing.T) {
+	sock := newFakeSocket(t)
+	type denied struct{ method, path, reason string }
+	var mu sync.Mutex
+	var got []denied
+	h := Handler(sock.path, Policy{}, func(method, path, reason string) {
+		mu.Lock()
+		got = append(got, denied{method, path, reason})
+		mu.Unlock()
+	})
+	for _, raw := range []string{
+		request("POST", "/containers/create", "Content-Length: 2\r\n") + "{}",
+		get("/swarm"),
+		get("//info"),
+		get("/containers/json?x=" + strings.Repeat("a", maxQuery+1)),
+	} {
+		resp := do(t, h, raw)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("status %d for %q, want 403", resp.StatusCode, raw[:20])
+		}
+	}
+	resp := do(t, h, get("/info"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("an allowed request answered %d", resp.StatusCode)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []denied{
+		{"POST", "/containers/create", "allowlist"},
+		{"GET", "/swarm", "allowlist"},
+		{"GET", "//info", "allowlist"},
+		{"GET", "/containers/json", "allowlist"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("onDenied ran %d times (%v), want %d", len(got), got, len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("denial %d = %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestAReadOnlyAgentReportsTheReadOnlyReasonAndNeverReachesTheEngine(t *testing.T) {
+	sock := newFakeSocket(t)
+	var mu sync.Mutex
+	var reasons []string
+	h := Handler(sock.path, Policy{ReadOnly: true}, func(_, _, reason string) {
+		mu.Lock()
+		reasons = append(reasons, reason)
+		mu.Unlock()
+	})
+	resp := do(t, h, request("POST", "/info"))
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "agent_policy_denied: POST /info") {
+		t.Fatalf("status %d body %s, want the typed refusal", resp.StatusCode, body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reasons) != 1 || reasons[0] != "read_only_flag" {
+		t.Fatalf("reasons = %v, want [read_only_flag]", reasons)
+	}
+	if len(sock.requests()) != 0 {
+		t.Fatalf("the engine saw %v", sock.requests())
+	}
+}
+
+func TestADeniedPathIsCappedWhereItIsReported(t *testing.T) {
+	sock := newFakeSocket(t)
+	var mu sync.Mutex
+	var paths []string
+	h := Handler(sock.path, Policy{}, func(_, path, _ string) {
+		mu.Lock()
+		paths = append(paths, path)
+		mu.Unlock()
+	})
+	resp := do(t, h, get("/"+strings.Repeat("a", 3000)))
+	_ = resp.Body.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 1 || len(paths[0]) != maxShownPath {
+		t.Fatalf("reported paths %d long, want one of %d", len(paths[0]), maxShownPath)
+	}
+}
+
+func TestHopByHopAndForwardingHeadersDoNotReachTheEngine(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	resp := do(t, h, get("/_ping",
+		"Keep-Alive: timeout=5\r\n", "Proxy-Authorization: Basic eDp5\r\n", "Te: trailers\r\n",
+		"Connection: X-Custom\r\n", "X-Custom: 1\r\n", "X-Forwarded-For: 203.0.113.9\r\n", "Accept: application/json\r\n"))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	sock.mu.Lock()
+	defer sock.mu.Unlock()
+	if len(sock.headers) != 1 {
+		t.Fatalf("the engine saw %d requests", len(sock.headers))
+	}
+	for _, name := range []string{"Keep-Alive", "Proxy-Authorization", "Te", "X-Custom", "X-Forwarded-For"} {
+		if v := sock.headers[0].Get(name); v != "" {
+			t.Errorf("the engine received %s: %s", name, v)
+		}
+	}
+	if sock.headers[0].Get("Accept") != "application/json" {
+		t.Errorf("an end-to-end header was dropped: %v", sock.headers[0])
 	}
 }

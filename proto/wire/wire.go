@@ -60,6 +60,17 @@ const (
 const (
 	// TypeHeartbeat is sent by the agent every heartbeatMs.
 	TypeHeartbeat = "heartbeat"
+	// TypeDenied is sent by the agent for every request its policy refused.
+	TypeDenied = "denied"
+)
+
+// Why the agent refused a request, the reason of a Denied message.
+const (
+	// DeniedAllowlist means the request is not on the agent's allowlist.
+	DeniedAllowlist = "allowlist"
+	// DeniedReadOnly means the host set BAYPLAN_AGENT_READ_ONLY and the request
+	// would change something.
+	DeniedReadOnly = "read_only_flag"
 )
 
 // Modes of an auth message.
@@ -169,6 +180,17 @@ type Heartbeat struct {
 	EngineReachable bool `json:"engineReachable"`
 	// ClockMs is the agent's clock in Unix milliseconds, for the clock-skew hint.
 	ClockMs int64 `json:"clockMs"`
+}
+
+// Denied is the agent telling the server that its policy refused a request, with
+// what was asked and why. The server records it in the audit log (D-29): it means
+// a bug in Bayplan or a server that is asking for more than it should. Method and
+// Path come from the server's own request, so they are capped on both ends.
+type Denied struct {
+	T      string `json:"t"`
+	Method string `json:"method"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
 }
 
 // Reasons are the connection failure codes of D-40. They are what the UI and

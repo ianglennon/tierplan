@@ -123,6 +123,9 @@ type reply struct {
 	heartbeatMs int    // zero: 40 ms, so a test sees heartbeats quickly
 	drop        bool   // close the connection right after the welcome
 	toAgent     []string
+	// dockerRequests are raw HTTP requests the server sends on streams it opens
+	// after the welcome, the way its Docker client would.
+	dockerRequests []string
 }
 
 // fakeServer is the server end of the agent's connection: it runs the real
@@ -136,12 +139,13 @@ type fakeServer struct {
 	nonces  [][]byte
 	kinds   []byte
 	beats   chan wire.Heartbeat
+	denied  chan wire.Denied
 	started chan int // connection number, after the welcome
 }
 
 func newFakeServer(t *testing.T, script func(n int, a wire.Auth) reply) *fakeServer {
 	t.Helper()
-	f := &fakeServer{script: script, beats: make(chan wire.Heartbeat, 256), started: make(chan int, 64)}
+	f := &fakeServer{script: script, beats: make(chan wire.Heartbeat, 256), denied: make(chan wire.Denied, 256), started: make(chan int, 64)}
 	f.ts = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(func() {
 		f.ts.CloseClientConnections()
@@ -226,12 +230,30 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	for _, line := range rep.toAgent {
 		_, _ = st.Write([]byte(line + "\n"))
 	}
+	for _, raw := range rep.dockerRequests {
+		go func() {
+			ds, err := ym.OpenStream()
+			if err != nil {
+				return
+			}
+			defer func() { _ = ds.Close() }()
+			_, _ = ds.Write(append([]byte{wire.StreamKindDockerHTTP}, raw...))
+			_, _ = io.Copy(io.Discard, ds)
+		}()
+	}
 	sc := bufio.NewScanner(br)
 	for sc.Scan() {
 		var h wire.Heartbeat
 		if json.Unmarshal(sc.Bytes(), &h) == nil && h.T == wire.TypeHeartbeat {
 			select {
 			case f.beats <- h:
+			default:
+			}
+		}
+		var d wire.Denied
+		if json.Unmarshal(sc.Bytes(), &d) == nil && d.T == wire.TypeDenied {
+			select {
+			case f.denied <- d:
 			default:
 			}
 		}
@@ -755,5 +777,96 @@ func TestTheHandshakeCarriesTheAgentsOwnClockAndTheExporterOfItsDial(t *testing.
 	}
 	if len(a.EKM) != 0 {
 		t.Errorf("a plain ws:// dial carried an exporter value: %x", a.EKM)
+	}
+}
+
+func TestTheHandshakeReportsTheHostPolicyInTheFacts(t *testing.T) {
+	for name, tc := range map[string]struct{ readOnly, selfUpdate bool }{
+		"read-only, no self update": {true, false},
+		"read-write, self update":   {false, true},
+	} {
+		srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
+		startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok", ReadOnly: tc.readOnly, SelfUpdate: tc.selfUpdate}, fastEnv())
+		a, _ := srv.authN(t, 1)
+		if a.Facts.Policy.ReadOnly != tc.readOnly || a.Facts.Policy.SelfUpdate != tc.selfUpdate {
+			t.Errorf("%s: facts.policy = %+v", name, a.Facts.Policy)
+		}
+	}
+}
+
+func TestARefusedDockerRequestIsReportedOnTheControlStream(t *testing.T) {
+	sock := fakeEngine(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("OK")) })
+	for name, tc := range map[string]struct {
+		readOnly bool
+		raw      string
+		want     wire.Denied
+	}{
+		"a write on a read-only agent": {
+			readOnly: true, raw: "POST /containers/create HTTP/1.1\r\nHost: docker\r\nContent-Length: 2\r\n\r\n{}",
+			want: wire.Denied{T: wire.TypeDenied, Method: "POST", Path: "/containers/create", Reason: wire.DeniedReadOnly},
+		},
+		"a read the allowlist does not name": {
+			raw:  "GET /swarm HTTP/1.1\r\nHost: docker\r\n\r\n",
+			want: wire.Denied{T: wire.TypeDenied, Method: "GET", Path: "/swarm", Reason: wire.DeniedAllowlist},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{dockerRequests: []string{tc.raw}} })
+			startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok", SocketPath: sock, ReadOnly: tc.readOnly}, fastEnv())
+			select {
+			case got := <-srv.denied:
+				if got != tc.want {
+					t.Fatalf("denied = %+v, want %+v", got, tc.want)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("no denied message reached the server")
+			}
+			select {
+			case extra := <-srv.denied:
+				t.Fatalf("a second denied message for one refusal: %+v", extra)
+			case <-time.After(150 * time.Millisecond):
+			}
+		})
+	}
+}
+
+func TestAnAllowedRequestSendsNoDeniedMessage(t *testing.T) {
+	sock := fakeEngine(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("OK")) })
+	srv := newFakeServer(t, func(int, wire.Auth) reply {
+		return reply{dockerRequests: []string{"GET /_ping HTTP/1.1\r\nHost: docker\r\n\r\n"}}
+	})
+	startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok", SocketPath: sock, ReadOnly: true}, fastEnv())
+	select {
+	case d := <-srv.denied:
+		t.Fatalf("a read on a read-only agent was reported as denied: %+v", d)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// The agent reports refusals without ever blocking the request: a full buffer
+// drops the message and counts it.
+func TestDenialsBufferSixtyFourAndCountTheDrops(t *testing.T) {
+	d := newDenials()
+	for range 100 {
+		d.report("GET", "/x", wire.DeniedAllowlist)
+	}
+	if got := len(d.ch); got != 64 {
+		t.Fatalf("buffered %d, want 64", got)
+	}
+	if got := d.dropped.Load(); got != 36 {
+		t.Fatalf("dropped %d, want 36", got)
+	}
+	m := <-d.ch
+	if m.T != wire.TypeDenied || m.Method != "GET" || m.Path != "/x" || m.Reason != wire.DeniedAllowlist {
+		t.Fatalf("message = %+v", m)
+	}
+}
+
+func TestDenialsCapTheMethodAndThePathTheServerSent(t *testing.T) {
+	d := newDenials()
+	d.report(strings.Repeat("M", 100), "/"+strings.Repeat("p", 1000), wire.DeniedAllowlist)
+	m := <-d.ch
+	if len(m.Method) > 16 || len(m.Path) > 256 {
+		t.Fatalf("method %d bytes, path %d bytes; want at most 16 and 256", len(m.Method), len(m.Path))
 	}
 }

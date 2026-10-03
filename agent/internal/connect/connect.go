@@ -59,6 +59,10 @@ type Config struct {
 	StateDir string
 	// BackoffMin and BackoffMax bound the reconnect delay. Zero means 1 s and 60 s.
 	BackoffMin, BackoffMax time.Duration
+	// ReadOnly makes the agent refuse every request that is not GET or HEAD, and
+	// SelfUpdate says whether the host lets the agent update itself. Both are
+	// reported in the handshake so the UI can show them (D-28).
+	ReadOnly, SelfUpdate bool
 }
 
 // runEnv is what a test replaces: the wait between attempts, the jitter and the
@@ -507,7 +511,7 @@ func serve(ctx context.Context, c *websocket.Conn, socketPath string, every time
 	}
 	defer func() { _ = sess.Close() }()
 
-	handler := proxy.Handler(socketPath)
+	handler := proxy.Handler(socketPath, proxy.Policy{}, nil)
 	go func() {
 		<-ctx.Done()
 		_ = sess.Close()

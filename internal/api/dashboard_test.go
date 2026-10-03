@@ -550,3 +550,25 @@ func TestEachListDocumentsItsOwn200Schema(t *testing.T) {
 		}
 	}
 }
+
+// An agent that refuses a read is not an offline environment: the page says what
+// was refused (plan 02-07, D-29).
+func TestAnAgentThatRefusesARequestIs502AgentPolicyDeniedNamingTheEndpoint(t *testing.T) {
+	cfg := richEngine()
+	cfg.PolicyDeny = true
+	f, e := dashEnv(t, cfg)
+	for _, what := range dataPaths {
+		rec := f.get(t, e, what)
+		if rec.code != http.StatusBadGateway || rec.ptyp != "agent_policy_denied" {
+			t.Errorf("%s: status %d type %q, want 502 agent_policy_denied: %s", what, rec.code, rec.ptyp, rec.body)
+			continue
+		}
+		var p struct{ Detail string }
+		if err := json.Unmarshal(rec.body, &p); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(p.Detail, "The agent refused a request (GET /") || !strings.HasSuffix(p.Detail, ").") {
+			t.Errorf("%s: detail %q does not name the endpoint", what, p.Detail)
+		}
+	}
+}

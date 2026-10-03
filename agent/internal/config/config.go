@@ -52,6 +52,9 @@ type Config struct {
 	// Enrolled is true when the state directory already holds an identity, so
 	// a join token is not required.
 	Enrolled bool
+	// ReadOnly refuses every Docker call that is not a read, and SelfUpdate says
+	// whether the agent may update itself (D-28).
+	ReadOnly, SelfUpdate bool
 }
 
 // Load reads the configuration. env looks up an environment variable and

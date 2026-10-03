@@ -55,6 +55,15 @@ type SessionStatus struct {
 	// beyond ClockWarnOffset. They hold for the whole session (D-45).
 	ClockOffset  time.Duration
 	ClockWarning bool
+	// LastDenial is the last request the agent refused by policy, nil when it has
+	// refused none (D-29).
+	LastDenial *Denial
+}
+
+// Denial is a request an agent refused by policy.
+type Denial struct {
+	Method, Endpoint, Reason string
+	At                       time.Time
 }
 
 // Status is the last heartbeat. It reads memory and never the database.

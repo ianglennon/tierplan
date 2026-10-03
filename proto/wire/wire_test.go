@@ -118,3 +118,21 @@ func TestAHeartbeatRoundTripsAndTheStreamKindsDiffer(t *testing.T) {
 		t.Errorf("control stream kind = %#x", StreamKindControl)
 	}
 }
+
+func TestADeniedMessageHasTheShapeTheServerReads(t *testing.T) {
+	in := Denied{T: TypeDenied, Method: "POST", Path: "/containers/create", Reason: DeniedReadOnly}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"t":"denied","method":"POST","path":"/containers/create","reason":"read_only_flag"}`
+	if string(b) != want {
+		t.Fatalf("denied = %s, want %s", b, want)
+	}
+	if out := roundTrip(t, in); out != in {
+		t.Fatalf("round trip = %+v, want %+v", out, in)
+	}
+	if DeniedAllowlist != "allowlist" || DeniedReadOnly != "read_only_flag" {
+		t.Fatalf("reasons = %q, %q", DeniedAllowlist, DeniedReadOnly)
+	}
+}

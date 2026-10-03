@@ -181,3 +181,19 @@ func TestTheStateDirectoryAndBackoffReachTheConnection(t *testing.T) {
 		t.Fatalf("connect got state %q backoff %v..%v, want /state and 2s..20s", h.gotConn.StateDir, h.gotConn.BackoffMin, h.gotConn.BackoffMax)
 	}
 }
+
+func TestThePolicyFlagsReachTheConnection(t *testing.T) {
+	h := &harness{}
+	d := h.deps(map[string]string{
+		"BAYPLAN_AGENT_URL":         "wss://bayplan.example/agent/connect",
+		"BAYPLAN_AGENT_JOIN_TOKEN":  secret,
+		"BAYPLAN_AGENT_READ_ONLY":   "true",
+		"BAYPLAN_AGENT_SELF_UPDATE": "false",
+	}, nil)
+	if code := run(d); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
+	}
+	if !h.gotConn.ReadOnly || h.gotConn.SelfUpdate {
+		t.Fatalf("connect got ReadOnly %v SelfUpdate %v, want true and false", h.gotConn.ReadOnly, h.gotConn.SelfUpdate)
+	}
+}

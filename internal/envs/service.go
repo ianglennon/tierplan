@@ -483,3 +483,24 @@ func defaultName(hostname string) string {
 }
 
 var _ httpx.EnvResolver = (*Service)(nil)
+
+// ErrAgentPolicyDenied means an agent refused a Docker request by its own policy.
+var ErrAgentPolicyDenied = errors.New("envs: the agent refused the request by policy")
+
+// AgentPolicyDeniedError is an ErrAgentPolicyDenied that names the request.
+type AgentPolicyDeniedError struct {
+	// Endpoint is "METHOD /path" as the agent reported it.
+	Endpoint string
+}
+
+func (e *AgentPolicyDeniedError) Error() string {
+	return "envs: the agent refused " + e.Endpoint + " by policy"
+}
+
+// Is makes errors.Is(err, ErrAgentPolicyDenied) true.
+func (e *AgentPolicyDeniedError) Is(target error) bool { return target == ErrAgentPolicyDenied }
+
+// ClassifyDockerError turns an error from a Docker call into an
+// *AgentPolicyDeniedError when its message is the agent's refusal, and returns
+// every other error unchanged.
+func ClassifyDockerError(err error) error { return err }

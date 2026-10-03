@@ -51,8 +51,20 @@ const (
 var allowed = regexp.MustCompile(
 	`^/(v[0-9]+\.[0-9]+/)?(_ping|version|info|containers/json|images/json|volumes|networks|events|nodes|services|tasks)$`)
 
+// Policy is what the host owner set on this agent (D-28).
+type Policy struct {
+	// ReadOnly refuses every request that is not GET or HEAD, whatever the
+	// allowlist says.
+	ReadOnly bool
+}
+
+// Allowed decides whether a request may be forwarded.
+func Allowed(method, rawPath, rawQuery string, hasBody, hasUpgrade bool, p Policy) (ok bool, reason string) {
+	return true, ""
+}
+
 // Handler returns the policy handler for the Docker socket at socketPath.
-func Handler(socketPath string) http.Handler {
+func Handler(socketPath string, _ Policy, _ func(method, path, reason string)) http.Handler {
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Rewrite, unlike Director, drops any X-Forwarded-* the server

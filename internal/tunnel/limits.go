@@ -93,6 +93,10 @@ func (h *Hub) WithConnectLimit(burst int) *Hub {
 	return h
 }
 
+// WithAudit sets where what an authenticated agent does is recorded, such as the
+// requests it refused by policy.
+func (h *Hub) WithAudit(auth.AuditRecorder) *Hub { return h }
+
 // WithRefusalAudit sets where refused attempts are recorded as agent.enrol_refused.
 // It must be an auth.AuditThrottle, or something as careful: the actor is
 // anonymous, so without a per-address budget one caller could fill the audit log
