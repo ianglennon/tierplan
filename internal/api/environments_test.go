@@ -66,6 +66,7 @@ func newEnvFix(t *testing.T, cfg dockertest.FakeConfig) *envFix {
 	svc := envs.NewService(f.st, f.aud, mon, "unix://"+fake.SocketPath(), "0123456789ab", f.clk.now)
 	f.envSvc = svc
 	f.snaps = envs.NewSnapshots(mon, 5*time.Second, f.clk.now)
+	f.agg = envs.NewAggregator(svc, f.snaps, nil, f.clk.now)
 	f.localHost.DockerHost = "unix://" + fake.SocketPath()
 	f.localHost.ProbeTimeout = 500 * time.Millisecond
 	f.localHost.Envs = svc
@@ -423,7 +424,7 @@ func TestEnvironmentAddAgentAnswers201WithTheJoinTokenAndTheAgentURL(t *testing.
 	if err := json.Unmarshal(rec.body, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Kind != "agent" || got.Name != "Production" || got.IsSelfHost || !got.Enabled || got.Status.State != "unknown" {
+	if got.Kind != "agent" || got.Name != "Production" || got.IsSelfHost || !got.Enabled || got.Status.State != "pending" {
 		t.Errorf("environment = %+v", got.envBody)
 	}
 	if got.Install == nil || !strings.HasPrefix(got.Install.JoinToken, "bpjt_"+got.ID+"_") {
@@ -763,6 +764,7 @@ func newAgentFix(t *testing.T) *agentFix {
 	f.snaps = envs.NewSnapshots(mon, 5*time.Second, tclk.Now)
 	f.hub = envs.NewHub(mon, f.snaps, log, tclk.Now)
 	t.Cleanup(f.hub.Close)
+	f.agg = envs.NewAggregator(svc, f.snaps, f.hub, tclk.Now)
 	srv := tunneltest.Start(t, tunneltest.Options{
 		Clock: tclk, Store: f.st, Observer: svc,
 		Configure: func(h *tunnel.Hub) *tunnel.Hub {
@@ -869,8 +871,8 @@ func TestAgentEnvironmentIsPendingThenOnlineThenOfflineWithReasonTimeoutAndSince
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Version: "28.4.0"}, nil)
 	e := f.whenState(t, env.ID, "online")
 	waitFor(t, "the engine read through the tunnel", func() bool { return f.environment(t, env.ID).Engine.Version == "28.4.0" })
-	if e.Name != "edge-1" || e.Status.Reason != "" || len(e.Status.Issues) != 0 {
-		t.Fatalf("environment = %+v, want the first agent's hostname as its name and plain online", e)
+	if e.Name != "Remote" || e.Status.Reason != "" || len(e.Status.Issues) != 0 {
+		t.Fatalf("environment = %+v, want the name the admin gave and plain online", e)
 	}
 
 	f.srv.Events.WaitLen(t, 1)

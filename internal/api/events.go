@@ -35,18 +35,19 @@ const (
 	recentEventsLimit = 50
 )
 
-// EventsSource is what the events routes read. *envs.Hub implements it.
+// EventsSource is what the events routes read: the events of an environment,
+// whichever target they come from. *envs.Aggregator implements it.
 type EventsSource interface {
-	// Subscribe returns the buffered events, oldest first, and the channel of
-	// the ones that follow; see envs.Hub.Subscribe.
-	Subscribe(ctx context.Context, envID string) (backlog []dockerx.EventRow, ch <-chan dockerx.EventRow, cancel func())
+	// Events returns the buffered events, oldest first, and the channel of the
+	// ones that follow; see envs.Aggregator.Events.
+	Events(ctx context.Context, envID string) (backlog []dockerx.EventRow, ch <-chan dockerx.EventRow, cancel func())
 	// Recent returns up to n buffered events, newest first.
-	Recent(envID string, n int) []dockerx.EventRow
+	Recent(ctx context.Context, envID string, n int) []dockerx.EventRow
 }
 
 // EventsDeps are the dependencies of the events routes.
 type EventsDeps struct {
-	Hub EventsSource
+	Aggregator EventsSource
 	// Heartbeat is how often an idle stream gets a comment line. Zero means 15
 	// seconds; tests shorten it.
 	Heartbeat time.Duration
@@ -153,8 +154,8 @@ func RegisterEvents(r *httpx.Router, d EventsDeps) {
 			"empty after a restart until Docker reports something, apart from what the daemon still remembers from " +
 			"the last hour. The live version of this list is a server-sent events stream with the same event data.",
 		Tags: []string{"environments"},
-	}, need, func(_ context.Context, in *EnvironmentPathInput) (*EventListOutput, error) {
-		rows := d.Hub.Recent(in.EnvID, recentEventsLimit)
+	}, need, func(ctx context.Context, in *EnvironmentPathInput) (*EventListOutput, error) {
+		rows := d.Aggregator.Recent(ctx, in.EnvID, recentEventsLimit)
 		items := make([]EventDTO, 0, len(rows))
 		for _, row := range rows {
 			items = append(items, eventDTO(row))
@@ -195,7 +196,7 @@ func serveEventStream(w http.ResponseWriter, req *http.Request, d EventsDeps, li
 	}
 	defer release()
 
-	backlog, ch, cancel := d.Hub.Subscribe(ctx, env.ID)
+	backlog, ch, cancel := d.Aggregator.Events(ctx, env.ID)
 	defer cancel()
 	if last := req.Header.Get("Last-Event-ID"); last != "" {
 		// Only what the browser has not seen. An ID the buffer no longer holds

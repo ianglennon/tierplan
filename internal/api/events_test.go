@@ -63,6 +63,7 @@ func newEventsFix(t *testing.T, cfg dockertest.FakeConfig, heartbeat time.Durati
 	f.snaps = envs.NewSnapshots(mon, 5*time.Second, f.clk.now)
 	f.hub = envs.NewHub(mon, f.snaps, slog.New(slog.DiscardHandler), time.Now)
 	t.Cleanup(f.hub.Close)
+	f.agg = envs.NewAggregator(svc, f.snaps, f.hub, f.clk.now)
 	f.eventsHeartbeat, f.eventsMaxStreams = heartbeat, maxStreams
 	f.localHost.DockerHost = "unix://" + fake.SocketPath()
 	f.localHost.ProbeTimeout = 500 * time.Millisecond

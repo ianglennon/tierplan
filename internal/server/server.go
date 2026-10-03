@@ -327,6 +327,15 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		WithConnectLimit(cfg.AgentConnectBurst).
 		WithRefusalAudit(agentAudit)
 
+	// The registry rolls an environment's health up from its agents, so it reads
+	// the live ones from the hub and uses the configured windows (D-41); every
+	// Docker read of an environment goes through the aggregator over the registry,
+	// the snapshot cache and the events hub (D-47).
+	envSvc.WithAgents(tunnelHub).WithHealth(envs.HealthConfig{
+		OfflineAfter: cfg.AgentOfflineAfter, Grace: cfg.AgentReconnectGrace,
+	})
+	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
+
 	spa := webui.Handler(web.FS(), inst.BasePath)
 	router := NewRouter(httpx.Options{
 		Fallback:       spa,
@@ -381,8 +390,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
 		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Log: log},
 		api.AgentsDeps{Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Log: log},
-		api.DashboardDeps{Snapshots: snapshots, SelfContainerID: selfID, Log: log},
-		api.EventsDeps{Hub: hub, Log: log},
+		api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
+		api.EventsDeps{Aggregator: aggregator, Log: log},
 		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
 		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Log: log}, tunnelHub.Handler())
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).

@@ -75,8 +75,10 @@ type authFixture struct {
 	// exists and the environment routes are never called.
 	envSvc *envs.Service
 	// snaps, when set with envSvc, is the snapshot cache behind the summary and
-	// list routes (plan 18).
+	// list routes (plan 18); agg is the aggregator over it that the routes read
+	// through (plan 02-11).
 	snaps *envs.Snapshots
+	agg   *envs.Aggregator
 	// hub, when set with envSvc, is the events hub behind the events routes
 	// (plan 21); eventsHeartbeat and eventsMaxStreams tune them for a test.
 	hub              *envs.Hub
@@ -150,11 +152,11 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterAgents(r, api.AgentsDeps{
 		Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst, TLSPin: func() string { return f.tlsPin }, Log: log,
 	})
-	if f.envSvc != nil && f.snaps != nil {
-		api.RegisterDashboard(r, api.DashboardDeps{Snapshots: f.snaps, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+	if f.envSvc != nil && f.agg != nil {
+		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 	}
-	if f.envSvc != nil && f.hub != nil {
-		api.RegisterEvents(r, api.EventsDeps{Hub: f.hub, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, MaxLifetime: f.eventsMaxLifetime, Log: log})
+	if f.envSvc != nil && f.agg != nil && f.hub != nil {
+		api.RegisterEvents(r, api.EventsDeps{Aggregator: f.agg, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, MaxLifetime: f.eventsMaxLifetime, Log: log})
 	}
 	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Log: log})
 	if err := httpx.VerifyAllGuarded(r); err != nil {

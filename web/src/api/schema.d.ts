@@ -113,7 +113,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -153,7 +153,7 @@ export interface paths {
         };
         /**
          * List the images of an environment
-         * @description Newest first. An untagged image is listed as <none>. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Newest first. An untagged image is listed as <none>. At most 500 rows with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listImages"];
         put?: never;
@@ -173,7 +173,7 @@ export interface paths {
         };
         /**
          * List the networks of an environment
-         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description By name. At most 500 rows with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listNetworks"];
         put?: never;
@@ -213,7 +213,7 @@ export interface paths {
         };
         /**
          * The dashboard of an environment
-         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["getEnvironmentSummary"];
         put?: never;
@@ -233,7 +233,7 @@ export interface paths {
         };
         /**
          * List the volumes of an environment
-         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description By name. At most 500 rows with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listVolumes"];
         put?: never;
@@ -253,7 +253,7 @@ export interface paths {
         };
         /**
          * List the environments the signed-in user may see
-         * @description Each environment comes with the health monitor's status. An environment the caller does not hold environments.read for is left out, so the list never reveals what the caller cannot open.
+         * @description Each environment comes with its health: for an agent environment the rollup of its agents (pending, reconnecting, online, degraded with its issues, offline, unsupported, revoked or cluster_changed, each with a stable reason code and since), for the local socket the health monitor's status. An environment the caller does not hold environments.read for is left out, so the list never reveals what the caller cannot open.
          */
         get: operations["listEnvironments"];
         put?: never;
@@ -696,6 +696,17 @@ export interface components {
             /** @description The engine version */
             version?: string;
         };
+        EnvironmentIssueBody: {
+            /** @description A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring or clock_skew */
+            code: string;
+            /** @description The node's host name, at most 64 characters; absent for an agent that has not enrolled yet */
+            node?: string;
+            /**
+             * Format: date-time
+             * @description When this began
+             */
+            since?: string;
+        };
         EnvironmentListBody: {
             items: components["schemas"]["EnvironmentBody"][] | null;
         };
@@ -715,13 +726,18 @@ export interface components {
              * @example https://example.com/error-log/abc123
              */
             instance?: string;
-            /** @description Why, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop */
+            /** @description Why, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager or no_quorum; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop */
             reason?: string;
             /**
              * Format: date-time
-             * @description environment_offline: when the engine first stopped answering
+             * @description When the environment entered this state; for offline, when contact was lost
              */
             since?: string;
+            /**
+             * @description The environment's health state, so the page can say what is wrong: pending (no agent has enrolled), reconnecting (the server just started), offline, revoked, cluster_changed or unsupported
+             * @enum {string}
+             */
+            state?: "offline" | "unsupported" | "pending" | "reconnecting" | "revoked" | "cluster_changed";
             /**
              * Format: int64
              * @description HTTP status code
@@ -750,23 +766,25 @@ export interface components {
             version?: string;
         };
         EnvironmentStatusBody: {
+            /** @description What is wrong with a degraded environment, worst first, then by node */
+            issues?: components["schemas"]["EnvironmentIssueBody"][] | null;
             /**
              * Format: date-time
-             * @description When the most recent probe finished
+             * @description When the most recent probe of the environment's engine finished
              */
             lastAttempt?: string;
-            /** @description Why it is offline or unsupported, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop */
+            /** @description Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum or cert_expiring; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop */
             reason?: string;
             /**
              * Format: date-time
-             * @description When the environment entered this state; for offline, the first failed probe
+             * @description When the environment entered this state; for offline, when contact was lost
              */
             since?: string;
             /**
-             * @description online: the engine answers and is supported. offline: it does not answer. unsupported: it answers but Bayplan does not manage it. unknown: not probed yet
+             * @description online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but Bayplan does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet
              * @enum {string}
              */
-            state: "unknown" | "online" | "offline" | "unsupported";
+            state: "unknown" | "online" | "offline" | "unsupported" | "pending" | "reconnecting" | "degraded" | "revoked" | "cluster_changed";
         };
         EnvironmentSummaryBody: {
             counts: components["schemas"]["SummaryCountsBody"];
@@ -1423,7 +1441,7 @@ export interface operations {
                     "application/json": components["schemas"]["ContainerListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1441,7 +1459,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
-            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            /** @description environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1507,7 +1525,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImageListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1525,7 +1543,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
-            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            /** @description environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1558,7 +1576,7 @@ export interface operations {
                     "application/json": components["schemas"]["NetworkListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1576,7 +1594,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
-            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            /** @description environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1642,7 +1660,7 @@ export interface operations {
                     "application/json": components["schemas"]["EnvironmentSummaryBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1660,7 +1678,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
-            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            /** @description environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1693,7 +1711,7 @@ export interface operations {
                     "application/json": components["schemas"]["VolumeListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1711,7 +1729,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
-            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            /** @description environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since. */
             503: {
                 headers: {
                     [name: string]: unknown;

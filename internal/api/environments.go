@@ -53,12 +53,36 @@ type EnvironmentsDeps struct {
 	Log *slog.Logger
 }
 
-// EnvironmentStatusBody is what the health monitor currently believes.
+// EnvironmentIssueBody is one reason an environment is degraded: a node that is
+// missing, cannot reach Docker, runs an unsupported engine, or has a certificate or
+// clock that needs attention. It carries only a fixed code and a node name.
+type EnvironmentIssueBody struct {
+	Code  string `json:"code" doc:"A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring or clock_skew"`
+	Node  string `json:"node,omitempty" doc:"The node's host name, at most 64 characters; absent for an agent that has not enrolled yet"`
+	Since string `json:"since,omitempty" format:"date-time" doc:"When this began"`
+}
+
+// EnvironmentStatusBody is the health of an environment: the rollup of its agents
+// for an agent environment (D-33), what the health monitor believes for the local
+// socket.
 type EnvironmentStatusBody struct {
-	State       string `json:"state" enum:"unknown,online,offline,unsupported" doc:"online: the engine answers and is supported. offline: it does not answer. unsupported: it answers but Bayplan does not manage it. unknown: not probed yet"`
-	Since       string `json:"since,omitempty" format:"date-time" doc:"When the environment entered this state; for offline, the first failed probe"`
-	Reason      string `json:"reason,omitempty" doc:"Why it is offline or unsupported, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop"`
-	LastAttempt string `json:"lastAttempt,omitempty" format:"date-time" doc:"When the most recent probe finished"`
+	State       string                 `json:"state" enum:"unknown,online,offline,unsupported,pending,reconnecting,degraded,revoked,cluster_changed" doc:"online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but Bayplan does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet"`
+	Since       string                 `json:"since,omitempty" format:"date-time" doc:"When the environment entered this state; for offline, when contact was lost"`
+	Reason      string                 `json:"reason,omitempty" doc:"Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum or cert_expiring; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop"`
+	LastAttempt string                 `json:"lastAttempt,omitempty" format:"date-time" doc:"When the most recent probe of the environment's engine finished"`
+	Issues      []EnvironmentIssueBody `json:"issues,omitempty" doc:"What is wrong with a degraded environment, worst first, then by node"`
+}
+
+// statusBody builds the status of an environment from its rolled-up health and the
+// time of the last probe of its engine.
+func statusBody(h envs.Health, lastAttempt time.Time) EnvironmentStatusBody {
+	body := EnvironmentStatusBody{
+		State: string(h.State), Since: rfc3339(h.Since), Reason: h.Reason, LastAttempt: rfc3339(lastAttempt),
+	}
+	for _, is := range h.Issues {
+		body.Issues = append(body.Issues, EnvironmentIssueBody{Code: is.Code, Node: is.Node, Since: rfc3339(is.Since)})
+	}
+	return body
 }
 
 // EnvironmentEngineBody identifies the engine behind an environment.
@@ -195,12 +219,7 @@ func environmentBody(e envs.Environment) EnvironmentBody {
 		IsSelfHost: e.Kind == envs.KindLocal,
 		Enabled:    e.Enabled,
 		CreatedAt:  rfc3339(e.CreatedAt),
-		Status: EnvironmentStatusBody{
-			State:       string(e.Status.State),
-			Since:       rfc3339(e.Status.Since),
-			Reason:      e.Status.Reason,
-			LastAttempt: rfc3339(e.Status.LastAttempt),
-		},
+		Status:     statusBody(e.Health, e.Status.LastAttempt),
 		Engine: EnvironmentEngineBody{
 			Name: p.EngineName, Version: p.EngineVersion, APIVersion: p.APIVersion, NegotiatedAPI: p.NegotiatedAPI,
 		},
@@ -250,7 +269,7 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		Method:      http.MethodGet,
 		Path:        "/api/environments",
 		Summary:     "List the environments the signed-in user may see",
-		Description: "Each environment comes with the health monitor's status. An environment the caller does not hold " +
+		Description: "Each environment comes with its health: for an agent environment the rollup of its agents (pending, reconnecting, online, degraded with its issues, offline, unsupported, revoked or cluster_changed, each with a stable reason code and since), for the local socket the health monitor's status. An environment the caller does not hold " +
 			"environments.read for is left out, so the list never reveals what the caller cannot open.",
 		Tags: []string{"environments"},
 	}, rbac.SelfService, func(ctx context.Context, _ *struct{}) (*EnvironmentListOutput, error) {

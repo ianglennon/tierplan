@@ -624,7 +624,7 @@ func TestAgentEnvironmentSummaryAndListsAreReadThroughTheTunnel(t *testing.T) {
 		s = decode[summaryBody](t, rec)
 		return true
 	})
-	if s.Environment.ID != env.ID || s.Environment.Name != "edge-1" || s.Environment.Type != "standalone" || s.Environment.Status.State != "online" {
+	if s.Environment.ID != env.ID || s.Environment.Name != "Remote" || s.Environment.Type != "standalone" || s.Environment.Status.State != "online" {
 		t.Errorf("environment = %+v", s.Environment)
 	}
 	if s.Engine.Version != "28.4.0" || s.Counts.Containers != 2 || s.Counts.ContainersRunning != 1 || s.Counts.Images != 1 || s.Counts.Volumes != 1 || s.Counts.Networks != 1 {

@@ -41,14 +41,17 @@ const maxListRows = 500
 // hostname.
 const minSelfIDLen = 12
 
-// SnapshotSource is what the dashboard routes read. *envs.Snapshots implements it.
-type SnapshotSource interface {
-	Get(ctx context.Context, envID string) (dockerx.Snapshot, envs.Status, error)
+// AggregateSource is what the dashboard routes read: the single path from an
+// environment to its Docker data. *envs.Aggregator implements it. A handler never
+// reaches the monitor or the snapshot cache by environment, because an agent
+// environment has no monitor of its own (D-47).
+type AggregateSource interface {
+	Snapshot(ctx context.Context, envID string) (envs.Aggregate, envs.Health, error)
 }
 
 // DashboardDeps are the dependencies of the summary and list routes.
 type DashboardDeps struct {
-	Snapshots SnapshotSource
+	Aggregator AggregateSource
 	// SelfContainerID is Bayplan's own container ID, for the isSelf flag. Empty
 	// when Bayplan does not run in a container, or cannot tell.
 	SelfContainerID string
@@ -67,8 +70,9 @@ type EnvironmentProblemEngine struct {
 // environment_unsupported. The extra members drive the full-page states.
 type EnvironmentProblem struct {
 	huma.ErrorModel
-	Since  string                    `json:"since,omitempty" format:"date-time" doc:"environment_offline: when the engine first stopped answering"`
-	Reason string                    `json:"reason,omitempty" doc:"Why, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop"`
+	State  string                    `json:"state,omitempty" enum:"offline,unsupported,pending,reconnecting,revoked,cluster_changed" doc:"The environment's health state, so the page can say what is wrong: pending (no agent has enrolled), reconnecting (the server just started), offline, revoked, cluster_changed or unsupported"`
+	Since  string                    `json:"since,omitempty" format:"date-time" doc:"When the environment entered this state; for offline, when contact was lost"`
+	Reason string                    `json:"reason,omitempty" doc:"Why, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager or no_quorum; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop"`
 	Engine *EnvironmentProblemEngine `json:"engine,omitempty" doc:"environment_unsupported: the engine that was found"`
 }
 
@@ -229,9 +233,9 @@ func problemResponses(r *httpx.Router) map[string]*huma.Response {
 	schema := r.API().OpenAPI().Components.Schemas.Schema(reflect.TypeFor[EnvironmentProblem](), true, "EnvironmentProblem")
 	media := map[string]*huma.MediaType{"application/problem+json": {Schema: schema}}
 	return map[string]*huma.Response{
-		"503": {Description: "environment_offline: the engine does not answer. Carries since and reason.", Content: media},
+		"503": {Description: "environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since.", Content: media},
 		"502": {Description: "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint.", Content: media},
-		"409": {Description: "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason.", Content: media},
+		"409": {Description: "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason.", Content: media},
 	}
 }
 
@@ -240,50 +244,44 @@ func problemResponses(r *httpx.Router) map[string]*huma.Response {
 // environment (D-48); the counts and the lists come from one short-lived
 // snapshot read live from Docker (D-57, Pitfall 22). An offline environment
 // answers 503 environment_offline and an unsupported one 409
-// environment_unsupported, so the SPA shows the full-page state (D-25, D-58).
+// environment_unsupported, so the SPA shows the full-page state (D-25, D-58). The
+// data of every environment is read through the aggregator, which knows an agent
+// environment's targets (D-47).
 func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
 	problems := problemResponses(r)
 
-	// read fetches the snapshot, turning the monitor's two sentinel errors into
-	// the problems the SPA understands.
-	read := func(ctx context.Context, envID string) (dockerx.Snapshot, envs.Status, error) {
-		snap, st, err := d.Snapshots.Get(ctx, envID)
+	// read fetches the snapshot through the aggregator, turning the environment's
+	// health into the problems the SPA understands.
+	read := func(ctx context.Context, envID string) (envs.Aggregate, envs.Health, error) {
+		agg, health, err := d.Aggregator.Snapshot(ctx, envID)
 		// An agent that refuses a read says so in the message of the Docker error.
 		err = envs.ClassifyDockerError(err)
 		var denied *envs.AgentPolicyDeniedError
+		var down envs.ErrNotOnline
 		switch {
 		case err == nil:
-			return snap, st, nil
+			return agg, health, nil
 		case errors.As(err, &denied):
 			// Not an outage: the host's policy refused it, which is either a Bayplan
 			// bug or a server asking for more than it should.
 			d.Log.Warn("an agent refused a read of an environment", "environment", envID, "endpoint", denied.Endpoint)
-			return snap, st, httpx.Problem(http.StatusBadGateway, problemAgentPolicyDenied,
+			return agg, health, httpx.Problem(http.StatusBadGateway, problemAgentPolicyDenied,
 				fmt.Sprintf("The agent refused a request (%s).", denied.Endpoint))
-		case errors.Is(err, envs.ErrUnsupported):
-			return snap, st, &EnvironmentProblem{
-				ErrorModel: huma.ErrorModel{
-					Type: problemEnvironmentUnsupported, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-					Detail: "Bayplan does not manage the Docker engine on this host.",
-				},
-				Reason: st.Reason,
-				Engine: &EnvironmentProblemEngine{Name: st.Probe.EngineName, Version: st.Probe.EngineVersion, APIVersion: st.Probe.APIVersion},
-			}
-		case errors.Is(err, envs.ErrOffline):
-			return snap, st, offlineProblem(st.Since, st.Reason)
+		case errors.As(err, &down):
+			return agg, health, notOnlineProblem(down)
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			// The caller gave up, or the read ran out of time. Say so without
 			// blaming the engine's status.
-			return snap, st, httpx.Problem(http.StatusServiceUnavailable, "", "The environment took too long to answer.")
+			return agg, health, httpx.Problem(http.StatusServiceUnavailable, "", "The environment took too long to answer.")
 		default:
 			// The engine answered its last probe but not this read. The snapshot
 			// cache has already asked the monitor to probe again.
 			d.Log.Error("reading an environment failed", "environment", envID, "error", err)
 			// There is no honest "offline since" yet, so it is left out.
-			return snap, st, offlineProblem(time.Time{}, dockerx.ReasonUnreachable)
+			return agg, health, offlineProblem(time.Time{}, dockerx.ReasonUnreachable)
 		}
 	}
 	isSelf := func(id string) bool {
@@ -299,7 +297,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		responses := maps.Clone(problems)
 		return huma.Operation{
 			OperationID: id, Method: http.MethodGet, Path: path, Summary: summary,
-			Description: description + " 503 environment_offline (with since and reason) when the engine does not answer, " +
+			Description: description + " 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; " +
 				"409 environment_unsupported (with the engine) when it is not one Bayplan manages, " +
 				"502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
 			Tags: []string{"environments"}, Responses: responses,
@@ -313,7 +311,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			"the same snapshot, cached for a few seconds."),
 		need(rbac.PermEnvironmentsRead),
 		func(ctx context.Context, in *EnvironmentPathInput) (*EnvironmentSummaryOutput, error) {
-			snap, st, err := read(ctx, in.EnvID)
+			agg, health, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
@@ -321,13 +319,11 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			if env == nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
-			p, c := st.Probe, snap.Counts
+			p, c := agg.Target.Probe, agg.Counts
 			return &EnvironmentSummaryOutput{CacheControl: "no-store", Body: EnvironmentSummaryBody{
 				Environment: SummaryEnvironmentBody{
 					ID: env.ID, Name: env.Name, Type: p.Type,
-					Status: EnvironmentStatusBody{
-						State: string(st.State), Since: rfc3339(st.Since), Reason: st.Reason, LastAttempt: rfc3339(st.LastAttempt),
-					},
+					Status: statusBody(health, agg.Target.LastAttempt),
 				},
 				Engine: SummaryEngineBody{
 					Name: p.EngineName, Version: p.EngineVersion, APIVersion: p.APIVersion, OS: p.OS, Arch: p.Arch,
@@ -339,7 +335,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 				},
 				IsWorker:        p.Type == dockerx.TypeSwarmWorker,
 				SelfContainerID: d.SelfContainerID,
-				FetchedAt:       rfc3339(snap.FetchedAt),
+				FetchedAt:       rfc3339(agg.FetchedAt),
 			}}, nil
 		})
 
@@ -348,11 +344,11 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		"Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total."),
 		need(rbac.PermContainersRead),
 		func(ctx context.Context, in *EnvironmentPathInput) (*ContainerListOutput, error) {
-			snap, _, err := read(ctx, in.EnvID)
+			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(snap.Containers, func(c dockerx.ContainerRow) ContainerItem {
+			items, total, truncated := capRows(agg.Containers, func(c dockerx.ContainerRow) ContainerItem {
 				return ContainerItem{
 					ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
 					Created: rfc3339(c.Created), Ports: c.Ports, IsSelf: isSelf(c.ID),
@@ -366,11 +362,11 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		"Newest first. An untagged image is listed as <none>. At most 500 rows with the total."),
 		need(rbac.PermImagesRead),
 		func(ctx context.Context, in *EnvironmentPathInput) (*ImageListOutput, error) {
-			snap, _, err := read(ctx, in.EnvID)
+			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(snap.Images, func(i dockerx.ImageRow) ImageItem {
+			items, total, truncated := capRows(agg.Images, func(i dockerx.ImageRow) ImageItem {
 				return ImageItem{ID: i.ID, ShortID: shortImageID(i.ID), RepoTags: i.RepoTags, Size: i.Size, Created: rfc3339(i.Created)}
 			})
 			return &ImageListOutput{CacheControl: "no-store", Body: ImageListBody{Items: items, Total: total, Truncated: truncated}}, nil
@@ -381,11 +377,11 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		"By name. At most 500 rows with the total."),
 		need(rbac.PermVolumesRead),
 		func(ctx context.Context, in *EnvironmentPathInput) (*VolumeListOutput, error) {
-			snap, _, err := read(ctx, in.EnvID)
+			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(snap.Volumes, func(v dockerx.VolumeRow) VolumeItem {
+			items, total, truncated := capRows(agg.Volumes, func(v dockerx.VolumeRow) VolumeItem {
 				return VolumeItem{Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created)}
 			})
 			return &VolumeListOutput{CacheControl: "no-store", Body: VolumeListBody{Items: items, Total: total, Truncated: truncated}}, nil
@@ -396,11 +392,11 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		"By name. At most 500 rows with the total."),
 		need(rbac.PermNetworksRead),
 		func(ctx context.Context, in *EnvironmentPathInput) (*NetworkListOutput, error) {
-			snap, _, err := read(ctx, in.EnvID)
+			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(snap.Networks, func(n dockerx.NetworkRow) NetworkItem {
+			items, total, truncated := capRows(agg.Networks, func(n dockerx.NetworkRow) NetworkItem {
 				return NetworkItem{ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created)}
 			})
 			return &NetworkListOutput{CacheControl: "no-store", Body: NetworkListBody{Items: items, Total: total, Truncated: truncated}}, nil
@@ -417,7 +413,63 @@ func offlineProblem(since time.Time, reason string) error {
 			Type: problemEnvironmentOffline, Title: http.StatusText(http.StatusServiceUnavailable), Status: http.StatusServiceUnavailable,
 			Detail: "The Docker engine of this environment is not answering.",
 		},
+		State:  string(envs.StateOffline),
 		Since:  rfc3339(since),
+		Reason: reason,
+	}
+}
+
+// notOnlineDetail is the sentence a state carries when the SPA has not replaced it
+// with its own copy, which it keys by state and reason.
+var notOnlineDetail = map[envs.State]string{
+	envs.StatePending:        "No agent has connected to this environment yet.",
+	envs.StateReconnecting:   "Bayplan has just started and is waiting for the agents of this environment to reconnect.",
+	envs.StateRevoked:        "Every agent of this environment was revoked.",
+	envs.StateClusterChanged: "The swarm behind this environment was re-initialised.",
+	envs.StateOffline:        "Bayplan cannot reach this environment.",
+}
+
+// notOnlineProblem is the problem for an environment that cannot be read: 409
+// environment_unsupported with the engine for an unsupported one, and 503
+// environment_offline, carrying the state, the D-40 reason and since, for every
+// other state. The local socket keeps its Phase 1 answers: a host that has not
+// been probed yet is offline, with the reason unreachable.
+func notOnlineProblem(e envs.ErrNotOnline) error {
+	h := e.Health
+	if h.State == envs.StateUnsupported {
+		p := e.Target.Probe
+		return &EnvironmentProblem{
+			ErrorModel: huma.ErrorModel{
+				Type: problemEnvironmentUnsupported, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+				Detail: "Bayplan does not manage the Docker engine on this host.",
+			},
+			State:  string(envs.StateUnsupported),
+			Since:  rfc3339(h.Since),
+			Reason: h.Reason,
+			Engine: &EnvironmentProblemEngine{Name: p.EngineName, Version: p.EngineVersion, APIVersion: p.APIVersion},
+		}
+	}
+	state, reason := h.State, h.Reason
+	if state == envs.StateUnknown {
+		state = envs.StateOffline // not probed yet: nothing is known to answer
+	}
+	if state == envs.StateOffline && reason == "" {
+		reason = dockerx.ReasonUnreachable
+	}
+	detail := notOnlineDetail[state]
+	if state == envs.StateOffline && reason == dockerx.ReasonUnreachable {
+		detail = "The Docker engine of this environment is not answering."
+	}
+	if detail == "" {
+		detail = notOnlineDetail[envs.StateOffline]
+	}
+	return &EnvironmentProblem{
+		ErrorModel: huma.ErrorModel{
+			Type: problemEnvironmentOffline, Title: http.StatusText(http.StatusServiceUnavailable), Status: http.StatusServiceUnavailable,
+			Detail: detail,
+		},
+		State:  string(state),
+		Since:  rfc3339(h.Since),
 		Reason: reason,
 	}
 }
