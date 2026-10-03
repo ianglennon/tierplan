@@ -103,9 +103,10 @@ func muxConfig() *yamux.Config {
 }
 
 // Run connects and serves until ctx ends. It returns nil only when ctx ended: a
-// dropped connection or a refusal is retried with backoff, never returned, so a
-// revoked agent that an administrator later unblocks comes back by itself. An
-// error is returned only for a configuration the agent cannot work with.
+// dropped connection or a refusal is retried with backoff, so a revoked agent
+// that an administrator later unblocks comes back by itself. It returns an error
+// for a configuration the agent cannot work with, and for a refusal of the very
+// first enrolment (a *RefusedError), because a wrong token does not fix itself.
 func Run(ctx context.Context, cfg Config) error {
 	return runWith(ctx, cfg, runEnv{})
 }
@@ -195,6 +196,13 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 		var wait time.Duration
 		var refused *RefusedError
 		if errors.As(err, &refused) {
+			if !r.have && !transient(refused.Code) {
+				// The very first enrolment was refused for a reason that will not
+				// pass by itself, most often a wrong or disabled join token. Say so
+				// and stop, so the operator sees the failure where they installed
+				// the agent. An enrolled agent never stops for a refusal.
+				return refused
+			}
 			wait = r.refused(refused, &failures)
 		} else {
 			failures++
@@ -230,6 +238,12 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 	}
 	*failures++
 	return backoff(*failures, r.cfg.BackoffMin, r.cfg.BackoffMax, r.env.rnd)
+}
+
+// transient reports whether a refusal is the server's trouble rather than the
+// agent's: it will pass, so the agent retries instead of ending.
+func transient(code string) bool {
+	return code == wire.RefuseRateLimited || code == wire.RefuseInternal
 }
 
 // hint is what an operator should do about a refusal code.

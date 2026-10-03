@@ -101,9 +101,10 @@ func run(d deps) int {
 	} else {
 		log.Error("the agent stopped", "error", err)
 	}
-	// Only a configuration the agent cannot work with ends it: a refusal or a
-	// dropped connection is retried inside connect.Run. A supervisor (the restart
-	// policy or the swarm) starts it again.
+	// Only a configuration the agent cannot work with, or a refusal of its very
+	// first enrolment, ends it: a dropped connection or a refusal of an enrolled
+	// agent is retried inside connect.Run. A supervisor (the restart policy or the
+	// swarm) starts it again.
 	return 1
 }
 

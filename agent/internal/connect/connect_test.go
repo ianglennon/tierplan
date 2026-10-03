@@ -672,3 +672,34 @@ func TestBackoffUsesRealRandomnessByDefault(t *testing.T) {
 		t.Fatalf("20 delays with the default jitter were all equal: %v", seen)
 	}
 }
+
+func TestARefusalOfTheVeryFirstEnrolmentEndsTheAgentSoAWrongTokenIsVisible(t *testing.T) {
+	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonAuthRejected} })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := runWith(ctx, Config{
+		URL: srv.url(), JoinToken: "bpjt_wrong", SocketPath: filepath.Join(t.TempDir(), "none.sock"), Log: slog.New(slog.DiscardHandler),
+	}, fastEnv())
+	var re *RefusedError
+	if !errors.As(err, &re) || re.Code != wire.ReasonAuthRejected {
+		t.Fatalf("Run = %v, want the auth_rejected refusal; a token that is wrong stays wrong", err)
+	}
+	if srv.attempts() != 1 {
+		t.Errorf("the agent tried %d times", srv.attempts())
+	}
+}
+
+func TestATransientRefusalOfTheFirstEnrolmentIsRetried(t *testing.T) {
+	for _, code := range []string{wire.RefuseRateLimited, wire.RefuseInternal} {
+		srv := newFakeServer(t, func(n int, _ wire.Auth) reply {
+			if n < 3 {
+				return reply{refuse: code}
+			}
+			return reply{}
+		})
+		startAgent(t, Config{URL: srv.url(), JoinToken: "bpjt_tok"}, fastEnv())
+		if a, _ := srv.authN(t, 3); a.Mode != wire.ModeEnrol {
+			t.Errorf("%s: third attempt used mode %q", code, a.Mode)
+		}
+	}
+}
