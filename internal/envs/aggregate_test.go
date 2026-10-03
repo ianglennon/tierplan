@@ -6,8 +6,11 @@ package envs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -292,7 +295,7 @@ func TestTheAggregatorReadsAStandaloneEnvironmentThroughItsAgentsTarget(t *testi
 		t.Fatalf("Snapshot = %v, %+v", err, h)
 	}
 	if len(agg.Containers) != 2 || agg.Containers[0].Name != "db" || agg.Counts.Containers != 2 || agg.Counts.ContainersRunning != 1 {
-		t.Fatalf("aggregate = %+v, want the two containers of the agent's daemon", agg.Snapshot)
+		t.Fatalf("aggregate = %+v, want the two containers of the agent's daemon", agg.Containers)
 	}
 	if agg.Target.Probe.Hostname != "edge-1" || len(agg.NotReporting) != 0 {
 		t.Fatalf("target = %+v, not reporting %v", agg.Target.Probe, agg.NotReporting)
@@ -546,7 +549,7 @@ func TestEveryVariantReadsThroughTheAggregator(t *testing.T) {
 			continue
 		}
 		if len(agg.Containers) != 1 || agg.Containers[0].Name != tc.container || agg.Target.Probe.Hostname != tc.host {
-			t.Errorf("%s: aggregate = %+v / target %+v, want container %s from %s", tc.name, agg.Snapshot, agg.Target.Probe.Hostname, tc.container, tc.host)
+			t.Errorf("%s: aggregate = %+v / target %+v, want container %s from %s", tc.name, agg.Containers, agg.Target.Probe.Hostname, tc.container, tc.host)
 		}
 		// The status rollup: the same environment through the registry.
 		e, err := r.svc.Get(context.Background(), tc.envID)
@@ -554,8 +557,7 @@ func TestEveryVariantReadsThroughTheAggregator(t *testing.T) {
 			t.Errorf("%s: Get = %v, %+v; want the same online health as the aggregator's %+v", tc.name, err, e.Health, h)
 		}
 	}
-	// A swarm manager's snapshot carries the cluster counts, and no more is
-	// fanned out until plan 21: the one manager's snapshot is the whole answer.
+	// A swarm manager's snapshot carries the cluster counts.
 	agg, _, err := r.agg.Snapshot(context.Background(), swarmEnv.ID)
 	if err != nil || agg.Counts.Nodes == nil || *agg.Counts.Nodes != 1 || agg.Counts.Services == nil || *agg.Counts.Services != 2 {
 		t.Fatalf("swarm counts = %+v, %v; want 1 node and 2 services from the manager", agg.Counts, err)
@@ -627,5 +629,287 @@ func TestRemovingAnAgentEnvironmentRevokesAndDisconnectsEveryAgentAndDeletesWhat
 		if c.Refuse == nil || c.Refuse.Code != wire.ReasonAuthRejected {
 			t.Errorf("hello after removal = %+v (err %v), want auth_rejected", c.Refuse, c.Err)
 		}
+	}
+}
+
+// The swarm fan-out (plan 02-21, ENV-02, ENV-06, D-46): every present agent is read
+// in parallel through the per-target snapshot cache, node-local rows keep their node,
+// cluster-scoped data comes from the manager in use, and a node that did not answer
+// is named instead of silently missing.
+
+// fanRig is a swarm of three managers (mgr-1 to mgr-3, mgr-2 leads) and one worker,
+// wrk-1, with a short per-node timeout so a slow node costs a fraction of a second.
+type fanRig struct {
+	*swarmRig
+	w *agentConn
+}
+
+func workerFacts(name string) *wire.Facts {
+	return &wire.Facts{
+		EngineID: "ENG:" + name, Hostname: name, EngineReachable: true,
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-" + name, Control: false},
+	}
+}
+
+func container(id, name string) dockertest.FakeContainer {
+	return dockertest.FakeContainer{ID: id, Names: []string{"/" + name}, State: "running"}
+}
+
+// newFanRig enrols the managers and the worker. cfg may change each node's daemon
+// (i is 1 to 3 for the managers and 4 for the worker) before it is started.
+func newFanRig(t *testing.T, extraNodes []dockertest.FakeNode, cfg func(i int, c *dockertest.FakeConfig)) *fanRig {
+	t.Helper()
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	s := &swarmRig{tunRig: r, nodes: managerNodes(append([]dockertest.FakeNode{
+		{ID: "node-wrk-1", Hostname: "wrk-1", Role: "worker", EngineVersion: "29.1.0", OS: "linux"},
+	}, extraNodes...)...)}
+	s.env = r.srv.NewEnvironment(t, "Swarm")
+	s.c = NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now, Publisher: r.brk, Events: r.evs, Grace: 2 * time.Minute})
+	r.svc.WithClusters(s.c)
+	r.agg.WithNodeTimeout(300 * time.Millisecond)
+	services := []dockertest.FakeService{{ID: "svc-1", Name: "web", Mode: "replicated", Running: 1, Desired: 1}, {ID: "svc-2", Name: "db", Mode: "global", Running: 4, Desired: 4}}
+	for i := 1; i <= 3; i++ {
+		c := managerConfig(i, s.nodes, services)
+		if cfg != nil {
+			cfg(i, &c)
+		}
+		s.m[i-1] = r.connect(t, s.env, c, managerFacts(i))
+	}
+	wc := dockertest.FakeConfig{Hostname: "wrk-1", SwarmState: "active", Containers: []dockertest.FakeContainer{container("w1", "svc-on-wrk-1")}}
+	if cfg != nil {
+		cfg(4, &wc)
+	}
+	f := &fanRig{swarmRig: s, w: r.connect(t, s.env, wc, workerFacts("wrk-1"))}
+	r.whenOnline(t, s.env.ID)
+	// The node list and the leader are known before anything is read.
+	if err := s.c.Refresh(context.Background(), s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func (f *fanRig) read(t *testing.T) Aggregate {
+	t.Helper()
+	agg, _, err := f.agg.Snapshot(context.Background(), f.env.ID)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	return agg
+}
+
+func containerNodes(rows []ContainerRow) []string {
+	var out []string
+	for _, c := range rows {
+		out = append(out, c.Node+"/"+c.Name)
+	}
+	return out
+}
+
+func TestAggregateSwarmReadsEveryNodeAndGivesEachRowItsNode(t *testing.T) {
+	f := newFanRig(t, nil, func(i int, c *dockertest.FakeConfig) {
+		c.Containers = []dockertest.FakeContainer{container(fmt.Sprintf("c%d", i), "web")}
+		c.Images = []dockertest.FakeImage{{ID: fmt.Sprintf("sha256:%064d", 1), RepoTags: []string{"nginx:1"}, Size: 10}}
+		c.Volumes = []dockertest.FakeVolume{{Name: "data", Driver: "local"}}
+	})
+	agg := f.read(t)
+
+	// Two nodes each run a container called web: both rows stay, told apart by node.
+	if got := strings.Join(containerNodes(agg.Containers), " "); got != "mgr-1/web mgr-2/web mgr-3/web wrk-1/web" {
+		t.Fatalf("containers = %s, want one web per node, by name then node", got)
+	}
+	if len(agg.Images) != 4 || len(agg.Volumes) != 4 {
+		t.Fatalf("images %d, volumes %d, want one of each per node (duplicates across nodes are kept)", len(agg.Images), len(agg.Volumes))
+	}
+	nodes := map[string]bool{}
+	for _, v := range agg.Volumes {
+		nodes[v.Node] = true
+	}
+	if len(nodes) != 4 {
+		t.Errorf("volume nodes = %v, want four different nodes", nodes)
+	}
+	if len(agg.NotReporting) != 0 || agg.NotReporting == nil {
+		t.Errorf("notReporting = %#v, want an empty list, not nil", agg.NotReporting)
+	}
+	// Totals are the sums, each equal to its list; the breakdown has every node.
+	c := agg.Counts
+	if c.Containers != 4 || c.ContainersRunning != 4 || c.Images != 4 || c.Volumes != 4 || c.Networks != len(agg.Networks) {
+		t.Errorf("counts = %+v, want the cluster totals", c)
+	}
+	if len(agg.ByNode) != 4 || agg.ByNode["wrk-1"].Containers != 1 || agg.ByNode["mgr-2"].Images != 1 {
+		t.Errorf("byNode = %+v, want each node's own counts", agg.ByNode)
+	}
+	// Nodes and services are the cluster's, from the manager.
+	if c.Nodes == nil || *c.Nodes != 4 || c.Services == nil || *c.Services != 2 {
+		t.Errorf("nodes/services = %v/%v, want 4 and 2 from the manager's cluster read", c.Nodes, c.Services)
+	}
+	if len(agg.Nodes) != 4 {
+		t.Errorf("nodes = %+v, want the four that answered", agg.Nodes)
+	}
+}
+
+func TestAggregateSwarmScopedNetworksComeFromTheManagerInUseOnceAndLocalOnesFromEachNode(t *testing.T) {
+	f := newFanRig(t, nil, func(i int, c *dockertest.FakeConfig) {
+		nets := []dockertest.FakeNetwork{
+			{ID: "ovl-1", Name: "ovl", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}},
+			{ID: fmt.Sprintf("br-%d", i), Name: "bridge", Driver: "bridge", Scope: "local"},
+		}
+		if i == 1 {
+			// A manager that is not the one in use: what only it lists is not shown.
+			nets = append(nets, dockertest.FakeNetwork{ID: "stale", Name: "only-on-mgr-1", Driver: "overlay", Scope: "swarm"})
+		}
+		c.Networks = nets
+	})
+	agg := f.read(t)
+
+	var cluster, local []string
+	for _, n := range agg.Networks {
+		if n.Scope == "swarm" {
+			cluster = append(cluster, n.Node+"/"+n.Name)
+		} else {
+			local = append(local, n.Node+"/"+n.Name)
+		}
+	}
+	if got := strings.Join(cluster, " "); got != "Cluster/ovl" {
+		t.Errorf("swarm networks = %q, want the overlay once, labelled Cluster, from the manager in use", got)
+	}
+	if got := strings.Join(local, " "); got != "mgr-1/bridge mgr-2/bridge mgr-3/bridge wrk-1/bridge" {
+		t.Errorf("local networks = %q, want a bridge per node", got)
+	}
+	if agg.Counts.Networks != 5 {
+		t.Errorf("network total = %d, want 5 (the list's length)", agg.Counts.Networks)
+	}
+	if agg.ByNode["mgr-1"].Networks != 1 {
+		t.Errorf("mgr-1 networks = %d, want its one local network", agg.ByNode["mgr-1"].Networks)
+	}
+}
+
+func TestAggregateSlowNodeIsNamedAndTheRestAreNotHeldUp(t *testing.T) {
+	f := newFanRig(t, nil, func(i int, c *dockertest.FakeConfig) {
+		if i == 4 {
+			c.ListDelay = 3 * time.Second
+		}
+	})
+	start := time.Now()
+	agg := f.read(t)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("the read took %v, want about the per-node timeout, not the slow node's delay", took)
+	}
+	if !reflect.DeepEqual(agg.NotReporting, []string{"wrk-1"}) {
+		t.Errorf("notReporting = %v, want the slow node by name", agg.NotReporting)
+	}
+	if got := strings.Join(containerNodes(agg.Containers), " "); got != "mgr-1/svc-on-m1 mgr-2/svc-on-m2 mgr-3/svc-on-m3" {
+		t.Errorf("containers = %s, want the three managers' rows and none of the slow node's", got)
+	}
+	if agg.Counts.Containers != 3 || len(agg.ByNode) != 3 {
+		t.Errorf("counts = %+v byNode = %v, want only the nodes that answered", agg.Counts, agg.ByNode)
+	}
+}
+
+func TestAggregateNodeWithNoAgentIsNamedWhetherItsAgentDroppedOrWasNeverEnrolled(t *testing.T) {
+	// wrk-2 is in the swarm and never had an agent; wrk-1's agent drops.
+	f := newFanRig(t, []dockertest.FakeNode{{ID: "node-wrk-2", Hostname: "wrk-2", Role: "worker", EngineVersion: "29.1.0", OS: "linux"}}, nil)
+	f.kick(t, f.w)
+	if err := f.c.Refresh(context.Background(), f.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	agg := f.read(t)
+	if !reflect.DeepEqual(agg.NotReporting, []string{"wrk-1", "wrk-2"}) {
+		t.Errorf("notReporting = %v, want the dropped agent's node and the never-enrolled one, by name", agg.NotReporting)
+	}
+	if agg.Counts.Containers != 3 {
+		t.Errorf("containers = %d, want the three managers' only", agg.Counts.Containers)
+	}
+}
+
+func TestAggregateNodeThatIsDrainedAndHasNoAgentIsNotExpectedToReport(t *testing.T) {
+	f := newFanRig(t, []dockertest.FakeNode{{ID: "node-wrk-3", Hostname: "wrk-3", Role: "worker", Availability: "drain", EngineVersion: "29.1.0", OS: "linux"}}, nil)
+	if agg := f.read(t); len(agg.NotReporting) != 0 {
+		t.Errorf("notReporting = %v, want none: a drained node gets no agent task", agg.NotReporting)
+	}
+}
+
+func TestAggregateWhenNoNodeReportsTheListsAreEmptyAndEveryNodeIsNamed(t *testing.T) {
+	f := newFanRig(t, nil, nil)
+	for _, a := range append(f.m[:], f.w) {
+		f.kick(t, a)
+	}
+	// Still inside the offline window: the environment is not offline, but nothing answers.
+	agg := f.read(t)
+	if want := []string{"mgr-1", "mgr-2", "mgr-3", "wrk-1"}; !reflect.DeepEqual(agg.NotReporting, want) {
+		t.Errorf("notReporting = %v, want %v", agg.NotReporting, want)
+	}
+	if len(agg.Containers)+len(agg.Images)+len(agg.Volumes)+len(agg.Networks) != 0 || agg.Counts.Containers != 0 {
+		t.Errorf("rows %+v, want empty lists", agg)
+	}
+	if agg.Containers == nil || agg.Networks == nil {
+		t.Error("an empty list is nil: the API would answer null")
+	}
+	if agg.Counts.Nodes != nil || agg.Counts.Services != nil {
+		t.Errorf("counts = %+v, want no cluster counts without a manager", agg.Counts)
+	}
+}
+
+func TestAggregateReadsEveryNodeAtOnceAndAtMostSixteenAtATime(t *testing.T) {
+	// 20 workers behind a 200 ms list each: serial reads would take 4 s, 16 at a time
+	// about 400 ms.
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Many")
+	r.agg.WithNodeTimeout(5 * time.Second)
+	for i := 1; i <= 20; i++ {
+		name := fmt.Sprintf("w-%02d", i)
+		r.connect(t, env, dockertest.FakeConfig{
+			Hostname: name, SwarmState: "active", ListDelay: 200 * time.Millisecond,
+			Containers: []dockertest.FakeContainer{container("c"+name, "job-"+name)},
+		}, workerFacts(name))
+	}
+	r.whenOnline(t, env.ID)
+	start := time.Now()
+	agg, _, err := r.agg.Snapshot(context.Background(), env.ID)
+	took := time.Since(start)
+	if err != nil || len(agg.Containers) != 20 || len(agg.NotReporting) != 0 {
+		t.Fatalf("Snapshot = %d containers, notReporting %v, %v; want all 20 nodes", len(agg.Containers), agg.NotReporting, err)
+	}
+	if took > 2*time.Second {
+		t.Errorf("the read took %v: the nodes were read one after another", took)
+	}
+}
+
+func TestAggregateOfAStandaloneHostIsOneNodeAndNamesNobodyMissing(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Remote")
+	r.connect(t, env, dockertest.FakeConfig{
+		Hostname: "edge-1", Containers: []dockertest.FakeContainer{container("a1", "web")},
+		Networks: []dockertest.FakeNetwork{{ID: "n1", Name: "bridge", Driver: "bridge", Scope: "local"}},
+	}, nil)
+	r.whenOnline(t, env.ID)
+	agg, _, err := r.agg.Snapshot(context.Background(), env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(containerNodes(agg.Containers), " "); got != "edge-1/web" || agg.Networks[0].Node != "edge-1" {
+		t.Errorf("rows = %s / network node %q, want everything on the one host", got, agg.Networks[0].Node)
+	}
+	if len(agg.ByNode) != 1 || agg.ByNode["edge-1"].Containers != 1 || agg.NotReporting == nil || len(agg.NotReporting) != 0 {
+		t.Errorf("byNode = %+v notReporting = %#v, want one entry and nobody missing", agg.ByNode, agg.NotReporting)
+	}
+}
+
+func TestAggregateOfTheLocalSocketIsOneNodeNamedAfterTheEngine(t *testing.T) {
+	local := dockertest.NewFake(t, dockertest.FakeConfig{
+		Hostname: "this-host", Containers: []dockertest.FakeContainer{container("l1", "local-1")},
+	})
+	r := newTunRig(t, local)
+	r.pastGrace()
+	e, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.whenOnline(t, e.ID)
+	agg, _, err := r.agg.Snapshot(context.Background(), e.ID)
+	if err != nil || len(agg.Containers) != 1 || agg.Containers[0].Node != "this-host" || agg.ByNode["this-host"].Containers != 1 {
+		t.Fatalf("aggregate = %+v, %v; want the one container on this-host", agg, err)
 	}
 }

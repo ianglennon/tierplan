@@ -21,6 +21,9 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/wire"
 )
 
 // The environment summary and the four read-only lists (plan 18, ENV-07, PLAT-06,
@@ -767,4 +770,239 @@ func TestAgentEnvironmentEventsStreamDeliversAnEventPublishedOnTheAgentsDaemon(t
 		rec := f.get(t, env.ID, "events")
 		return rec.code == http.StatusOK && strings.Contains(string(rec.body), `"name":"web"`)
 	})
+}
+
+// The summary and lists of a swarm: every node, each row with its node, the
+// nodes that did not answer by name, and a node filter (plan 02-21, ENV-02, ENV-06,
+// D-46, T-02-73, T-02-74).
+
+type nodeCountsItem struct {
+	Node       string `json:"node"`
+	Containers int    `json:"containers"`
+	Images     int    `json:"images"`
+	Volumes    int    `json:"volumes"`
+	Networks   int    `json:"networks"`
+}
+
+type swarmSummary struct {
+	summaryBody
+	NotReporting *[]string        `json:"notReporting"`
+	ByNode       []nodeCountsItem `json:"byNode"`
+}
+
+type nodeListBody[T any] struct {
+	Items        []T       `json:"items"`
+	Total        int       `json:"total"`
+	Truncated    bool      `json:"truncated"`
+	Nodes        *[]string `json:"nodes"`
+	NotReporting *[]string `json:"notReporting"`
+}
+
+type nodeContainer struct {
+	Name string `json:"name"`
+	Node string `json:"node"`
+}
+
+type nodeNetwork struct {
+	Name  string `json:"name"`
+	Scope string `json:"scope"`
+	Node  string `json:"node"`
+}
+
+type nodeNamed struct {
+	Node string `json:"node"`
+}
+
+// swarmFix is a swarm of two managers and a worker whose worker holds 501 containers,
+// so a filter and the 500-row cap can be told apart.
+type swarmFix struct {
+	*agentFix
+	env       tunneltest.Environment
+	m1, m2, w *agentConn
+}
+
+func newSwarmFix(t *testing.T) *swarmFix {
+	t.Helper()
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Swarm")
+	mgr := func(i int) (dockertest.FakeConfig, *wire.Facts) {
+		name := fmt.Sprintf("mgr-%d", i)
+		return dockertest.FakeConfig{
+			Hostname: name, SwarmState: "active", SwarmControl: true, Nodes: 3, Services: 2,
+			Containers: []dockertest.FakeContainer{{ID: fmt.Sprintf("m%d", i), Names: []string{"/web"}, State: "running"}},
+			Images:     []dockertest.FakeImage{{ID: "sha256:" + strings.Repeat("a", 64), RepoTags: []string{"nginx:1"}, Size: 5}},
+			Volumes:    []dockertest.FakeVolume{{Name: "data", Driver: "local"}},
+			Networks: []dockertest.FakeNetwork{
+				{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"},
+				{ID: fmt.Sprintf("br%d", i), Name: "bridge", Driver: "bridge", Scope: "local"},
+			},
+		}, &wire.Facts{
+			EngineID: "ENG:" + name, Hostname: name, EngineReachable: true,
+			Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-" + name, ClusterID: "cluster-1", Control: true},
+		}
+	}
+	s := &swarmFix{agentFix: f, env: env}
+	cfg, facts := mgr(1)
+	s.m1 = f.connect(t, env, cfg, facts)
+	cfg, facts = mgr(2)
+	s.m2 = f.connect(t, env, cfg, facts)
+	var many []dockertest.FakeContainer
+	for i := range 501 {
+		many = append(many, dockertest.FakeContainer{ID: fmt.Sprintf("w%03d", i), Names: []string{fmt.Sprintf("/job-%03d", i)}, State: "running"})
+	}
+	s.w = f.connect(t, env, dockertest.FakeConfig{
+		Hostname: "wrk-1", SwarmState: "active", Containers: many,
+		Networks: []dockertest.FakeNetwork{{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"}, {ID: "brw", Name: "bridge", Driver: "bridge", Scope: "local"}},
+	}, &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
+	f.whenState(t, env.ID, "online")
+	return s
+}
+
+func TestSwarmSummaryHasClusterTotalsAPerNodeBreakdownAndNobodyMissing(t *testing.T) {
+	s := newSwarmFix(t)
+	var sum swarmSummary
+	waitFor(t, "the summary", func() bool {
+		rec := s.get(t, s.env.ID, "summary")
+		if rec.code != http.StatusOK {
+			return false
+		}
+		sum = decode[swarmSummary](t, rec)
+		return true
+	})
+	if sum.Counts.Containers != 503 || sum.Counts.Images != 2 || sum.Counts.Volumes != 2 {
+		t.Errorf("counts = %+v, want the totals over the three nodes", sum.Counts)
+	}
+	// One swarm network from the manager in use, and a bridge on each of the nodes.
+	if sum.Counts.Networks != 4 {
+		t.Errorf("networks = %d, want the overlay once and three bridges", sum.Counts.Networks)
+	}
+	if sum.Counts.Nodes == nil || *sum.Counts.Nodes != 3 || sum.Counts.Services == nil || *sum.Counts.Services != 2 {
+		t.Errorf("nodes/services = %v/%v, want the manager's 3 and 2", sum.Counts.Nodes, sum.Counts.Services)
+	}
+	if sum.NotReporting == nil || len(*sum.NotReporting) != 0 {
+		t.Errorf("notReporting = %v, want an empty list (not null) when every node answered", sum.NotReporting)
+	}
+	var names []string
+	for _, n := range sum.ByNode {
+		names = append(names, n.Node)
+	}
+	if !slices.Equal(names, []string{"mgr-1", "mgr-2", "wrk-1"}) {
+		t.Fatalf("byNode = %+v, want the three nodes by name", sum.ByNode)
+	}
+	if w := sum.ByNode[2]; w.Containers != 501 || w.Networks != 1 {
+		t.Errorf("wrk-1 = %+v, want its 501 containers and one local network", w)
+	}
+}
+
+func TestSwarmSummaryNamesTheNodeThatDidNotAnswer(t *testing.T) {
+	s := newSwarmFix(t)
+	s.srv.Hub.Kick(s.w.id, tunnel.DisconnectClosed)
+	waitFor(t, "the worker to be gone", func() bool {
+		for _, v := range s.srv.Hub.Views(s.env.ID) {
+			if v.AgentID == s.w.id && v.Connected {
+				return false
+			}
+		}
+		return true
+	})
+	rec := s.get(t, s.env.ID, "summary")
+	if rec.code != http.StatusOK {
+		t.Fatalf("summary: %d %s", rec.code, rec.body)
+	}
+	sum := decode[swarmSummary](t, rec)
+	if sum.NotReporting == nil || !slices.Equal(*sum.NotReporting, []string{"wrk-1"}) {
+		t.Errorf("notReporting = %v, want the missing node by name", sum.NotReporting)
+	}
+	if sum.Counts.Containers != 2 || len(sum.ByNode) != 2 {
+		t.Errorf("counts = %+v byNode = %+v, want only the two managers' totals, not a partial figure presented as the whole", sum.Counts, sum.ByNode)
+	}
+}
+
+func TestSwarmListsCarryEachRowsNodeAndTheNodeNamesAvailableForTheFilter(t *testing.T) {
+	s := newSwarmFix(t)
+	nets := decode[nodeListBody[nodeNetwork]](t, s.get(t, s.env.ID, "networks"))
+	var rows []string
+	for _, n := range nets.Items {
+		rows = append(rows, n.Node+"/"+n.Name+"/"+n.Scope)
+	}
+	want := []string{"mgr-1/bridge/local", "mgr-2/bridge/local", "wrk-1/bridge/local", "Cluster/ovl/swarm"}
+	slices.Sort(rows)
+	slices.Sort(want)
+	if !slices.Equal(rows, want) {
+		t.Errorf("networks = %v, want %v", rows, want)
+	}
+	if nets.Nodes == nil || !slices.Equal(*nets.Nodes, []string{"Cluster", "mgr-1", "mgr-2", "wrk-1"}) {
+		t.Errorf("networks nodes = %v, want the reporting nodes and Cluster for the filter", nets.Nodes)
+	}
+	for _, what := range []string{"images", "volumes"} {
+		l := decode[nodeListBody[nodeNamed]](t, s.get(t, s.env.ID, what))
+		if l.Total != 2 || len(l.Items) != 2 || l.Items[0].Node == "" {
+			t.Errorf("%s = %+v, want one row per manager with its node", what, l)
+		}
+		if l.Nodes == nil || !slices.Equal(*l.Nodes, []string{"mgr-1", "mgr-2", "wrk-1"}) || l.NotReporting == nil || len(*l.NotReporting) != 0 {
+			t.Errorf("%s nodes %v notReporting %v, want three nodes and nobody missing", what, l.Nodes, l.NotReporting)
+		}
+	}
+}
+
+func TestSwarmContainerListFiltersByNodeBeforeTheCapAndKeepsEveryNodeNameForTheFilter(t *testing.T) {
+	s := newSwarmFix(t)
+	all := decode[nodeListBody[nodeContainer]](t, s.get(t, s.env.ID, "containers"))
+	if all.Total != 503 || !all.Truncated || len(all.Items) != 500 {
+		t.Fatalf("unfiltered: total %d truncated %v items %d, want 503 / true / 500", all.Total, all.Truncated, len(all.Items))
+	}
+	w := decode[nodeListBody[nodeContainer]](t, s.get(t, s.env.ID, "containers?node=wrk-1"))
+	if w.Total != 501 || !w.Truncated || len(w.Items) != 500 {
+		t.Errorf("wrk-1: total %d truncated %v items %d, want the cap applied after the filter: 501 / true / 500", w.Total, w.Truncated, len(w.Items))
+	}
+	m := decode[nodeListBody[nodeContainer]](t, s.get(t, s.env.ID, "containers?node=mgr-2"))
+	if m.Total != 1 || m.Truncated || len(m.Items) != 1 || m.Items[0].Node != "mgr-2" {
+		t.Errorf("mgr-2 = %+v, want its one container", m)
+	}
+	if m.Nodes == nil || !slices.Equal(*m.Nodes, []string{"mgr-1", "mgr-2", "wrk-1"}) {
+		t.Errorf("nodes = %v, want every reporting node even with a filter on", m.Nodes)
+	}
+	none := decode[nodeListBody[nodeContainer]](t, s.get(t, s.env.ID, "containers?node=nobody"))
+	if none.Total != 0 || none.Items == nil || len(none.Items) != 0 {
+		t.Errorf("an unknown node = %+v, want an empty list that is not null", none)
+	}
+	if rec := s.get(t, s.env.ID, "containers?node="+strings.Repeat("n", 129)); rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("a node of 129 characters: %d, want 422 (T-02-74)", rec.code)
+	}
+}
+
+func TestStandaloneListsAndSummaryAreUnchangedApartFromTheOneNode(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Containers: []dockertest.FakeContainer{{ID: "a1", Names: []string{"/web"}, State: "running"}}}, nil)
+	f.whenState(t, env.ID, "online")
+	var sum swarmSummary
+	waitFor(t, "the summary", func() bool {
+		rec := f.get(t, env.ID, "summary")
+		if rec.code != http.StatusOK {
+			return false
+		}
+		sum = decode[swarmSummary](t, rec)
+		return true
+	})
+	if len(sum.ByNode) != 1 || sum.ByNode[0].Node != "edge-1" || sum.ByNode[0].Containers != 1 || sum.NotReporting == nil || len(*sum.NotReporting) != 0 {
+		t.Errorf("summary = %+v, want the one host and nobody missing", sum)
+	}
+	l := decode[nodeListBody[nodeContainer]](t, f.get(t, env.ID, "containers"))
+	if l.Total != 1 || l.Items[0].Node != "edge-1" || l.Nodes == nil || !slices.Equal(*l.Nodes, []string{"edge-1"}) {
+		t.Errorf("containers = %+v, want the row on edge-1", l)
+	}
+}
+
+func TestLocalSocketListsNameTheEngineAsTheOnlyNode(t *testing.T) {
+	f, e := dashEnv(t, richEngine())
+	waitFor(t, "the summary", func() bool { return f.get(t, e, "summary").code == http.StatusOK })
+	sum := decode[swarmSummary](t, f.get(t, e, "summary"))
+	if len(sum.ByNode) != 1 || sum.ByNode[0].Node != "node-1" || sum.ByNode[0].Containers != 3 {
+		t.Errorf("byNode = %+v, want the one engine", sum.ByNode)
+	}
+	l := decode[nodeListBody[nodeContainer]](t, f.get(t, e, "containers?node=node-1"))
+	if l.Total != 3 || l.Items[0].Node != "node-1" {
+		t.Errorf("containers = %+v, want all three on node-1", l)
+	}
 }

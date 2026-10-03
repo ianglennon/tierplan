@@ -348,7 +348,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(agg.Containers, func(c dockerx.ContainerRow) ContainerItem {
+			items, total, truncated := capRows(agg.Containers, func(c envs.ContainerRow) ContainerItem {
 				return ContainerItem{
 					ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
 					Created: rfc3339(c.Created), Ports: c.Ports, IsSelf: isSelf(c.ID),
@@ -366,7 +366,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(agg.Images, func(i dockerx.ImageRow) ImageItem {
+			items, total, truncated := capRows(agg.Images, func(i envs.ImageRow) ImageItem {
 				return ImageItem{ID: i.ID, ShortID: shortImageID(i.ID), RepoTags: i.RepoTags, Size: i.Size, Created: rfc3339(i.Created)}
 			})
 			return &ImageListOutput{CacheControl: "no-store", Body: ImageListBody{Items: items, Total: total, Truncated: truncated}}, nil
@@ -381,7 +381,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(agg.Volumes, func(v dockerx.VolumeRow) VolumeItem {
+			items, total, truncated := capRows(agg.Volumes, func(v envs.VolumeRow) VolumeItem {
 				return VolumeItem{Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created)}
 			})
 			return &VolumeListOutput{CacheControl: "no-store", Body: VolumeListBody{Items: items, Total: total, Truncated: truncated}}, nil
@@ -396,7 +396,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			if err != nil {
 				return nil, err
 			}
-			items, total, truncated := capRows(agg.Networks, func(n dockerx.NetworkRow) NetworkItem {
+			items, total, truncated := capRows(agg.Networks, func(n envs.NetworkRow) NetworkItem {
 				return NetworkItem{ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created)}
 			})
 			return &NetworkListOutput{CacheControl: "no-store", Body: NetworkListBody{Items: items, Total: total, Truncated: truncated}}, nil

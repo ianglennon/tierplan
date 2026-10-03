@@ -415,8 +415,8 @@ func TestNoManagerConnectedIsNotAManager(t *testing.T) {
 	}
 	// Node-local data from the workers keeps working.
 	agg, _, err := r.agg.Snapshot(context.Background(), env.ID)
-	if err != nil || len(agg.Containers) != 1 {
-		t.Fatalf("Snapshot = %+v, %v; want a worker's containers", agg.Snapshot, err)
+	if err != nil || len(agg.Containers) != 2 {
+		t.Fatalf("Snapshot = %+v, %v; want both workers' containers", agg.Containers, err)
 	}
 }
 
@@ -446,8 +446,8 @@ func TestQuorumLossIsNoQuorumWhileNodeLocalDataKeepsWorking(t *testing.T) {
 		t.Errorf("nodes = %+v: stale cluster counts were shown while the quorum is lost", e.Overview.Nodes)
 	}
 	agg, _, err := s.agg.Snapshot(ctx, s.env.ID)
-	if err != nil || len(agg.Containers) != 1 {
-		t.Fatalf("Snapshot = %+v, %v; want node-local containers while the quorum is lost", agg.Snapshot, err)
+	if err != nil || len(agg.Containers) != 3 {
+		t.Fatalf("Snapshot = %+v, %v; want every manager's node-local containers while the quorum is lost", agg.Containers, err)
 	}
 	if agg.Counts.Nodes != nil || agg.Counts.Services != nil {
 		t.Errorf("counts = %+v, want no cluster counts without a quorum", agg.Counts)

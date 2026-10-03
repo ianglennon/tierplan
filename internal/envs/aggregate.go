@@ -14,14 +14,74 @@ import (
 // NodeRef names one node an aggregate was read from.
 type NodeRef struct{ ID, Name, Role string }
 
-// Aggregate is what an environment's Docker read answers with.
+// Limits of the swarm fan-out (D-46, T-02-72).
+const (
+	// defaultNodeTimeout is how long one node may take before it is named in
+	// NotReporting.
+	defaultNodeTimeout = 5 * time.Second
+	// fanOutLimit is how many nodes are read at once.
+	fanOutLimit = 16
+)
+
+// swarmScope is the Scope Docker gives a cluster-wide network.
+const swarmScope = "swarm"
+
+// NodeCluster is the Node of a swarm-scoped network: it belongs to the cluster, not
+// to the manager it was read from (D-46).
+const NodeCluster = "Cluster"
+
+// The row types of an aggregate are Docker's, plus the node the row was read from.
+// The node lives here and not in dockerx, which stays unaware of nodes.
+
+// ContainerRow is a container and the node it runs on.
+type ContainerRow struct {
+	dockerx.ContainerRow
+	Node string
+}
+
+// ImageRow is an image and the node that holds it.
+type ImageRow struct {
+	dockerx.ImageRow
+	Node string
+}
+
+// VolumeRow is a volume and the node that holds it.
+type VolumeRow struct {
+	dockerx.VolumeRow
+	Node string
+}
+
+// NetworkRow is a network and the node it was read from: the node's own for a local
+// network, NodeCluster for a swarm-scoped one.
+type NetworkRow struct {
+	dockerx.NetworkRow
+	Node string
+}
+
+// Aggregate is what an environment's Docker read answers with: the rows of every
+// node that answered, each with its node, and the names of the nodes that did not.
+// A standalone or local environment is one node.
 type Aggregate struct {
-	dockerx.Snapshot
-	// Target is the monitor's status of the target the read went to.
+	Containers []ContainerRow
+	Images     []ImageRow
+	Volumes    []VolumeRow
+	Networks   []NetworkRow
+	// Counts are the totals of the rows above; each equals the length of its list.
+	// Nodes and Services are the cluster's, from the manager in use, and nil where
+	// no manager answered.
+	Counts dockerx.Counts
+	// ByNode is each reporting node's own counts, by node name. A node's networks
+	// are its local ones: a swarm-scoped network is counted in the total only.
+	ByNode map[string]dockerx.Counts
+	// FetchedAt is when the oldest of the reads was taken.
+	FetchedAt time.Time
+	// Target is the monitor's status of the target the read went to: the manager
+	// in use for a swarm.
 	Target Status
 	// Nodes are the nodes the data was read from.
 	Nodes []NodeRef
-	// NotReporting names the nodes whose data is missing (swarm aggregation, plan 21).
+	// NotReporting names the nodes expected to answer whose rows are left out:
+	// agent missing, read failed or timed out (D-46). It is never nil.
 	NotReporting []string
 }
 
@@ -62,6 +122,8 @@ type Aggregator struct {
 	snaps  *Snapshots
 	events *Hub
 	now    func() time.Time
+	// nodeTimeout is how long one node of a swarm may take.
+	nodeTimeout time.Duration
 }
 
 // NewAggregator returns the aggregator over the registry, the snapshot cache and
@@ -70,7 +132,14 @@ func NewAggregator(svc *Service, snaps *Snapshots, events *Hub, now func() time.
 	if now == nil {
 		now = time.Now
 	}
-	return &Aggregator{svc: svc, snaps: snaps, events: events, now: now}
+	return &Aggregator{svc: svc, snaps: snaps, events: events, now: now, nodeTimeout: defaultNodeTimeout}
+}
+
+// WithNodeTimeout sets how long one node of a swarm may take to answer before it is
+// named in NotReporting; the default is five seconds. It returns a for chaining.
+func (a *Aggregator) WithNodeTimeout(d time.Duration) *Aggregator {
+	a.nodeTimeout = d
+	return a
 }
 
 // Snapshot reads the counts and lists of an environment through its target and
@@ -111,7 +180,51 @@ func (a *Aggregator) Snapshot(ctx context.Context, envID string) (Aggregate, Hea
 	case err != nil:
 		return Aggregate{}, h, err
 	}
-	return Aggregate{Snapshot: snap, Target: st, Nodes: nodesOf(in)}, h, nil
+	ref := nodeOf(in, key, st)
+	return oneNode(snap, st, ref, st.Probe.Type == dockerx.TypeSwarmManager), h, nil
+}
+
+// nodeOf is the node a single target's rows come from: the host name its agent
+// reported, or for the local socket the engine's own.
+func nodeOf(in RollupInput, key string, st Status) NodeRef {
+	for _, a := range in.Agents {
+		if AgentTarget(a.ID) == key {
+			return NodeRef{ID: a.ID, Name: nodeName(a), Role: a.Role}
+		}
+	}
+	name := cleanText(st.Probe.Hostname, maxNodeLen)
+	if name == "" {
+		name = "local"
+	}
+	return NodeRef{ID: in.EnvID, Name: name, Role: st.Probe.Type}
+}
+
+// oneNode is the aggregate of an environment read through one target.
+func oneNode(snap dockerx.Snapshot, st Status, ref NodeRef, manager bool) Aggregate {
+	node := ref.Name
+	agg := Aggregate{
+		Counts: snap.Counts, ByNode: map[string]dockerx.Counts{node: snap.Counts},
+		FetchedAt: snap.FetchedAt, Target: st, Nodes: []NodeRef{ref}, NotReporting: []string{},
+		Containers: make([]ContainerRow, 0, len(snap.Containers)), Images: make([]ImageRow, 0, len(snap.Images)),
+		Volumes: make([]VolumeRow, 0, len(snap.Volumes)), Networks: make([]NetworkRow, 0, len(snap.Networks)),
+	}
+	for _, c := range snap.Containers {
+		agg.Containers = append(agg.Containers, ContainerRow{c, node})
+	}
+	for _, i := range snap.Images {
+		agg.Images = append(agg.Images, ImageRow{i, node})
+	}
+	for _, v := range snap.Volumes {
+		agg.Volumes = append(agg.Volumes, VolumeRow{v, node})
+	}
+	for _, n := range snap.Networks {
+		label := node
+		if manager && n.Scope == swarmScope {
+			label = NodeCluster
+		}
+		agg.Networks = append(agg.Networks, NetworkRow{n, label})
+	}
+	return agg
 }
 
 // local reads the local socket: its health is the monitor's status, kept exactly as
@@ -126,10 +239,7 @@ func (a *Aggregator) local(ctx context.Context, in RollupInput) (Aggregate, Heal
 	case err != nil:
 		return Aggregate{}, h, err
 	}
-	return Aggregate{
-		Snapshot: snap, Target: st,
-		Nodes: []NodeRef{{ID: in.EnvID, Name: st.Probe.Hostname, Role: st.Probe.Type}},
-	}, h, nil
+	return oneNode(snap, st, nodeOf(in, in.EnvID, st), st.Probe.Type == dockerx.TypeSwarmManager), h, nil
 }
 
 // between is the error for an environment whose agents are present but have no
@@ -150,15 +260,6 @@ func primaryStatus(svc *Service, in RollupInput) Status {
 		return svc.mon.Status(key)
 	}
 	return Status{State: StateUnknown}
-}
-
-// nodesOf names the nodes an aggregate is read from: the connected agents.
-func nodesOf(in RollupInput) []NodeRef {
-	var out []NodeRef
-	for _, a := range connectedAgents(in) {
-		out = append(out, NodeRef{ID: a.ID, Name: nodeName(a), Role: a.Role})
-	}
-	return out
 }
 
 // primaryKey is the target the events of an environment come from.
