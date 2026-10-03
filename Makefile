@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-int smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke edge-context e2e e2e-image
+.PHONY: web build gen gen-check tidy-check test test-int smoke dev dev-go dev-web spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -144,16 +144,23 @@ actionlint:
 GORELEASER_VERSION := v2.18.2
 GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 
-# Validates .goreleaser.yaml, builds this machine's binary the way a release
-# does (SPA, ldflags, trimpath) and runs its version subcommand. Needs no Docker.
+# Validates .goreleaser.yaml, builds this machine's server and agent binaries the
+# way a release does (SPA, ldflags, trimpath) and runs each one's version output.
+# Needs no Docker.
 release-check:
 	$(GORELEASER) check
 	@mkdir -p bin
-	$(GORELEASER) build --snapshot --clean --single-target --output bin/bayplan-release
+	$(GORELEASER) build --snapshot --clean --single-target --id bayplan --output bin/bayplan-release
 	@v="$$(bin/bayplan-release version)"; echo "$$v"; \
 	case "$$v" in \
 	  v[0-9]*) ;; \
 	  *) echo "release-check: the release binary reports '$$v', expected a version that starts with v and a number" >&2; exit 1 ;; \
+	esac
+	$(GORELEASER) build --snapshot --clean --single-target --id bayplan-agent --output bin/bayplan-agent-release
+	@v="$$(bin/bayplan-agent-release --version)"; echo "$$v"; \
+	case "$$v" in \
+	  v[0-9]*) ;; \
+	  *) echo "release-check: the release agent reports '$$v', expected a version that starts with v and a number" >&2; exit 1 ;; \
 	esac
 
 # The release image for this machine's engine, built exactly as a release builds
@@ -166,16 +173,46 @@ image:
 image-smoke:
 	scripts/image-smoke.sh
 
-# The build context for the :edge image: both binaries laid out as
-# $TARGETPLATFORM/bayplan next to the Dockerfile, as goreleaser does it. CI
-# pushes it with buildx from the main branch.
+# The agent image for this machine's architecture, tagged bayplan-agent:dev and
+# loaded into the local engine. The context is laid out as goreleaser lays it
+# out: $TARGETPLATFORM/bayplan-agent plus agent/image/state/. The binary is a
+# plain build (version "dev"); set AGENT_VERSION=v0.1.0 to stamp one. Needs
+# Docker with buildx.
+AGENT_ARCH ?= $(shell go env GOARCH)
+AGENT_CTX := .devdata/agent-image
+AGENT_VERSION_PKG := github.com/ianglennon/bayplan/agent/internal/version
+agent-image:
+	rm -rf $(AGENT_CTX)
+	mkdir -p $(AGENT_CTX)/linux/$(AGENT_ARCH) $(AGENT_CTX)/agent/image
+	cp -R agent/image/state $(AGENT_CTX)/agent/image/state
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(AGENT_ARCH) go -C agent build -trimpath \
+		-ldflags "-s -w $(if $(AGENT_VERSION),-X $(AGENT_VERSION_PKG).Version=$(AGENT_VERSION))" \
+		-o $(CURDIR)/$(AGENT_CTX)/linux/$(AGENT_ARCH)/bayplan-agent ./cmd/bayplan-agent
+	docker buildx build --platform linux/$(AGENT_ARCH) -f agent/Dockerfile -t bayplan-agent:dev --load $(AGENT_CTX)
+
+# Runs bayplan-agent:dev with the documented hardening flags: UID 1000, no
+# root capability left, no-new-privileges (also without the security option, as
+# a swarm service runs it), a writable state volume and the Docker socket. Needs
+# Docker, python3 and tar.
+agent-image-smoke:
+	scripts/agent-image-smoke.sh
+
+# The build contexts for the :edge images: the binaries laid out as
+# $TARGETPLATFORM/bayplan (server) and $TARGETPLATFORM/bayplan-agent (agent)
+# next to their Dockerfiles, as goreleaser does it. CI pushes them with buildx
+# from the main branch.
 edge-context:
 	$(GORELEASER) build --snapshot --clean
-	rm -rf dist/edge
+	rm -rf dist/edge dist/edge-agent
 	mkdir -p dist/edge/linux/amd64 dist/edge/linux/arm64
-	cp "$$(find dist -path 'dist/edge' -prune -o -type f -name bayplan -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/bayplan
-	cp "$$(find dist -path 'dist/edge' -prune -o -type f -name bayplan -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/bayplan
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name bayplan -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/bayplan
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name bayplan -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/bayplan
 	cp Dockerfile dist/edge/Dockerfile
+	mkdir -p dist/edge-agent/linux/amd64 dist/edge-agent/linux/arm64 dist/edge-agent/agent/image
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name bayplan-agent -path '*linux_amd64*' -print | head -n 1)" dist/edge-agent/linux/amd64/bayplan-agent
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name bayplan-agent -path '*linux_arm64*' -print | head -n 1)" dist/edge-agent/linux/arm64/bayplan-agent
+	cp -R agent/image/state dist/edge-agent/agent/image/state
+	cp agent/Dockerfile dist/edge-agent/Dockerfile
 
 # --- End-to-end (D-80, RESEARCH Pattern 11) ---
 # The built image under Docker Compose with a docker:29-dind sidecar, driven by

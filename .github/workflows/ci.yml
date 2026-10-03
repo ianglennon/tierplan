@@ -150,6 +150,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: make build && make smoke
+      # The agent image under the install commands' hardening flags: UID 1000,
+      # no-new-privileges, a writable state volume, the Docker socket.
+      - run: make agent-image agent-image-smoke
 
   dco:
     runs-on: ubuntu-24.04
@@ -308,19 +311,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      - name: Build both binaries and the image context
+      - name: Build both binaries and the image contexts
         run: make edge-context
-      - name: Build, push and sign the edge image
+      # Both images are pushed and signed in this one step, so nothing can leave
+      # an :edge tag pushed but unsigned (WR-11).
+      - name: Build, push and sign the edge images
         run: |
           set -euo pipefail
-          docker buildx build dist/edge \
-            --platform linux/amd64,linux/arm64 \
-            --tag ghcr.io/ianglennon/bayplan:edge \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            --label "org.opencontainers.image.version=edge" \
-            --sbom=true \
-            --push \
-            --metadata-file "${RUNNER_TEMP}/edge-metadata.json"
-          digest="$(jq -r '."containerimage.digest"' "${RUNNER_TEMP}/edge-metadata.json")"
-          test -n "${digest}" && test "${digest}" != null
-          cosign sign --yes "ghcr.io/ianglennon/bayplan@${digest}"
+          publish() {
+            # publish NAME CONTEXT: push ghcr.io/ianglennon/NAME:edge, then sign its digest.
+            local name="$1" context="$2" meta digest
+            meta="${RUNNER_TEMP}/${name}-edge-metadata.json"
+            docker buildx build "${context}" \
+              --platform linux/amd64,linux/arm64 \
+              --tag "ghcr.io/ianglennon/${name}:edge" \
+              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --label "org.opencontainers.image.version=edge" \
+              --sbom=true \
+              --push \
+              --metadata-file "${meta}"
+            digest="$(jq -r '."containerimage.digest"' "${meta}")"
+            test -n "${digest}" && test "${digest}" != null
+            cosign sign --yes "ghcr.io/ianglennon/${name}@${digest}"
+          }
+          publish bayplan dist/edge
+          publish bayplan-agent dist/edge-agent
