@@ -14,6 +14,7 @@
       "menu": "Switch environment"
     },
     "nav": {
+      "environments": "Environments",
       "dashboard": "Dashboard",
       "resources": "Resources",
       "containers": "Containers",

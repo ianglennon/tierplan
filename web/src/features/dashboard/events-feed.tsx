@@ -4,6 +4,7 @@
 import { Box, HardDrive, Layers, type LucideIcon, Network } from "lucide-react";
 import { useState } from "react";
 
+import { LiveChip } from "@/components/live-chip";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,30 +29,6 @@ const ICONS: Record<EventType, LucideIcon> = {
 
 // How many characters of an ID stand in for a name Docker did not give.
 const SHORT_ID = 12;
-
-// LiveChip says how the feed is connected. It shows only while the stream is
-// connected or retrying: once the feed has fallen back to polling there is no
-// chip, so it never claims freshness the feed does not have (T-01-93). The
-// pulse is off under prefers-reduced-motion.
-function LiveChip({ state }: { state: "live" | "reconnecting" }) {
-  const t = useT();
-  const live = state === "live";
-  return (
-    <output className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs">
-      <span
-        aria-hidden="true"
-        className={
-          live
-            ? "inline-block size-2 shrink-0 animate-pulse rounded-full bg-status-online motion-reduce:animate-none"
-            : "inline-block size-2 shrink-0 rounded-full bg-status-warning"
-        }
-      />
-      <span className={live ? "text-status-online-text" : "text-status-warning-text"}>
-        {live ? t("dashboard.events.live") : t("dashboard.events.reconnecting")}
-      </span>
-    </output>
-  );
-}
 
 // EventRow is one event: when, what kind, what happened, to what, and up to two
 // facts about it (image, then exit code). Names come from the daemon and are

@@ -161,6 +161,17 @@ describe("home redirect", () => {
 });
 
 describe("dashboard", () => {
+  it("holds a 64-character name to two lines and keeps the whole name in a title", async () => {
+    const long = "n".repeat(64);
+    environments = () => Response.json({ items: [{ ...LAB, name: long }] });
+    summary = () =>
+      Response.json({ ...SUMMARY, environment: { ...SUMMARY.environment, name: long } });
+    renderAt("/env/e1");
+    const heading = await screen.findByRole("heading", { name: long });
+    expect(heading.className).toContain("line-clamp-2");
+    expect(heading.getAttribute("title")).toBe(long);
+  });
+
   it("shows the header, the four tiles and the engine card from one summary request", async () => {
     renderAt("/env/e1");
     const heading = await screen.findByRole("heading", { name: "Lab host" });

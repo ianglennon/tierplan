@@ -1,0 +1,168 @@
+{
+  "overview": {
+    "tabTitle": "Environments",
+    "title": "Environments",
+    "caption_one": "{{count}} environment",
+    "caption_other": "{{count}} environments",
+    "add": "Add environment",
+    "tableLabel": "Environments",
+    "loading": "Loading environments",
+    "columns": {
+      "health": "Health",
+      "name": "Name",
+      "type": "Type",
+      "nodes": "Nodes",
+      "failing": "Failing services",
+      "agents": "Agents",
+      "engine": "Engine",
+      "agent": "Agent",
+      "lastSeen": "Last seen"
+    },
+    "sort": {
+      "by": "Sort by {{column}}"
+    },
+    "cell": {
+      "missing": "—",
+      "now": "Now",
+      "nodesLabel_one": "{{ready}} of {{total}} node ready",
+      "nodesLabel_other": "{{ready}} of {{total}} nodes ready",
+      "failingLabel_one": "{{failing}} of {{total}} service failing",
+      "failingLabel_other": "{{failing}} of {{total}} services failing",
+      "agentsLabel_one": "{{connected}} of {{expected}} agent connected",
+      "agentsLabel_other": "{{connected}} of {{expected}} agents connected",
+      "update": "Update",
+      "updateLabel": "Agent update available"
+    },
+    "finishSetup": "Finish setup",
+    "mobile": {
+      "nodes_one": "{{ready}}/{{total}} node",
+      "nodes_other": "{{ready}}/{{total}} nodes",
+      "failing": "{{failing}} failing",
+      "agent": "agent {{version}}"
+    },
+    "announce": "{{name}} is now {{state}}",
+    "error": {
+      "heading": "Couldn't load environments.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry"
+    },
+    "reason": {
+      "codes": {
+        "agent_offline": {
+          "text": "The agent isn't connected.",
+          "hint": "Check that it's running. It reconnects by itself when it can reach Bayplan."
+        },
+        "tls_untrusted": {
+          "text": "The agent doesn't trust Bayplan's certificate.",
+          "hint": "Use a certificate from a public CA, or reinstall the agent with the command from Show install command."
+        },
+        "auth_rejected": {
+          "text": "Bayplan rejected the agent's credentials.",
+          "hint": "Generate a new join token and reinstall the agent with the new command."
+        },
+        "cert_expired": {
+          "text": "The agent's certificate expired before it could renew.",
+          "hint": "Reinstall the agent with a fresh join token. It enrols again with a new certificate."
+        },
+        "cert_expiring": {
+          "text": "An agent certificate isn't renewing.",
+          "hint": "Check that the agent can reach Bayplan."
+        },
+        "revoked": {
+          "text": "An admin revoked the agent.",
+          "hint": "Remove the agent from the host. To let it back in, unblock the node in Settings, then enrol it again."
+        },
+        "blocked": {
+          "text": "A node is blocked from enrolling.",
+          "hint": "Unblock it in Settings, in the nodes list."
+        },
+        "version_incompatible": {
+          "text": "The agent can't talk to this Bayplan.",
+          "hint": "Update the agent by hand."
+        },
+        "clock_skew": {
+          "text": "The clock on a node is out of step.",
+          "hint": "Sync the host's clock. Bayplan accepts up to 5 minutes of difference."
+        },
+        "timeout": {
+          "text": "The agent stopped answering.",
+          "hint": "Check the network between the host and Bayplan. The agent reconnects by itself."
+        },
+        "not_a_manager": {
+          "text": "No manager node is reporting.",
+          "hint": "Only worker nodes are connected. Check the agent on a manager node."
+        },
+        "no_quorum": {
+          "text": "This swarm has lost quorum.",
+          "hint": "Bring a manager node back online. Node-local data still works."
+        },
+        "cluster_changed": {
+          "text": "This swarm was re-initialised.",
+          "hint": "Adopt the new cluster to keep this environment, or remove it."
+        },
+        "engine_unreachable": {
+          "text": "The agent can't reach Docker.",
+          "hint": "Check that /var/run/docker.sock is mounted into the agent and that Docker is running."
+        },
+        "unsupported_engine": {
+          "text": "Docker on a node isn't supported.",
+          "hint": "Bayplan needs Docker Engine 24 or later."
+        },
+        "agent_policy_denied": {
+          "text": "The agent refused a request.",
+          "hint": "The host's agent policy doesn't allow it. This is recorded in the audit log."
+        },
+        "unreachable": {
+          "text": "Docker isn't answering on the local socket.",
+          "hint": "Check that /var/run/docker.sock is mounted into Bayplan and that Docker is running."
+        },
+        "api_too_old": {
+          "text": "This Docker Engine is older than Bayplan supports.",
+          "hint": "Bayplan needs Docker Engine 24 or later."
+        },
+        "podman": {
+          "text": "Podman isn't supported.",
+          "hint": "Bayplan manages Docker Engine only."
+        },
+        "rootless": {
+          "text": "This Docker setup isn't supported.",
+          "hint": "Bayplan manages Docker Engine 24 or later."
+        },
+        "docker_desktop": {
+          "text": "This Docker setup isn't supported.",
+          "hint": "Bayplan manages Docker Engine 24 or later."
+        }
+      },
+      "states": {
+        "pending": {
+          "text": "No agent has connected yet.",
+          "hint": "Install the Bayplan agent on a host to start managing it."
+        },
+        "reconnecting": {
+          "text": "Bayplan just started and is waiting for the agent to reconnect.",
+          "hint": "This usually takes under a minute."
+        },
+        "offline": {
+          "text": "Bayplan can't reach this environment.",
+          "hint": "Open it to see why."
+        },
+        "degraded": {
+          "text": "Something is wrong on part of this environment.",
+          "hint": "Open it to see which node."
+        },
+        "revoked": {
+          "text": "An admin revoked every agent.",
+          "hint": "Remove the agents from the hosts, or unblock them in Settings."
+        },
+        "cluster_changed": {
+          "text": "This swarm was re-initialised.",
+          "hint": "Adopt the new cluster to keep this environment, or remove it."
+        },
+        "unsupported": {
+          "text": "This Docker setup isn't supported.",
+          "hint": "Bayplan manages Docker Engine 24 or later."
+        }
+      }
+    }
+  }
+}

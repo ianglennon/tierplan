@@ -111,7 +111,7 @@ describe("app shell", () => {
     renderAt("/");
     expect(await screen.findByText("No environments yet")).toBeTruthy();
     expect(
-      screen.getByText(/Bayplan can manage the Docker host it runs on through the Docker socket/),
+      screen.getByText(/Bayplan gives you one command that installs a small agent on it/),
     ).toBeTruthy();
     expect(document.title).toBe("Home · Lab");
   });

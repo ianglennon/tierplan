@@ -15,6 +15,7 @@ import { Route as SetupRouteImport } from './routes/setup'
 import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
+import { Route as AppEnvironmentsRouteImport } from './routes/_app/environments'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppEnvEnvIdRouteImport } from './routes/_app/env/$envId'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
@@ -54,6 +55,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
 const AppAuditRoute = AppAuditRouteImport.update({
   id: '/audit',
   path: '/audit',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppEnvironmentsRoute = AppEnvironmentsRouteImport.update({
+  id: '/environments',
+  path: '/environments',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSettingsRoute = AppSettingsRouteImport.update({
@@ -118,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/setup': typeof SetupRoute
   '/welcome': typeof WelcomeRoute
   '/audit': typeof AppAuditRoute
+  '/environments': typeof AppEnvironmentsRoute
   '/settings': typeof AppSettingsRouteWithChildren
   '/env/$envId': typeof AppEnvEnvIdRouteWithChildren
   '/settings/about': typeof AppSettingsAboutRoute
@@ -135,6 +142,7 @@ export interface FileRoutesByTo {
   '/setup': typeof SetupRoute
   '/welcome': typeof WelcomeRoute
   '/audit': typeof AppAuditRoute
+  '/environments': typeof AppEnvironmentsRoute
   '/': typeof AppIndexRoute
   '/settings/about': typeof AppSettingsAboutRoute
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
@@ -153,6 +161,7 @@ export interface FileRoutesById {
   '/setup': typeof SetupRoute
   '/welcome': typeof WelcomeRoute
   '/_app/audit': typeof AppAuditRoute
+  '/_app/environments': typeof AppEnvironmentsRoute
   '/_app/settings': typeof AppSettingsRouteWithChildren
   '/_app/': typeof AppIndexRoute
   '/_app/env/$envId': typeof AppEnvEnvIdRouteWithChildren
@@ -174,6 +183,7 @@ export interface FileRouteTypes {
     | '/setup'
     | '/welcome'
     | '/audit'
+    | '/environments'
     | '/settings'
     | '/env/$envId'
     | '/settings/about'
@@ -191,6 +201,7 @@ export interface FileRouteTypes {
     | '/setup'
     | '/welcome'
     | '/audit'
+    | '/environments'
     | '/'
     | '/settings/about'
     | '/settings/environments'
@@ -208,6 +219,7 @@ export interface FileRouteTypes {
     | '/setup'
     | '/welcome'
     | '/_app/audit'
+    | '/_app/environments'
     | '/_app/settings'
     | '/_app/'
     | '/_app/env/$envId'
@@ -271,6 +283,13 @@ declare module '@tanstack/react-router' {
       path: '/audit'
       fullPath: '/audit'
       preLoaderRoute: typeof AppAuditRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/environments': {
+      id: '/_app/environments'
+      path: '/environments'
+      fullPath: '/environments'
+      preLoaderRoute: typeof AppEnvironmentsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/settings': {
@@ -393,6 +412,7 @@ const AppEnvEnvIdRouteWithChildren = AppEnvEnvIdRoute._addFileChildren(
 
 interface AppRouteChildren {
   AppAuditRoute: typeof AppAuditRoute
+  AppEnvironmentsRoute: typeof AppEnvironmentsRoute
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
   AppEnvEnvIdRoute: typeof AppEnvEnvIdRouteWithChildren
@@ -400,6 +420,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppAuditRoute: AppAuditRoute,
+  AppEnvironmentsRoute: AppEnvironmentsRoute,
   AppSettingsRoute: AppSettingsRouteWithChildren,
   AppIndexRoute: AppIndexRoute,
   AppEnvEnvIdRoute: AppEnvEnvIdRouteWithChildren,

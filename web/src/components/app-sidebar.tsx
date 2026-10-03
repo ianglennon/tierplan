@@ -7,6 +7,7 @@ import {
   HardDrive,
   Layers,
   LayoutDashboard,
+  LayoutGrid,
   Network,
   ScrollText,
   Settings,
@@ -27,7 +28,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { VersionFooter } from "@/components/version-footer";
-import { usePermission } from "@/hooks/use-me";
+import { useAnyEnvironmentPermission, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // AppSidebar is the left navigation (D-53): the environment switcher on top,
@@ -82,6 +83,9 @@ export function AppSidebar() {
   const canSettings = canReadSettings || canManageEnvironments;
   // Audit is global and admin only in this phase (D-43).
   const canAudit = usePermission("audit.read");
+  // The overview is global. environments.read is held per environment, so it
+  // shows for anyone who may read at least one; the server limits its rows.
+  const canOverview = useAnyEnvironmentPermission("environments.read");
 
   return (
     <Sidebar
@@ -93,6 +97,30 @@ export function AppSidebar() {
         <EnvSwitcher />
       </SidebarHeader>
       <SidebarContent>
+        {canOverview ? (
+          <SidebarGroup>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    tooltip={t("shell.nav.environments")}
+                    className="max-md:h-11"
+                  >
+                    <Link
+                      to="/environments"
+                      activeOptions={{ exact: true }}
+                      activeProps={{ "aria-current": "page", "data-active": true }}
+                    >
+                      <LayoutGrid aria-hidden="true" />
+                      <span>{t("shell.nav.environments")}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ) : null}
         {envId ? (
           <SidebarGroup>
             <SidebarGroupContent>

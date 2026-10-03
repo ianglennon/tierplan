@@ -429,10 +429,11 @@ describe("EnvOverviewTable live updates", () => {
   });
 
   it("flashes a changed row muted for 150 ms and no other row", async () => {
-    vi.useFakeTimers();
     const a = env("a", "alpha", "online");
     const b = env("b", "bravo", "online");
     const view = await mount({ items: [a, b] });
+    // After the mount: testing-library's waits do not advance fake timers.
+    vi.useFakeTimers();
     await view.update({
       items: [
         env("a", "alpha", "degraded", { status: { state: "degraded", reason: "clock_skew" } }),
@@ -465,10 +466,11 @@ describe("EnvOverviewTable live updates", () => {
   });
 
   it("announces a state change politely and at most once every 5 seconds", async () => {
-    vi.useFakeTimers();
     const a = env("a", "alpha", "online");
     const b = env("b", "bravo", "online");
     const view = await mount({ items: [a, b] });
+    // After the mount: testing-library's waits do not advance fake timers.
+    vi.useFakeTimers();
     const region = () => document.querySelector("[aria-live=polite]") as HTMLElement;
     expect(region().textContent).toBe("");
 

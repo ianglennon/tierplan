@@ -206,7 +206,7 @@ describe("the signed-in home with no environments", () => {
     renderAt("/");
 
     expect(await screen.findByText("No environments yet")).toBeTruthy();
-    expect(screen.getByText("Ask an admin to add a Docker host.")).toBeTruthy();
+    expect(screen.getByText("Ask an admin to add an environment.")).toBeTruthy();
     expect(calls.some((c) => c.path === "/api/local-host")).toBe(false);
   });
 
