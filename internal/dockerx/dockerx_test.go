@@ -1144,6 +1144,9 @@ func TestRestartPoliciesReturnsOnlyTheNameAndTheRetryCount(t *testing.T) {
 		t.Errorf("RestartPolicy has %d fields, want only Name and MaxRetry", n)
 	}
 	for _, p := range fake.Requests() {
+		if p == "/_ping" {
+			continue // the client negotiates the API version first
+		}
 		if !strings.HasSuffix(p, "/json") || !strings.Contains(p, "/containers/") {
 			t.Errorf("RestartPolicies asked %s, want only container inspects", p)
 		}

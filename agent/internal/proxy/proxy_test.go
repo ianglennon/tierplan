@@ -128,6 +128,9 @@ func TestReadOnlyCallsReachTheEngine(t *testing.T) {
 		{"GET", "/nodes"},
 		{"GET", "/services?status=true"},
 		{"GET", "/tasks"},
+		{"GET", "/containers/abc123/json"},
+		{"GET", "/v1.47/containers/web-1/json"},
+		{"HEAD", "/containers/abc123/json"},
 	} {
 		resp := do(t, h, request(tc.method, tc.path))
 		_ = resp.Body.Close()
@@ -141,8 +144,8 @@ func TestReadOnlyCallsReachTheEngine(t *testing.T) {
 			t.Errorf("%s %s: the Swarm header was not passed through: %q", tc.method, tc.path, got)
 		}
 	}
-	if got := len(sock.requests()); got != 11 {
-		t.Errorf("the engine saw %d requests, want 11: %v", got, sock.requests())
+	if got := len(sock.requests()); got != 14 {
+		t.Errorf("the engine saw %d requests, want 14: %v", got, sock.requests())
 	}
 }
 
@@ -169,7 +172,8 @@ func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *test
 		name, raw, wantMessage string
 	}{
 		{"create a container", request("POST", "/containers/create", "Content-Length: 2\r\n") + "{}", "agent_policy_denied: POST /containers/create"},
-		{"inspect a container", get("/containers/abc/json"), "agent_policy_denied: GET /containers/abc/json"},
+		{"the logs of a container", get("/containers/abc/logs"), "agent_policy_denied: GET /containers/abc/logs"},
+		{"inspect a container with a POST", request("POST", "/containers/abc/json"), "agent_policy_denied: POST /containers/abc/json"},
 		{"swarm inspect returns the join tokens", get("/swarm"), "agent_policy_denied: GET /swarm"},
 		{"plugins", get("/plugins"), "agent_policy_denied: GET /plugins"},
 		{"a double slash", get("//info"), "agent_policy_denied: GET //info"},

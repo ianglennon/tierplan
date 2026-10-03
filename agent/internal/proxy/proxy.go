@@ -44,7 +44,8 @@ const (
 )
 
 // allowed is the whole read-only surface of Phase 2: ping, version, info, the
-// four resource lists the dashboard reads, events, and the swarm lists. The
+// four resource lists the dashboard reads, events, the swarm lists, and the
+// inspect of one container (inspectPath). The
 // optional /vX.Y prefix is the API version the server's client negotiated.
 //
 // GET /swarm is deliberately absent: its answer carries the swarm join tokens,
@@ -52,6 +53,15 @@ const (
 // read from /info on a manager instead.
 var allowed = regexp.MustCompile(
 	`^/(v[0-9]+\.[0-9]+/)?(_ping|version|info|containers/json|images/json|volumes|networks|events|nodes|services|tasks)$`)
+
+// inspectPath is the one container-scoped read that is allowed: the inspect of a
+// single container, which Bayplan reads only for its restart policy (the failing
+// standalone container rule, D-34). The ID or name is anchored and bounded: it
+// starts with a letter or digit, so ".." and a leading dash are not IDs, and it
+// is at most 128 characters. The logs, stats, archive and export of a container
+// are other paths and stay refused.
+var inspectPath = regexp.MustCompile(
+	`^/(v[0-9]+\.[0-9]+/)?containers/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}/json$`)
 
 // Policy is what the host owner set on this agent (D-28).
 type Policy struct {
@@ -79,7 +89,7 @@ func Allowed(method, rawPath, rawQuery string, hasBody, hasUpgrade bool, p Polic
 	case !read,
 		len(rawQuery) > maxQuery,
 		hasControl(rawPath), hasControl(rawQuery),
-		rawPath != path.Clean(rawPath), !allowed.MatchString(rawPath),
+		rawPath != path.Clean(rawPath), !allowed.MatchString(rawPath) && !inspectPath.MatchString(rawPath),
 		hasBody, hasUpgrade:
 		return false, wire.DeniedAllowlist
 	}
