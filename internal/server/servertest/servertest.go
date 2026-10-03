@@ -396,6 +396,10 @@ type Environment struct {
 		Connected int `json:"connected"`
 		Expected  int `json:"expected"`
 	} `json:"agents"`
+	Failing *struct {
+		Failing int `json:"failing"`
+		Total   int `json:"total"`
+	} `json:"failingServices"`
 	AgentVersion     *string `json:"agentVersion"`
 	PendingClusterID string  `json:"pendingClusterId"`
 }

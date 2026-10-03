@@ -6,11 +6,13 @@ package agents_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/server/servertest"
 )
 
 // execCtx is the context a command run in a dind node gets.
@@ -65,4 +67,10 @@ func fieldOf(status, key string) string {
 		}
 	}
 	return ""
+}
+
+// summarise is an environment as one line of JSON, for a failure message.
+func summarise(e servertest.Environment) string {
+	b, _ := json.Marshal(e)
+	return string(b)
 }

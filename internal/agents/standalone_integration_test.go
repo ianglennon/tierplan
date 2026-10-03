@@ -116,3 +116,87 @@ func TestStandaloneAgent(t *testing.T) {
 		t.Errorf("agent network mode and bindings = %q, want the default bridge with no published port", nm)
 	}
 }
+
+// TestStandaloneAgentWithDockerUnreachable starts the agent where it cannot reach
+// the Docker socket it was told to use (02-19: "start an agent with Docker
+// stopped"). The server cannot tell what such a host is, so it refuses the agent
+// with engine_unreachable, which the agent logs with advice and the audit records;
+// the environment stays pending and no agent is enrolled.
+func TestStandaloneAgentWithDockerUnreachable(t *testing.T) {
+	host := dockertest.StartHost(t, "")
+	dockertest.LoadAgentImage(t, host)
+	dumpOnFailure(t, host)
+	srv := servertest.Start(t, servertest.Options{Host: host.Gateway})
+	env := srv.CreateAgentEnvironment("")
+
+	cmd := strings.Replace(env.Install.Standalone.Command, " "+env.Install.Image, " -e BAYPLAN_AGENT_SOCKET=/var/run/missing.sock "+env.Install.Image, 1)
+	if cmd == env.Install.Standalone.Command {
+		t.Fatal("could not add the socket override to the command")
+	}
+	sh(t, host, cmd)
+
+	srv.WaitFor("the agent to be refused with engine_unreachable", 60*time.Second, func() (bool, string) {
+		out, _ := host.Sh(execCtx(t, time.Minute), "docker logs --tail 5 bayplan-agent 2>&1")
+		return strings.Contains(out, "code=engine_unreachable") && strings.Contains(out, "Check that the Docker socket is mounted"), out
+	})
+	srv.WaitFor("the audit log to record engine_unreachable", 30*time.Second, func() (bool, string) {
+		code, body := srv.Do(http.MethodGet, "/api/audit?action=agent.enrol_refused", nil)
+		return code == http.StatusOK && strings.Contains(string(body), "engine_unreachable"), string(body)
+	})
+	got, ok := srv.Environment(env.ID)
+	if !ok || got.Status.State != "pending" || got.Engine.Version != "" {
+		t.Errorf("environment = %s, want it still pending: no agent was accepted", summarise(got))
+	}
+	if agents := srv.Agents(env.ID); len(agents) != 0 {
+		t.Errorf("agents = %+v, want none enrolled", agents)
+	}
+}
+
+// TestStandaloneFailingAndManyContainers reads a standalone host through its agent
+// when it holds a crash-looping container with a restart policy and more containers
+// than a list answers with. The failing count needs /containers/{id}/json, which
+// the agent's allowlist must let through; the list is capped at 500 rows and says
+// how many there really are (02-20, 02-21, 02-22).
+func TestStandaloneFailingAndManyContainers(t *testing.T) {
+	host := dockertest.StartHost(t, "")
+	dockertest.LoadAgentImage(t, host)
+	dumpOnFailure(t, host)
+	srv := servertest.Start(t, servertest.Options{Host: host.Gateway})
+	env := srv.CreateAgentEnvironment("")
+	sh(t, host, env.Install.Standalone.Command)
+	srv.WaitOnline(env.ID, 60*time.Second)
+
+	// A container with a restart policy that fails at once, over and over: the
+	// agent image started with a flag it does not know exits with an error.
+	sh(t, host, "docker run -d --name flaky --restart unless-stopped "+env.Install.Image+" --no-such-flag")
+	srv.WaitFor("one failing container of two with a restart policy", 90*time.Second, func() (bool, string) {
+		e, ok := srv.Environment(env.ID)
+		return ok && e.Failing != nil && e.Failing.Failing == 1 && e.Failing.Total == 2, summarise(e)
+	})
+
+	// 520 more containers, never started: with the two above, 522.
+	started := time.Now()
+	sh(t, host, "i=1; while [ $i -le 520 ]; do docker create --name bulk$i "+env.Install.Image+" >/dev/null || exit 1; i=$((i+1)); done")
+	t.Logf("created 520 containers in %s", time.Since(started).Round(time.Second))
+	var list servertest.ContainerList
+	srv.WaitFor("the capped container list", 60*time.Second, func() (bool, string) {
+		l, code, body := srv.Containers(env.ID, "")
+		list = l
+		return code == http.StatusOK && l.Total == 522, string(body[:min(len(body), 300)])
+	})
+	if len(list.Items) != 500 || !list.Truncated {
+		t.Errorf("list = %d rows, truncated %v, want 500 rows and truncated", len(list.Items), list.Truncated)
+	}
+	readStart := time.Now()
+	if _, code, _ := srv.Containers(env.ID, ""); code != http.StatusOK {
+		t.Errorf("list code = %d", code)
+	}
+	t.Logf("a 522-container list read through the tunnel took %s", time.Since(readStart).Round(time.Millisecond))
+	if sum, code, body := srv.Summary(env.ID); code != http.StatusOK || sum.Counts.Containers != 522 {
+		t.Errorf("summary containers = %d (%d): %.300s, want the full 522 even though the list is capped", sum.Counts.Containers, code, body)
+	}
+	// The failing count never overstates while the policies of the new containers are read, a few at a time.
+	if e, _ := srv.Environment(env.ID); e.Failing == nil || e.Failing.Failing != 1 {
+		t.Errorf("failing = %+v, want one failing container", e.Failing)
+	}
+}

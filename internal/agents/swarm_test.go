@@ -86,11 +86,6 @@ func (f *swarmFix) waitSwarmOnline(t *testing.T, want int) servertest.Environmen
 	return got
 }
 
-func summarise(e servertest.Environment) string {
-	b, _ := json.Marshal(e)
-	return string(b)
-}
-
 // serviceSpec is the part of `docker service inspect` the install flags decide.
 type serviceSpec struct {
 	Name   string
