@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import audit from "@/i18n/en/audit.json";
+import { resetBasePathForTests } from "@/lib/base-path";
 import {
   actionLabel,
   auditSearchSchema,
@@ -163,6 +164,24 @@ describe("exportUrl and listParams", () => {
     filters.delete("format");
     expect([...filters.entries()].sort()).toEqual([...list.entries()].sort());
     expect(filters.get("from")).toBe("2026-10-02T11:00:00.000Z");
+  });
+
+  it("puts the served base path in front of the export URL", () => {
+    const meta = document.createElement("meta");
+    meta.name = "bayplan-base";
+    meta.content = "/bayplan";
+    document.head.append(meta);
+    resetBasePathForTests();
+    try {
+      const search = auditSearchSchema.parse({ user: "admin", range: "1h" });
+      const url = new URL(exportUrl("csv", search, NOW), "http://bayplan.test");
+      expect(url.pathname).toBe("/bayplan/api/audit/export");
+      expect(url.searchParams.get("format")).toBe("csv");
+      expect(url.searchParams.get("user")).toBe("admin");
+    } finally {
+      meta.remove();
+      resetBasePathForTests();
+    }
   });
 
   it("asks for JSON and sends no filters when there are none", () => {

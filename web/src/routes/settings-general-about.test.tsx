@@ -9,10 +9,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { Toaster } from "@/components/ui/sonner";
+import { resetBasePathForTests } from "@/lib/base-path";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 
 // Settings > General and About (plan 26, D-03, D-04, D-60, D-61, PLAT-05).
+
+// announceBase does what the server does when it renders index.html (plan
+// 02-03): it puts the base path in a meta tag the SPA reads once.
+function announceBase(base: string | null): void {
+  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  resetBasePathForTests();
+  if (base === null) return;
+  const meta = document.createElement("meta");
+  meta.name = "bayplan-base";
+  meta.content = base;
+  document.head.append(meta);
+}
 
 const ORIGIN = window.location.origin;
 const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -208,6 +221,21 @@ describe("General tab", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(patches()).toHaveLength(0);
     expect(urlField().value).toBe("https://bayplan.example");
+  });
+
+  it("names the origin plus the base path as the address in use under a base", async () => {
+    announceBase("/bayplan");
+    try {
+      await openGeneral();
+      fireEvent.change(urlField(), { target: { value: "https://bayplan.example" } });
+      fireEvent.click(saveButton());
+      const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
+      expect(
+        within(dialog).getByText(`You're using Bayplan at ${ORIGIN}/bayplan.`, { exact: false }),
+      ).toBeTruthy();
+    } finally {
+      announceBase(null);
+    }
   });
 
   it("changes the public URL after the warning is confirmed", async () => {

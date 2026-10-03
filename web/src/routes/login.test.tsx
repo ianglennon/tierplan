@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
+import { resetBasePathForTests } from "@/lib/base-path";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 
@@ -69,9 +70,10 @@ function stubApi(opts: {
   );
 }
 
-function renderAt(path: string) {
+function renderAt(path: string, basepath?: string) {
   const router = createRouter({
     routeTree,
+    basepath,
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   render(
@@ -80,6 +82,18 @@ function renderAt(path: string) {
     </QueryClientProvider>,
   );
   return router;
+}
+
+// announceBase does what the server does when it renders index.html (plan
+// 02-03): it puts the base path in a meta tag the SPA reads once.
+function announceBase(base: string | null): void {
+  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  resetBasePathForTests();
+  if (base === null) return;
+  const meta = document.createElement("meta");
+  meta.name = "bayplan-base";
+  meta.content = base;
+  document.head.append(meta);
 }
 
 const invalid = () => Response.json({ status: 401, type: "invalid_credentials" }, { status: 401 });
@@ -255,5 +269,39 @@ describe("/login", () => {
     renderAt("/login");
     expect(await screen.findByText("Bayplan v0.0.0")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Source code (opens in a new tab)" })).toBeTruthy();
+  });
+});
+
+describe("/login under a base path", () => {
+  beforeEach(() => announceBase("/bayplan"));
+  afterEach(() => announceBase(null));
+
+  it("sends the browser to the base plus next after sign-in", async () => {
+    stubApi({});
+    const router = renderAt("/bayplan/login?next=%2Fenv%2Fa%2Fcontainers", "/bayplan");
+    await fill("admin", "pw");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(router.history.location.pathname).toBe("/bayplan/env/a/containers"));
+    expect(router.state.location.pathname).toBe("/env/a/containers");
+  });
+
+  it.each(["https%3A%2F%2Fevil.example%2F", "%2F%2Fevil.example", "%2F%5Cevil.example"])(
+    "ignores an unsafe next (%s) and lands on the base root",
+    async (next) => {
+      stubApi({});
+      const router = renderAt(`/bayplan/login?next=${next}`, "/bayplan");
+      await fill("admin", "pw");
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      await waitFor(() => expect(router.history.location.pathname).toMatch(/^\/bayplan\/?$/));
+      expect(router.state.location.pathname).toBe("/");
+      expect(router.history.location.href).not.toContain("evil");
+    },
+  );
+
+  it("skips the form for a signed-in visitor and lands under the base", async () => {
+    stubApi({ signedIn: true });
+    const router = renderAt("/bayplan/login?next=%2Fenv%2Fa", "/bayplan");
+    await waitFor(() => expect(router.history.location.pathname).toBe("/bayplan/env/a"));
+    expect(router.state.location.pathname).toBe("/env/a");
   });
 });
