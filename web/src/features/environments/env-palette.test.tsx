@@ -139,7 +139,7 @@ describe("EnvPalette (D-35)", () => {
     // The palette is for switching: nothing about Settings in it.
     expect(within(dialog).queryByRole("option", { name: "Manage environments" })).toBeNull();
     // The title is for screen readers only.
-    expect(within(dialog).getByText("Switch environment").className).toContain("sr-only");
+    expect(within(dialog).getByText("Switch environment").closest(".sr-only")).toBeTruthy();
   });
 
   it("uses the command key on a Mac and leaves Ctrl alone there", async () => {

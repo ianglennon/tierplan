@@ -16,7 +16,6 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandSeparator,
 } from "@/components/ui/command";
 import { Kbd } from "@/components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -65,6 +64,18 @@ export function useEnvChoices() {
   };
 }
 
+// useSelectedEnvironment is the environment the user is "in": the one in the
+// address, else the last one they were in (Settings and the overview keep
+// showing it), else the first alphabetically. Both lists mark it with a check.
+export function useSelectedEnvironment(items: EnvironmentItem[]): EnvironmentItem | undefined {
+  const { envId } = useParams({ strict: false });
+  const [lastId, setLastId] = useState<string | undefined>();
+  useEffect(() => {
+    if (envId) setLastId(envId);
+  }, [envId]);
+  return items.find((e) => e.id === envId) ?? items.find((e) => e.id === lastId) ?? items[0];
+}
+
 // choiceFilter is the list's filter: the text typed must be inside the name or
 // the type ("swarm", "standalone", "local socket"). cmdk's own filter is fuzzy
 // and also reads the value, which here is an ID, so it is replaced.
@@ -93,6 +104,20 @@ function useChoose(onChosen: () => void) {
   };
 }
 
+// CompactTypeBadge is the one badge the switcher has room for. The trigger and
+// a list row are narrower than a name and two badges, and a name that is cut to
+// "this-h…" is worse than a missing "Standalone". The local socket is the more
+// telling of the two, and the full pair is on the overview and the dashboard.
+function CompactTypeBadge({ env }: { env: EnvironmentItem }) {
+  return (
+    <TypeBadge
+      envType={env.isLocalSocket ? undefined : env.envType}
+      type={env.isLocalSocket ? undefined : env.type}
+      isLocalSocket={env.isLocalSocket}
+    />
+  );
+}
+
 interface EnvItemProps {
   env: EnvironmentItem;
   group: "recent" | "env";
@@ -107,14 +132,17 @@ interface EnvItemProps {
 // name so it is never colour alone. It is a link, so open-in-new-tab works.
 function EnvChoice({ env, group, selected, to, onLinkClick, select }: EnvItemProps) {
   const t = useT();
-  const kind = env.envType ?? (env.type === "standalone" ? "standalone" : "swarm");
+  // The same reading of the type as TypeBadge: nothing until it is known, so
+  // a pending environment is not found by a type it does not show.
+  const kind =
+    env.envType ?? (env.type ? (env.type === "standalone" ? "standalone" : "swarm") : undefined);
   return (
     <CommandItem
       asChild
       value={`${group}:${env.id}`}
       keywords={[
         env.name,
-        t(`env.type.${kind}`),
+        ...(kind ? [t(`env.type.${kind}`)] : []),
         ...(env.isLocalSocket ? [t("env.type.localSocket")] : []),
       ]}
       data-checked={selected ? "true" : undefined}
@@ -125,7 +153,7 @@ function EnvChoice({ env, group, selected, to, onLinkClick, select }: EnvItemPro
         <span className="min-w-0 flex-1 truncate" title={env.name}>
           {env.name}
         </span>
-        <TypeBadge envType={env.envType} type={env.type} isLocalSocket={env.isLocalSocket} />
+        <CompactTypeBadge env={env} />
         <StatusDot state={env.status.state} />
         {selected ? <Check className="size-4" aria-hidden="true" /> : null}
       </Link>
@@ -205,35 +233,38 @@ export function EnvCommandItems({
       {query !== "" && !loading ? (
         <CommandEmpty>{t("switcher.noMatch", { query })}</CommandEmpty>
       ) : null}
-      <CommandSeparator />
-      <CommandGroup forceMount>
-        <CommandItem
-          asChild
-          forceMount
-          value="all-environments"
-          onSelect={() => select("/environments")}
-          className="max-md:min-h-11"
-        >
-          <Link to="/environments" onClick={onLinkClick}>
-            <LayoutGrid aria-hidden="true" />
-            {t("switcher.all")}
-          </Link>
-        </CommandItem>
-        {showManage ? (
+      {/* Pinned to the bottom of the scrolling list, so All environments is
+          there however many environments there are. */}
+      <div className="sticky bottom-0 z-10 border-t bg-popover">
+        <CommandGroup forceMount>
           <CommandItem
             asChild
             forceMount
-            value="manage-environments"
-            onSelect={() => select("/settings/environments")}
+            value="all-environments"
+            onSelect={() => select("/environments")}
             className="max-md:min-h-11"
           >
-            <Link to="/settings/environments" onClick={onLinkClick}>
-              <Settings2 aria-hidden="true" />
-              {t("switcher.manage")}
+            <Link to="/environments" onClick={onLinkClick}>
+              <LayoutGrid aria-hidden="true" />
+              {t("switcher.all")}
             </Link>
           </CommandItem>
-        ) : null}
-      </CommandGroup>
+          {showManage ? (
+            <CommandItem
+              asChild
+              forceMount
+              value="manage-environments"
+              onSelect={() => select("/settings/environments")}
+              className="max-md:min-h-11"
+            >
+              <Link to="/settings/environments" onClick={onLinkClick}>
+                <Settings2 aria-hidden="true" />
+                {t("switcher.manage")}
+              </Link>
+            </CommandItem>
+          ) : null}
+        </CommandGroup>
+      </div>
     </CommandList>
   );
 }
@@ -245,17 +276,10 @@ export function EnvCommandItems({
 export function EnvSwitcher() {
   const t = useT();
   const { items, loading } = useEnvChoices();
-  const { envId } = useParams({ strict: false });
   const pathname = useLocation({ select: (l) => l.pathname });
   const { state, isMobile } = useSidebar();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  // Pages outside an environment (Settings, the overview) keep showing the one
-  // the user was last on.
-  const [lastId, setLastId] = useState<string | undefined>();
-  useEffect(() => {
-    if (envId) setLastId(envId);
-  }, [envId]);
   // Manage environments leads to Settings, which is for these two (the sidebar
   // uses the same test for its Settings item). The server checks each page.
   const canReadSettings = usePermission("settings.read");
@@ -264,8 +288,7 @@ export function EnvSwitcher() {
 
   // The list query keeps its last data when a refetch fails, so a failure keeps
   // the last known name and the list adds the notice.
-  const selected =
-    items.find((e) => e.id === envId) ?? items.find((e) => e.id === lastId) ?? items[0];
+  const selected = useSelectedEnvironment(items);
 
   const changeOpen = (next: boolean) => {
     setOpen(next);
@@ -293,19 +316,18 @@ export function EnvSwitcher() {
               <Server aria-hidden="true" />
               {selected ? (
                 <>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="min-w-12 flex-1 truncate text-start">{selected.name}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">{selected.name}</TooltipContent>
-                  </Tooltip>
-                  {/* One badge: the trigger is narrower than a name and two
-                      badges, and the local socket is the more telling of them. */}
-                  <TypeBadge
-                    envType={selected.isLocalSocket ? undefined : selected.envType}
-                    type={selected.isLocalSocket ? undefined : selected.type}
-                    isLocalSocket={selected.isLocalSocket}
-                  />
+                  {open ? (
+                    // A tooltip over the open list would sit on top of its badge.
+                    <span className="min-w-12 flex-1 truncate text-start">{selected.name}</span>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="min-w-12 flex-1 truncate text-start">{selected.name}</span>
+                      </TooltipTrigger>
+                      <TooltipContent side="right">{selected.name}</TooltipContent>
+                    </Tooltip>
+                  )}
+                  <CompactTypeBadge env={selected} />
                   <StatusDot state={selected.status.state} />
                 </>
               ) : (
@@ -320,7 +342,7 @@ export function EnvSwitcher() {
             align="start"
             className="w-(--radix-popover-trigger-width) min-w-72 gap-0 p-0"
           >
-            <Command filter={choiceFilter} label={t("switcher.filter")} loop>
+            <Command filter={choiceFilter} label={t("switcher.filter")} loop vimBindings={false}>
               <CommandInput
                 autoFocus
                 value={query}

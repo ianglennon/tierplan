@@ -13,6 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UserMenu } from "@/components/user-menu";
 import { VersionFooter } from "@/components/version-footer";
 import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
+import { EnvPalette } from "@/features/environments/env-palette";
 import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { meQueryOptions, UnauthenticatedError, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -99,6 +100,10 @@ function AppLayout() {
         >
           <AppSidebar />
           <ShellBody />
+          {/* Cmd/Ctrl+K from any signed-in page (D-35). A code editor added
+              later must set data-code-editor on its root, or the shortcut
+              will open this over the editor's own use of the key. */}
+          <EnvPalette />
         </SidebarProvider>
       </EnvHealthStreamProvider>
     </TooltipProvider>

@@ -207,6 +207,19 @@ describe("EnvSwitcher (D-35)", () => {
     expect(screen.getByRole("option", { name: /Beta/ })).toBeTruthy();
   });
 
+  it("does not find a pending environment by a type it does not show yet", async () => {
+    list = () =>
+      Response.json({
+        items: [env("n", "new-host", "pending", { envType: undefined }), ...ALL],
+      });
+    renderAt("/env/a");
+    const filter = await openSwitcher();
+    fireEvent.change(filter, { target: { value: "swarm" } });
+    await waitFor(() => expect(screen.queryByRole("option", { name: /Beta/ })).toBeNull());
+    expect(screen.queryByRole("option", { name: /new-host/ })).toBeNull();
+    expect(screen.getAllByRole("option", { name: /alpha/ }).length).toBeGreaterThan(0);
+  });
+
   it("says nothing matches and still offers All environments", async () => {
     renderAt("/env/a");
     const filter = await openSwitcher();
@@ -317,7 +330,7 @@ describe("EnvSwitcher (D-35)", () => {
     expect(within(group).getByRole("option", { name: /Zulu/ })).toBeTruthy();
   }, 8000);
 
-  it("shows only the type badge the trigger has room for on a local socket", async () => {
+  it("shows only the Local socket badge, in the trigger and the list, so the name keeps its room", async () => {
     list = () =>
       Response.json({
         items: [env("l", "this-host", "online", { isLocalSocket: true, envType: "standalone" })],
@@ -330,8 +343,14 @@ describe("EnvSwitcher (D-35)", () => {
     await screen.findByRole("combobox");
     const group = screen.getByRole("group", { name: "Environments" });
     const row = within(group).getByRole("option", { name: /this-host/ });
-    expect(within(row).getByText("Standalone")).toBeTruthy();
+    expect(within(row).queryByText("Standalone")).toBeNull();
     expect(within(row).getByText("Local socket")).toBeTruthy();
+    // It is still found by its type.
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "standalone" } });
+    await waitFor(() =>
+      expect(screen.queryByText("No environments match “standalone”.")).toBeNull(),
+    );
+    expect(screen.getAllByRole("option", { name: /this-host/ }).length).toBeGreaterThan(0);
   });
 
   describe("footer", () => {
