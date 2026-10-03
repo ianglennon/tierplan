@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, setCsrfToken, setUnauthorizedHandler } from "@/api/client";
+import { resetBasePathForTests } from "@/lib/base-path";
 
 function stubFetch(status: number, body: unknown = {}) {
   const fn = vi.fn(async (_input: RequestInfo | URL) =>
@@ -27,6 +28,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  resetBasePathForTests();
+  vi.resetModules();
 });
 
 describe("CSRF header", () => {
@@ -103,5 +107,55 @@ describe("401 handling", () => {
     stubFetch(401, { status: 401 });
     const { response } = await api.GET("/api/me");
     expect(response.status).toBe(401);
+  });
+});
+
+// The typed client is a module singleton that reads the base once, so each
+// test announces a base the way the server does and loads a fresh copy.
+describe("under a base path", () => {
+  async function loadUnderBase(base: string) {
+    const meta = document.createElement("meta");
+    meta.name = "bayplan-base";
+    meta.content = base;
+    document.head.append(meta);
+    resetBasePathForTests();
+    vi.resetModules();
+    return import("@/api/client");
+  }
+
+  it("sends requests to the origin plus the base", async () => {
+    const fetchMock = stubFetch(200, { instanceName: "x", needsSetup: false, rememberDays: 30 });
+    const client = await loadUnderBase("/bayplan");
+    await client.api.GET("/api/instance");
+    expect(sentRequest(fetchMock).url).toBe(`${window.location.origin}/bayplan/api/instance`);
+  });
+
+  it("treats a 401 from the prefixed login URL as an answer", async () => {
+    stubFetch(401, { status: 401, type: "invalid_credentials" });
+    const client = await loadUnderBase("/bayplan");
+    const handler = vi.fn();
+    client.setUnauthorizedHandler(handler);
+    await client.api.POST("/api/auth/login", { body: { username: "a", password: "b" } });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("treats a 401 from the prefixed setup URLs as an answer", async () => {
+    stubFetch(401, { status: 401 });
+    const client = await loadUnderBase("/bayplan");
+    const handler = vi.fn();
+    client.setUnauthorizedHandler(handler);
+    await client.api.POST("/api/setup/token", { body: { token: "x" } });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("tells the handler the path without the base", async () => {
+    stubFetch(401, { status: 401 });
+    window.history.pushState({}, "", "/bayplan/environments/e1?tab=x");
+    const client = await loadUnderBase("/bayplan");
+    const handler = vi.fn();
+    client.setUnauthorizedHandler(handler);
+    await client.api.GET("/api/me");
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith("/environments/e1?tab=x");
   });
 });
