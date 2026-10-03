@@ -109,6 +109,18 @@ type UnblockAgentInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
+// AdoptClusterBody is the answer to adopting a new cluster.
+type AdoptClusterBody struct {
+	ClusterID         string `json:"clusterId" doc:"The swarm cluster ID the environment is bound to now"`
+	PreviousClusterID string `json:"previousClusterId,omitempty" doc:"The cluster ID it was bound to; absent if it had none"`
+}
+
+// AdoptClusterOutput wraps AdoptClusterBody for huma.
+type AdoptClusterOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         AdoptClusterBody
+}
+
 // DenialBody is the last request an agent refused by its own policy.
 type DenialBody struct {
 	Endpoint string `json:"endpoint" doc:"The Docker API path the agent refused"`
@@ -228,6 +240,10 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 			return httpx.Problem(http.StatusConflict, problemAgentAlreadyRevoked, "That node was revoked while you were looking at it.")
 		case errors.Is(err, agents.ErrNotBlocked):
 			return httpx.Problem(http.StatusConflict, problemNotBlocked, "That node's host is not blocked.")
+		case errors.Is(err, agents.ErrNoClusterChange):
+			return httpx.Problem(http.StatusConflict, problemNoClusterChange, "This environment has no new cluster to adopt. It may have been adopted a moment ago.")
+		case errors.Is(err, agents.ErrClusterInUse):
+			return httpx.Problem(http.StatusConflict, problemClusterInUse, "Another environment already manages that cluster, so this one cannot adopt it.")
 		}
 		d.Log.Error("agent request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
@@ -414,5 +430,31 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 			return nil, fail("unblock agent", err)
 		}
 		return nil, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "adoptEnvironmentCluster",
+		Method:      http.MethodPost,
+		Path:        "/api/environments/{envId}/adopt-cluster",
+		Summary:     "Adopt the new cluster of a re-initialised swarm",
+		Description: "A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is " +
+			"cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears " +
+			"cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not " +
+			"changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or " + problemClusterInUse + " when another " +
+			"environment manages the new cluster. Needs environments.manage.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *TokenMutationInput) (*AdoptClusterOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if err := usable(); err != nil {
+			return nil, err
+		}
+		got, err := d.Agents.AdoptCluster(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent)
+		if err != nil {
+			return nil, fail("adopt cluster", err)
+		}
+		return &AdoptClusterOutput{CacheControl: "no-store", Body: AdoptClusterBody{ClusterID: got.To, PreviousClusterID: got.From}}, nil
 	})
 }

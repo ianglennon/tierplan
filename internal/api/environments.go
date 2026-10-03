@@ -34,6 +34,8 @@ const (
 	problemAgentNotFound          = "agent_not_found"
 	problemAgentAlreadyRevoked    = "agent_already_revoked"
 	problemNotBlocked             = "not_blocked"
+	problemNoClusterChange        = "no_cluster_change"
+	problemClusterInUse           = "cluster_in_use"
 )
 
 // EnvironmentsDeps are the dependencies of the environment routes.
@@ -126,15 +128,16 @@ type EnvironmentBody struct {
 	Status     EnvironmentStatusBody `json:"status"`
 	Engine     EnvironmentEngineBody `json:"engine"`
 
-	EnvType         string                           `json:"envType,omitempty" enum:"swarm,standalone" doc:"What the environment is; absent until it is known. An agent environment gets it from its first agent"`
-	IsLocalSocket   bool                             `json:"isLocalSocket" doc:"True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent"`
-	Nodes           Nullable[EnvironmentNodesBody]   `json:"nodes" doc:"Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster"`
-	FailingServices Nullable[EnvironmentFailingBody] `json:"failingServices" doc:"Failing and total services; null until service data is known"`
-	Agents          Nullable[EnvironmentAgentsBody]  `json:"agents" doc:"Connected and expected agents; null except on a swarm"`
-	AgentVersion    *string                          `json:"agentVersion" nullable:"true" doc:"The oldest agent version in the environment; null when it has no agent, and for the local socket"`
-	UpdateAvailable bool                             `json:"updateAvailable" doc:"True when an agent is older than this server by a minor or a patch version"`
-	EngineVersion   *string                          `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
-	LastSeen        *string                          `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
+	EnvType          string                           `json:"envType,omitempty" enum:"swarm,standalone" doc:"What the environment is; absent until it is known. An agent environment gets it from its first agent"`
+	IsLocalSocket    bool                             `json:"isLocalSocket" doc:"True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent"`
+	Nodes            Nullable[EnvironmentNodesBody]   `json:"nodes" doc:"Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster"`
+	FailingServices  Nullable[EnvironmentFailingBody] `json:"failingServices" doc:"Failing and total services; null until service data is known"`
+	Agents           Nullable[EnvironmentAgentsBody]  `json:"agents" doc:"Connected and expected agents; null except on a swarm"`
+	AgentVersion     *string                          `json:"agentVersion" nullable:"true" doc:"The oldest agent version in the environment; null when it has no agent, and for the local socket"`
+	UpdateAvailable  bool                             `json:"updateAvailable" doc:"True when an agent is older than this server by a minor or a patch version"`
+	EngineVersion    *string                          `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
+	LastSeen         *string                          `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
+	PendingClusterID string                           `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to"`
 }
 
 // InstallSwarmBody is the swarm install: one command for a manager, or a stack file.
@@ -266,6 +269,7 @@ func environmentBody(e envs.Environment) EnvironmentBody {
 	if o.Agents != nil {
 		body.Agents = Some(EnvironmentAgentsBody{Connected: o.Agents.Connected, Expected: o.Agents.Expected})
 	}
+	body.PendingClusterID = e.PendingClusterID
 	if o.AgentVersion != "" {
 		body.AgentVersion = &o.AgentVersion
 	}

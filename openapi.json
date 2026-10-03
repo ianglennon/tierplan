@@ -105,6 +105,10 @@
               }
             ]
           },
+          "pendingClusterId": {
+            "description": "Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to",
+            "type": "string"
+          },
           "status": {
             "$ref": "#/components/schemas/EnvironmentStatusBody"
           },
@@ -165,6 +169,23 @@
         },
         "required": [
           "kind"
+        ],
+        "type": "object"
+      },
+      "AdoptClusterBody": {
+        "additionalProperties": false,
+        "properties": {
+          "clusterId": {
+            "description": "The swarm cluster ID the environment is bound to now",
+            "type": "string"
+          },
+          "previousClusterId": {
+            "description": "The cluster ID it was bound to; absent if it had none",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clusterId"
         ],
         "type": "object"
       },
@@ -743,6 +764,10 @@
                 "type": "null"
               }
             ]
+          },
+          "pendingClusterId": {
+            "description": "Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to",
+            "type": "string"
           },
           "status": {
             "$ref": "#/components/schemas/EnvironmentStatusBody"
@@ -3232,6 +3257,57 @@
           }
         },
         "summary": "Rename an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/adopt-cluster": {
+      "post": {
+        "description": "A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.manage.",
+        "operationId": "adoptEnvironmentCluster",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdoptClusterBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Adopt the new cluster of a re-initialised swarm",
         "tags": [
           "environments"
         ]

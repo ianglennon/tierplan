@@ -720,9 +720,64 @@ type Adopted struct {
 }
 
 // AdoptCluster is the audited admin action that binds an environment to the cluster
-// its managers now report.
-func (s *Service) AdoptCluster(_ context.Context, _ audit.Actor, _, _, _ string) (Adopted, error) {
-	return Adopted{}, errors.New("agents: adopting a cluster is not implemented")
+// its managers now report, after the swarm behind it was re-initialised (D-14). It is
+// the only way a swarm environment is ever rebound: the handshake only records the
+// change. It binds the pending cluster, clears the change and audits
+// environment.cluster_adopted with the cluster it was and the one it is, in one
+// transaction, and then tells the broker so every overview updates at once.
+//
+// ErrNoClusterChange means there is nothing recorded to adopt, for example because
+// another admin just did. ErrClusterInUse means another environment has bound the
+// cluster since.
+func (s *Service) AdoptCluster(ctx context.Context, actor audit.Actor, envID, ip, ua string) (Adopted, error) {
+	ts := s.now().UTC().UnixNano()
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Adopted{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	if err := requireAgentEnvironment(ctx, q, envID); err != nil {
+		return Adopted{}, err
+	}
+	env, err := q.GetEnvironment(ctx, envID)
+	if err != nil {
+		return Adopted{}, fmt.Errorf("load the environment: %w", err)
+	}
+	if !env.ClusterChangedAt.Valid || env.PendingClusterID.String == "" {
+		return Adopted{}, ErrNoClusterChange
+	}
+	pending := env.PendingClusterID.String
+	// A cluster is one environment's. The unique index would refuse the update too;
+	// this says why.
+	if _, err := q.OtherEnvironmentWithCluster(ctx, sqlc.OtherEnvironmentWithClusterParams{
+		EnvID: envID, ClusterID: sql.NullString{String: pending, Valid: true},
+	}); err == nil {
+		return Adopted{}, ErrClusterInUse
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return Adopted{}, fmt.Errorf("look up the cluster: %w", err)
+	}
+	rows, err := q.AdoptPendingCluster(ctx, sqlc.AdoptPendingClusterParams{UpdatedAt: ts, ID: envID})
+	if err != nil {
+		return Adopted{}, fmt.Errorf("adopt the cluster: %w", err)
+	}
+	if rows == 0 {
+		return Adopted{}, ErrNoClusterChange
+	}
+	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: audit.ActionEnvironmentClusterAdopted, TargetType: targetEnvironment, TargetID: envID,
+		EnvID: envID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
+		Details: map[string]string{"from": env.SwarmClusterID.String, "to": pending},
+	}); err != nil {
+		return Adopted{}, fmt.Errorf("audit cluster adopted: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Adopted{}, fmt.Errorf("commit: %w", err)
+	}
+	if s.notifier != nil {
+		s.notifier.Notify(envID)
+	}
+	return Adopted{From: env.SwarmClusterID.String, To: pending}, nil
 }
 
 // Node is one enrolled agent as the database knows it: what the node list shows

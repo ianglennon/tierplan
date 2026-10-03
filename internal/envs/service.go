@@ -86,6 +86,10 @@ type Environment struct {
 	Health Health
 	// Overview is what the environments table shows beside the health (D-32).
 	Overview Overview
+	// PendingClusterID is the cluster a manager reported after the swarm was
+	// re-initialised, while that change waits for an admin to adopt it (D-14).
+	// Empty when no change is recorded.
+	PendingClusterID string
 }
 
 // DefaultReconnectGrace is how long after the server starts an environment with
@@ -348,14 +352,18 @@ func (s *Service) environment(ctx context.Context, row sqlc.Environment) (Enviro
 	if key, ok := Primary(in); ok {
 		status = s.mon.Status(key)
 	}
-	return Environment{
+	e := Environment{
 		ID: row.ID, Kind: row.Kind, Name: name, SocketPath: row.SocketPath,
 		Enabled:   row.Enabled != 0,
 		CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
 		Status:    status,
 		Health:    Rollup(in),
 		Overview:  overview(in, status, s.health.ServerVersion),
-	}, nil
+	}
+	if row.ClusterChangedAt.Valid {
+		e.PendingClusterID = row.PendingClusterID.String
+	}
+	return e, nil
 }
 
 // Connected implements tunnel.Observer: a session that is ready becomes a

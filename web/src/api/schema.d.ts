@@ -312,6 +312,26 @@ export interface paths {
         patch: operations["renameEnvironment"];
         trace?: never;
     };
+    "/api/environments/{envId}/adopt-cluster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt the new cluster of a re-initialised swarm
+         * @description A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.manage.
+         */
+        post: operations["adoptEnvironmentCluster"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments/{envId}/agents/{agentId}/revoke": {
         parameters: {
             query?: never;
@@ -656,6 +676,8 @@ export interface components {
             name: string;
             /** @description Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster */
             nodes: components["schemas"]["EnvironmentNodesBody"] | null;
+            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to */
+            pendingClusterId?: string;
             status: components["schemas"]["EnvironmentStatusBody"];
             /**
              * @description What the engine is; absent until it has answered
@@ -675,6 +697,12 @@ export interface components {
             kind: "local" | "agent";
             /** @description 1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent */
             name?: string;
+        };
+        AdoptClusterBody: {
+            /** @description The swarm cluster ID the environment is bound to now */
+            clusterId: string;
+            /** @description The cluster ID it was bound to; absent if it had none */
+            previousClusterId?: string;
         };
         AgentBody: {
             /** @description The agent's version when it last connected or enrolled */
@@ -904,6 +932,8 @@ export interface components {
             name: string;
             /** @description Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster */
             nodes: components["schemas"]["EnvironmentNodesBody"] | null;
+            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to */
+            pendingClusterId?: string;
             status: components["schemas"]["EnvironmentStatusBody"];
             /**
              * @description What the engine is; absent until it has answered
@@ -2150,6 +2180,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    adoptEnvironmentCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptClusterBody"];
                 };
             };
             /** @description Error */
