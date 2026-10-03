@@ -3,7 +3,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Ellipsis } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { type AgentItem, agentsQuery } from "@/api/agents";
 import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
@@ -174,8 +174,9 @@ interface RowProps {
   // The environment's status issues name a node whose certificate is not renewing.
   renewalFailing: boolean;
   canRevoke: boolean;
-  onRevoke: (agent: AgentItem) => void;
-  onUnblock: (agent: AgentItem) => void;
+  // The menu button comes along, so focus can go back to it after the dialog.
+  onRevoke: (agent: AgentItem, trigger: HTMLElement | null) => void;
+  onUnblock: (agent: AgentItem, trigger: HTMLElement | null) => void;
 }
 
 function NodeRow({ agent, renewalFailing, canRevoke, onRevoke, onUnblock }: RowProps) {
@@ -183,6 +184,10 @@ function NodeRow({ agent, renewalFailing, canRevoke, onRevoke, onUnblock }: RowP
   const revoked = isRevoked(agent);
   const canRevokeThis = canRevoke && agent.status === "active";
   const canUnblockThis = canRevoke && agent.blocked;
+  // Set when a menu item was chosen, so closing the menu does not hand focus
+  // back to its button over the dialog that is opening.
+  const chose = useRef(false);
+  const button = useRef<HTMLButtonElement>(null);
   return (
     <TableRow className="h-9">
       <TableCell className="max-w-56">
@@ -253,6 +258,7 @@ function NodeRow({ agent, renewalFailing, canRevoke, onRevoke, onUnblock }: RowP
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
+                ref={button}
                 type="button"
                 variant="ghost"
                 size="icon"
@@ -262,18 +268,34 @@ function NodeRow({ agent, renewalFailing, canRevoke, onRevoke, onUnblock }: RowP
                 <Ellipsis aria-hidden="true" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent
+              align="end"
+              onCloseAutoFocus={(event) => {
+                if (!chose.current) return;
+                chose.current = false;
+                event.preventDefault();
+              }}
+            >
               {canRevokeThis ? (
                 <DropdownMenuItem
                   variant="destructive"
                   className="max-md:min-h-11"
-                  onSelect={() => onRevoke(agent)}
+                  onSelect={() => {
+                    chose.current = true;
+                    onRevoke(agent, button.current);
+                  }}
                 >
                   {t("envsettings.nodes.revokeNode")}
                 </DropdownMenuItem>
               ) : null}
               {canUnblockThis ? (
-                <DropdownMenuItem className="max-md:min-h-11" onSelect={() => onUnblock(agent)}>
+                <DropdownMenuItem
+                  className="max-md:min-h-11"
+                  onSelect={() => {
+                    chose.current = true;
+                    onUnblock(agent, button.current);
+                  }}
+                >
                   {t("envsettings.nodes.unblockNode")}
                 </DropdownMenuItem>
               ) : null}
@@ -340,6 +362,16 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
   const agents = useQuery({ ...agentsQuery(envId), enabled: !isLocal });
   const [revoking, setRevoking] = useState<AgentItem | null>(null);
   const [unblocking, setUnblocking] = useState<AgentItem | null>(null);
+  // The menu button that opened the dialog, and the scrolling card as the place
+  // to go when that row no longer has one.
+  const returnTo = useRef<HTMLElement | null>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+
+  function giveFocusBack(event: Event) {
+    event.preventDefault();
+    const target = returnTo.current?.isConnected ? returnTo.current : scroller.current;
+    target?.focus();
+  }
 
   // An agent that connects or goes away, or a status change, makes the list stale.
   useEnvHealthEvents(envId, () => {
@@ -387,7 +419,12 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
       </span>
       {/* The card scrolls, not the page: fifty nodes stay inside it, with the
           header held at the top. */}
-      <div data-scroll className="max-h-[28rem] overflow-auto rounded-md border">
+      <div
+        ref={scroller}
+        data-scroll
+        tabIndex={-1}
+        className="max-h-[28rem] overflow-auto rounded-md border outline-none"
+      >
         <table
           aria-label={t("envsettings.nodes.tableLabel")}
           aria-busy={loading || undefined}
@@ -435,8 +472,14 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
                     agent={agent}
                     renewalFailing={notRenewing.has(agent.node)}
                     canRevoke={canRevoke}
-                    onRevoke={setRevoking}
-                    onUnblock={setUnblocking}
+                    onRevoke={(a, trigger) => {
+                      returnTo.current = trigger;
+                      setRevoking(a);
+                    }}
+                    onUnblock={(a, trigger) => {
+                      returnTo.current = trigger;
+                      setUnblocking(a);
+                    }}
                   />
                 ))
               : null}
@@ -448,8 +491,14 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
         agent={revoking}
         onClose={() => setRevoking(null)}
         onRotateToken={onRotateToken}
+        onCloseAutoFocus={giveFocusBack}
       />
-      <UnblockDialog envId={envId} agent={unblocking} onClose={() => setUnblocking(null)} />
+      <UnblockDialog
+        envId={envId}
+        agent={unblocking}
+        onClose={() => setUnblocking(null)}
+        onCloseAutoFocus={giveFocusBack}
+      />
     </>
   );
 }

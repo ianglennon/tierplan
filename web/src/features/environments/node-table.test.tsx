@@ -523,6 +523,32 @@ describe("NodeTable revoke", () => {
     );
   });
 
+  it("puts focus back on the row's Actions button when the dialog is cancelled", async () => {
+    await mountLoaded();
+    const dialog = await openRevoke();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Actions for mgr-1" }),
+      ),
+    );
+  });
+
+  it("puts focus on the card when the row has no menu any more after a revoke", async () => {
+    await mountLoaded();
+    // The revoke succeeds, and the node comes back already unblocked.
+    agents = agents.map((a) =>
+      a.id === "a1" ? { ...a, status: "revoked", blocked: false, connected: false } : a,
+    );
+    const dialog = await openRevoke();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Revoke node" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(document.querySelector("[data-scroll]")),
+    );
+  });
+
   it("cancels on Escape without sending anything", async () => {
     await mountLoaded();
     const dialog = await openRevoke();

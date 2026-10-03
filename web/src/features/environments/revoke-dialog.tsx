@@ -54,6 +54,9 @@ interface RevokeDialogProps {
   // Offered in the toast after a revoke: rotating the join token is what keeps
   // a compromised host out (UI-SPEC "After revoke toast").
   onRotateToken?: () => void;
+  // Where focus goes when the dialog has closed. The row's menu is gone by
+  // then, so the table decides.
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 // RevokeDialog is "Revoke {node}?" (D-08): an alert-dialog with focus on Cancel
@@ -61,7 +64,13 @@ interface RevokeDialogProps {
 // no toast over it, and a node somebody revoked first says so (UI-SPEC
 // Concurrency). Radix closes an alert-dialog on any action click, so the
 // confirm is a plain button and the dialog closes when the server has answered.
-export function RevokeDialog({ envId, agent, onClose, onRotateToken }: RevokeDialogProps) {
+export function RevokeDialog({
+  envId,
+  agent,
+  onClose,
+  onRotateToken,
+  onCloseAutoFocus,
+}: RevokeDialogProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<FailureKey | null>(null);
@@ -109,7 +118,7 @@ export function RevokeDialog({ envId, agent, onClose, onRotateToken }: RevokeDia
 
   return (
     <AlertDialog open={agent !== null} onOpenChange={close}>
-      <AlertDialogContent>
+      <AlertDialogContent onCloseAutoFocus={onCloseAutoFocus}>
         <AlertDialogHeader>
           <AlertDialogTitle>{t("envsettings.revoke.title", { node })}</AlertDialogTitle>
           <AlertDialogDescription>{t("envsettings.revoke.body", { node })}</AlertDialogDescription>
@@ -155,12 +164,13 @@ interface UnblockDialogProps {
   envId: string;
   agent: AgentItem | null;
   onClose: () => void;
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 // UnblockDialog is "Unblock {node}?" (D-09): a plain dialog, since nothing is
 // lost by it, with the primary confirm. The revoked agent is not revived: the
 // host enrols again as a new agent, which the body says.
-export function UnblockDialog({ envId, agent, onClose }: UnblockDialogProps) {
+export function UnblockDialog({ envId, agent, onClose, onCloseAutoFocus }: UnblockDialogProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<FailureKey | null>(null);
@@ -198,7 +208,7 @@ export function UnblockDialog({ envId, agent, onClose }: UnblockDialogProps) {
 
   return (
     <Dialog open={agent !== null} onOpenChange={close}>
-      <DialogContent showCloseButton={false}>
+      <DialogContent showCloseButton={false} onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>{t("envsettings.unblock.title", { node })}</DialogTitle>
           <DialogDescription>{t("envsettings.unblock.body", { node })}</DialogDescription>
