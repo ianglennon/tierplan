@@ -277,7 +277,10 @@ type Hub struct {
 
 	mu       sync.Mutex
 	sessions map[string]*Session
-	closed   bool
+	// memory is what is kept of every agent that has connected, for the health
+	// rollup (Views).
+	memory map[string]*agentMemory
+	closed bool
 }
 
 // NewHub returns a Hub. v is required. o may be nil. now defaults to time.Now.
@@ -289,7 +292,7 @@ func NewHub(v Verifier, o Observer, log *slog.Logger, now func() time.Time) *Hub
 		now = time.Now
 	}
 	return &Hub{
-		v: v, o: o, log: log, now: now, sessions: map[string]*Session{},
+		v: v, o: o, log: log, now: now, sessions: map[string]*Session{}, memory: map[string]*agentMemory{},
 		heartbeat: wire.DefaultHeartbeatMs * time.Millisecond, offlineAfter: DefaultOfflineAfter,
 		connect:     auth.NewIPLimiter(connectRefill, DefaultConnectBurst, connectLimiterTTL, now),
 		handshakes:  make(chan struct{}, maxHandshakes),
@@ -389,6 +392,7 @@ func (h *Hub) register(s *Session) bool {
 	}
 	old := h.sessions[s.AgentID]
 	h.sessions[s.AgentID] = s
+	h.noteConnected(s)
 	h.mu.Unlock()
 
 	if old != nil {
@@ -418,6 +422,7 @@ func (h *Hub) finish(s *Session) {
 // report tells the Observer, once, that s has ended.
 func (h *Hub) report(s *Session) {
 	s.reported.Do(func() {
+		h.noteEnded(s)
 		if h.o != nil {
 			h.o.Disconnected(s, s.Reason())
 		}

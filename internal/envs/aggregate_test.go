@@ -442,14 +442,28 @@ func TestTwentyGoroutinesConnectingDisconnectingAndReadingStatusPassTheRaceDetec
 	for i := range agents {
 		// Each of ten goroutines drops its agent and brings it back with hello.
 		reconnecting.Go(func() {
+			id := conns[i].id
 			for range 3 {
+				prev := r.srv.Hub.Session(id)
 				_ = conns[i].conn.WS.CloseNow()
 				again := r.srv.Hello(t, conns[i].conn.Identity)
 				if again.Welcome == nil {
+					t.Errorf("hello refused: %+v (err %v)", again.Refuse, again.Err)
 					return
 				}
 				again.ProxyDocker(t, conns[i].fake.SocketPath())
 				conns[i].conn = again
+				// The hub registers a session just after it sends the welcome. Closing
+				// the connection before that would race two handshakes of one agent,
+				// which is a client behaviour this test is not about.
+				deadline := time.Now().Add(5 * time.Second)
+				for s := r.srv.Hub.Session(id); s == nil || s == prev; s = r.srv.Hub.Session(id) {
+					if time.Now().After(deadline) {
+						t.Errorf("the new session of %s was never registered", id)
+						return
+					}
+					time.Sleep(time.Millisecond)
+				}
 			}
 		})
 		// Each of ten others reads the environment's status and the aggregate.
@@ -457,13 +471,17 @@ func TestTwentyGoroutinesConnectingDisconnectingAndReadingStatusPassTheRaceDetec
 			for ctx.Err() == nil {
 				e, err := r.svc.Get(ctx, env.ID)
 				if err != nil {
-					t.Errorf("Get: %v", err)
+					if ctx.Err() == nil {
+						t.Errorf("Get: %v", err)
+					}
 					return
 				}
 				_ = e.Health
 				_, _, _ = r.agg.Snapshot(ctx, env.ID)
 				if _, err := r.svc.List(ctx); err != nil {
-					t.Errorf("List: %v", err)
+					if ctx.Err() == nil {
+						t.Errorf("List: %v", err)
+					}
 					return
 				}
 				time.Sleep(time.Millisecond)

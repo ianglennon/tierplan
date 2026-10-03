@@ -56,8 +56,14 @@ type AgentView struct {
 	Connected bool
 	// ConnectedAt is when the current or last session began.
 	ConnectedAt time.Time
-	// LastSeen is the last sign of life: a heartbeat, or the connect itself.
+	// LastSeen is the last sign of life of this server run: a heartbeat, or the
+	// connect itself. It is zero for an agent that has not connected since the
+	// server started, and presence is decided from it alone.
 	LastSeen time.Time
+	// StoredSeen is agents.last_seen_at, written at most once a minute. It is never
+	// used for presence; it tells how long ago contact was lost when this run has
+	// no sign of the agent.
+	StoredSeen time.Time
 	// Ended is when the last session ended, zero when the server has seen none end.
 	Ended time.Time
 	// LastCode is why the last session ended (a tunnel Disconnect code).
@@ -214,7 +220,7 @@ func absent(in RollupInput, active []AgentView) Health {
 				reason = ReasonAgentOffline
 			}
 		}
-		lastSeen = later(lastSeen, a.LastSeen)
+		lastSeen = later(later(lastSeen, a.LastSeen), a.StoredSeen)
 	}
 	return Health{State: StateOffline, Reason: reason, Since: firstSet(lastEnd, lastSeen, in.ServerStart)}
 }
@@ -298,6 +304,19 @@ func unreachableSince(a AgentView) time.Time {
 		return firstSet(a.Target.Since, a.ConnectedAt)
 	}
 	return firstSet(a.ConnectedAt, a.LastSeen)
+}
+
+// connectedAgents are the agents that are not revoked and have a live session,
+// ordered by ID.
+func connectedAgents(in RollupInput) []AgentView {
+	var out []AgentView
+	for _, a := range in.Agents {
+		if a.Connected && !a.Revoked {
+			out = append(out, a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // nodeName is the name of a node as shown in an issue: the host name the agent

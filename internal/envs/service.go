@@ -58,6 +58,13 @@ const (
 	pendingName = "New environment"
 
 	targetEnvironment = "environment"
+
+	// statusRevoked is the status of an agent an admin revoked, and the roles an
+	// agent row carries.
+	statusRevoked     = "revoked"
+	roleManager       = "manager"
+	roleWorker        = "worker"
+	envTypeStandalone = "standalone"
 )
 
 // AgentTarget is the monitor key of one agent. An agent environment has no
@@ -134,6 +141,9 @@ func NewService(s *store.Store, w *audit.Writer, m *Monitor, dockerHost string, 
 		st: s, aud: w, mon: m, dockerHost: dockerHost, selfID: selfID, now: now,
 		log: m.log, runCtx: context.Background(),
 		connected: map[string]map[string]*tunnel.Session{},
+		health: HealthConfig{
+			ServerStart: now(), OfflineAfter: tunnel.DefaultOfflineAfter, Grace: DefaultReconnectGrace,
+		},
 	}
 }
 
@@ -144,19 +154,95 @@ func (s *Service) WithAgents(src AgentSource) *Service {
 	return s
 }
 
-// WithHealth sets the timing of the health rollup. Call it before the service is
-// used.
+// WithHealth sets the timing of the health rollup; a zero field keeps the value it
+// has. Call it before the service is used.
 func (s *Service) WithHealth(c HealthConfig) *Service {
-	s.health = c
+	if !c.ServerStart.IsZero() {
+		s.health.ServerStart = c.ServerStart
+	}
+	if c.OfflineAfter > 0 {
+		s.health.OfflineAfter = c.OfflineAfter
+	}
+	if c.Grace > 0 {
+		s.health.Grace = c.Grace
+	}
 	return s
 }
 
 // Input is everything Rollup decides an environment's health from, read now: the
 // environment row, its agent rows, the hub's live view of each agent and the
-// monitor's status of each target.
+// monitor's status of each target. It returns ErrNotFound for an unknown
+// environment.
 func (s *Service) Input(ctx context.Context, envID string, now time.Time) (RollupInput, error) {
-	_, _, _ = ctx, envID, now
-	return RollupInput{}, errors.New("envs: not implemented")
+	row, err := s.st.RQ.GetEnvironment(ctx, envID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RollupInput{}, ErrNotFound
+	}
+	if err != nil {
+		return RollupInput{}, fmt.Errorf("get environment: %w", err)
+	}
+	return s.input(ctx, row, now)
+}
+
+func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time) (RollupInput, error) {
+	in := RollupInput{
+		EnvID: row.ID, Kind: row.Kind, Now: now,
+		ServerStart: s.health.ServerStart, OfflineAfter: s.health.OfflineAfter, Grace: s.health.Grace,
+	}
+	if row.Kind != KindAgent {
+		in.Local = s.mon.Status(row.ID)
+		return in, nil
+	}
+	rows, err := s.st.RQ.ListAgentsByEnv(ctx, row.ID)
+	if err != nil {
+		return RollupInput{}, fmt.Errorf("list agents: %w", err)
+	}
+	live := map[string]tunnel.AgentLive{}
+	if s.agents != nil {
+		for _, v := range s.agents.Views(row.ID) {
+			live[v.AgentID] = v
+		}
+	}
+	swarm := false
+	for _, a := range rows {
+		v := AgentView{
+			ID: a.ID, Node: a.Name, Role: a.Role, Revoked: a.Status == statusRevoked,
+			CertNotAfter: time.Unix(0, a.CertNotAfter).UTC(),
+			// Presence never reads the stored last-seen: after a restart it would make
+			// an agent that has not reconnected look present for up to a minute.
+			EngineReachable: true,
+		}
+		if a.RevokedAt.Valid {
+			v.RevokedAt = time.Unix(0, a.RevokedAt.Int64).UTC()
+		}
+		if a.LastSeenAt.Valid {
+			v.StoredSeen = time.Unix(0, a.LastSeenAt.Int64).UTC()
+		}
+		if l, ok := live[a.ID]; ok {
+			v.Connected, v.ConnectedAt, v.LastSeen, v.Ended, v.LastCode = l.Connected, l.ConnectedAt, l.LastSeen, l.Ended, l.LastCode
+			v.EngineReachable, v.ClockOffset = l.EngineReachable, l.ClockOffset
+			if l.Connected {
+				v.Target = s.mon.Status(AgentTarget(a.ID))
+			}
+		}
+		if !v.Revoked {
+			in.Expected++
+			swarm = swarm || a.Role == roleManager || a.Role == roleWorker
+		}
+		in.Agents = append(in.Agents, v)
+	}
+	switch {
+	case row.EnvType.Valid:
+		in.EnvType = row.EnvType.String
+	case swarm:
+		in.EnvType = envTypeSwarm
+	case in.Expected > 0:
+		in.EnvType = envTypeStandalone
+	}
+	if row.ClusterChangedAt.Valid {
+		in.ClusterChanged, in.ClusterChangedAt = true, time.Unix(0, row.ClusterChangedAt.Int64).UTC()
+	}
+	return in, nil
 }
 
 // SelfContainerID is the ID of Bayplan's own container, or empty (D-27).
@@ -200,7 +286,11 @@ func (s *Service) List(ctx context.Context) ([]Environment, error) {
 	}
 	out := make([]Environment, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, s.environment(row))
+		e, err := s.environment(ctx, row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }
@@ -214,49 +304,36 @@ func (s *Service) Get(ctx context.Context, id string) (Environment, error) {
 	if err != nil {
 		return Environment{}, fmt.Errorf("get environment: %w", err)
 	}
-	return s.environment(row), nil
+	return s.environment(ctx, row)
 }
 
-func (s *Service) environment(row sqlc.Environment) Environment {
+// environment builds the API view of a row: its rolled-up health (D-33) and the
+// status of the one target its engine data is read through. An agent environment
+// is never monitored under its own ID: its health is the rollup of its agents,
+// and its engine data are those of its primary target.
+func (s *Service) environment(ctx context.Context, row sqlc.Environment) (Environment, error) {
 	name := row.Name
 	if name == "" {
 		// An agent environment the admin did not name stays blank in the
 		// database until its first agent enrols and names it (D-23).
 		name = pendingName
 	}
+	now := s.now()
+	in, err := s.input(ctx, row, now)
+	if err != nil {
+		return Environment{}, err
+	}
+	status := Status{State: StateUnknown}
+	if key, ok := Primary(in); ok {
+		status = s.mon.Status(key)
+	}
 	return Environment{
 		ID: row.ID, Kind: row.Kind, Name: name, SocketPath: row.SocketPath,
 		Enabled:   row.Enabled != 0,
 		CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
-		Status:    s.status(row),
-	}
-}
-
-// status is the monitor's view of a local environment, and for an agent
-// environment the view of its connected agent. With no agent connected it is
-// unknown; plan 11 replaces this with the D-33 rollup over every agent.
-func (s *Service) status(row sqlc.Environment) Status {
-	if row.Kind != KindAgent {
-		return s.mon.Status(row.ID)
-	}
-	if id := s.firstConnectedAgent(row.ID); id != "" {
-		return s.mon.Status(AgentTarget(id))
-	}
-	return Status{State: StateUnknown}
-}
-
-// firstConnectedAgent is the connected agent of envID with the lowest ID, or
-// empty when none is connected.
-func (s *Service) firstConnectedAgent(envID string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	first := ""
-	for id := range s.connected[envID] {
-		if first == "" || id < first {
-			first = id
-		}
-	}
-	return first
+		Status:    status,
+		Health:    Rollup(in),
+	}, nil
 }
 
 // Connected implements tunnel.Observer: a session that is ready becomes a
@@ -403,7 +480,7 @@ func (s *Service) AddLocal(ctx context.Context, actor audit.Actor, name string, 
 	st, _ := statusFromProbe(res, nil, s.now())
 	return Environment{
 		ID: id.String(), Kind: KindLocal, Name: name, SocketPath: path, Enabled: true,
-		CreatedAt: time.Unix(0, now).UTC(), Status: st,
+		CreatedAt: time.Unix(0, now).UTC(), Status: st, Health: Health{State: st.State, Reason: st.Reason, Since: st.Since},
 	}, nil
 }
 
@@ -462,7 +539,7 @@ func (s *Service) Rename(ctx context.Context, actor audit.Actor, id, name, ip, u
 		return Environment{}, fmt.Errorf("commit: %w", err)
 	}
 	row.Name, row.UpdatedAt = name, now
-	return s.environment(row), nil
+	return s.environment(ctx, row)
 }
 
 // Remove deletes the environment and stops its monitor. It changes nothing in
@@ -503,6 +580,9 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 	for agentID := range agents {
 		s.mon.Stop(AgentTarget(agentID))
 	}
+	if s.agents != nil {
+		s.agents.Forget(id)
+	}
 	return nil
 }
 
@@ -513,7 +593,13 @@ func (s *Service) Reconnect(ctx context.Context, id string) (Environment, error)
 	if err != nil {
 		return Environment{}, err
 	}
-	s.mon.Kick(id)
+	in, err := s.Input(ctx, id, s.now())
+	if err != nil {
+		return Environment{}, err
+	}
+	for _, key := range Targets(in) {
+		s.mon.Kick(key)
+	}
 	return e, nil
 }
 
