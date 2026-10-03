@@ -122,6 +122,22 @@ if [ "$(grep -c '^Signed-off-by: Test Author <test@example.invalid>$' "${msg}")"
   failures=$((failures + 1))
 fi
 
+# --- TLS confinement gate: the setting may appear only in the agent's tls.go ---
+tls_setting="Insecure""SkipVerify"
+tlsfix="${scratch}/tls-fixture"
+mkdir -p "${tlsfix}/agent/internal/connect" "${tlsfix}/internal/server" "${tlsfix}/web/node_modules/p"
+printf 'package connect\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/agent/internal/connect/tls.go"
+expect pass "tls-gate-allowed-file" scripts/insecure-tls-check.sh "${tlsfix}"
+printf 'package server\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/internal/server/healthcheck.go"
+expect fail "tls-gate-other-file" scripts/insecure-tls-check.sh "${tlsfix}"
+expect_out "tls-gate-other-file names the file" "internal/server/healthcheck.go"
+rm -f "${tlsfix}/internal/server/healthcheck.go"
+printf 'package p\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/web/node_modules/p/x.go"
+expect pass "tls-gate-skips-dependencies" scripts/insecure-tls-check.sh "${tlsfix}"
+printf 'package server\n// mentions %s\n' "${tls_setting}" >"${tlsfix}/internal/server/x_test.go"
+expect fail "tls-gate-test-file-comment" scripts/insecure-tls-check.sh "${tlsfix}"
+expect pass "tls-gate-repository" scripts/insecure-tls-check.sh
+
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"
   exit 1

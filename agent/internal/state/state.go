@@ -12,6 +12,7 @@ package state
 import (
 	"crypto/ed25519"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -28,6 +30,8 @@ const (
 	CertFile      = "cert.der"
 	IdentityFile  = "identity.json"
 	ConnectedFile = "connected"
+	// PinsFile holds the server certificate pins the agent keeps (D-06).
+	PinsFile = "pins.json"
 
 	fileMode  = 0o600
 	tmpSuffix = ".tmp"
@@ -176,4 +180,128 @@ func writeFile(path string, data []byte) error {
 		return err
 	}
 	return f.Close()
+}
+
+// PinOverlap is how long a pin that the server stopped listing stays valid. A
+// server that changes its key therefore does not cut off an agent that has not
+// yet heard about the new one (D-06).
+const PinOverlap = 30 * 24 * time.Hour
+
+// MaxPins bounds the pins kept. A server lists one or two; the cap keeps a
+// misbehaving one from growing the file.
+const MaxPins = 16
+
+// PinEntry is one server certificate pin. ExpiresAt is zero while the server
+// lists the pin, and is the end of its overlap window once it stopped.
+type PinEntry struct {
+	Pin       string    `json:"pin"`
+	ExpiresAt time.Time `json:"expiresAt,omitzero"`
+}
+
+// ValidPin reports whether s is a pin as authn.SPKIPin writes it: "sha256/" and
+// the standard base64 of a 32-byte hash.
+func ValidPin(s string) bool {
+	rest, ok := strings.CutPrefix(s, "sha256/")
+	if !ok || len(rest) != 44 {
+		return false
+	}
+	raw, err := base64.StdEncoding.DecodeString(rest)
+	return err == nil && len(raw) == 32
+}
+
+// live reports whether e still counts at now.
+func (e PinEntry) live(now time.Time) bool {
+	return e.ExpiresAt.IsZero() || now.Before(e.ExpiresAt)
+}
+
+// MergePins is the pins to keep after a welcome that listed fromServer, given
+// the current ones. Every well-formed pin the server lists is kept with no
+// expiry. A current pin it no longer lists stays until PinOverlap after the first
+// welcome that left it out, and is then dropped; later welcomes do not extend that
+// deadline. Malformed entries are ignored and the result is capped at MaxPins,
+// the server's own pins first.
+func MergePins(current []PinEntry, fromServer []string, now time.Time) []PinEntry {
+	var out []PinEntry
+	listed := map[string]bool{}
+	for _, p := range fromServer {
+		if !ValidPin(p) || listed[p] {
+			continue
+		}
+		listed[p] = true
+		out = append(out, PinEntry{Pin: p})
+	}
+	for _, e := range current {
+		if listed[e.Pin] || !ValidPin(e.Pin) || !e.live(now) {
+			continue
+		}
+		listed[e.Pin] = true
+		if e.ExpiresAt.IsZero() {
+			e.ExpiresAt = now.Add(PinOverlap)
+		}
+		out = append(out, e)
+	}
+	if len(out) > MaxPins {
+		out = out[:MaxPins]
+	}
+	return out
+}
+
+// ActivePins is the pins that count at now, in order.
+func ActivePins(entries []PinEntry, now time.Time) []string {
+	var out []string
+	for _, e := range entries {
+		if e.live(now) {
+			out = append(out, e.Pin)
+		}
+	}
+	return out
+}
+
+// EqualPins reports whether two lists hold the same pins and deadlines.
+func EqualPins(a, b []PinEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Pin != b[i].Pin || !a[i].ExpiresAt.Equal(b[i].ExpiresAt) {
+			return false
+		}
+	}
+	return true
+}
+
+// LoadPins reads the pins in dir. A directory with no pins.json has none.
+func LoadPins(dir string) ([]PinEntry, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, PinsFile)) //nolint:gosec // the name is a constant joined to the agent's own state directory
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", PinsFile, err)
+	}
+	var entries []PinEntry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("%s is damaged: %w", filepath.Join(dir, PinsFile), err)
+	}
+	return entries, nil
+}
+
+// SavePins replaces pins.json with entries, atomically and private to the agent.
+func SavePins(dir string, entries []PinEntry) error {
+	if entries == nil {
+		entries = []PinEntry{}
+	}
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal the pins: %w", err)
+	}
+	tmp := filepath.Join(dir, PinsFile+tmpSuffix)
+	if err := writeFile(tmp, append(data, '\n')); err != nil {
+		return fmt.Errorf("save %s: %w", PinsFile, err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, PinsFile)); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("save %s: %w", PinsFile, err)
+	}
+	return nil
 }

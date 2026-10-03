@@ -12,6 +12,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"io"
+	"log"
 	"log/slog"
 	"math/big"
 	"net"
@@ -90,6 +92,7 @@ func serveChain(t *testing.T, chain ...certPair) *httptest.Server {
 		ders = append(ders, c.cert.Raw)
 	}
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	ts.Config.ErrorLog = log.New(io.Discard, "", 0) // refused handshakes are what these tests are about
 	ts.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: ders, PrivateKey: chain[0].key}}, MinVersion: tls.VersionTLS12}
 	ts.StartTLS()
 	t.Cleanup(ts.Close)
@@ -106,7 +109,11 @@ func poolOf(cs ...certPair) *x509.CertPool {
 
 // getWith is a GET to ts through a client that uses the agent's TLS settings.
 func getWith(ts *httptest.Server, pins, override []string, roots *x509.CertPool) error {
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig(pins, override, roots)}, Timeout: 5 * time.Second}
+	u, err := url.Parse(ts.URL)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig(pins, override, roots, u.Hostname())}, Timeout: 5 * time.Second}
 	defer client.CloseIdleConnections()
 	resp, err := client.Get(ts.URL) //nolint:noctx // a test against a loopback listener
 	if err != nil {
@@ -233,20 +240,20 @@ func TestTLSVerifiesTheHostNameWhenItTrustsARoot(t *testing.T) {
 
 func TestTLSConfigurationIsTLS12OrNewerWithAndWithoutPins(t *testing.T) {
 	for name, c := range map[string]*tls.Config{
-		"no pins":  tlsConfig(nil, nil, nil),
-		"pins":     tlsConfig([]string{"sha256/x"}, nil, nil),
-		"override": tlsConfig(nil, []string{"sha256/x"}, nil),
+		"no pins":  tlsConfig(nil, nil, nil, "127.0.0.1"),
+		"pins":     tlsConfig([]string{"sha256/x"}, nil, nil, "127.0.0.1"),
+		"override": tlsConfig(nil, []string{"sha256/x"}, nil, "127.0.0.1"),
 	} {
 		if c.MinVersion != tls.VersionTLS12 {
 			t.Errorf("%s: MinVersion = %#x, want TLS 1.2", name, c.MinVersion)
 		}
 	}
 	// The no-pin configuration is the ordinary one: nothing replaces verification.
-	if c := tlsConfig(nil, nil, nil); c.VerifyConnection != nil || skipsBuiltInVerification(c) {
+	if c := tlsConfig(nil, nil, nil, "127.0.0.1"); c.VerifyConnection != nil || skipsBuiltInVerification(c) {
 		t.Errorf("the no-pin configuration replaces verification: %+v", c)
 	}
 	// With pins, a verifier is mandatory: the built-in one is replaced by it.
-	if c := tlsConfig([]string{"sha256/x"}, nil, nil); c.VerifyConnection == nil {
+	if c := tlsConfig([]string{"sha256/x"}, nil, nil, "127.0.0.1"); c.VerifyConnection == nil {
 		t.Error("a configuration that skips the built-in verification has no VerifyConnection")
 	}
 }
@@ -258,7 +265,7 @@ func skipsBuiltInVerification(c *tls.Config) bool {
 }
 
 func TestTLSVerifyConnectionRefusesAnEmptyPeerCertificateList(t *testing.T) {
-	c := tlsConfig([]string{"sha256/x"}, []string{"sha256/y"}, nil)
+	c := tlsConfig([]string{"sha256/x"}, []string{"sha256/y"}, nil, "127.0.0.1")
 	err := c.VerifyConnection(tls.ConnectionState{})
 	if asUntrusted(err) == nil {
 		t.Fatalf("VerifyConnection with no peer certificate = %v, want a tls_untrusted refusal", err)
@@ -269,7 +276,7 @@ func TestTLSVerifyConnectionRefusesAnEmptyPeerCertificateList(t *testing.T) {
 }
 
 func TestTheDialClientUsesTheEnvironmentProxy(t *testing.T) {
-	c := newHTTPClient(nil, nil, nil)
+	c := newHTTPClient(nil, nil, nil, "bayplan.example")
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok || tr.Proxy == nil {
 		t.Fatalf("transport = %#v, want an http.Transport with a proxy function", c.Transport)
@@ -320,7 +327,9 @@ func (l *lockedBuffer) String() string {
 func newFakeServerTLS(t *testing.T, script func(n int, a wire.Auth) reply) *fakeServer {
 	t.Helper()
 	f := &fakeServer{script: script, beats: make(chan wire.Heartbeat, 256), denied: make(chan wire.Denied, 256), started: make(chan int, 64)}
-	f.ts = httptest.NewTLSServer(http.HandlerFunc(f.handle))
+	f.ts = httptest.NewUnstartedServer(http.HandlerFunc(f.handle))
+	f.ts.Config.ErrorLog = log.New(io.Discard, "", 0) // refused handshakes are what these tests are about
+	f.ts.StartTLS()
 	t.Cleanup(func() {
 		f.ts.CloseClientConnections()
 		f.ts.Close()
@@ -399,15 +408,14 @@ func TestStoredPinsLetARestartedAgentConnectWithoutTheInstallPin(t *testing.T) {
 	f = newFakeServerTLS(t, func(int, wire.Auth) reply { return reply{pins: []string{serverPin(f)}} })
 	dir := t.TempDir()
 
-	cancel, done := startAgent(t, Config{URL: f.url(), JoinToken: "bpjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
+	cancel, _ := startAgent(t, Config{URL: f.url(), JoinToken: "bpjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
 	f.authN(t, 1)
 	waitUntil(t, "the identity and the pins to be stored", func() bool {
 		ps, err := state.LoadPins(dir)
 		_, ok, lerr := state.Load(dir)
 		return err == nil && len(ps) == 1 && ok && lerr == nil
 	})
-	cancel()
-	<-done
+	cancel() // startAgent's cleanup waits for it to stop
 
 	// The restart has no token and no install pin: only what it stored.
 	startAgent(t, Config{URL: f.url(), StateDir: dir}, fastEnv())

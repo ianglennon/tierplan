@@ -11,14 +11,16 @@
 // certificate and signs the server's challenge with that key; the token is not
 // needed again (D-01, D-03). After the welcome the agent opens a control stream
 // and heartbeats on it (D-41). When the connection ends it reconnects with
-// jittered exponential backoff and never gives up. Renewal and pinning arrive in
-// later plans.
+// jittered exponential backoff and never gives up. The server's certificate is
+// verified by the system roots or by a pin (tls.go). Renewal arrives in a later
+// plan.
 package connect
 
 import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,9 +53,15 @@ type Config struct {
 	Version string
 	// Log receives one line per event. Nil means slog.Default().
 	Log *slog.Logger
-	// HTTPClient dials the server. Nil means the default client, which trusts
-	// the system roots and honours SSL_CERT_FILE.
+	// HTTPClient dials the server. Nil means the agent's own client: system
+	// roots (honouring SSL_CERT_FILE), the pins below and those stored from
+	// earlier welcomes, and the proxy from the environment (tls.go). A caller
+	// that supplies one takes over verification; the agent binary never does.
 	HTTPClient *http.Client
+	// InstallPins are the server certificate pins of BAYPLAN_AGENT_PIN: the
+	// pin of Bayplan's own certificate, or of a certificate authority in the
+	// chain of a private-CA proxy.
+	InstallPins []string
 	// StateDir holds the agent's identity (key, certificate, IDs). Empty keeps
 	// the identity in memory only, so a restart enrols again.
 	StateDir string
@@ -71,6 +79,8 @@ type runEnv struct {
 	sleep func(context.Context, time.Duration) error
 	rnd   func() float64
 	now   func() time.Time
+	// roots replaces the system roots in a test; nil in production.
+	roots *x509.CertPool
 }
 
 // RefusedError is returned when the server answers the handshake with a refusal.
@@ -128,6 +138,9 @@ type runner struct {
 	env runEnv
 	log *slog.Logger
 	aud string
+	// host is the name or address of the server, which its certificate must be
+	// valid for.
+	host string
 
 	// cur is the identity, once the agent has one. It is also kept in memory when
 	// there is no state directory, so a reconnect in the same process never
@@ -140,6 +153,8 @@ type runner struct {
 	// lastCode is the refusal code last logged, so a refusal that repeats every
 	// minute is said once.
 	lastCode string
+	// pins are the server pins kept from welcomes, with their overlap deadlines.
+	pins []state.PinEntry
 }
 
 func runWith(ctx context.Context, cfg Config, env runEnv) error {
@@ -174,13 +189,19 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 		log.Warn("the agent endpoint is plain ws://: the join token and every Docker answer travel unencrypted")
 	}
 
-	r := &runner{cfg: cfg, env: env, log: log, aud: aud}
+	r := &runner{cfg: cfg, env: env, log: log, aud: aud, host: u.Hostname()}
 	if cfg.StateDir != "" {
 		cur, ok, err := state.Load(cfg.StateDir)
 		if err != nil {
 			return err
 		}
 		r.cur, r.have = cur, ok
+		// A pins file that cannot be read leaves the agent with fewer pins, which
+		// can only make it refuse more, never trust more.
+		if r.pins, err = state.LoadPins(cfg.StateDir); err != nil {
+			log.Warn("the agent could not read its stored server pins; it will trust only the install pin and the system roots", "error", err)
+			r.pins = nil
+		}
 	}
 	if !r.have && cfg.JoinToken == "" {
 		return errNoCredentials
@@ -212,6 +233,17 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 				return refused
 			}
 			wait = r.refused(refused, &failures)
+		} else if untrusted := asUntrusted(err); untrusted != nil {
+			// The server could not be verified, so nothing was sent to it. Said
+			// once, with the way out; a server that stays untrusted is retried
+			// quietly with the usual backoff until its certificate changes.
+			failures++
+			wait = backoff(failures, cfg.BackoffMin, cfg.BackoffMax, env.rnd)
+			if r.lastCode != untrustedCode {
+				r.lastCode = untrustedCode
+				log.Warn("the server's certificate could not be verified, so the agent did not connect",
+					"code", untrustedCode, "detail", untrusted.Detail, "hint", untrustedHint, "retry_in", wait.Round(time.Millisecond).String())
+			}
 		} else {
 			failures++
 			wait = backoff(failures, cfg.BackoffMin, cfg.BackoffMax, env.rnd)
@@ -291,11 +323,19 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 		return false, err
 	}
 
+	client := r.cfg.HTTPClient
+	if client == nil {
+		client = newHTTPClient(state.ActivePins(r.pins, r.env.now()), r.cfg.InstallPins, r.env.roots, r.host)
+		defer client.CloseIdleConnections()
+	}
 	c, resp, err := websocket.Dial(ctx, r.cfg.URL, &websocket.DialOptions{ //nolint:bodyclose // coder/websocket reads and closes the body of a refused upgrade itself
-		HTTPClient:   r.cfg.HTTPClient,
+		HTTPClient:   client,
 		Subprotocols: []string{wire.Subprotocol},
 	})
 	if err != nil {
+		if u := asUntrusted(err); u != nil {
+			return false, u
+		}
 		return false, fmt.Errorf("connect to %s: %w", r.aud, err)
 	}
 	// CloseNow, never a graceful close: a peer that stopped answering would make
@@ -314,7 +354,7 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	if err := r.accept(cr, welcome); err != nil {
+	if err := r.accept(cr, welcome, resp != nil && resp.TLS != nil); err != nil {
 		return false, err
 	}
 	r.forceEnrol = false
@@ -351,8 +391,11 @@ func (r *runner) credentials() (credentials, error) {
 }
 
 // accept records the outcome of a welcome: an enrolment's identity is kept in
-// memory and saved, and every welcome marks the agent as connected.
-func (r *runner) accept(cr credentials, w wire.Welcome) error {
+// memory and saved, the server's pins are merged in, and every welcome marks the
+// agent as connected. verified says the session ran over TLS that was verified;
+// pins from any other session are not taken, so a spoofed server cannot plant one
+// (T-02-33).
+func (r *runner) accept(cr credentials, w wire.Welcome, verified bool) error {
 	switch cr.mode {
 	case wire.ModeEnrol:
 		if len(w.Cert) == 0 {
@@ -374,12 +417,31 @@ func (r *runner) accept(cr credentials, w wire.Welcome) error {
 		}
 		r.log.Info("connected to Bayplan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", r.aud)
 	}
+	if verified {
+		r.mergePins(w.Pins)
+	}
 	if r.cfg.StateDir != "" {
 		if err := state.MarkConnected(r.cfg.StateDir); err != nil {
 			r.log.Warn("the agent could not write its connected marker", "error", err)
 		}
 	}
 	return nil
+}
+
+// mergePins keeps the pins a welcome lists, and for 30 days the ones it no longer
+// does (state.MergePins), saving them when they changed.
+func (r *runner) mergePins(fromServer []string) {
+	merged := state.MergePins(r.pins, fromServer, r.env.now())
+	if state.EqualPins(merged, r.pins) {
+		return
+	}
+	r.pins = merged
+	if r.cfg.StateDir == "" {
+		return
+	}
+	if err := state.SavePins(r.cfg.StateDir, merged); err != nil {
+		r.log.Warn("the agent could not save the server's pins; it will trust the server by the install pin or the system roots after a restart", "dir", r.cfg.StateDir, "error", err)
+	}
 }
 
 // publicOf is the public half of an Ed25519 private key: the last 32 bytes of it.

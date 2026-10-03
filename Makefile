@@ -126,12 +126,14 @@ lint-config:
 
 # golangci-lint has no -C flag, so each module is linted from inside a subshell.
 # The root module's ./... stops at the nested go.mod files, so no package is
-# linted twice.
+# linted twice. The TLS gate keeps the switch that turns off certificate
+# verification in the agent's one reviewed file (D-06).
 lint:
 	@set -e; for m in $(GO_MODULES); do \
 	  echo "lint: $$m"; \
 	  (cd $$m && $(GOLANGCI_LINT) run ./...); \
 	done
+	scripts/insecure-tls-check.sh
 	pnpm -C web exec biome ci .
 	pnpm -C web exec tsc --noEmit
 

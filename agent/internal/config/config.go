@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ianglennon/bayplan/agent/internal/state"
 )
 
 const (
@@ -36,6 +38,13 @@ const (
 	// envSelfUpdate says whether the agent may update or uninstall itself when the
 	// server asks (D-28). The default is true; a later plan implements what it gates.
 	envSelfUpdate = "BAYPLAN_AGENT_SELF_UPDATE"
+
+	// envPin is the pin of the server's certificate, or several separated by
+	// commas, as "sha256/" and a base64 SPKI hash. The install command carries it
+	// when Bayplan serves its own certificate; a pin on a certificate authority of
+	// a private proxy works too (D-06). Without it the server must present a
+	// certificate the system trusts.
+	envPin = "BAYPLAN_AGENT_PIN"
 
 	// identityFile is written into the state directory when the agent enrols.
 	// Its presence means a join token is no longer needed.
@@ -62,6 +71,8 @@ type Config struct {
 	// ReadOnly refuses every Docker call that is not a read, and SelfUpdate says
 	// whether the agent may update itself (D-28).
 	ReadOnly, SelfUpdate bool
+	// Pins are the server certificate pins from the install command, validated.
+	Pins []string
 }
 
 // Load reads the configuration. env looks up an environment variable and
@@ -115,6 +126,10 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 		return Config{}, err
 	}
 
+	if cfg.Pins, err = parsePins(env(envPin)); err != nil {
+		return Config{}, err
+	}
+
 	token, err := readToken(env, readFile)
 	if err != nil {
 		return Config{}, err
@@ -157,6 +172,23 @@ func parseFlag(env func(string) string, name string, def bool) (bool, error) {
 		return false, fmt.Errorf("%s must be true or false, got %q", name, raw)
 	}
 	return v, nil
+}
+
+// parsePins reads a comma-separated list of pins. Each must be well formed, so
+// a mistyped pin stops the agent instead of leaving it unable to trust anything.
+func parsePins(raw string) ([]string, error) {
+	var pins []string
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if !state.ValidPin(p) {
+			return nil, fmt.Errorf("%s must be sha256/ followed by the 44-character base64 hash, as Bayplan's install command shows it; got %q", envPin, p)
+		}
+		pins = append(pins, p)
+	}
+	return pins, nil
 }
 
 func parseGID(raw string) (*int, error) {

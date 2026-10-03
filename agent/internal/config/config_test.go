@@ -339,7 +339,7 @@ func TestLoadRefusesAPolicyFlagItCannotRead(t *testing.T) {
 func TestLoadReadsTheServerPinsFromTheInstallCommand(t *testing.T) {
 	a := "sha256/" + strings.Repeat("A", 43) + "="
 	b := "sha256/" + strings.Repeat("B", 43) + "="
-	base := map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "bpjt_x_y"}
+	base := map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "bpjt_x_y"} //nolint:gosec // a test fixture, not a credential
 	load := func(pin string) (Config, error) {
 		m := map[string]string{"BAYPLAN_AGENT_PIN": pin}
 		for k, v := range base {
@@ -364,7 +364,7 @@ func TestLoadReadsTheServerPinsFromTheInstallCommand(t *testing.T) {
 
 func TestLoadRefusesAPinThatIsNotASHA256Pin(t *testing.T) {
 	for _, bad := range []string{"sha1/abc", "AAAA", "sha256/short", "sha256/" + strings.Repeat("A", 44), "sha256/" + strings.Repeat("!", 43) + "="} {
-		_, err := Load(env(map[string]string{
+		_, err := Load(env(map[string]string{ //nolint:gosec // a test fixture, not a credential
 			"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "bpjt_x_y", "BAYPLAN_AGENT_PIN": bad,
 		}), files(nil))
 		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_PIN") {
