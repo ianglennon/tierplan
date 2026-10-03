@@ -11,6 +11,7 @@ import dashboard from "./en/dashboard.json";
 import env from "./en/env.json";
 import install from "./en/install.json";
 import overview from "./en/overview.json";
+import reason from "./en/reason.json";
 import settings from "./en/settings.json";
 import setup from "./en/setup.json";
 import shell from "./en/shell.json";
@@ -30,6 +31,7 @@ export const resources = {
     env,
     install,
     overview,
+    reason,
     settings,
     setup,
     shell,
