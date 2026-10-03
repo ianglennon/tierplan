@@ -4,7 +4,11 @@
 package envs
 
 import (
+	"sort"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // States an environment can be in besides the three the monitor reports for one
@@ -114,21 +118,244 @@ type Health struct {
 	Issues []Issue
 }
 
-// Rollup decides the health of one environment from its agents and their targets.
+// Rollup decides the health of one environment from its agents and their targets
+// (D-33). It is a pure function: the clock is in the input, the input is not
+// changed, and the same input always gives the same state, reason, since and
+// issue order.
+//
+// The rules, first match wins:
+//
+//   - the local socket keeps what its monitor says;
+//   - a cluster that was re-initialised is cluster_changed, whatever the agents say;
+//   - no agent rows is pending, and only revoked rows is revoked;
+//   - no agent present is reconnecting inside the grace after the server started
+//     and offline after it, with reason timeout when the last session ended by
+//     heartbeat timeout (D-41);
+//   - a standalone host whose agent cannot reach Docker is offline, and one on an
+//     unsupported engine is unsupported;
+//   - anything else wrong, on any node, is an issue and makes the environment
+//     degraded; no issue is online.
+//
+// An agent is present while it is connected, or for OfflineAfter after its last
+// sign of life, so a blip shorter than the window changes nothing (D-41).
 func Rollup(in RollupInput) Health {
-	_ = in
-	return Health{}
+	if in.Kind == KindLocal {
+		return Health{State: in.Local.State, Reason: in.Local.Reason, Since: in.Local.Since}
+	}
+	if in.ClusterChanged {
+		return Health{State: StateClusterChanged, Reason: ReasonClusterChanged, Since: firstSet(in.ClusterChangedAt, in.ServerStart)}
+	}
+	// A copy, so the caller's slice is neither reordered nor aliased.
+	agents := append([]AgentView(nil), in.Agents...)
+	sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
+	if len(agents) == 0 {
+		return Health{State: StatePending}
+	}
+
+	var active, present []AgentView
+	var revokedAt time.Time
+	for _, a := range agents {
+		if a.Revoked {
+			revokedAt = later(revokedAt, a.RevokedAt)
+			continue
+		}
+		active = append(active, a)
+		if a.presentAt(in.Now, in.OfflineAfter) {
+			present = append(present, a)
+		}
+	}
+	if len(active) == 0 {
+		return Health{State: StateRevoked, Reason: ReasonRevoked, Since: firstSet(revokedAt, in.ServerStart)}
+	}
+	if len(present) == 0 {
+		return absent(in, active)
+	}
+
+	issues := nodeIssues(in, active, present)
+	if in.EnvType != envTypeSwarm && len(active) == 1 {
+		// A standalone host has one engine: what is wrong with it is the state of
+		// the environment, not one of several nodes' issues.
+		a := present[0]
+		switch {
+		case a.Target.State == StateUnsupported:
+			return Health{State: StateUnsupported, Reason: ReasonUnsupportedEngine, Since: firstSet(a.Target.Since, a.ConnectedAt, in.ServerStart)}
+		case a.engineUnreachable():
+			return Health{State: StateOffline, Reason: ReasonEngineUnreachable, Since: unreachableSince(a)}
+		}
+		// Only certificate and clock issues are left for it.
+	}
+	if len(issues) > 0 {
+		since := issues[0].Since
+		for _, is := range issues[1:] {
+			if since.IsZero() || (!is.Since.IsZero() && is.Since.Before(since)) {
+				since = is.Since
+			}
+		}
+		return Health{State: StateDegraded, Reason: issues[0].Code, Since: firstSet(since, in.ServerStart), Issues: issues}
+	}
+	return Health{State: StateOnline, Since: firstSet(present[0].Target.Since, present[0].ConnectedAt)}
+}
+
+// absent is the health of an environment with agents, none of them present.
+func absent(in RollupInput, active []AgentView) Health {
+	if in.Now.Sub(in.ServerStart) < in.Grace {
+		return Health{State: StateReconnecting, Reason: ReasonAgentOffline, Since: in.ServerStart}
+	}
+	// The reason comes from the session that ended last, the best evidence of how
+	// contact was lost; ties go to the lowest ID, which active already is.
+	reason := ReasonAgentOffline
+	var lastEnd, lastSeen time.Time
+	for _, a := range active {
+		if a.Ended.After(lastEnd) {
+			lastEnd = a.Ended
+			if a.LastCode == ReasonTimeout {
+				reason = ReasonTimeout
+			} else {
+				reason = ReasonAgentOffline
+			}
+		}
+		lastSeen = later(lastSeen, a.LastSeen)
+	}
+	return Health{State: StateOffline, Reason: reason, Since: firstSet(lastEnd, lastSeen, in.ServerStart)}
+}
+
+// issueRank orders issues, worst first: a node that is gone, then one whose
+// engine cannot be reached, then one on an engine that is not supported, then the
+// warnings (certificate, clock), the order of the overview's severity list.
+var issueRank = map[string]int{
+	ReasonAgentOffline:      0,
+	ReasonTimeout:           0,
+	ReasonEngineUnreachable: 1,
+	ReasonUnsupportedEngine: 2,
+	IssueCertExpiring:       3,
+	ReasonClockSkew:         4,
+}
+
+// nodeIssues lists what is wrong with the nodes: an agent missing, an engine that
+// cannot be reached or is not supported, a certificate close to expiry and a
+// clock that is out of step. The list is in a fixed order.
+func nodeIssues(in RollupInput, active, present []AgentView) []Issue {
+	var issues []Issue
+	for _, a := range active {
+		if !a.presentAt(in.Now, in.OfflineAfter) {
+			issues = append(issues, Issue{Code: ReasonAgentOffline, Node: nodeName(a), Since: firstSet(a.Ended, a.LastSeen, in.ServerStart)})
+		}
+	}
+	// Agents the environment should have but that have never enrolled.
+	for i := len(active); i < in.Expected; i++ {
+		issues = append(issues, Issue{Code: ReasonAgentOffline, Since: in.ServerStart})
+	}
+	for _, a := range present {
+		switch {
+		case a.Target.State == StateUnsupported:
+			issues = append(issues, Issue{Code: ReasonUnsupportedEngine, Node: nodeName(a), Since: firstSet(a.Target.Since, a.ConnectedAt)})
+		case a.engineUnreachable():
+			issues = append(issues, Issue{Code: ReasonEngineUnreachable, Node: nodeName(a), Since: unreachableSince(a)})
+		}
+		if !a.CertNotAfter.IsZero() && a.CertNotAfter.Sub(in.Now) < CertWarnBefore {
+			issues = append(issues, Issue{Code: IssueCertExpiring, Node: nodeName(a), Since: a.CertNotAfter.Add(-CertWarnBefore)})
+		}
+		if abs(a.ClockOffset) > ClockWarnAbove {
+			issues = append(issues, Issue{Code: ReasonClockSkew, Node: nodeName(a), Since: a.ConnectedAt})
+		}
+	}
+	sort.SliceStable(issues, func(i, j int) bool {
+		if ri, rj := issueRank[issues[i].Code], issueRank[issues[j].Code]; ri != rj {
+			return ri < rj
+		}
+		if issues[i].Node != issues[j].Node {
+			return issues[i].Node < issues[j].Node
+		}
+		return issues[i].Code < issues[j].Code
+	})
+	return issues
+}
+
+// presentAt reports whether the agent counts as present at now: connected, or
+// within offlineAfter of its last sign of life. An agent that was never heard from
+// is never present.
+func (a AgentView) presentAt(now time.Time, offlineAfter time.Duration) bool {
+	if a.Revoked {
+		return false
+	}
+	if a.Connected {
+		return true
+	}
+	if a.LastSeen.IsZero() {
+		return false
+	}
+	return now.Sub(a.LastSeen) < offlineAfter
+}
+
+// engineUnreachable is whether the agent cannot reach Docker on its host: its
+// heartbeat says so, or the monitor's probe through the tunnel failed.
+func (a AgentView) engineUnreachable() bool {
+	return !a.EngineReachable || a.Target.State == StateOffline
+}
+
+func unreachableSince(a AgentView) time.Time {
+	if a.Target.State == StateOffline {
+		return firstSet(a.Target.Since, a.ConnectedAt)
+	}
+	return firstSet(a.ConnectedAt, a.LastSeen)
+}
+
+// nodeName is the name of a node as shown in an issue: the host name the agent
+// reported, cleaned. An agent's text is never trusted (T-02-43): control
+// characters are dropped, the name is cut to the length of an environment name,
+// and a blank name falls back to the agent ID.
+func nodeName(a AgentView) string {
+	name := strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, a.Node))
+	if name == "" {
+		name = a.ID
+	}
+	if utf8.RuneCountInString(name) > maxNodeLen {
+		name = string([]rune(name)[:maxNodeLen])
+	}
+	return name
 }
 
 // ClockOffsetSeconds is d in whole seconds, rounded toward zero, with its sign.
-func ClockOffsetSeconds(d time.Duration) int {
-	_ = d
-	return 0
-}
+func ClockOffsetSeconds(d time.Duration) int { return int(d / time.Second) }
 
 // CertDaysRemaining is how many whole days are left until notAfter, rounded
 // down; it is negative once the certificate has expired.
 func CertDaysRemaining(notAfter, now time.Time) int {
-	_, _ = notAfter, now
-	return 0
+	const day = 24 * time.Hour
+	d := notAfter.Sub(now)
+	days := int(d / day)
+	if d < 0 && d%day != 0 {
+		days-- // Go truncates toward zero; the days left are rounded down
+	}
+	return days
+}
+
+func abs(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
+// later is the later of two times; a zero time is the earliest.
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+// firstSet is the first of ts that is not the zero time, or the zero time.
+func firstSet(ts ...time.Time) time.Time {
+	for _, t := range ts {
+		if !t.IsZero() {
+			return t
+		}
+	}
+	return time.Time{}
 }
