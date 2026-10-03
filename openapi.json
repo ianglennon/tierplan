@@ -1193,12 +1193,13 @@
             "type": "string"
           },
           "type": {
-            "description": "What kind of object it is about",
+            "description": "What kind of object it is about. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event",
             "enum": [
               "container",
               "image",
               "network",
-              "volume"
+              "volume",
+              "bayplan"
             ],
             "type": "string"
           }

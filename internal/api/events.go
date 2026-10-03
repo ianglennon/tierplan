@@ -67,7 +67,7 @@ type EventsDeps struct {
 type EventDTO struct {
 	ID         string            `json:"id" doc:"A stable ID for the event; the SSE frame id, and what a repeated event is recognised by"`
 	Time       string            `json:"time" format:"date-time" doc:"When it happened, in UTC, with sub-second precision"`
-	Type       string            `json:"type" enum:"container,image,network,volume" doc:"What kind of object it is about"`
+	Type       string            `json:"type" enum:"container,image,network,volume,bayplan" doc:"What kind of object it is about. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event"`
 	Action     string            `json:"action" doc:"What happened, for example start, die, pull, connect or create"`
 	ActorID    string            `json:"actorId" doc:"The ID of the container, image, network or volume"`
 	Name       string            `json:"name" doc:"The container, image, network or volume name; empty when Docker gave none"`

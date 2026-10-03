@@ -119,6 +119,24 @@ describe("EnvDegradedBanner", () => {
     expect(screen.queryByText(/more issue/)).toBeNull();
   });
 
+  it("puts a lost quorum and a missing manager above a node that is offline", async () => {
+    await mount(
+      degraded([
+        { code: "agent_offline", node: "n2" },
+        { code: "not_a_manager" },
+        { code: "no_quorum" },
+      ]),
+    );
+    expect(await screen.findByText("This swarm has lost quorum.")).toBeTruthy();
+    expect(screen.queryByText("The agent on n2 isn't connected.")).toBeNull();
+    expect(screen.getByText("and 2 more issues")).toBeTruthy();
+    cleanup();
+    await mount(degraded([{ code: "agent_offline", node: "n2" }, { code: "not_a_manager" }]));
+    await screen.findByRole("alert");
+    expect(screen.queryByText("The agent on n2 isn't connected.")).toBeNull();
+    expect(screen.getByText("and 1 more issue")).toBeTruthy();
+  });
+
   it("falls back to the status reason when the issue list is empty", async () => {
     await mount(degraded(null, { reason: "no_quorum" }));
     expect(await screen.findByText("This swarm has lost quorum.")).toBeTruthy();

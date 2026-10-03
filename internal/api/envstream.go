@@ -60,6 +60,9 @@ type EnvStreamDeps struct {
 //   - agent.connected: AgentID, Node, Type (manager, worker or standalone), Version
 //   - agent.disconnected: AgentID, Node, Reason (closed, timeout, replaced or shutdown)
 //   - agent.refused: Code, Mode, Node, IP
+//   - failover: FromAgentID, FromNode, ToAgentID, ToNode. A read of the cluster
+//     stopped being answered by a manager and went to another; the environment shows
+//     degraded until the first is back (D-43)
 //
 // The first frame is named snapshot, has no id and carries {"items": [...]} with
 // every environment the caller may read.
@@ -75,6 +78,10 @@ type EnvStreamEventBody struct {
 	Code        string           `json:"code,omitempty"`
 	Mode        string           `json:"mode,omitempty"`
 	IP          string           `json:"ip,omitempty"`
+	FromAgentID string           `json:"fromAgentId,omitempty"`
+	FromNode    string           `json:"fromNode,omitempty"`
+	ToAgentID   string           `json:"toAgentId,omitempty"`
+	ToNode      string           `json:"toNode,omitempty"`
 }
 
 // envStreamEventBody maps a broker event to what the stream sends, or reports
@@ -91,6 +98,8 @@ func envStreamEventBody(ev envs.HealthEvent) (EnvStreamEventBody, bool) {
 		body.AgentID, body.Node, body.Reason = d.AgentID, d.Node, d.Reason
 	case envs.AgentRefusedData:
 		body.Code, body.Mode, body.Node, body.IP = d.Code, d.Mode, d.Node, d.IP
+	case envs.FailoverData:
+		body.FromAgentID, body.FromNode, body.ToAgentID, body.ToNode = d.FromAgentID, d.FromNode, d.ToAgentID, d.ToNode
 	default:
 		return EnvStreamEventBody{}, false
 	}

@@ -92,6 +92,38 @@ describe("EventsFeed", () => {
     expect(within(row).getByText("1 min ago")).toBeTruthy();
   });
 
+  it("shows a row of Bayplan's own with a Bayplan label and its message, under All only", async () => {
+    recent = async () =>
+      Response.json({
+        items: [
+          ev("1", {
+            type: "bayplan",
+            action: "failover",
+            name: "Manager mgr-2 unreachable, using mgr-1",
+            actorId: "env-1",
+            attributes: { from: "mgr-2", to: "mgr-1" },
+            time: "2026-10-02T10:00:02Z",
+          }),
+          ev("2", { type: "container", name: "web", time: "2026-10-02T10:00:01Z" }),
+        ],
+      });
+    show();
+    const row = (await screen.findAllByRole("listitem"))[0] as HTMLElement;
+    expect(within(row).getByText("Bayplan")).toBeTruthy();
+    expect(within(row).getByText("Manager mgr-2 unreachable, using mgr-1")).toBeTruthy();
+    // The label stands in for the type icon, and the row has no subject line of its own.
+    expect(row.querySelector("svg")).toBeNull();
+    expect(within(row).queryByText("env-1")).toBeNull();
+    expect(within(row).queryByText("Bayplan failover")).toBeNull();
+
+    // No fifth filter, and the row is not under a Docker type.
+    expect(screen.queryByRole("radio", { name: "Bayplan" })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "Container" }));
+    expect(screen.queryByText("Manager mgr-2 unreachable, using mgr-1")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "All" }));
+    expect(screen.getByText("Manager mgr-2 unreachable, using mgr-1")).toBeTruthy();
+  });
+
   it("falls back to the short ID when Docker gave no name", async () => {
     recent = async () => Response.json({ items: [ev("1", { name: "" })] });
     show();

@@ -1141,10 +1141,10 @@ export interface components {
              */
             time: string;
             /**
-             * @description What kind of object it is about
+             * @description What kind of object it is about. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event
              * @enum {string}
              */
-            type: "container" | "image" | "network" | "volume";
+            type: "container" | "image" | "network" | "volume" | "bayplan";
         };
         EventListBody: {
             /** @description At most 50 events, newest first */

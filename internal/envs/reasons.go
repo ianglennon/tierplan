@@ -72,6 +72,8 @@ func ReasonFor(err error) string {
 		return ""
 	}
 	switch {
+	case errors.Is(err, ErrNoManager):
+		return ReasonNotAManager
 	case errors.Is(err, tunnel.ErrAgentGone):
 		return ReasonAgentOffline
 	case errors.Is(err, context.DeadlineExceeded):

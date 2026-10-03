@@ -194,8 +194,14 @@ func (s *Service) WithClusters(c *Clusters) *Service {
 	return s
 }
 
-// primary is the target a one-engine read of the environment goes to.
-func (s *Service) primary(in RollupInput) (string, bool) { return Primary(in) }
+// primary is the target a one-engine read of the environment goes to: for a swarm
+// the manager a cluster read would choose, so the dashboard follows the leader.
+func (s *Service) primary(in RollupInput) (string, bool) {
+	if s.clusters != nil {
+		return s.clusters.Manager(in)
+	}
+	return Primary(in)
+}
 
 // Input is everything Rollup decides an environment's health from, read now: the
 // environment row, its agent rows, the hub's live view of each agent and the
@@ -219,6 +225,9 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 	}
 	if row.Kind != KindAgent {
 		in.Local = s.mon.Status(row.ID)
+		if s.clusters != nil {
+			in.Cluster = s.clusters.View(in)
+		}
 		return in, nil
 	}
 	rows, err := s.st.RQ.ListAgentsByEnv(ctx, row.ID)
@@ -234,7 +243,7 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 	swarm := false
 	for _, a := range rows {
 		v := AgentView{
-			ID: a.ID, Node: a.Name, Role: a.Role, Revoked: a.Status == statusRevoked,
+			ID: a.ID, Node: a.Name, Role: a.Role, SwarmNodeID: a.SwarmNodeID.String, Revoked: a.Status == statusRevoked,
 			CertNotAfter: time.Unix(0, a.CertNotAfter).UTC(),
 			// Presence never reads the stored last-seen: after a restart it would make
 			// an agent that has not reconnected look present for up to a minute.
@@ -272,6 +281,14 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 	}
 	if row.ClusterChangedAt.Valid {
 		in.ClusterChanged, in.ClusterChangedAt = true, time.Unix(0, row.ClusterChangedAt.Int64).UTC()
+	}
+	if s.clusters != nil {
+		in.Cluster = s.clusters.View(in)
+		if v := in.Cluster; v != nil && v.Known && in.EnvType == envTypeSwarm {
+			// The cluster knows which nodes should run an agent, which is better than
+			// counting the agents that enrolled.
+			in.Expected = v.ExpectedAgents
+		}
 	}
 	return in, nil
 }
@@ -362,7 +379,7 @@ func (s *Service) environment(ctx context.Context, row sqlc.Environment) (Enviro
 		return Environment{}, err
 	}
 	status := Status{State: StateUnknown}
-	if key, ok := Primary(in); ok {
+	if key, ok := s.primary(in); ok {
 		status = s.mon.Status(key)
 	}
 	e := Environment{
@@ -646,6 +663,9 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 	}
 	if s.agents != nil {
 		s.agents.Forget(id)
+	}
+	if s.clusters != nil {
+		s.clusters.Forget(id)
 	}
 	return nil
 }

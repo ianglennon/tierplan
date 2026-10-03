@@ -46,6 +46,9 @@ const (
 // status of its target).
 type AgentView struct {
 	ID, Node, Role string
+	// SwarmNodeID is the swarm node the agent runs on, empty for a standalone host
+	// and for an agent that reported none.
+	SwarmNodeID string
 	// Revoked is true for an agent an admin revoked; RevokedAt is when.
 	Revoked   bool
 	RevokedAt time.Time
@@ -214,6 +217,10 @@ func Rollup(in RollupInput) Health {
 	}
 
 	issues := nodeIssues(in, active, present)
+	if in.EnvType == envTypeSwarm {
+		issues = append(issues, clusterIssues(in.Cluster, issues)...)
+		sortIssues(issues)
+	}
 	if in.EnvType != envTypeSwarm && len(active) == 1 {
 		// A standalone host has one engine: what is wrong with it is the state of
 		// the environment, not one of several nodes' issues.
@@ -261,16 +268,20 @@ func absent(in RollupInput, active []AgentView) Health {
 	return Health{State: StateOffline, Reason: reason, Since: firstSet(lastEnd, lastSeen, in.ServerStart)}
 }
 
-// issueRank orders issues, worst first: a node that is gone, then one whose
-// engine cannot be reached, then one on an engine that is not supported, then the
-// warnings (certificate, clock), the order of the overview's severity list.
+// issueRank orders issues, worst first: a cluster that has lost its quorum, one
+// with no manager to ask, a node that is gone, then one whose engine cannot be
+// reached, then one on an engine that is not supported, then the warnings
+// (certificate, clock), the order of the overview's severity list.
 var issueRank = map[string]int{
-	ReasonAgentOffline:      0,
-	ReasonTimeout:           0,
-	ReasonEngineUnreachable: 1,
-	ReasonUnsupportedEngine: 2,
-	IssueCertExpiring:       3,
-	ReasonClockSkew:         4,
+	// The cluster cannot answer at all, then nothing could be asked of it.
+	ReasonNoQuorum:          0,
+	ReasonNotAManager:       1,
+	ReasonAgentOffline:      2,
+	ReasonTimeout:           2,
+	ReasonEngineUnreachable: 3,
+	ReasonUnsupportedEngine: 4,
+	IssueCertExpiring:       5,
+	ReasonClockSkew:         6,
 }
 
 // nodeIssues lists what is wrong with the nodes: an agent missing, an engine that
@@ -301,6 +312,12 @@ func nodeIssues(in RollupInput, active, present []AgentView) []Issue {
 			issues = append(issues, Issue{Code: ReasonClockSkew, Node: nodeName(a), Since: a.ConnectedAt})
 		}
 	}
+	sortIssues(issues)
+	return issues
+}
+
+// sortIssues puts issues in their fixed order: worst first, then by node name.
+func sortIssues(issues []Issue) {
 	sort.SliceStable(issues, func(i, j int) bool {
 		if ri, rj := issueRank[issues[i].Code], issueRank[issues[j].Code]; ri != rj {
 			return ri < rj
@@ -310,7 +327,42 @@ func nodeIssues(in RollupInput, active, present []AgentView) []Issue {
 		}
 		return issues[i].Code < issues[j].Code
 	})
-	return issues
+}
+
+// clusterIssues are the swarm problems the cluster view reports (D-43, D-44, D-47):
+// the quorum lost, no manager to ask, a manager that failed over or is unreachable,
+// and a node on an engine older than Docker 24. A node the agents' own issues
+// already name for the same cause is not listed twice. A nil view adds nothing.
+func clusterIssues(c *ClusterView, have []Issue) []Issue {
+	if c == nil {
+		return nil
+	}
+	listed := make(map[string]struct{}, len(have))
+	for _, is := range have {
+		listed[is.Code+"\x00"+is.Node] = struct{}{}
+	}
+	var out []Issue
+	add := func(code, node string, since time.Time) {
+		key := code + "\x00" + node
+		if _, dup := listed[key]; dup {
+			return
+		}
+		listed[key] = struct{}{}
+		out = append(out, Issue{Code: code, Node: node, Since: since})
+	}
+	if c.NoQuorum {
+		add(ReasonNoQuorum, "", c.NoQuorumSince)
+	}
+	if c.NotAManager {
+		add(ReasonNotAManager, "", time.Time{})
+	}
+	for _, m := range c.ManagersUnreachable {
+		add(ReasonAgentOffline, cleanText(m.Node, maxNodeLen), m.Since)
+	}
+	for _, n := range c.UnsupportedNodes {
+		add(ReasonUnsupportedEngine, cleanText(n.Node, maxNodeLen), n.Since)
+	}
+	return out
 }
 
 // presentAt reports whether the agent counts as present at now: connected, or

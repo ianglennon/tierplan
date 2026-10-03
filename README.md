@@ -112,6 +112,7 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `BAYPLAN_AGENT_HEARTBEAT_INTERVAL` | `10s` | no | How often each agent sends a heartbeat; the value is sent to the agent when it connects. |
 | `BAYPLAN_AGENT_OFFLINE_AFTER` | `30s` | no | Silence after which an agent connection is closed and the agent counts as offline. At least twice the heartbeat interval. |
 | `BAYPLAN_AGENT_RECONNECT_GRACE` | `60s` | no | After Bayplan starts, how long an environment shows "Reconnecting" instead of offline while its agents come back. |
+| `BAYPLAN_FAILING_SERVICE_GRACE` | `2m` | no | How long after a swarm service was updated it is not counted as failing, so a rolling update does not show as a failure. |
 | `BAYPLAN_AGENT_ALLOW_INSECURE` | `false` | no | Development only. Lets agents connect over plain `ws://` although the public URL is `https`, which sends join tokens and Docker answers unencrypted. |
 | `BAYPLAN_AGENT_CONNECT_BURST` | `200` | no | How many connection attempts one client address may make at once on the agent endpoint, then one more every 100 ms. Sized so a whole swarm behind one NAT can reconnect together. |
 | `BAYPLAN_LOG_LEVEL` | `info` | no | `debug`, `info`, `warn` or `error`. Logs are JSON on standard error. |

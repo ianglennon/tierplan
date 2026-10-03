@@ -8,11 +8,22 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 )
+
+// quorumLossMarker is in the message of the 500 a manager answers every cluster
+// question with when the swarm has no leader (RESEARCH Pitfall 11).
+const quorumLossMarker = "The swarm does not have a leader"
+
+// IsQuorumLoss reports whether err is a manager saying the swarm has no leader.
+// Node-local calls to the same manager still work.
+func IsQuorumLoss(err error) bool {
+	return err != nil && strings.Contains(err.Error(), quorumLossMarker)
+}
 
 // agentServiceName is the name of the swarm service the install command creates.
 // Its tasks are the agents, one per node.

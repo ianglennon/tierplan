@@ -350,6 +350,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		// An agent older than this server shows an update badge in the overview.
 		ServerVersion: buildinfo.Get().Version,
 	})
+	// The cluster reader keeps what a swarm's managers say about it: which manager
+	// leads, the nodes, the failing services. It retries a read once on another
+	// manager and says so, and it feeds the rollup and the overview (D-43).
+	clusters := envs.NewClusters(envSvc, snapshots, envs.ClusterOptions{
+		Publisher: broker, Events: hub, Grace: cfg.FailingServiceGrace, Log: log,
+	})
+	envSvc.WithClusters(clusters)
 	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
@@ -452,6 +459,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	srv.background.Go(func() { anonAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { broker.Run(bg) })
+	srv.background.Go(func() { clusters.Run(bg) })
 	// Monitoring resumes for the environments an admin already added. The
 	// monitors live as long as bg, and Close waits for them.
 	if err := envSvc.StartAll(bg); err != nil {

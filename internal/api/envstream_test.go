@@ -36,6 +36,10 @@ type streamEvent struct {
 	Code        string        `json:"code"`
 	Mode        string        `json:"mode"`
 	IP          string        `json:"ip"`
+	FromAgentID string        `json:"fromAgentId"`
+	FromNode    string        `json:"fromNode"`
+	ToAgentID   string        `json:"toAgentId"`
+	ToNode      string        `json:"toNode"`
 }
 
 type snapshotBody struct {
@@ -295,5 +299,20 @@ func TestEnvStreamDeliversARefusedEnrolmentToAnAdminWatching(t *testing.T) {
 	fr, ev := nextOf(t, c, "agent.refused")
 	if fr.id == "" || ev.EnvID != env.ID || ev.Code != "auth_rejected" || ev.Mode != "enrol" || ev.Node != "intruder" || ev.IP != "127.0.0.1" || ev.At == "" {
 		t.Fatalf("agent.refused = %+v (id %q), want environment %s, auth_rejected, enrol, intruder, 127.0.0.1 and a time", ev, fr.id, env.ID)
+	}
+}
+
+func TestEnvStreamDeliversAManagerFailoverToAnAdminWatching(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Swarm")
+	c := f.openEnvStream(t, f.cookie, "")
+	nextFrame(t, c) // the snapshot
+
+	f.brk.Publish(envs.HealthEvent{Type: envs.EventFailover, EnvID: env.ID, Data: envs.FailoverData{
+		FromAgentID: "a1", FromNode: "mgr-2", ToAgentID: "a2", ToNode: "mgr-1",
+	}})
+	fr, ev := nextOf(t, c, "failover")
+	if fr.id == "" || ev.EnvID != env.ID || ev.FromAgentID != "a1" || ev.FromNode != "mgr-2" || ev.ToAgentID != "a2" || ev.ToNode != "mgr-1" || ev.At == "" {
+		t.Fatalf("failover = %+v (id %q), want mgr-2 to mgr-1 for %s with a time", ev, fr.id, env.ID)
 	}
 }

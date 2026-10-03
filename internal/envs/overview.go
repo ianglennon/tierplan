@@ -35,8 +35,8 @@ type Overview struct {
 	// while no agent has enrolled and for a local swarm, whose node count is read
 	// from the cluster, not from here.
 	Nodes *NodeCounts
-	// Failing counts failing services. It is nil until service data is read; the
-	// swarm fan-out fills it.
+	// Failing counts failing services of a swarm, or failing containers of a
+	// standalone host (D-34). It is nil until they have been read.
 	Failing *FailingCounts
 	// Agents counts connected agents of expected ones, on a swarm only.
 	Agents *AgentCounts
@@ -70,6 +70,13 @@ func overview(in RollupInput, st Status, serverVersion string) Overview {
 			o.Nodes = &NodeCounts{Ready: 1, Total: 1}
 		case st.State == StateOffline || st.State == StateUnsupported:
 			o.Nodes = &NodeCounts{Ready: 0, Total: 1}
+		}
+		if c := in.Cluster; c != nil {
+			// The nodes and failing services of a local swarm manager are the cluster's.
+			if c.Known && o.EnvType == envTypeSwarm {
+				o.Nodes = &NodeCounts{Ready: c.NodesReady, Total: c.NodesTotal}
+			}
+			o.Failing = c.Failing
 		}
 		if st.State == StateOnline {
 			o.LastSeen = st.LastAttempt
@@ -111,6 +118,15 @@ func overview(in RollupInput, st Status, serverVersion string) Overview {
 	o.Nodes = &NodeCounts{Ready: ready, Total: total}
 	if in.EnvType == envTypeSwarm {
 		o.Agents = &AgentCounts{Connected: connected, Expected: total}
+	}
+	if c := in.Cluster; c != nil {
+		// What a manager said about the cluster is better than what the agents
+		// imply: it counts nodes that never enrolled and leaves out drained ones.
+		if c.Known && in.EnvType == envTypeSwarm {
+			o.Nodes = &NodeCounts{Ready: c.NodesReady, Total: c.NodesTotal}
+			o.Agents = &AgentCounts{Connected: connected, Expected: max(c.ExpectedAgents, connected)}
+		}
+		o.Failing = c.Failing
 	}
 
 	// The oldest version stands for the environment, so the update badge shows while

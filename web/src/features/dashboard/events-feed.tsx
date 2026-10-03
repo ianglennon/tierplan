@@ -16,11 +16,14 @@ import { type EventDTO, type EventType, useEnvEvents } from "@/features/dashboar
 import { TruncatedText } from "@/features/resources/resource-table";
 import { useT } from "@/i18n/use-t";
 
-type Filter = "all" | EventType;
+// A row of Bayplan's own, such as a manager failover, has no Docker type and so no
+// icon: a label stands in. It has no filter either and shows under All only.
+type DockerEventType = Exclude<EventType, "bayplan">;
+type Filter = "all" | DockerEventType;
 
 const FILTERS: readonly Filter[] = ["all", "container", "image", "network", "volume"];
 
-const ICONS: Record<EventType, LucideIcon> = {
+const ICONS: Record<DockerEventType, LucideIcon> = {
   container: Box,
   image: Layers,
   network: Network,
@@ -35,6 +38,20 @@ const SHORT_ID = 12;
 // rendered as text only (T-01-91).
 function EventRow({ event }: { event: EventDTO }) {
   const t = useT();
+  if (event.type === "bayplan") {
+    // The message is written by Bayplan, from names agents reported; rendered as text.
+    return (
+      <li className="flex items-start gap-3 border-b py-2 last:border-b-0">
+        <span className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground">
+          <RelativeTime value={event.time} />
+        </span>
+        <span className="mt-0.5 w-4 shrink-0 text-center text-xs font-semibold text-muted-foreground">
+          {t("dashboard.events.filters.bayplan")}
+        </span>
+        <p className="min-w-0 flex-1 text-sm font-semibold">{event.name}</p>
+      </li>
+    );
+  }
   const Icon = ICONS[event.type];
   const subject = event.name || event.actorId.slice(0, SHORT_ID);
   const exitCode = event.attributes.exitCode;

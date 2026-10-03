@@ -138,6 +138,10 @@ describe("invalidationKeys", () => {
     expect(invalidationKeys("network", "e1")).toEqual([summary, ["env", "e1", "networks"]]);
     expect(invalidationKeys("volume", "e1")).toEqual([summary, ["env", "e1", "volumes"]]);
   });
+
+  it("makes only the summary stale for a row of Bayplan's own, which has no list", () => {
+    expect(invalidationKeys("bayplan", "e1")).toEqual([["env", "e1", "summary"]]);
+  });
 });
 
 describe("createEventsConnection", () => {

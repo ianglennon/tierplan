@@ -545,3 +545,51 @@ func TestHubSubscribeToAnUnknownEnvironmentGivesAnEmptyBacklogAndAClosedChannel(
 		t.Error("the channel of an unknown environment is open and would block a stream forever")
 	}
 }
+
+// A row of Bayplan's own, such as a manager failover (plan 02-20, D-43).
+
+func TestInjectedRowsAppearInTheBacklogAndToSubscribersAndRepeatsShowOnce(t *testing.T) {
+	r := newHubRig(t, dockertest.FakeConfig{})
+	r.waitStreamOpen(t)
+	_, ch, _ := r.subscribe(t)
+
+	row := dockerx.EventRow{
+		ID: "bayplan-1", Time: time.Now().UTC(), TimeNano: time.Now().UnixNano(),
+		Type: "bayplan", Action: "failover", ActorID: hubEnv, Name: "Manager a unreachable, using b",
+	}
+	if !r.hub.Inject(hubEnv, row) {
+		t.Fatal("Inject reported no feed for a monitored target")
+	}
+	if got := recvEvent(t, ch); got.ID != "bayplan-1" || got.Name != row.Name {
+		t.Fatalf("subscriber got %+v, want the injected row", got)
+	}
+	if !r.hub.Inject(hubEnv, row) {
+		t.Fatal("a repeated Inject reported no feed")
+	}
+	expectQuiet(t, ch)
+	if rows := r.hub.Recent(hubEnv, 10); len(rows) != 1 || rows[0].Type != "bayplan" {
+		t.Fatalf("Recent = %+v, want the one injected row", rows)
+	}
+	backlog, _, _ := r.hub.Subscribe(context.Background(), hubEnv)
+	if len(backlog) != 1 || backlog[0].ID != "bayplan-1" {
+		t.Fatalf("backlog of a later subscriber = %+v, want the injected row", backlog)
+	}
+}
+
+func TestInjectingIntoATargetWithNoFeedIsRefusedAndAnInjectedRowDoesNotMoveTheResumePoint(t *testing.T) {
+	r := newHubRig(t, dockertest.FakeConfig{})
+	r.waitStreamOpen(t)
+	if r.hub.Inject("nobody", dockerx.EventRow{ID: "x"}) {
+		t.Error("Inject reported a feed for a target that has none")
+	}
+	// The resume point is the time of the newest event the daemon sent; a row of
+	// Bayplan's own, however new, must not move it past events the daemon has yet to send.
+	future := time.Now().Add(time.Hour).UnixNano()
+	r.hub.Inject(hubEnv, dockerx.EventRow{ID: "bp", Time: time.Now().Add(time.Hour).UTC(), TimeNano: future, Type: "bayplan", Action: "failover"})
+	r.hub.mu.Lock()
+	f := r.hub.feeds[hubEnv]
+	r.hub.mu.Unlock()
+	if n, ok := f.lastSeen(); ok && n >= future {
+		t.Errorf("the resume point moved to %d because of an injected row", n)
+	}
+}

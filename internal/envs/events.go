@@ -199,6 +199,21 @@ func (h *Hub) Subscribe(ctx context.Context, envID string) (backlog []dockerx.Ev
 	}
 }
 
+// Inject adds an event of Bayplan's own to the feed of a target, so it shows with
+// the Docker events of the environment that target serves. It reports false when
+// the target has no feed, which is when it is not being monitored. The event keeps
+// its ID, so injecting the same one twice shows it once.
+func (h *Hub) Inject(key string, ev dockerx.EventRow) bool {
+	h.mu.Lock()
+	f := h.feeds[key]
+	h.mu.Unlock()
+	if f == nil {
+		return false
+	}
+	f.inject(ev)
+	return true
+}
+
 // Recent returns up to n of the newest buffered events of envID, newest first.
 func (h *Hub) Recent(envID string, n int) []dockerx.EventRow {
 	h.mu.Lock()
@@ -339,15 +354,41 @@ func (f *feed) ingest(snaps *Snapshots, ev dockerx.EventRow) {
 	if !f.haveLast || ev.TimeNano > f.last {
 		f.last, f.haveLast = ev.TimeNano, true
 	}
+	f.addLocked(ev)
+	if snaps != nil {
+		snaps.Invalidate(f.env)
+	}
+	f.fanOutLocked(ev)
+}
+
+// inject records an event of Bayplan's own. Unlike ingest it leaves the resume
+// point alone, which is the time of the newest event the daemon sent: moving it
+// would make a reopened stream skip what the daemon said in between. The caller
+// does not hold f.mu.
+func (f *feed) inject(ev dockerx.EventRow) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, dup := f.seen[ev.ID]; dup {
+		return
+	}
+	f.remember(ev.ID)
+	f.addLocked(ev)
+	f.fanOutLocked(ev)
+}
+
+// addLocked puts ev in the ring, dropping the oldest when it is full. The caller
+// holds f.mu.
+func (f *feed) addLocked(ev dockerx.EventRow) {
 	f.ring = append(f.ring, ev)
 	if len(f.ring) > ringSize {
 		n := copy(f.ring, f.ring[len(f.ring)-ringSize:])
 		clear(f.ring[n:])
 		f.ring = f.ring[:n]
 	}
-	if snaps != nil {
-		snaps.Invalidate(f.env)
-	}
+}
+
+// fanOutLocked hands ev to every subscriber. The caller holds f.mu.
+func (f *feed) fanOutLocked(ev dockerx.EventRow) {
 	for s := range f.subs {
 		select {
 		case s.ch <- ev:

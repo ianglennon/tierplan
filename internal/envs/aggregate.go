@@ -91,7 +91,7 @@ func (a *Aggregator) Snapshot(ctx context.Context, envID string) (Aggregate, Hea
 	if h.State != StateOnline && h.State != StateDegraded {
 		return Aggregate{}, h, ErrNotOnline{Health: h, Target: primaryStatus(a.svc, in)}
 	}
-	key, ok := Primary(in)
+	key, ok := a.svc.primary(in)
 	if !ok {
 		// Present inside the offline window but between sessions: nothing to read
 		// through yet.
@@ -146,7 +146,7 @@ func (a *Aggregator) between(in RollupInput) error {
 // primaryStatus is the monitor's status of the environment's primary target, or
 // unknown when it has none.
 func primaryStatus(svc *Service, in RollupInput) Status {
-	if key, ok := Primary(in); ok {
+	if key, ok := svc.primary(in); ok {
 		return svc.mon.Status(key)
 	}
 	return Status{State: StateUnknown}
@@ -167,7 +167,7 @@ func (a *Aggregator) primaryKey(ctx context.Context, envID string) (string, bool
 	if err != nil {
 		return "", false
 	}
-	return Primary(in)
+	return a.svc.primary(in)
 }
 
 // Events subscribes to the events of an environment's primary target; see

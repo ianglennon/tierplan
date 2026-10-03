@@ -14,6 +14,8 @@ import { useT } from "@/i18n/use-t";
 // already; the banner sorts again so it never depends on that, and a code this
 // build does not know goes last.
 const SEVERITY = [
+  "no_quorum",
+  "not_a_manager",
   "agent_offline",
   "engine_unreachable",
   "unsupported_engine",

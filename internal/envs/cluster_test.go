@@ -246,8 +246,14 @@ func TestWhenTheLeaderDiesMidReadTheReadSucceedsOnAnotherManagerAndTheFailoverIs
 func TestAManagerThatDisconnectedBetweenReadsIsAFailoverToo(t *testing.T) {
 	s := newSwarmRig(t, managerNodes(), nil)
 	ctx := context.Background()
-	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
-		t.Fatal(err)
+	// The first read does not know the leader yet; the second goes to it.
+	for range 2 {
+		if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st, _ := s.c.Cached(s.env.ID); st.InUse != s.m[1].id {
+		t.Fatalf("the manager in use is %s, want the leader %s", st.InUse, s.m[1].id)
 	}
 	s.kick(t, s.m[1])
 	var host string
@@ -357,7 +363,7 @@ func TestATunnelErrorIsRetriedOnceAndNoMoreAndSaysNothingWhenTheRetryFails(t *te
 	}
 }
 
-func TestTheClusterReaderOffersOnlyReadFunctions(t *testing.T) {
+func TestReadOnlyClusterCallerOffersOnlyReadFunctions(t *testing.T) {
 	typ := reflect.TypeOf(&Clusters{})
 	bad := regexp.MustCompile(`Write|Update|Create|Remove|Mutate|Delete|Scale|Deploy`)
 	var names []string
@@ -497,20 +503,20 @@ func TestANodeOnAnEngineBelow24IsUnsupportedForThatNodeOnly(t *testing.T) {
 func TestFailingServicesFillTheOverviewWithTheGraceFromTheClusterOptions(t *testing.T) {
 	var s *swarmRig
 	// The clock is the rig's; the services are updated relative to it.
-	old := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
+	old := time.Date(2026, 3, 1, 11, 0, 0, 0, time.UTC)
 	services := []dockertest.FakeService{
 		{ID: "s1", Name: "web", Mode: "replicated", Running: 2, Desired: 3, UpdatedAt: old},
 		{ID: "s2", Name: "db", Mode: "replicated", Running: 1, Desired: 1, UpdatedAt: old},
 		{ID: "s3", Name: "cron", Mode: "replicated-job", Running: 0, Desired: 1, UpdatedAt: old},
 		{ID: "s4", Name: "api", Mode: "global", Running: 3, Desired: 3, UpdatedAt: old},
-		{ID: "s5", Name: "new", Mode: "replicated", Running: 0, Desired: 1, UpdatedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC).Add(2 * time.Hour)},
+		{ID: "s5", Name: "new", Mode: "replicated", Running: 0, Desired: 1, UpdatedAt: time.Date(2026, 3, 1, 12, 1, 30, 0, time.UTC)},
 	}
 	s = newSwarmRig(t, managerNodes(), services)
 	if err := s.c.Refresh(context.Background(), s.env.ID); err != nil {
 		t.Fatal(err)
 	}
 	e := s.health(t, s.env.ID)
-	// web is failing; "new" was updated in the future of the rig's clock, so it is inside the grace.
+	// web is failing; "new" was updated 30 s before the rig's clock, so it is inside the grace.
 	if e.Overview.Failing == nil || *e.Overview.Failing != (FailingCounts{Failing: 1, Total: 4}) {
 		t.Fatalf("failing = %+v, want 1 of 4 (the job is not counted, the new service is inside the grace)", e.Overview.Failing)
 	}

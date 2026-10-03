@@ -81,6 +81,10 @@ export function mergeEvents(existing: EventDTO[], incoming: EventDTO[], cap: num
 // invalidationKeys are the queries an event of this type makes stale: the
 // dashboard counts and the list the event is about (D-57).
 export function invalidationKeys(type: EventType, envId: string): QueryKey[] {
+  if (type === "bayplan") {
+    // Bayplan's own row (a manager failover) is about the environment, not a list.
+    return [["env", envId, "summary"]];
+  }
   const resource = {
     container: "containers",
     image: "images",
