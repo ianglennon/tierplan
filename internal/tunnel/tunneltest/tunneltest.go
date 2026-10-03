@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -83,6 +84,15 @@ type Options struct {
 	// real audit writer, unthrottled, so a test can read the reason from the
 	// database. Off by default, so tests that count audit rows are unaffected.
 	AuditRefusals bool
+	// Store is an already migrated store to use instead of a new one, for a test
+	// that runs other services over the same database (the environment registry
+	// reads the agent rows the agents service writes). Its data directory is the
+	// one the master key is kept in.
+	Store *store.Store
+	// Observer is told about every session after the hub's own recorder has been
+	// told, in the same order. Events still records them, so a test can wait on
+	// Events.WaitLen to know the Observer has run.
+	Observer tunnel.Observer
 }
 
 // Server is a running in-process Bayplan tunnel endpoint.
@@ -111,9 +121,13 @@ type Recorder struct {
 	events   []string
 	sessions []*tunnel.Session
 	changed  chan struct{}
+	// next is the Observer the recorder forwards to, or nil.
+	next tunnel.Observer
 }
 
-func newRecorder() *Recorder { return &Recorder{changed: make(chan struct{}, 1)} }
+func newRecorder(next tunnel.Observer) *Recorder {
+	return &Recorder{changed: make(chan struct{}, 1), next: next}
+}
 
 func (r *Recorder) note() {
 	select {
@@ -124,6 +138,11 @@ func (r *Recorder) note() {
 
 // Connected implements tunnel.Observer.
 func (r *Recorder) Connected(s *tunnel.Session) {
+	// The Observer runs first: a test that waits for the log entry then knows the
+	// Observer has finished.
+	if r.next != nil {
+		r.next.Connected(s)
+	}
 	r.mu.Lock()
 	r.events = append(r.events, "connected:"+s.AgentID)
 	r.sessions = append(r.sessions, s)
@@ -133,6 +152,9 @@ func (r *Recorder) Connected(s *tunnel.Session) {
 
 // Disconnected implements tunnel.Observer.
 func (r *Recorder) Disconnected(s *tunnel.Session, code string) {
+	if r.next != nil {
+		r.next.Disconnected(s, code)
+	}
 	r.mu.Lock()
 	r.events = append(r.events, "disconnected:"+s.AgentID+":"+code)
 	r.mu.Unlock()
@@ -181,7 +203,10 @@ func Start(t *testing.T, opts Options) *Server {
 	if clock == nil {
 		clock = NewClock(time.Now())
 	}
-	st := storetest.New(t)
+	st := opts.Store
+	if st == nil {
+		st = storetest.New(t)
+	}
 	// The master key sits in the data directory next to the database, as it does in
 	// production, so a test can search the whole directory for secrets and exempt
 	// only the key file.
@@ -192,7 +217,7 @@ func Start(t *testing.T, opts Options) *Server {
 	}
 	aud := audit.NewWriter(st, vlt, log, clock.Now)
 	svc := agents.NewService(st, vlt, aud, clock.Now)
-	rec := newRecorder()
+	rec := newRecorder(opts.Observer)
 
 	ts := httptest.NewUnstartedServer(nil)
 	addr := ts.Listener.Addr().String()
@@ -522,6 +547,45 @@ func (c *Conn) AnswerDocker(t testing.TB, status int, body string) {
 			}()
 		}
 	}()
+}
+
+// ProxyDocker serves the Docker streams the hub opens on this connection by
+// piping each to the unix socket at socketPath, a fake daemon's for instance, so
+// the real client, probe and snapshot run through the real tunnel. It runs until
+// the connection ends. A stream of another kind is closed.
+func (c *Conn) ProxyDocker(t testing.TB, socketPath string) {
+	t.Helper()
+	if c.Mux == nil {
+		t.Fatal("tunneltest: no multiplexer on this connection")
+	}
+	go func() {
+		for {
+			st, err := c.Mux.Accept()
+			if err != nil {
+				return
+			}
+			go pipeDocker(st, socketPath)
+		}
+	}()
+}
+
+// pipeDocker copies one Docker stream to and from the daemon until either side
+// ends.
+func pipeDocker(st net.Conn, socketPath string) {
+	defer func() { _ = st.Close() }()
+	var kind [1]byte
+	if _, err := io.ReadFull(st, kind[:]); err != nil || kind[0] != wire.StreamKindDockerHTTP {
+		return
+	}
+	up, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return
+	}
+	defer func() { _ = up.Close() }()
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(up, st); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(st, up); done <- struct{}{} }()
+	<-done // whichever side ends first ends the exchange; the deferred closes release the other copy
 }
 
 // ForeignCert issues a client certificate shaped like Bayplan's (CN the agent ID,

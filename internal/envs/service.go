@@ -70,7 +70,34 @@ type Environment struct {
 	ID, Kind, Name, SocketPath string
 	Enabled                    bool
 	CreatedAt                  time.Time
-	Status                     Status
+	// Status is the monitor's view of the environment's one engine: the local
+	// socket, or for an agent environment its primary target. It carries the probe
+	// data (engine, version, type) and is unknown while no target is monitored.
+	Status Status
+	// Health is the environment's rolled-up state (D-33) with its D-40 reason and
+	// issues. It is what the API reports as the environment's status.
+	Health Health
+}
+
+// DefaultReconnectGrace is how long after the server starts an environment with
+// no agent present shows as reconnecting (D-41).
+const DefaultReconnectGrace = 60 * time.Second
+
+// HealthConfig is the timing the health rollup uses. A zero field takes its
+// default: the moment the service was built, the 30 s offline window and the 60 s
+// reconnect grace.
+type HealthConfig struct {
+	ServerStart  time.Time
+	OfflineAfter time.Duration
+	Grace        time.Duration
+}
+
+// AgentSource is what the registry reads of the live agents: the tunnel hub.
+type AgentSource interface {
+	// Views is what is known of the agents of an environment that have connected.
+	Views(envID string) []tunnel.AgentLive
+	// Forget drops what is known of the agents of a removed environment.
+	Forget(envID string)
 }
 
 // Service is the environment registry: it stores the environments an admin
@@ -84,6 +111,10 @@ type Service struct {
 	selfID     string
 	now        func() time.Time
 	log        *slog.Logger
+
+	// agents and health are set before the service is used (WithAgents, WithHealth).
+	agents AgentSource
+	health HealthConfig
 
 	mu     sync.Mutex
 	runCtx context.Context
@@ -104,6 +135,28 @@ func NewService(s *store.Store, w *audit.Writer, m *Monitor, dockerHost string, 
 		log: m.log, runCtx: context.Background(),
 		connected: map[string]map[string]*tunnel.Session{},
 	}
+}
+
+// WithAgents tells the service where to read the live agents from. Call it before
+// the service is used.
+func (s *Service) WithAgents(src AgentSource) *Service {
+	s.agents = src
+	return s
+}
+
+// WithHealth sets the timing of the health rollup. Call it before the service is
+// used.
+func (s *Service) WithHealth(c HealthConfig) *Service {
+	s.health = c
+	return s
+}
+
+// Input is everything Rollup decides an environment's health from, read now: the
+// environment row, its agent rows, the hub's live view of each agent and the
+// monitor's status of each target.
+func (s *Service) Input(ctx context.Context, envID string, now time.Time) (RollupInput, error) {
+	_, _, _ = ctx, envID, now
+	return RollupInput{}, errors.New("envs: not implemented")
 }
 
 // SelfContainerID is the ID of Bayplan's own container, or empty (D-27).
