@@ -21,7 +21,7 @@ const ADMIN = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
   permissions: {
-    global: ["settings.read", "settings.write", "environments.write"],
+    global: ["settings.read", "settings.write", "environments.manage"],
     environments: {},
   },
 };

@@ -117,6 +117,41 @@ describe("actionLabel", () => {
   });
 });
 
+describe("the agent and environment lifecycle actions (D-13)", () => {
+  const D13 = [
+    "agent.enrolled",
+    "agent.enrol_refused",
+    "agent.cert_renewed",
+    "agent.revoked",
+    "agent.blocked",
+    "agent.unblocked",
+    "agent.auto_revoked",
+    "agent.updated",
+    "agent.update_failed",
+    "agent.uninstalled",
+    "agent.policy_denied",
+    "environment.token_rotated",
+    "environment.token_disabled",
+    "environment.failover",
+    "environment.cluster_adopted",
+    "environment.local_folded",
+    "environment.auto_update_changed",
+  ];
+
+  it("lists every one in the Action filter", () => {
+    for (const key of D13) expect(KNOWN_ACTIONS, key).toContain(key);
+  });
+
+  it("names every one with its own audit.json label, not the raw key", () => {
+    const labels = audit.audit.actions as Record<string, Record<string, string>>;
+    for (const key of D13) {
+      const [area, name] = key.split(".") as [string, string];
+      expect(labels[area]?.[name], key).toBeTruthy();
+      expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);
+    }
+  });
+});
+
 describe("exportUrl and listParams", () => {
   it("builds the export URL with exactly the filters the list uses", () => {
     const search = auditSearchSchema.parse({ user: "admin", action: ["auth.login"], range: "1h" });

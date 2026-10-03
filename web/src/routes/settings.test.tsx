@@ -17,7 +17,10 @@ const SOCKET = "/var/run/docker.sock";
 const ADMIN = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: ["environments.write", "settings.read"], environments: {} },
+  permissions: {
+    global: ["environments.manage", "environments.create", "settings.read"],
+    environments: {},
+  },
 };
 const VIEWER = {
   user: { id: "u2", username: "viewer", role: "" },
@@ -165,8 +168,8 @@ describe("Settings layout", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/general"));
   });
 
-  it("opens the Environments tab from /settings for a user with only environments.write (WR-19)", async () => {
-    me = { ...ADMIN, permissions: { global: ["environments.write"], environments: {} } };
+  it("opens the Environments tab from /settings for a user with only environments.manage (WR-19)", async () => {
+    me = { ...ADMIN, permissions: { global: ["environments.manage"], environments: {} } };
     const router = renderAt("/settings");
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/environments"));
     expect(await main().findByText("lab-1")).toBeTruthy();
@@ -182,7 +185,17 @@ describe("Settings layout", () => {
     expect(router.state.location.pathname).toBe("/");
   });
 
-  it("renders no permission without environments.write, and asks the server for nothing", async () => {
+  it("hides the Environments tab from a user who may add environments but not manage them", async () => {
+    me = {
+      ...ADMIN,
+      permissions: { global: ["environments.create", "settings.read"], environments: {} },
+    };
+    renderAt("/settings/general");
+    await screen.findByRole("tab", { name: "General" });
+    expect(screen.queryByRole("tab", { name: "Environments" })).toBeNull();
+  });
+
+  it("renders no permission without environments.manage, and asks the server for nothing", async () => {
     me = VIEWER;
     renderAt("/settings/environments");
     expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();

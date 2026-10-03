@@ -14,7 +14,7 @@ import "@/i18n";
 const ADMIN = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: ["environments.write"], environments: {} },
+  permissions: { global: ["environments.create"], environments: {} },
 };
 const VIEWER = { ...ADMIN, permissions: { global: [], environments: {} } };
 
@@ -160,7 +160,7 @@ describe("/welcome (wizard step 4)", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/setup"));
   });
 
-  it("sends a user without environments.write to /, and never asks for the socket", async () => {
+  it("sends a user without environments.create to /, and never asks for the socket", async () => {
     me = VIEWER;
     const router = renderAt("/welcome");
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
