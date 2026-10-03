@@ -177,6 +177,45 @@ func TestPublicURL(t *testing.T) {
 	}
 }
 
+func TestPublicURLRejectsAFirstSegmentBayplanServesItself(t *testing.T) {
+	for _, seg := range []string{"api", "assets", "agent", "healthz", "readyz", "setup", "openapi", "docs", "schemas", "env", "environments", "settings", "audit", "login", "welcome"} {
+		for _, in := range []string{"https://example.com/" + seg, "https://example.com/" + seg + "/x", "https://example.com/" + seg + "/"} {
+			_, err := load(t, nil, envMap{"BAYPLAN_PUBLIC_URL": in}, files{})
+			if err == nil {
+				t.Errorf("%q should be rejected", in)
+				continue
+			}
+			if !strings.Contains(err.Error(), "BAYPLAN_PUBLIC_URL") || !strings.Contains(err.Error(), "must not start with /"+seg+", which Bayplan serves itself") {
+				t.Errorf("%q: error %q does not name the reserved segment", in, err)
+			}
+		}
+	}
+	// NormalisePublicURL is what the setup wizard and Settings call.
+	if _, err := config.NormalisePublicURL("https://example.com/api"); err == nil || !strings.Contains(err.Error(), "/api") {
+		t.Errorf("NormalisePublicURL(/api) = %v", err)
+	}
+}
+
+func TestPublicURLAcceptsAPathThatDoesNotCollide(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://example.com/bayplan":       "https://example.com/bayplan",
+		"https://example.com/tools/bayplan": "https://example.com/tools/bayplan",
+		// Only the FIRST segment is Bayplan's to claim.
+		"https://example.com/tools/api": "https://example.com/tools/api",
+		"https://example.com/apis":      "https://example.com/apis",
+		"https://example.com/API":       "https://example.com/API",
+	} {
+		c, err := load(t, nil, envMap{"BAYPLAN_PUBLIC_URL": in}, files{})
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+		if c.PublicURL != want {
+			t.Errorf("%q normalised to %q, want %q", in, c.PublicURL, want)
+		}
+	}
+}
+
 func TestTrustedProxies(t *testing.T) {
 	c, err := load(t, nil, envMap{"BAYPLAN_TRUSTED_PROXIES": "10.0.0.0/8, 192.168.1.5"}, files{})
 	if err != nil {

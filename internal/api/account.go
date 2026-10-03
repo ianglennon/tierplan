@@ -259,7 +259,7 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			return nil, internal("commit", err)
 		}
 		return &ChangePasswordOutput{
-			SetCookie:    d.Sessions.Cookie(raw, remember, d.Instance.Secure()),
+			SetCookie:    d.Sessions.Cookie(raw, remember, d.Instance.CookieScope()),
 			CacheControl: "no-store",
 			Body:         ChangePasswordBody{CSRFToken: d.Sessions.CSRFToken(idHash)},
 		}, nil

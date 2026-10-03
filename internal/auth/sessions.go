@@ -92,10 +92,18 @@ func (m *Sessions) CreateTx(ctx context.Context, tx *sql.Tx, userID string, reme
 	return rawID, idHash, nil
 }
 
-// CookieName is the session cookie's name for a public URL that is (secure) or
-// is not https.
-func CookieName(secure bool) string {
-	if secure {
+// CookieScope is what decides the session cookie's name, Path and Secure flag:
+// whether the public URL is https, and the path of the public URL (D-50).
+type CookieScope struct {
+	// Secure is true when the public URL is https.
+	Secure bool
+	// BasePath is the path of the public URL, "" for the root.
+	BasePath string
+}
+
+// CookieName is the session cookie's name for the scope.
+func CookieName(scope CookieScope) string {
+	if scope.Secure {
 		return secureCookieName
 	}
 	return plainCookieName
@@ -106,13 +114,13 @@ func CookieName(secure bool) string {
 // Without remember there is no Max-Age, so the browser drops it when it closes;
 // with remember it lasts the remember lifetime. It is HttpOnly, SameSite=Lax,
 // Path=/ and never has a Domain.
-func (m *Sessions) Cookie(rawID string, remember, secure bool) http.Cookie {
+func (m *Sessions) Cookie(rawID string, remember bool, scope CookieScope) http.Cookie {
 	c := http.Cookie{ //nolint:gosec // Secure follows the public URL scheme (D-12): the __Host- prefix needs it, and over plain http a Secure cookie would never be stored
-		Name:     CookieName(secure),
+		Name:     CookieName(scope),
 		Value:    rawID,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   secure,
+		Secure:   scope.Secure,
 		SameSite: http.SameSiteLaxMode,
 	}
 	if remember {
@@ -122,14 +130,14 @@ func (m *Sessions) Cookie(rawID string, remember, secure bool) http.Cookie {
 }
 
 // ClearCookie builds the cookie that makes a browser delete the session cookie.
-func ClearCookie(secure bool) http.Cookie {
+func ClearCookie(scope CookieScope) http.Cookie {
 	return http.Cookie{ //nolint:gosec // Secure must match the cookie being cleared (D-12)
-		Name:     CookieName(secure),
+		Name:     CookieName(scope),
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   secure,
+		Secure:   scope.Secure,
 		SameSite: http.SameSiteLaxMode,
 	}
 }

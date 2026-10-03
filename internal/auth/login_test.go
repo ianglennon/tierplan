@@ -602,7 +602,7 @@ func (f *loginFixture) authenticator() interface {
 func (f *loginFixture) authenticatorFor(secure bool) interface {
 	Authenticate(*http.Request) (*rbac.Principal, error)
 } {
-	return auth.NewAuthenticator(f.st, testIdle, func() bool { return secure }, f.clk.now)
+	return auth.NewAuthenticator(f.st, testIdle, func() auth.CookieScope { return auth.CookieScope{Secure: secure} }, f.clk.now)
 }
 
 // rechecker is what httpx.SessionRechecker asks of the authenticator.
@@ -635,7 +635,7 @@ func TestAuthenticateFreshSessionReturnsThePrincipal(t *testing.T) {
 	f.addUser(t, "admin")
 	res := f.mustLogin(t, "admin", false)
 	for _, secure := range []bool{true, false} {
-		name := auth.CookieName(secure)
+		name := auth.CookieName(auth.CookieScope{Secure: secure})
 		p, err := f.authenticatorFor(secure).Authenticate(cookieRequest(name, res.RawSessionID))
 		if err != nil || p == nil {
 			t.Fatalf("cookie %s: %v, %v", name, p, err)
@@ -652,10 +652,10 @@ func TestAuthenticateWithoutAValidCookieIsAnonymous(t *testing.T) {
 	res := f.mustLogin(t, "admin", false)
 	for name, req := range map[string]*http.Request{
 		"no cookie":        cookieRequest("", ""),
-		"empty value":      cookieRequest(auth.CookieName(true), ""),
-		"unknown id":       cookieRequest(auth.CookieName(true), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-		"garbage":          cookieRequest(auth.CookieName(false), "!!!not base64!!!"),
-		"the hash itself":  cookieRequest(auth.CookieName(true), string(res.IDHash)),
+		"empty value":      cookieRequest(auth.CookieName(auth.CookieScope{Secure: true}), ""),
+		"unknown id":       cookieRequest(auth.CookieName(auth.CookieScope{Secure: true}), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		"garbage":          cookieRequest(auth.CookieName(auth.CookieScope{Secure: false}), "!!!not base64!!!"),
+		"the hash itself":  cookieRequest(auth.CookieName(auth.CookieScope{Secure: true}), string(res.IDHash)),
 		"a different name": cookieRequest("other_session", res.RawSessionID),
 	} {
 		p, err := f.authenticator().Authenticate(req)
@@ -671,12 +671,12 @@ func TestAuthenticateBrowserSessionExpiresAfterTwelveHoursIdleAndIsDeleted(t *te
 	res := f.mustLogin(t, "admin", false)
 
 	f.clk.advance(testIdle) // exactly 12h: still valid
-	if p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(true), res.RawSessionID)); err != nil || p == nil {
+	if p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(auth.CookieScope{Secure: true}), res.RawSessionID)); err != nil || p == nil {
 		t.Fatalf("at exactly 12h idle: %v, %v; want a principal", p, err)
 	}
 	// That call touched the session, so measure idleness from now.
 	f.clk.advance(testIdle + time.Second)
-	p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(true), res.RawSessionID))
+	p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(auth.CookieScope{Secure: true}), res.RawSessionID))
 	if err != nil || p != nil {
 		t.Fatalf("12h and 1s idle: %v, %v; want anonymous", p, err)
 	}
@@ -689,7 +689,9 @@ func TestAuthenticateRememberedSessionIgnoresIdleTimeAndEndsAtTheAbsoluteLimit(t
 	f := newLoginFixture(t)
 	f.addUser(t, "admin")
 	res := f.mustLogin(t, "admin", true)
-	req := func() *http.Request { return cookieRequest(auth.CookieName(true), res.RawSessionID) }
+	req := func() *http.Request {
+		return cookieRequest(auth.CookieName(auth.CookieScope{Secure: true}), res.RawSessionID)
+	}
 
 	f.clk.advance(13 * time.Hour) // idle for longer than 12h: still fine (D-31)
 	if p, err := f.authenticator().Authenticate(req()); err != nil || p == nil {
@@ -722,7 +724,7 @@ func TestAuthenticateTouchesLastSeenAtMostOncePerMinute(t *testing.T) {
 	}
 	check := func() {
 		t.Helper()
-		if p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(true), res.RawSessionID)); err != nil || p == nil {
+		if p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(auth.CookieScope{Secure: true}), res.RawSessionID)); err != nil || p == nil {
 			t.Fatalf("authenticate: %v, %v", p, err)
 		}
 	}
@@ -752,7 +754,7 @@ func TestAuthenticateDisabledUserIsAnonymous(t *testing.T) {
 	if _, err := f.st.Write.Exec(`UPDATE users SET disabled = 1 WHERE username = 'admin'`); err != nil {
 		t.Fatal(err)
 	}
-	p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(true), res.RawSessionID))
+	p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(auth.CookieScope{Secure: true}), res.RawSessionID))
 	if err != nil || p != nil {
 		t.Fatalf("disabled user's session: %v, %v; want anonymous", p, err)
 	}
@@ -767,8 +769,8 @@ func TestAuthenticateReadsOnlyTheCookieOfTheConfiguredScheme(t *testing.T) {
 
 	// https: the __Host- cookie is the only one believed (WR-01, D-12).
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	addCookie(req, auth.CookieName(false), planted.RawSessionID)
-	addCookie(req, auth.CookieName(true), good.RawSessionID)
+	addCookie(req, auth.CookieName(auth.CookieScope{Secure: false}), planted.RawSessionID)
+	addCookie(req, auth.CookieName(auth.CookieScope{Secure: true}), good.RawSessionID)
 	p, err := f.authenticatorFor(true).Authenticate(req)
 	if err != nil || p == nil || p.Name != "admin" {
 		t.Fatalf("both cookies present on https: %+v, %v; want the __Host- one (admin)", p, err)
@@ -776,20 +778,20 @@ func TestAuthenticateReadsOnlyTheCookieOfTheConfiguredScheme(t *testing.T) {
 
 	// A bare cookie never stands in for a __Host- cookie that is missing or bad.
 	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	addCookie(req, auth.CookieName(false), planted.RawSessionID)
+	addCookie(req, auth.CookieName(auth.CookieScope{Secure: false}), planted.RawSessionID)
 	if p, err := f.authenticatorFor(true).Authenticate(req); err != nil || p != nil {
 		t.Fatalf("a bare cookie authenticated on https: %+v, %v", p, err)
 	}
 	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	addCookie(req, auth.CookieName(true), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-	addCookie(req, auth.CookieName(false), planted.RawSessionID)
+	addCookie(req, auth.CookieName(auth.CookieScope{Secure: true}), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	addCookie(req, auth.CookieName(auth.CookieScope{Secure: false}), planted.RawSessionID)
 	if p, err := f.authenticatorFor(true).Authenticate(req); err != nil || p != nil {
 		t.Fatalf("a bad __Host- cookie fell through to the bare one: %+v, %v", p, err)
 	}
 
 	// plain http: only the bare cookie is read.
 	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	addCookie(req, auth.CookieName(true), good.RawSessionID)
+	addCookie(req, auth.CookieName(auth.CookieScope{Secure: true}), good.RawSessionID)
 	if p, err := f.authenticatorFor(false).Authenticate(req); err != nil || p != nil {
 		t.Fatalf("a __Host- cookie authenticated on plain http: %+v, %v", p, err)
 	}
@@ -797,7 +799,7 @@ func TestAuthenticateReadsOnlyTheCookieOfTheConfiguredScheme(t *testing.T) {
 	// a nil scheme func means plain http.
 	nilSecure := auth.NewAuthenticator(f.st, testIdle, nil, f.clk.now)
 	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	addCookie(req, auth.CookieName(false), good.RawSessionID)
+	addCookie(req, auth.CookieName(auth.CookieScope{Secure: false}), good.RawSessionID)
 	if p, err := nilSecure.Authenticate(req); err != nil || p == nil {
 		t.Fatalf("nil secure func did not read the bare cookie: %+v, %v", p, err)
 	}
@@ -808,7 +810,7 @@ func TestRecheckFollowsTheSessionWithoutTouchingIt(t *testing.T) {
 	f := newLoginFixture(t)
 	f.addUser(t, "admin")
 	res := f.mustLogin(t, "admin", false)
-	p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(true), res.RawSessionID))
+	p, err := f.authenticator().Authenticate(cookieRequest(auth.CookieName(auth.CookieScope{Secure: true}), res.RawSessionID))
 	if err != nil || p == nil {
 		t.Fatalf("authenticate: %v, %v", p, err)
 	}

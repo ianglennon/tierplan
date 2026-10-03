@@ -112,7 +112,7 @@ func (f *setupFixture) setting(t *testing.T, key string) (string, bool) {
 
 func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == auth.CookieName(true) || c.Name == auth.CookieName(false) {
+		if c.Name == auth.CookieName(auth.CookieScope{Secure: true}) || c.Name == auth.CookieName(auth.CookieScope{Secure: false}) {
 			return c
 		}
 	}

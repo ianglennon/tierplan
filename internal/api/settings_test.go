@@ -139,7 +139,7 @@ func TestPatchSettingsSwitchesTheOriginGuardImmediately(t *testing.T) {
 		req.Header.Set("Origin", origin)
 		req.Header.Set("X-CSRF-Token", csrf)
 		req.RemoteAddr = authIP + ":40000"
-		req.AddCookie(&http.Cookie{Name: auth.CookieName(secure), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
+		req.AddCookie(&http.Cookie{Name: auth.CookieName(auth.CookieScope{Secure: secure}), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
 		rec := httptest.NewRecorder()
 		f.h.ServeHTTP(rec, req)
 		return rec.Code

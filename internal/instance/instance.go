@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/store"
@@ -103,6 +104,12 @@ func (i *Instance) BasePath() string {
 		return ""
 	}
 	return strings.TrimRight(u.EscapedPath(), "/")
+}
+
+// CookieScope is the scope the session cookie is named and scoped for: whether
+// the public URL is https and the path it is served under (D-50).
+func (i *Instance) CookieScope() auth.CookieScope {
+	return auth.CookieScope{Secure: i.Secure(), BasePath: i.BasePath()}
 }
 
 // Locked reports whether BAYPLAN_PUBLIC_URL fixes the public URL.

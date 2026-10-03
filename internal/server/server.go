@@ -299,7 +299,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	router := NewRouter(httpx.Options{
 		Fallback:       spa,
 		Checker:        checker,
-		Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, inst.Secure, nil),
+		Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, inst.CookieScope, nil),
 		EnvResolver:    envSvc,
 		Auditor:        anonAudit,
 		MutationGuard:  auth.NewCSRFGuard(sessions),

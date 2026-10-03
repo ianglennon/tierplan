@@ -179,7 +179,7 @@ func (f *eventsFix) openStream(t *testing.T, cookie, lastEventID string) *sseCon
 	req.Header.Set("User-Agent", authUA)
 	req.RemoteAddr = authIP + ":40000"
 	if cookie != "" {
-		req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.Secure()), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
+		req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
 	}
 	if lastEventID != "" {
 		req.Header.Set("Last-Event-ID", lastEventID)
@@ -490,7 +490,7 @@ func TestEventRoutesNeedEnvironmentsReadAndAKnownEnvironment(t *testing.T) {
 		t.Errorf("recent events of an unknown environment = %d, want 404", rec.Code)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/env/no-such-env/events/stream", nil)
-	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.Secure()), Value: f.cookie}) //nolint:gosec // a request cookie as a browser sends it
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: f.cookie}) //nolint:gosec // a request cookie as a browser sends it
 	rec2 := httptest.NewRecorder()
 	f.h.ServeHTTP(rec2, req)
 	if rec2.Code != http.StatusNotFound {

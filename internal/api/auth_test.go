@@ -123,7 +123,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	checker := rbac.NewChecker(f.st)
 	opts := httpx.Options{
 		Checker:       checker,
-		Authenticator: auth.NewAuthenticator(f.st, authIdle, f.inst.Secure, f.clk.now),
+		Authenticator: auth.NewAuthenticator(f.st, authIdle, f.inst.CookieScope, f.clk.now),
 		Auditor:       f.aud,
 		MutationGuard: auth.NewCSRFGuard(f.sess),
 		PublicOrigin:  f.inst.PublicOrigin,
@@ -206,7 +206,7 @@ func (f *authFixture) do(t *testing.T, h http.Handler, r authReq) *httptest.Resp
 		req.RemoteAddr = r.ip + ":40000"
 	}
 	if r.cookie != "" {
-		req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.Secure()), Value: r.cookie}) //nolint:gosec // a request cookie as a browser sends it
+		req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: r.cookie}) //nolint:gosec // a request cookie as a browser sends it
 	}
 	if r.csrf != "" {
 		req.Header.Set("X-CSRF-Token", r.csrf)
