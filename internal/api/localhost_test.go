@@ -188,14 +188,19 @@ func TestLocalHostDefaultsToTheStandardSocketPath(t *testing.T) {
 	}
 }
 
-func TestLocalHostNeedsEnvironmentsWrite(t *testing.T) {
+func TestLocalHostNeedsEnvironmentsCreate(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	f, _ := localHostFixture(t, "unix://"+fake.SocketPath())
-	f.addUser(t, "viewer", false) // no role, so no environments.write
+	f.addUser(t, "viewer", false) // no role, so no environments.create
 	viewer, _ := f.signIn(t, "viewer", false)
 
 	if _, code := f.localHostCall(t, viewer); code != http.StatusForbidden {
-		t.Errorf("without environments.write: %d, want 403", code)
+		t.Errorf("without environments.create: %d, want 403", code)
+	}
+	f.addUserWithGlobalPerms(t, "manager", "environments.manage", "environments.token")
+	manager, _ := f.signIn(t, "manager", false)
+	if _, code := f.localHostCall(t, manager); code != http.StatusForbidden {
+		t.Errorf("with environments.manage but not environments.create: %d, want 403", code)
 	}
 	if _, code := f.localHostCall(t, ""); code != http.StatusUnauthorized {
 		t.Errorf("anonymous: %d, want 401", code)

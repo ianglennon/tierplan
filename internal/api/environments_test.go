@@ -346,7 +346,7 @@ func TestEnvironmentMutationsRequireTheCSRFHeader(t *testing.T) {
 	}
 }
 
-func TestEnvironmentMutationsNeedEnvironmentsWriteAndASession(t *testing.T) {
+func TestEnvironmentMutationsNeedAPermissionAndASession(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
 	f.addUser(t, "viewer", false)
@@ -466,7 +466,7 @@ func TestEnvironmentAddAgentRejectsAnInvalidName(t *testing.T) {
 	}
 }
 
-func TestEnvironmentAddAgentNeedsTheWritePermission(t *testing.T) {
+func TestEnvironmentAddAgentNeedsTheCreatePermission(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	f.inst.Apply("Bayplan", "https://example.com")
 	f.addUser(t, "viewer", false)
@@ -474,5 +474,91 @@ func TestEnvironmentAddAgentNeedsTheWritePermission(t *testing.T) {
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"agent"}`, cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+}
+
+// addUserWithGlobalPerms adds a user holding a custom role, assigned
+// everywhere, that grants exactly perms (D-49: the split permissions).
+func (f *authFixture) addUserWithGlobalPerms(t *testing.T, name string, perms ...string) {
+	t.Helper()
+	f.addUser(t, name, false)
+	role := "role-" + name
+	if _, err := f.st.Write.Exec(`INSERT INTO roles (id, name, builtin) VALUES (?, ?, 0)`, role, name); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range perms {
+		if _, err := f.st.Write.Exec(`INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)`, role, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.st.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
+		VALUES (?, 'user', ?, ?, NULL, 0)`, "ra-"+name, "id-"+name, role); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnvironmentAddNeedsEnvironmentsCreateNotManage(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.addUserWithGlobalPerms(t, "manager", "environments.manage", "environments.delete")
+	f.addUserWithGlobalPerms(t, "creator", "environments.create")
+
+	cookie, csrf := f.signIn(t, "manager", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"local"}`, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("add with environments.manage only: %d %s, want 403", rec.Code, rec.Body)
+	}
+	denied := f.audits(t, audit.ActionPermissionDenied)
+	if len(denied) != 1 || denied[0].ActorID != "id-manager" || denied[0].Result != "denied" || denied[0].TargetID != "POST /api/environments" {
+		t.Fatalf("permission.denied entries = %+v", denied)
+	}
+
+	cookie, csrf = f.signIn(t, "creator", false)
+	rec = f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"local"}`, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("add with environments.create: %d %s, want 201", rec.Code, rec.Body)
+	}
+}
+
+func TestEnvironmentRenameNeedsEnvironmentsManage(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	e := f.add(t)
+	f.addUserWithGlobalPerms(t, "creator", "environments.create", "environments.delete")
+	f.addUserWithGlobalPerms(t, "manager", "environments.manage")
+
+	cookie, csrf := f.signIn(t, "creator", false)
+	rec := f.call(t, authReq{method: http.MethodPatch, path: "/api/environments/" + e.ID, body: `{"name":"Lab"}`, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("rename without environments.manage: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-creator" {
+		t.Fatalf("permission.denied entries = %+v", denied)
+	}
+
+	cookie, csrf = f.signIn(t, "manager", false)
+	rec = f.call(t, authReq{method: http.MethodPatch, path: "/api/environments/" + e.ID, body: `{"name":"Lab"}`, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename with environments.manage: %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+func TestEnvironmentRemoveNeedsEnvironmentsDelete(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	e := f.add(t)
+	f.addUserWithGlobalPerms(t, "manager", "environments.create", "environments.manage")
+	f.addUserWithGlobalPerms(t, "deleter", "environments.delete")
+
+	cookie, csrf := f.signIn(t, "manager", false)
+	rec := f.call(t, authReq{method: http.MethodDelete, path: "/api/environments/" + e.ID, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("remove without environments.delete: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-manager" {
+		t.Fatalf("permission.denied entries = %+v", denied)
+	}
+
+	cookie, csrf = f.signIn(t, "deleter", false)
+	rec = f.call(t, authReq{method: http.MethodDelete, path: "/api/environments/" + e.ID, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("remove with environments.delete: %d %s, want 204", rec.Code, rec.Body)
 	}
 }
