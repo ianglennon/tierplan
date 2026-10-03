@@ -112,7 +112,7 @@ func Start(t testing.TB, o Options) *Server {
 		if err != nil {
 			t.Fatalf("servertest config: %v", err)
 		}
-		srv, err = server.Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
+		srv, err = server.Build(context.Background(), cfg, serverLog())
 		if err != nil {
 			t.Fatalf("build the server: %v", err)
 		}
@@ -153,6 +153,16 @@ func Start(t testing.TB, o Options) *Server {
 	return s
 }
 
+// serverLog is where the server under test writes its log: nowhere, unless
+// BAYPLAN_TEST_SERVER_LOG is set, which sends it to stderr at debug level for
+// someone working out why a real-engine run did what it did.
+func serverLog() *slog.Logger {
+	if os.Getenv("BAYPLAN_TEST_SERVER_LOG") == "" {
+		return slog.New(slog.DiscardHandler)
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
 // Row is the environment's database row: the swarm cluster ID it is bound to,
 // the engine ID, and the pending cluster after a re-initialisation.
 func (s *Server) Row(id string) sqlc.Environment {
@@ -162,6 +172,29 @@ func (s *Server) Row(id string) sqlc.Environment {
 		s.t.Fatalf("read environment %s: %v", id, err)
 	}
 	return row
+}
+
+// AgentRow is the agent's database row, for what the API leaves out, such as who
+// revoked it.
+func (s *Server) AgentRow(id string) sqlc.Agent {
+	s.t.Helper()
+	row, err := s.srv.Store().RQ.GetAgent(context.Background(), id)
+	if err != nil {
+		s.t.Fatalf("read agent %s: %v", id, err)
+	}
+	return row
+}
+
+// RefreshCluster reads the environment's cluster now, the way the server does every
+// 15 seconds, so that a test knows which manager the server is using before it stops
+// one. It fails the test when the read fails.
+func (s *Server) RefreshCluster(id string) {
+	s.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.srv.Clusters().Refresh(ctx, id); err != nil {
+		s.t.Fatalf("read the cluster of %s: %v", id, err)
+	}
 }
 
 // Core is the server, for a test that needs something the HTTP API does not say.

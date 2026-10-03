@@ -84,6 +84,9 @@ type Server struct {
 	// hub holds one Docker events stream per online environment and fans it
 	// out to the browsers watching (plan 21).
 	hub *envs.Hub
+	// clusters reads each swarm's managers on a timer and decides which one a
+	// cluster read goes to.
+	clusters *envs.Clusters
 	// aggregator is the one read path to an environment's Docker data; it holds
 	// the merged event feeds (plan 02-21).
 	aggregator *envs.Aggregator
@@ -448,6 +451,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		monitor:    monitor,
 		snapshots:  snapshots,
 		hub:        hub,
+		clusters:   clusters,
 		aggregator: aggregator,
 		broker:     broker,
 		tunnel:     tunnelHub,
@@ -511,6 +515,11 @@ func (s *Server) Snapshots() *envs.Snapshots { return s.snapshots }
 
 // Hub is the per-environment Docker events hub.
 func (s *Server) Hub() *envs.Hub { return s.hub }
+
+// Clusters is the cluster reader of swarm environments. The server reads every
+// environment itself every 15 seconds; a test that needs a read at a given moment
+// calls Refresh.
+func (s *Server) Clusters() *envs.Clusters { return s.clusters }
 
 // TLSPin is the SPKI pin ("sha256/" and base64) of the certificate Bayplan
 // generated for itself, which an install command carries so the agent can trust
