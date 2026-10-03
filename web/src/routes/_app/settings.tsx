@@ -21,8 +21,12 @@ function SettingsLayout() {
     (tab) => pathname === tab.to || pathname.startsWith(`${tab.to}/`),
   )?.key;
 
+  // An environment's own page holds a table of nodes, so it gets the wider
+  // content area the UI-SPEC gives it (1280px); the other tabs stay narrow.
+  const wide = pathname.startsWith("/settings/environments/");
+
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <div className={`mx-auto flex w-full flex-col gap-6 ${wide ? "max-w-7xl" : "max-w-4xl"}`}>
       <h1 className="text-2xl font-semibold">{t("settings.title")}</h1>
       <Tabs value={active ?? ""} className="gap-6">
         <TabsList variant="line" aria-label={t("settings.tabsLabel")} className="h-9 max-md:h-11">

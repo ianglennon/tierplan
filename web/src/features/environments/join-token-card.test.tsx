@@ -101,6 +101,8 @@ async function mount() {
     </QueryClientProvider>,
   );
   await screen.findByRole("button", { name: "Show install command" });
+  // The status is read separately from the buttons.
+  await waitFor(() => expect(screen.queryByText("Loading the join token…")).toBeNull());
 }
 
 const count = (method: string) =>
