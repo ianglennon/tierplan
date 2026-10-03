@@ -135,7 +135,7 @@ type DenialBody struct {
 type AgentBody struct {
 	ID                 string      `json:"id" doc:"The agent ID"`
 	Node               string      `json:"node" doc:"The hostname the agent reported when it enrolled"`
-	Role               string      `json:"role" enum:"manager,worker,standalone" doc:"What the node is: a swarm manager, a swarm worker or a standalone host. Which manager leads is not reported yet"`
+	Role               string      `json:"role" enum:"leader,manager,worker,standalone" doc:"What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager"`
 	Status             string      `json:"status" enum:"active,revoked" doc:"revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back"`
 	Blocked            bool        `json:"blocked" doc:"True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them"`
 	Connected          bool        `json:"connected" doc:"Whether the agent has a live connection now"`
@@ -165,7 +165,7 @@ type AgentListOutput struct {
 
 // agentBodies merges the database's view of an environment's agents with the
 // live one: connected, what the agent reported and when it was last heard from.
-func agentBodies(nodes []agents.Node, live AgentSessions, envID string) []AgentBody {
+func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string) []AgentBody {
 	views := map[string]tunnel.AgentLive{}
 	if live != nil {
 		for _, v := range live.Views(envID) {
@@ -174,8 +174,12 @@ func agentBodies(nodes []agents.Node, live AgentSessions, envID string) []AgentB
 	}
 	items := make([]AgentBody, 0, len(nodes))
 	for _, n := range nodes {
+		role := n.Role
+		if role == "manager" && n.Status == "active" && leaderID != "" && n.ID == leaderID {
+			role = "leader"
+		}
 		b := AgentBody{
-			ID: n.ID, Node: n.Name, Role: n.Role, Status: n.Status, Blocked: n.Blocked,
+			ID: n.ID, Node: n.Name, Role: role, Status: n.Status, Blocked: n.Blocked,
 			AgentVersion: n.AgentVersion, CertFingerprint: n.CertFingerprint, CertNotAfter: rfc3339(n.CertNotAfter),
 			RevokedAt: rfc3339(n.RevokedAt), RevokeReason: n.RevokeReason,
 		}
@@ -231,6 +235,15 @@ type AgentCluster interface {
 	// LeaderAgent is the ID of the agent on the leading manager of the environment as
 	// of the last read of its cluster, or empty. It does no I/O.
 	LeaderAgent(envID string) string
+}
+
+// leaderAgent is the agent on the leading manager, or empty when no cluster reader
+// is set.
+func leaderAgent(d AgentsDeps, envID string) string {
+	if d.Cluster == nil {
+		return ""
+	}
+	return d.Cluster.LeaderAgent(envID)
 }
 
 // RegisterAgents registers the agent routes: the join token (rotate, disable and
@@ -386,7 +399,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		if err != nil {
 			return nil, fail("list agents", err)
 		}
-		return &AgentListOutput{CacheControl: "no-store", Body: AgentListBody{Items: agentBodies(nodes, d.Live, in.EnvID)}}, nil
+		return &AgentListOutput{CacheControl: "no-store", Body: AgentListBody{Items: agentBodies(nodes, d.Live, in.EnvID, leaderAgent(d, in.EnvID))}}, nil
 	})
 
 	httpx.Register(r, huma.Operation{

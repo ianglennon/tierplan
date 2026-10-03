@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/tunnel"
@@ -719,5 +720,75 @@ func TestLocalSwarmListsAreNotShownToTheReaperBecauseTheyHaveNoAgents(t *testing
 	}
 	if n := len(obs.list()); n != 0 {
 		t.Errorf("the reaper saw %d lists of the local socket's swarm", n)
+	}
+}
+
+func TestAWorkerRemovedFromTheSwarmLosesItsAgentAfterTwoReadsAndItsSessionIsClosed(t *testing.T) {
+	var s *swarmRig
+	// The real reaper over the same store as the tunnel's agents service.
+	reaper := &lateReaper{}
+	s = newSwarmRigWith(t, managerNodes(), nil, reaper)
+	reaper.set(agents.NewReaper(s.srv.Svc))
+
+	// A worker that is enrolled and connected, and has been removed from the swarm:
+	// the managers' node list does not name it.
+	w := s.connect(t, s.env, dockertest.FakeConfig{Hostname: "gone-1", SwarmState: "active"}, &wire.Facts{
+		EngineID: "ENG:gone-1", Hostname: "gone-1", EngineReachable: true,
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-gone-1", Control: false},
+	})
+	eventually(t, "the worker's session", func() bool { return s.srv.Hub.Session(w.id) != nil })
+	sess := s.srv.Hub.Session(w.id)
+	ctx := context.Background()
+
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := rowCount(t, s.tunRig, `SELECT COUNT(*) FROM agents WHERE id = ? AND status = 'active'`, w.id); n != 1 {
+		t.Fatal("the worker was revoked after one node list")
+	}
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := rowCount(t, s.tunRig, `SELECT COUNT(*) FROM agents WHERE id = ? AND status = 'revoked' AND revoked_by = 'system:agent-reaper'`, w.id); n != 1 {
+		t.Fatal("the worker was not revoked by the reaper after two node lists")
+	}
+	select {
+	case <-sess.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the revoked agent's session is still open")
+	}
+	if n := rowCount(t, s.tunRig, `SELECT COUNT(*) FROM audit_log WHERE action = 'agent.auto_revoked' AND env_id = ? AND actor_id = 'system:agent-reaper'`, s.env.ID); n != 1 {
+		t.Errorf("agent.auto_revoked rows = %d, want 1", n)
+	}
+	if n := rowCount(t, s.tunRig, `SELECT COUNT(*) FROM agent_blocks WHERE env_id = ?`, s.env.ID); n != 0 {
+		t.Errorf("%d block rows, want none", n)
+	}
+	// The three managers are untouched and the environment is healthy again.
+	if n := rowCount(t, s.tunRig, `SELECT COUNT(*) FROM agents WHERE env_id = ? AND status = 'active'`, s.env.ID); n != 3 {
+		t.Errorf("%d active agents left, want the three managers", n)
+	}
+	eventually(t, "the environment to be online without the removed worker", func() bool {
+		return s.health(t, s.env.ID).Health.State == StateOnline
+	})
+}
+
+// lateReaper lets a test build the reaper after the rig that needs it as an option.
+type lateReaper struct {
+	mu sync.Mutex
+	r  NodeObserver
+}
+
+func (l *lateReaper) set(r NodeObserver) {
+	l.mu.Lock()
+	l.r = r
+	l.mu.Unlock()
+}
+
+func (l *lateReaper) Observe(ctx context.Context, envID string, list dockerx.ClusterRead, answering string) {
+	l.mu.Lock()
+	r := l.r
+	l.mu.Unlock()
+	if r != nil {
+		r.Observe(ctx, envID, list, answering)
 	}
 }

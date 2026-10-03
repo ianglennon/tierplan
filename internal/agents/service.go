@@ -671,6 +671,62 @@ func (s *Service) Revoke(ctx context.Context, actor audit.Actor, envID, agentID,
 	return nil
 }
 
+// AutoRevoke revokes an agent whose node has left its swarm (D-10), as the reaper
+// decides. It is Revoke with three differences: the actor is system:agent-reaper, the
+// action is agent.auto_revoked, and no block is made, so the host can enrol again
+// with the join token the moment it rejoins the swarm. Once the change has committed
+// the agent's live session is closed and the environment's health is recomputed.
+//
+// An agent that is already revoked is ErrAlreadyRevoked and nothing changes.
+func (s *Service) AutoRevoke(ctx context.Context, envID, agentID string) error {
+	actor := rbac.System(reaperActor).AuditActor()
+	ts := s.now().UTC().UnixNano()
+
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	row, err := agentOf(ctx, q, envID, agentID)
+	if err != nil {
+		return err
+	}
+	changed, err := q.RevokeAgent(ctx, sqlc.RevokeAgentParams{
+		RevokedAt: sql.NullInt64{Int64: ts, Valid: true}, RevokedBy: sql.NullString{String: actor.ID, Valid: true},
+		RevokeReason: sql.NullString{String: leftSwarmReason, Valid: true}, ID: agentID, EnvID: envID,
+	})
+	if err != nil {
+		return fmt.Errorf("revoke the agent: %w", err)
+	}
+	if changed == 0 {
+		return ErrAlreadyRevoked
+	}
+	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: audit.ActionAgentAutoRevoked, TargetType: targetAgent, TargetID: agentID,
+		EnvID: envID, Result: audit.ResultSuccess,
+		Details: map[string]string{
+			"node": row.Name, "fingerprint": row.CertFingerprint, "reason": leftSwarmReason, "swarm_node": row.SwarmNodeID.String,
+		},
+	}); err != nil {
+		return fmt.Errorf("audit agent auto-revoked: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	s.seenMu.Lock()
+	delete(s.seen, agentID)
+	s.seenMu.Unlock()
+	// After the commit, so the hub's check of the agent's status sees the revoke.
+	if s.kicker != nil {
+		s.kicker.Kick(agentID, tunnel.DisconnectRevoked)
+	}
+	if s.notifier != nil {
+		s.notifier.Notify(envID)
+	}
+	return nil
+}
+
 // Unblock lifts the blocks a revoke of agentID made, so the host can enrol again
 // with the environment's join token, and audits agent.unblocked for each. The
 // revoked agent stays revoked and cannot come back: the host enrols as a new

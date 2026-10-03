@@ -353,8 +353,11 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// The cluster reader keeps what a swarm's managers say about it: which manager
 	// leads, the nodes, the failing services. It retries a read once on another
 	// manager and says so, and it feeds the rollup and the overview (D-43).
+	// Each node list it reads is shown to the reaper, which revokes the agent of a
+	// node that has left the swarm (D-10).
 	clusters := envs.NewClusters(envSvc, snapshots, envs.ClusterOptions{
-		Publisher: broker, Events: hub, Grace: cfg.FailingServiceGrace, Log: log,
+		Publisher: broker, Events: hub, Reaper: agents.NewReaper(agentSvc),
+		Grace: cfg.FailingServiceGrace, Log: log,
 	})
 	envSvc.WithClusters(clusters)
 	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
@@ -412,7 +415,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Log:     log,
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
 		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Log: log},
-		api.AgentsDeps{Agents: agentSvc, Live: tunnelHub, Instance: inst, TLSPin: tlsPin, Log: log},
+		api.AgentsDeps{Agents: agentSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, Log: log},
 		api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
 		api.EventsDeps{Aggregator: aggregator, Log: log},
 		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},

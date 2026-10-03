@@ -140,6 +140,7 @@ type Clusters struct {
 	svc    *Service
 	snaps  *Snapshots
 	pub    HealthPublisher
+	reaper NodeObserver
 	events *Hub
 	now    func() time.Time
 	log    *slog.Logger
@@ -154,7 +155,7 @@ type Clusters struct {
 // of a standalone host.
 func NewClusters(svc *Service, snaps *Snapshots, o ClusterOptions) *Clusters {
 	c := &Clusters{
-		svc: svc, snaps: snaps, pub: o.Publisher, events: o.Events, now: o.Now, log: o.Log,
+		svc: svc, snaps: snaps, pub: o.Publisher, reaper: o.Reaper, events: o.Events, now: o.Now, log: o.Log,
 		grace: o.Grace, interval: o.Interval, timeout: o.Timeout, ttl: o.TTL,
 		entries: map[string]*clusterEntry{},
 	}
@@ -202,6 +203,9 @@ func (c *Clusters) Forget(envID string) {
 	c.mu.Lock()
 	delete(c.entries, envID)
 	c.mu.Unlock()
+	if f, ok := c.reaper.(interface{ Forget(envID string) }); ok {
+		f.Forget(envID)
+	}
 }
 
 // Cached is the state as last read, with no I/O. It reports false for an
@@ -495,12 +499,20 @@ func (c *Clusters) refresh(ctx context.Context, envID string, e *clusterEntry) e
 
 func (c *Clusters) refreshSwarm(ctx context.Context, in RollupInput, e *clusterEntry) error {
 	var read dockerx.ClusterRead
-	_, err := c.read(ctx, in, func(cli *dockerx.Client) error {
+	used, err := c.read(ctx, in, func(cli *dockerx.Client) error {
 		r, err := cli.Cluster(ctx)
 		read = r
 		return err
 	})
 	c.apply(in, e, read, err)
+	if err == nil && c.reaper != nil {
+		// Each successful node list is what an agent's node is missing from or not
+		// (D-10). The read's own deadline is nearly spent, and the writes that may
+		// follow are not part of it.
+		octx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
+		defer cancel()
+		c.reaper.Observe(octx, in.EnvID, read, used.SwarmNodeID)
+	}
 	return err
 }
 

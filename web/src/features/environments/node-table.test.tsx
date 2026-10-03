@@ -217,6 +217,13 @@ describe("NodeTable columns and order", () => {
     ]);
   });
 
+  it("calls the manager that leads the swarm Leader", async () => {
+    agents = [agent("a1", "mgr-1", { role: "leader" }), agent("a7", "mgr-2", { role: "manager" })];
+    await mountLoaded();
+    expect(cells(rowFor("mgr-1"))[1]?.textContent).toBe("Leader");
+    expect(cells(rowFor("mgr-2"))[1]?.textContent).toBe("Manager");
+  });
+
   it("lists problems first: revoked, then not connected, then warnings, then the rest by name", async () => {
     await mountLoaded();
     expect(

@@ -746,10 +746,10 @@ export interface components {
              */
             revokedAt?: string;
             /**
-             * @description What the node is: a swarm manager, a swarm worker or a standalone host. Which manager leads is not reported yet
+             * @description What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager
              * @enum {string}
              */
-            role: "manager" | "worker" | "standalone";
+            role: "leader" | "manager" | "worker" | "standalone";
             /** @description The host owner allowed the agent to update itself. Reported only while it is connected */
             selfUpdate: boolean;
             /**

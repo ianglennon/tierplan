@@ -70,7 +70,7 @@ func (r *rig) agentRow(t *testing.T, id string) agentRow {
 	return a
 }
 
-func TestOneMissIsNotARevokeAndTwoConsecutiveMissesAreOnWithNoBlockAndAnAuditRow(t *testing.T) {
+func TestReaperOneMissIsNotARevokeAndTwoConsecutiveMissesAreWithNoBlockAndAnAuditRow(t *testing.T) {
 	r := newRig(t)
 	s := newSwarmEnv(t, r, "prod")
 	missing := s.list("prod", "w1") // w2 has left
@@ -125,7 +125,7 @@ func TestOneMissIsNotARevokeAndTwoConsecutiveMissesAreOnWithNoBlockAndAnAuditRow
 	}
 }
 
-func TestASightingBetweenTwoMissesStartsTheCountAgain(t *testing.T) {
+func TestReaperASightingBetweenTwoMissesStartsTheCountAgain(t *testing.T) {
 	r := newRig(t)
 	s := newSwarmEnv(t, r, "prod")
 	missing, present := s.list("prod", "w1"), s.list("prod", "w1", "w2")
@@ -141,7 +141,7 @@ func TestASightingBetweenTwoMissesStartsTheCountAgain(t *testing.T) {
 	}
 }
 
-func TestANodeThatIsDownDrainedOrPausedKeepsItsAgent(t *testing.T) {
+func TestReaperKeepsTheAgentOfANodeThatIsDownDrainedOrPaused(t *testing.T) {
 	r := newRig(t)
 	s := newSwarmEnv(t, r, "prod")
 	for name, mutate := range map[string]func(*dockerx.NodeRow){
@@ -165,7 +165,7 @@ func TestANodeThatIsDownDrainedOrPausedKeepsItsAgent(t *testing.T) {
 	}
 }
 
-func TestAListThatDoesNotIncludeTheAnsweringManagerCountsForNothing(t *testing.T) {
+func TestReaperIgnoresAListThatDoesNotIncludeTheAnsweringManager(t *testing.T) {
 	r := newRig(t)
 	s := newSwarmEnv(t, r, "prod")
 	bogus := nodes(nodeRow("node-w1-prod")) // the manager that answered is not in its own list
@@ -196,7 +196,7 @@ func TestAListThatDoesNotIncludeTheAnsweringManagerCountsForNothing(t *testing.T
 	}
 }
 
-func TestTheReaperNeverTouchesAnAdminRevokedAgentAStandaloneHostOrAnotherEnvironment(t *testing.T) {
+func TestReaperNeverTouchesAnAdminRevokedAgentAStandaloneHostOrAnotherEnvironment(t *testing.T) {
 	r := newRig(t)
 	s := newSwarmEnv(t, r, "prod")
 	other := newSwarmEnv(t, r, "lab")
@@ -233,7 +233,7 @@ func TestTheReaperNeverTouchesAnAdminRevokedAgentAStandaloneHostOrAnotherEnviron
 	}
 }
 
-func TestAnAutoRevokedHostEnrolsAgainWithTheJoinToken(t *testing.T) {
+func TestReaperAnAutoRevokedHostEnrolsAgainWithTheJoinToken(t *testing.T) {
 	r := newRig(t)
 	s := newSwarmEnv(t, r, "prod")
 	missing := s.list("prod", "w1")
@@ -253,7 +253,7 @@ func TestAnAutoRevokedHostEnrolsAgainWithTheJoinToken(t *testing.T) {
 	}
 }
 
-func TestAutoRevokeOfAnAlreadyRevokedOrUnknownAgentChangesNothing(t *testing.T) {
+func TestReaperAutoRevokeOfAnAlreadyRevokedOrUnknownAgentChangesNothing(t *testing.T) {
 	r := newRig(t)
 	s := newSwarmEnv(t, r, "prod")
 	if err := r.svc.AutoRevoke(r.ctx, s.c.EnvID, s.w2.id); err != nil {
@@ -273,7 +273,7 @@ func TestAutoRevokeOfAnAlreadyRevokedOrUnknownAgentChangesNothing(t *testing.T) 
 	}
 }
 
-func TestObservingFromManyGoroutinesPassesTheRaceDetectorAndRevokesOnce(t *testing.T) {
+func TestReaperObservingFromManyGoroutinesPassesTheRaceDetectorAndRevokesOnce(t *testing.T) {
 	r := newRig(t)
 	s := newSwarmEnv(t, r, "prod")
 	missing := s.list("prod", "w1")
