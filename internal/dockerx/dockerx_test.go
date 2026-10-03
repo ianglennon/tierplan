@@ -750,6 +750,23 @@ func TestEventsKeepsContainerImageNetworkAndVolumeEventsAndDropsTheNoise(t *test
 	}
 }
 
+func TestEventsCarryTheDaemonsScopeSoAClusterEventCanBeToldFromANodeOne(t *testing.T) {
+	base := time.Now().Add(-time.Minute).UnixNano()
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
+		{Type: "container", Action: "start", ActorID: "c1", TimeNano: base + 1},
+		{Type: "network", Action: "create", ActorID: "ovl", Scope: "swarm", TimeNano: base + 2},
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rows, _ := newClient(t, fake).Events(ctx, time.Now().Add(-time.Hour))
+	if r := recvRow(t, rows); r.Type != "container" || r.Scope != "local" {
+		t.Errorf("container row = %+v, want scope local", r)
+	}
+	if r := recvRow(t, rows); r.Type != "network" || r.Scope != "swarm" {
+		t.Errorf("network row = %+v, want scope swarm", r)
+	}
+}
+
 func TestEventsDropsAttachDetachResizeAndTopToo(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	ctx, cancel := context.WithCancel(context.Background())

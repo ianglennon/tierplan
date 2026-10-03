@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -591,5 +592,249 @@ func TestInjectingIntoATargetWithNoFeedIsRefusedAndAnInjectedRowDoesNotMoveTheRe
 	r.hub.mu.Unlock()
 	if n, ok := f.lastSeen(); ok && n >= future {
 		t.Errorf("the resume point moved to %d because of an injected row", n)
+	}
+}
+
+// The merged feed of an environment (plan 02-21, ENV-06, D-46, D-43, Pitfall 18):
+// every present target's events with their node, a swarm-scoped event from the
+// manager in use only, and Bayplan's own rows. The agents are real sessions over
+// real tunnels with a fake daemon behind each, as in cluster_test.go.
+
+// nodeSink reads a feed in the background and keeps what it saw.
+type nodeSink struct {
+	mu   sync.Mutex
+	rows []NodeEvent
+}
+
+func collect(backlog []NodeEvent, ch <-chan NodeEvent) *nodeSink {
+	s := &nodeSink{rows: append([]NodeEvent(nil), backlog...)}
+	go func() {
+		for r := range ch {
+			s.mu.Lock()
+			s.rows = append(s.rows, r)
+			s.mu.Unlock()
+		}
+	}()
+	return s
+}
+
+func (s *nodeSink) where(pred func(NodeEvent) bool) []NodeEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []NodeEvent
+	for _, r := range s.rows {
+		if pred(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func (s *nodeSink) await(t *testing.T, what string, pred func(NodeEvent) bool, n int) {
+	t.Helper()
+	eventually(t, what, func() bool { return len(s.where(pred)) >= n })
+}
+
+func actor(id string) func(NodeEvent) bool { return func(e NodeEvent) bool { return e.ActorID == id } }
+
+// mergedRig is a three-manager swarm with the leader known and a quick feed poll.
+func newMergedRig(t *testing.T) *swarmRig {
+	t.Helper()
+	s := newSwarmRig(t, managerNodes(), nil)
+	s.agg.WithEventPoll(10 * time.Millisecond)
+	t.Cleanup(s.agg.Close)
+	// The first read does not know the leader yet; the second goes to it.
+	for range 2 {
+		if err := s.c.Refresh(context.Background(), s.env.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s
+}
+
+func (s *swarmRig) subscribeMerged(t *testing.T) *nodeSink {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	backlog, ch, stop := s.agg.Events(ctx, s.env.ID)
+	t.Cleanup(stop)
+	return collect(backlog, ch)
+}
+
+// sentinels publishes a node-local event on each daemon and waits for all of them.
+// A daemon's events are handled in order, so once its sentinel is in the feed
+// everything it published before has been decided too.
+func sentinels(t *testing.T, sink *nodeSink, nodes map[string]*agentConn) {
+	t.Helper()
+	for node, a := range nodes {
+		a.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "sentinel-" + node, Attributes: map[string]string{"name": "sentinel"}})
+	}
+	for node := range nodes {
+		sink.await(t, "the sentinel of "+node, actor("sentinel-"+node), 1)
+	}
+}
+
+func TestMergedFeedTagsEachEventWithTheNodeItHappenedOn(t *testing.T) {
+	s := newMergedRig(t)
+	sink := s.subscribeMerged(t)
+	s.m[2].fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "abc", Attributes: map[string]string{"name": "web"}})
+	sink.await(t, "the event", actor("abc"), 1)
+	if got := sink.where(actor("abc")); len(got) != 1 || got[0].Node != "mgr-3" || got[0].Name != "web" {
+		t.Fatalf("event = %+v, want one event with node mgr-3", got)
+	}
+}
+
+func TestSwarmScopeEventReportedByEveryManagerReachesTheFeedOnceFromTheManagerInUse(t *testing.T) {
+	s := newMergedRig(t)
+	sink := s.subscribeMerged(t)
+	base := time.Now().UnixNano()
+	// The same cluster event, each manager stamping it with its own clock.
+	for i, a := range s.m {
+		a.fake.PublishEvent(dockertest.FakeEvent{
+			Type: "network", Action: "create", ActorID: "ovl-1", Scope: "swarm", TimeNano: base + int64(i)*int64(time.Millisecond),
+			Attributes: map[string]string{"name": "ovl"},
+		})
+	}
+	sentinels(t, sink, map[string]*agentConn{"mgr-1": s.m[0], "mgr-2": s.m[1], "mgr-3": s.m[2]})
+	got := sink.where(actor("ovl-1"))
+	if len(got) != 1 || got[0].Node != "mgr-2" {
+		t.Fatalf("the cluster event reached the feed as %+v, want once, from mgr-2 (the leader, in use)", got)
+	}
+}
+
+func TestSwarmScopeEventsFollowTheManagerInUseAcrossAFailoverWithoutLossOrRepeat(t *testing.T) {
+	s := newMergedRig(t)
+	sink := s.subscribeMerged(t)
+	base := time.Now().UnixNano()
+	swarmEvent := func(a *agentConn, id string, at int64) {
+		a.fake.PublishEvent(dockertest.FakeEvent{Type: "network", Action: "create", ActorID: id, Scope: "swarm", TimeNano: at})
+	}
+	ms := int64(time.Millisecond)
+
+	// Before: all three see net-1; the leader's is the one shown.
+	swarmEvent(s.m[0], "net-1", base+ms)
+	swarmEvent(s.m[1], "net-1", base)
+	swarmEvent(s.m[2], "net-1", base-ms)
+	sink.await(t, "net-1", actor("net-1"), 1)
+
+	// The leader dies. net-2 happens after that, so only the two managers left see it.
+	s.kick(t, s.m[1])
+	swarmEvent(s.m[0], "net-2", base+10*ms)
+	swarmEvent(s.m[2], "net-2", base+11*ms)
+	if err := s.c.Refresh(context.Background(), s.env.ID); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	fo := s.failovers(t)
+	if len(fo) != 1 {
+		t.Fatalf("failovers = %+v, want one", fo)
+	}
+	to := fo[0].ToNode
+
+	sink.await(t, "net-2", actor("net-2"), 1)
+	// And once more after the switch.
+	swarmEvent(s.m[0], "net-3", base+20*ms)
+	swarmEvent(s.m[2], "net-3", base+21*ms)
+	sink.await(t, "net-3", actor("net-3"), 1)
+	sentinels(t, sink, map[string]*agentConn{"mgr-1": s.m[0], "mgr-3": s.m[2]})
+
+	one := func(id, node string) {
+		t.Helper()
+		got := sink.where(actor(id))
+		if len(got) != 1 || (node != "" && got[0].Node != node) {
+			t.Errorf("%s reached the feed as %+v, want once from %q", id, got, node)
+		}
+	}
+	one("net-1", "mgr-2")
+	one("net-2", to) // seen by the new manager while it was not yet the one in use, and not lost
+	one("net-3", to)
+}
+
+func TestMergedFeedCarriesTheFailoverRowAsBayplanWithTheNewManagerAsNode(t *testing.T) {
+	s := newMergedRig(t)
+	sink := s.subscribeMerged(t)
+	s.kick(t, s.m[1])
+	if err := s.c.Refresh(context.Background(), s.env.ID); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	to := s.failovers(t)[0].ToNode
+	isFailover := func(e NodeEvent) bool { return e.Type == "bayplan" && e.Action == "failover" }
+	sink.await(t, "the failover row", isFailover, 1)
+	if got := sink.where(isFailover); len(got) != 1 || got[0].Node != to {
+		t.Fatalf("failover rows = %+v, want one with node %s, the manager that took over", got, to)
+	}
+}
+
+func TestMergedFeedRecentMergesTheNodesNewestFirstAndBacklogIsOldestFirst(t *testing.T) {
+	s := newMergedRig(t)
+	base := time.Now().UnixNano()
+	ms := int64(time.Millisecond)
+	// Interleaved in time across the three daemons.
+	for i, a := range s.m {
+		a.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: fmt.Sprintf("e%d", i+1), TimeNano: base + int64(i+1)*ms})
+		a.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "stop", ActorID: fmt.Sprintf("e%d", i+4), TimeNano: base + int64(i+4)*ms})
+	}
+	for _, a := range s.m {
+		eventually(t, "the hub to hold both events of a node", func() bool { return len(s.evs.Recent(AgentTarget(a.id), 10)) >= 2 })
+	}
+	ids := func(rows []NodeEvent) string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.ActorID)
+		}
+		return strings.Join(out, " ")
+	}
+	if got := ids(s.agg.Recent(context.Background(), s.env.ID, 10)); got != "e6 e5 e4 e3 e2 e1" {
+		t.Errorf("Recent = %s, want every node's events newest first", got)
+	}
+	if got := ids(s.agg.Recent(context.Background(), s.env.ID, 2)); got != "e6 e5" {
+		t.Errorf("Recent(2) = %s, want the newest two", got)
+	}
+	backlog, _, stop := s.agg.Events(context.Background(), s.env.ID)
+	defer stop()
+	if got := ids(backlog); got != "e1 e2 e3 e4 e5 e6" {
+		t.Errorf("backlog = %s, want oldest first", got)
+	}
+}
+
+func TestMergedFeedOfAnEnvironmentWithNoAgentIsEmptyAndAlreadyClosed(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Waiting")
+	backlog, ch, stop := r.agg.Events(context.Background(), env.ID)
+	defer stop()
+	if len(backlog) != 0 {
+		t.Errorf("backlog = %+v, want none", backlog)
+	}
+	select {
+	case _, open := <-ch:
+		if open {
+			t.Error("the channel delivered an event")
+		}
+	case <-time.After(time.Second):
+		t.Error("the channel of an environment with nothing to read is not closed")
+	}
+	if rows := r.agg.Recent(context.Background(), env.ID, 5); len(rows) != 0 {
+		t.Errorf("Recent = %+v, want none", rows)
+	}
+}
+
+func TestMergedFeedClosesItsSubscribersWhenTheAggregatorIsClosed(t *testing.T) {
+	s := newMergedRig(t)
+	_, ch, stop := s.agg.Events(context.Background(), s.env.ID)
+	defer stop()
+	s.agg.Close()
+	select {
+	case _, open := <-ch:
+		if open {
+			t.Error("an event arrived instead of the end of the feed")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the subscription is still open after Close")
+	}
+	if _, ch, stop := s.agg.Events(context.Background(), s.env.ID); true {
+		defer stop()
+		if _, open := <-ch; open {
+			t.Error("a subscriber after Close got an open channel")
+		}
 	}
 }

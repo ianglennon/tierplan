@@ -14,7 +14,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 )
@@ -40,9 +40,9 @@ const (
 type EventsSource interface {
 	// Events returns the buffered events, oldest first, and the channel of the
 	// ones that follow; see envs.Aggregator.Events.
-	Events(ctx context.Context, envID string) (backlog []dockerx.EventRow, ch <-chan dockerx.EventRow, cancel func())
+	Events(ctx context.Context, envID string) (backlog []envs.NodeEvent, ch <-chan envs.NodeEvent, cancel func())
 	// Recent returns up to n buffered events, newest first.
-	Recent(ctx context.Context, envID string, n int) []dockerx.EventRow
+	Recent(ctx context.Context, envID string, n int) []envs.NodeEvent
 }
 
 // EventsDeps are the dependencies of the events routes.
@@ -65,6 +65,7 @@ type EventsDeps struct {
 // environment: only name, image and exit code survive from Docker's attributes
 // (T-01-88).
 type EventDTO struct {
+	Node       string            `json:"node" doc:"The node the event happened on; for a row of Bayplan's own, the node it concerns, such as the manager that took over"`
 	ID         string            `json:"id" doc:"A stable ID for the event; the SSE frame id, and what a repeated event is recognised by"`
 	Time       string            `json:"time" format:"date-time" doc:"When it happened, in UTC, with sub-second precision"`
 	Type       string            `json:"type" enum:"container,image,network,volume,bayplan" doc:"What kind of object it is about. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event"`
@@ -85,13 +86,13 @@ type EventListOutput struct {
 	Body         EventListBody
 }
 
-func eventDTO(r dockerx.EventRow) EventDTO {
+func eventDTO(r envs.NodeEvent) EventDTO {
 	attrs := r.Attributes
 	if attrs == nil {
 		attrs = map[string]string{}
 	}
 	return EventDTO{
-		ID: r.ID, Time: r.Time.UTC().Format(time.RFC3339Nano), Type: r.Type, Action: r.Action,
+		Node: r.Node, ID: r.ID, Time: r.Time.UTC().Format(time.RFC3339Nano), Type: r.Type, Action: r.Action,
 		ActorID: r.ActorID, Name: r.Name, Attributes: attrs,
 	}
 }
@@ -227,7 +228,7 @@ func serveEventStream(w http.ResponseWriter, req *http.Request, d EventsDeps, li
 		return
 	}
 
-	send := func(row dockerx.EventRow) bool {
+	send := func(row envs.NodeEvent) bool {
 		data, err := json.Marshal(eventDTO(row))
 		if err != nil {
 			d.Log.Error("encode an event", "error", err)

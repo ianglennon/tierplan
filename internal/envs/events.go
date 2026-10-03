@@ -34,6 +34,13 @@ const (
 	defaultRetryMax = 15 * time.Second
 )
 
+// NodeEvent is a row of an environment's feed with the node it came from: the node
+// the Docker event happened on, or for a row of Bayplan's own the node it concerns.
+type NodeEvent struct {
+	dockerx.EventRow
+	Node string
+}
+
 // errNotOnline ends a stream because the monitor no longer calls the
 // environment online.
 var errNotOnline = errors.New("envs: the environment is not online")

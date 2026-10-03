@@ -11,6 +11,7 @@
 package dockertest
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -172,6 +173,8 @@ type FakeEvent struct {
 	Type    string
 	Action  string
 	ActorID string
+	// Scope is local or swarm; empty means local.
+	Scope string
 	// Attributes are sent as they are, so a test can prove which ones Bayplan
 	// drops.
 	Attributes map[string]string
@@ -836,8 +839,9 @@ func (f *Fake) serveEvents(w http.ResponseWriter, r *http.Request) {
 		if types != nil && !types[e.Type] {
 			return true
 		}
+		scope := cmp.Or(e.Scope, "local")
 		msg := events.Message{
-			Type: events.Type(e.Type), Action: events.Action(e.Action), Scope: "local",
+			Type: events.Type(e.Type), Action: events.Action(e.Action), Scope: scope,
 			Actor:    events.Actor{ID: e.ActorID, Attributes: e.Attributes},
 			Time:     e.TimeNano / int64(time.Second),
 			TimeNano: e.TimeNano,

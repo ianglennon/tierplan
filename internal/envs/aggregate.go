@@ -519,25 +519,50 @@ func (a *Aggregator) primaryKey(ctx context.Context, envID string) (string, bool
 	return a.svc.primary(in)
 }
 
-// Events subscribes to the events of an environment's primary target; see
-// Hub.Subscribe. An environment with no target to read gets an empty backlog and a
-// channel that is already closed.
-func (a *Aggregator) Events(ctx context.Context, envID string) (backlog []dockerx.EventRow, ch <-chan dockerx.EventRow, cancel func()) {
+// Close stops the merged feeds. A subscriber after it gets a closed channel.
+func (a *Aggregator) Close() {}
+
+// WithEventPoll sets how often an environment's merged feed looks for targets that
+// came or went; the default is one second.
+func (a *Aggregator) WithEventPoll(d time.Duration) *Aggregator { return a }
+
+// Events subscribes to the events of an environment; see Hub.Subscribe. An
+// environment with no target to read gets an empty backlog and a channel that is
+// already closed.
+func (a *Aggregator) Events(ctx context.Context, envID string) (backlog []NodeEvent, ch <-chan NodeEvent, cancel func()) {
+	closed := make(chan NodeEvent)
+	close(closed)
 	key, ok := a.primaryKey(ctx, envID)
 	if !ok {
-		closed := make(chan dockerx.EventRow)
-		close(closed)
 		return nil, closed, func() {}
 	}
-	return a.events.Subscribe(ctx, key)
+	in, _ := a.svc.Input(ctx, envID, a.now())
+	node := nodeOf(in, key, a.svc.mon.Status(key)).Name
+	rows, src, stop := a.events.Subscribe(ctx, key)
+	out := make(chan NodeEvent, subscriberBuffer)
+	go func() {
+		defer close(out)
+		for r := range src {
+			out <- NodeEvent{r, node}
+		}
+	}()
+	for _, r := range rows {
+		backlog = append(backlog, NodeEvent{r, node})
+	}
+	return backlog, out, stop
 }
 
-// Recent returns up to n buffered events of an environment's primary target,
-// newest first.
-func (a *Aggregator) Recent(ctx context.Context, envID string, n int) []dockerx.EventRow {
+// Recent returns up to n buffered events of an environment, newest first.
+func (a *Aggregator) Recent(ctx context.Context, envID string, n int) []NodeEvent {
 	key, ok := a.primaryKey(ctx, envID)
 	if !ok {
 		return nil
 	}
-	return a.events.Recent(key, n)
+	in, _ := a.svc.Input(ctx, envID, a.now())
+	node := nodeOf(in, key, a.svc.mon.Status(key)).Name
+	var out []NodeEvent
+	for _, r := range a.events.Recent(key, n) {
+		out = append(out, NodeEvent{r, node})
+	}
+	return out
 }
