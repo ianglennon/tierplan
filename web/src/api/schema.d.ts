@@ -394,6 +394,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/recent-environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The environments the signed-in user used last
+         * @description Up to 3 environment IDs, the most recently used first and, for uses at the same instant, in ID order. An environment that was removed, or that the user can no longer read, is left out.
+         */
+        get: operations["listRecentEnvironments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/recent-environments/{envId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Record that the signed-in user used an environment
+         * @description Sets the environment's last-used time to now. Using the same environment again keeps one entry with the newer time. Only the newest 3 per user are kept. An environment that does not exist and one the user cannot read both answer 404 environment_not_found, so the answer never says which exist.
+         */
+        put: operations["recordRecentEnvironment"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -517,14 +557,29 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         AddEnvironmentBody: {
+            /** @description The oldest agent version in the environment; null when it has no agent, and for the local socket */
+            agentVersion: string | null;
+            /** @description Connected and expected agents; null except on a swarm */
+            agents: components["schemas"]["EnvironmentAgentsBody"] | null;
             /** Format: date-time */
             createdAt: string;
             enabled: boolean;
             engine: components["schemas"]["EnvironmentEngineBody"];
+            /** @description The Docker engine version, as the engine reported it; null until it has answered */
+            engineVersion: string | null;
+            /**
+             * @description What the environment is; absent until it is known. An agent environment gets it from its first agent
+             * @enum {string}
+             */
+            envType?: "swarm" | "standalone";
+            /** @description Failing and total services; null until service data is known */
+            failingServices: components["schemas"]["EnvironmentFailingBody"] | null;
             /** @description The environment ID, used in /api/env/{envId}/... */
             id: string;
             /** @description Present for an agent environment only: the join token, the address the agent dials, and the commands and files that install it */
             install?: components["schemas"]["InstallBody"];
+            /** @description True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent */
+            isLocalSocket: boolean;
             /** @description True for the Docker host Bayplan itself runs on */
             isSelfHost: boolean;
             /**
@@ -532,14 +587,23 @@ export interface components {
              * @enum {string}
              */
             kind: "local" | "agent";
+            /**
+             * Format: date-time
+             * @description The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen
+             */
+            lastSeen: string | null;
             /** @description The display name; defaults to the daemon's hostname */
             name: string;
+            /** @description Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster */
+            nodes: components["schemas"]["EnvironmentNodesBody"] | null;
             status: components["schemas"]["EnvironmentStatusBody"];
             /**
              * @description What the engine is; absent until it has answered
              * @enum {string}
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
+            /** @description True when an agent is older than this server by a minor or a patch version */
+            updateAvailable: boolean;
         };
         AddEnvironmentInputBody: {
             /** @description Local only: add the host even though its engine is not supported; it is stored and shown as unsupported */
@@ -663,13 +727,40 @@ export interface components {
             /** @description True when total is more than the rows returned */
             truncated: boolean;
         };
+        EnvironmentAgentsBody: {
+            /**
+             * Format: int64
+             * @description Agents with a live connection
+             */
+            connected: number;
+            /**
+             * Format: int64
+             * @description Agents the swarm should have: one per node whose agent was not revoked
+             */
+            expected: number;
+        };
         EnvironmentBody: {
+            /** @description The oldest agent version in the environment; null when it has no agent, and for the local socket */
+            agentVersion: string | null;
+            /** @description Connected and expected agents; null except on a swarm */
+            agents: components["schemas"]["EnvironmentAgentsBody"] | null;
             /** Format: date-time */
             createdAt: string;
             enabled: boolean;
             engine: components["schemas"]["EnvironmentEngineBody"];
+            /** @description The Docker engine version, as the engine reported it; null until it has answered */
+            engineVersion: string | null;
+            /**
+             * @description What the environment is; absent until it is known. An agent environment gets it from its first agent
+             * @enum {string}
+             */
+            envType?: "swarm" | "standalone";
+            /** @description Failing and total services; null until service data is known */
+            failingServices: components["schemas"]["EnvironmentFailingBody"] | null;
             /** @description The environment ID, used in /api/env/{envId}/... */
             id: string;
+            /** @description True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent */
+            isLocalSocket: boolean;
             /** @description True for the Docker host Bayplan itself runs on */
             isSelfHost: boolean;
             /**
@@ -677,14 +768,23 @@ export interface components {
              * @enum {string}
              */
             kind: "local" | "agent";
+            /**
+             * Format: date-time
+             * @description The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen
+             */
+            lastSeen: string | null;
             /** @description The display name; defaults to the daemon's hostname */
             name: string;
+            /** @description Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster */
+            nodes: components["schemas"]["EnvironmentNodesBody"] | null;
             status: components["schemas"]["EnvironmentStatusBody"];
             /**
              * @description What the engine is; absent until it has answered
              * @enum {string}
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
+            /** @description True when an agent is older than this server by a minor or a patch version */
+            updateAvailable: boolean;
         };
         EnvironmentEngineBody: {
             /** @description The newest Engine API version the daemon speaks */
@@ -695,6 +795,18 @@ export interface components {
             negotiatedApi?: string;
             /** @description The engine version */
             version?: string;
+        };
+        EnvironmentFailingBody: {
+            /**
+             * Format: int64
+             * @description Services with tasks that keep failing
+             */
+            failing: number;
+            /**
+             * Format: int64
+             * @description Services in the environment
+             */
+            total: number;
         };
         EnvironmentIssueBody: {
             /** @description A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring or clock_skew */
@@ -709,6 +821,18 @@ export interface components {
         };
         EnvironmentListBody: {
             items: components["schemas"]["EnvironmentBody"][] | null;
+        };
+        EnvironmentNodesBody: {
+            /**
+             * Format: int64
+             * @description Nodes whose agent is connected or was heard from within the last 30 seconds
+             */
+            ready: number;
+            /**
+             * Format: int64
+             * @description Nodes the environment should have: one per agent that is not revoked
+             */
+            total: number;
         };
         EnvironmentProblem: {
             /**
@@ -1036,6 +1160,10 @@ export interface components {
             supported: boolean;
             swarmNodeState?: string;
             type?: string;
+        };
+        RecentEnvironmentsBody: {
+            /** @description Up to 3 environment IDs, most recently used first */
+            environmentIds: string[] | null;
         };
         RenameEnvironmentInputBody: {
             /** @description The new name, 1 to 64 characters */
@@ -2079,6 +2207,66 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ChangePasswordBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listRecentEnvironments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecentEnvironmentsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    recordRecentEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

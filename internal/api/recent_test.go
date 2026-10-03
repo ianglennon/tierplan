@@ -51,7 +51,7 @@ func (f *agentFix) rows(t *testing.T, userID string) int {
 	return n
 }
 
-func TestUsingTheSameEnvironmentTwiceKeepsOneRowWithTheNewerTime(t *testing.T) {
+func TestRecentUsingTheSameEnvironmentTwiceKeepsOneRowWithTheNewerTime(t *testing.T) {
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "A")
 	if rec := f.use(t, a.ID); rec.code != http.StatusNoContent {
@@ -82,7 +82,7 @@ func TestUsingTheSameEnvironmentTwiceKeepsOneRowWithTheNewerTime(t *testing.T) {
 	}
 }
 
-func TestOnlyTheNewestThreeAreKeptAndRemovingAnEnvironmentDropsItFromTheList(t *testing.T) {
+func TestRecentOnlyTheNewestThreeAreKeptAndRemovingAnEnvironmentDropsItFromTheList(t *testing.T) {
 	f := newAgentFix(t)
 	ids := map[string]string{}
 	for _, n := range []string{"A", "B", "C", "D"} {
@@ -106,7 +106,7 @@ func TestOnlyTheNewestThreeAreKeptAndRemovingAnEnvironmentDropsItFromTheList(t *
 	}
 }
 
-func TestUsesAtTheSameInstantAreOrderedByEnvironmentID(t *testing.T) {
+func TestRecentUsesAtTheSameInstantAreOrderedByEnvironmentID(t *testing.T) {
 	f := newAgentFix(t)
 	var ids []string
 	for _, n := range []string{"A", "B", "C"} {
@@ -128,7 +128,7 @@ func TestUsesAtTheSameInstantAreOrderedByEnvironmentID(t *testing.T) {
 	}
 }
 
-func TestUsingAnEnvironmentTheCallerCannotReadOrThatDoesNotExistIsTheSame404(t *testing.T) {
+func TestRecentUsingAnEnvironmentTheCallerCannotReadOrThatDoesNotExistIsTheSame404(t *testing.T) {
 	f := newAgentFix(t)
 	secret := f.srv.NewEnvironment(t, "Secret").ID
 	f.addUser(t, "nobody", false)
@@ -156,7 +156,7 @@ func TestUsingAnEnvironmentTheCallerCannotReadOrThatDoesNotExistIsTheSame404(t *
 	}
 }
 
-func TestEachUserHasTheirOwnRecentListAndOnlyReadableEnvironmentsAreReturned(t *testing.T) {
+func TestRecentEachUserHasTheirOwnListAndOnlyReadableEnvironmentsAreReturned(t *testing.T) {
 	f := newAgentFix(t)
 	a, b := f.srv.NewEnvironment(t, "A").ID, f.srv.NewEnvironment(t, "B").ID
 	f.addUser(t, "viewer", false)

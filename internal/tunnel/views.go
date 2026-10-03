@@ -42,6 +42,7 @@ type agentMemory struct {
 	envID string
 	sess  *Session
 
+	version         string
 	connectedAt     time.Time
 	lastSeen        time.Time
 	engineReachable bool
@@ -60,7 +61,7 @@ func (h *Hub) noteConnected(s *Session) {
 		m = &agentMemory{}
 		h.memory[s.AgentID] = m
 	}
-	m.envID, m.sess, m.connectedAt = s.EnvID, s, s.ConnectedAt
+	m.envID, m.sess, m.connectedAt, m.version = s.EnvID, s, s.ConnectedAt, s.AgentVersion
 }
 
 // noteEnded records that s has ended and why. When s is still the agent's current

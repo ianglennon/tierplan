@@ -84,6 +84,8 @@ type Environment struct {
 	// Health is the environment's rolled-up state (D-33) with its D-40 reason and
 	// issues. It is what the API reports as the environment's status.
 	Health Health
+	// Overview is what the environments table shows beside the health (D-32).
+	Overview Overview
 }
 
 // DefaultReconnectGrace is how long after the server starts an environment with
@@ -216,7 +218,7 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 			CertNotAfter: time.Unix(0, a.CertNotAfter).UTC(),
 			// Presence never reads the stored last-seen: after a restart it would make
 			// an agent that has not reconnected look present for up to a minute.
-			EngineReachable: true,
+			EngineReachable: true, Version: a.AgentVersion,
 		}
 		if a.RevokedAt.Valid {
 			v.RevokedAt = time.Unix(0, a.RevokedAt.Int64).UTC()
@@ -227,6 +229,9 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 		if l, ok := live[a.ID]; ok {
 			v.Connected, v.ConnectedAt, v.LastSeen, v.Ended, v.LastCode = l.Connected, l.ConnectedAt, l.LastSeen, l.Ended, l.LastCode
 			v.EngineReachable, v.ClockOffset = l.EngineReachable, l.ClockOffset
+			if l.Version != "" {
+				v.Version = l.Version
+			}
 			if l.Connected {
 				v.Target = s.mon.Status(AgentTarget(a.ID))
 			}
@@ -346,6 +351,7 @@ func (s *Service) environment(ctx context.Context, row sqlc.Environment) (Enviro
 		CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
 		Status:    status,
 		Health:    Rollup(in),
+		Overview:  overview(in, status, s.health.ServerVersion),
 	}, nil
 }
 
@@ -494,6 +500,7 @@ func (s *Service) AddLocal(ctx context.Context, actor audit.Actor, name string, 
 	return Environment{
 		ID: id.String(), Kind: KindLocal, Name: name, SocketPath: path, Enabled: true,
 		CreatedAt: time.Unix(0, now).UTC(), Status: st, Health: Health{State: st.State, Reason: st.Reason, Since: st.Since},
+		Overview: overview(RollupInput{Kind: KindLocal}, st, s.health.ServerVersion),
 	}, nil
 }
 

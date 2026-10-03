@@ -93,6 +93,24 @@ type EnvironmentEngineBody struct {
 	NegotiatedAPI string `json:"negotiatedApi,omitempty" doc:"The API version Bayplan uses with it"`
 }
 
+// EnvironmentNodesBody is how many of an environment's nodes are ready of how many it has.
+type EnvironmentNodesBody struct {
+	Ready int `json:"ready" doc:"Nodes whose agent is connected or was heard from within the last 30 seconds"`
+	Total int `json:"total" doc:"Nodes the environment should have: one per agent that is not revoked"`
+}
+
+// EnvironmentFailingBody is how many of an environment's services are failing of how many it has.
+type EnvironmentFailingBody struct {
+	Failing int `json:"failing" doc:"Services with tasks that keep failing"`
+	Total   int `json:"total" doc:"Services in the environment"`
+}
+
+// EnvironmentAgentsBody is how many of a swarm's expected agents are connected.
+type EnvironmentAgentsBody struct {
+	Connected int `json:"connected" doc:"Agents with a live connection"`
+	Expected  int `json:"expected" doc:"Agents the swarm should have: one per node whose agent was not revoked"`
+}
+
 // EnvironmentBody is one managed environment.
 type EnvironmentBody struct {
 	ID         string                `json:"id" doc:"The environment ID, used in /api/env/{envId}/..."`
@@ -104,6 +122,16 @@ type EnvironmentBody struct {
 	CreatedAt  string                `json:"createdAt" format:"date-time"`
 	Status     EnvironmentStatusBody `json:"status"`
 	Engine     EnvironmentEngineBody `json:"engine"`
+
+	EnvType         string                           `json:"envType,omitempty" enum:"swarm,standalone" doc:"What the environment is; absent until it is known. An agent environment gets it from its first agent"`
+	IsLocalSocket   bool                             `json:"isLocalSocket" doc:"True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent"`
+	Nodes           Nullable[EnvironmentNodesBody]   `json:"nodes" doc:"Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster"`
+	FailingServices Nullable[EnvironmentFailingBody] `json:"failingServices" doc:"Failing and total services; null until service data is known"`
+	Agents          Nullable[EnvironmentAgentsBody]  `json:"agents" doc:"Connected and expected agents; null except on a swarm"`
+	AgentVersion    *string                          `json:"agentVersion" nullable:"true" doc:"The oldest agent version in the environment; null when it has no agent, and for the local socket"`
+	UpdateAvailable bool                             `json:"updateAvailable" doc:"True when an agent is older than this server by a minor or a patch version"`
+	EngineVersion   *string                          `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
+	LastSeen        *string                          `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
 }
 
 // InstallSwarmBody is the swarm install: one command for a manager, or a stack file.
@@ -213,7 +241,8 @@ func rfc3339(t time.Time) string {
 
 func environmentBody(e envs.Environment) EnvironmentBody {
 	p := e.Status.Probe
-	return EnvironmentBody{
+	o := e.Overview
+	body := EnvironmentBody{
 		ID: e.ID, Name: e.Name, Kind: e.Kind,
 		Type:       p.Type,
 		IsSelfHost: e.Kind == envs.KindLocal,
@@ -223,7 +252,28 @@ func environmentBody(e envs.Environment) EnvironmentBody {
 		Engine: EnvironmentEngineBody{
 			Name: p.EngineName, Version: p.EngineVersion, APIVersion: p.APIVersion, NegotiatedAPI: p.NegotiatedAPI,
 		},
+		EnvType: o.EnvType, IsLocalSocket: o.IsLocalSocket, UpdateAvailable: o.UpdateAvailable,
 	}
+	if o.Nodes != nil {
+		body.Nodes = Some(EnvironmentNodesBody{Ready: o.Nodes.Ready, Total: o.Nodes.Total})
+	}
+	if o.Failing != nil {
+		body.FailingServices = Some(EnvironmentFailingBody{Failing: o.Failing.Failing, Total: o.Failing.Total})
+	}
+	if o.Agents != nil {
+		body.Agents = Some(EnvironmentAgentsBody{Connected: o.Agents.Connected, Expected: o.Agents.Expected})
+	}
+	if o.AgentVersion != "" {
+		body.AgentVersion = &o.AgentVersion
+	}
+	if o.EngineVersion != "" {
+		body.EngineVersion = &o.EngineVersion
+	}
+	if !o.LastSeen.IsZero() {
+		seen := rfc3339(o.LastSeen)
+		body.LastSeen = &seen
+	}
+	return body
 }
 
 // canRead reports whether the grants listed for each environment include

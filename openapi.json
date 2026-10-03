@@ -4,6 +4,24 @@
       "AddEnvironmentBody": {
         "additionalProperties": false,
         "properties": {
+          "agentVersion": {
+            "description": "The oldest agent version in the environment; null when it has no agent, and for the local socket",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agents": {
+            "description": "Connected and expected agents; null except on a swarm",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentAgentsBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -14,6 +32,32 @@
           "engine": {
             "$ref": "#/components/schemas/EnvironmentEngineBody"
           },
+          "engineVersion": {
+            "description": "The Docker engine version, as the engine reported it; null until it has answered",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "envType": {
+            "description": "What the environment is; absent until it is known. An agent environment gets it from its first agent",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          },
+          "failingServices": {
+            "description": "Failing and total services; null until service data is known",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentFailingBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "description": "The environment ID, used in /api/env/{envId}/...",
             "type": "string"
@@ -21,6 +65,10 @@
           "install": {
             "$ref": "#/components/schemas/InstallBody",
             "description": "Present for an agent environment only: the join token, the address the agent dials, and the commands and files that install it"
+          },
+          "isLocalSocket": {
+            "description": "True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent",
+            "type": "boolean"
           },
           "isSelfHost": {
             "description": "True for the Docker host Bayplan itself runs on",
@@ -34,9 +82,28 @@
             ],
             "type": "string"
           },
+          "lastSeen": {
+            "description": "The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "description": "The display name; defaults to the daemon's hostname",
             "type": "string"
+          },
+          "nodes": {
+            "description": "Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentNodesBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/EnvironmentStatusBody"
@@ -49,6 +116,10 @@
               "standalone"
             ],
             "type": "string"
+          },
+          "updateAvailable": {
+            "description": "True when an agent is older than this server by a minor or a patch version",
+            "type": "boolean"
           }
         },
         "required": [
@@ -59,7 +130,15 @@
           "enabled",
           "createdAt",
           "status",
-          "engine"
+          "engine",
+          "isLocalSocket",
+          "nodes",
+          "failingServices",
+          "agents",
+          "agentVersion",
+          "updateAvailable",
+          "engineVersion",
+          "lastSeen"
         ],
         "type": "object"
       },
@@ -406,9 +485,47 @@
         ],
         "type": "object"
       },
+      "EnvironmentAgentsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "connected": {
+            "description": "Agents with a live connection",
+            "format": "int64",
+            "type": "integer"
+          },
+          "expected": {
+            "description": "Agents the swarm should have: one per node whose agent was not revoked",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "connected",
+          "expected"
+        ],
+        "type": "object"
+      },
       "EnvironmentBody": {
         "additionalProperties": false,
         "properties": {
+          "agentVersion": {
+            "description": "The oldest agent version in the environment; null when it has no agent, and for the local socket",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agents": {
+            "description": "Connected and expected agents; null except on a swarm",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentAgentsBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -419,9 +536,39 @@
           "engine": {
             "$ref": "#/components/schemas/EnvironmentEngineBody"
           },
+          "engineVersion": {
+            "description": "The Docker engine version, as the engine reported it; null until it has answered",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "envType": {
+            "description": "What the environment is; absent until it is known. An agent environment gets it from its first agent",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          },
+          "failingServices": {
+            "description": "Failing and total services; null until service data is known",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentFailingBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "description": "The environment ID, used in /api/env/{envId}/...",
             "type": "string"
+          },
+          "isLocalSocket": {
+            "description": "True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent",
+            "type": "boolean"
           },
           "isSelfHost": {
             "description": "True for the Docker host Bayplan itself runs on",
@@ -435,9 +582,28 @@
             ],
             "type": "string"
           },
+          "lastSeen": {
+            "description": "The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "description": "The display name; defaults to the daemon's hostname",
             "type": "string"
+          },
+          "nodes": {
+            "description": "Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentNodesBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/EnvironmentStatusBody"
@@ -450,6 +616,10 @@
               "standalone"
             ],
             "type": "string"
+          },
+          "updateAvailable": {
+            "description": "True when an agent is older than this server by a minor or a patch version",
+            "type": "boolean"
           }
         },
         "required": [
@@ -460,7 +630,15 @@
           "enabled",
           "createdAt",
           "status",
-          "engine"
+          "engine",
+          "isLocalSocket",
+          "nodes",
+          "failingServices",
+          "agents",
+          "agentVersion",
+          "updateAvailable",
+          "engineVersion",
+          "lastSeen"
         ],
         "type": "object"
       },
@@ -484,6 +662,26 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "EnvironmentFailingBody": {
+        "additionalProperties": false,
+        "properties": {
+          "failing": {
+            "description": "Services with tasks that keep failing",
+            "format": "int64",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Services in the environment",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "failing",
+          "total"
+        ],
         "type": "object"
       },
       "EnvironmentIssueBody": {
@@ -523,6 +721,26 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "EnvironmentNodesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "ready": {
+            "description": "Nodes whose agent is connected or was heard from within the last 30 seconds",
+            "format": "int64",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Nodes the environment should have: one per agent that is not revoked",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ready",
+          "total"
         ],
         "type": "object"
       },
@@ -1322,6 +1540,25 @@
           "reachable",
           "supported",
           "probedAt"
+        ],
+        "type": "object"
+      },
+      "RecentEnvironmentsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "environmentIds": {
+            "description": "Up to 3 environment IDs, most recently used first",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "environmentIds"
         ],
         "type": "object"
       },
@@ -3093,6 +3330,82 @@
         "summary": "Change the signed-in user's own password",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/me/recent-environments": {
+      "get": {
+        "description": "Up to 3 environment IDs, the most recently used first and, for uses at the same instant, in ID order. An environment that was removed, or that the user can no longer read, is left out.",
+        "operationId": "listRecentEnvironments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentEnvironmentsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The environments the signed-in user used last",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/me/recent-environments/{envId}": {
+      "put": {
+        "description": "Sets the environment's last-used time to now. Using the same environment again keeps one entry with the newer time. Only the newest 3 per user are kept. An environment that does not exist and one the user cannot read both answer 404 environment_not_found, so the answer never says which exist.",
+        "operationId": "recordRecentEnvironment",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Record that the signed-in user used an environment",
+        "tags": [
+          "environments"
         ]
       }
     },

@@ -391,7 +391,7 @@ func (h *Hub) Views(envID string) []AgentLive {
 	out := make([]AgentLive, 0, len(found))
 	for _, f := range found {
 		v := AgentLive{
-			AgentID: f.id, EnvID: envID, ConnectedAt: f.m.connectedAt, LastSeen: f.m.lastSeen,
+			AgentID: f.id, EnvID: envID, Version: f.m.version, ConnectedAt: f.m.connectedAt, LastSeen: f.m.lastSeen,
 			Ended: f.m.ended, LastCode: f.m.lastCode, EngineReachable: f.m.engineReachable,
 			ClockOffset: f.m.clockOffset, ClockWarning: f.m.clockWarning,
 		}

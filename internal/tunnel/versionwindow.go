@@ -57,22 +57,31 @@ func Compatible(serverVersion, agentVersion string, proto int) (ok bool, tooOld 
 // parseRelease reads vMAJOR.MINOR.PATCH[-pre][+build], with or without the v. It
 // reports ok false for anything else.
 func parseRelease(v string) (major, minor int, ok bool) {
+	n, ok := parseVersion(v)
+	return n[0], n[1], ok
+}
+
+// ParseVersion reads vMAJOR.MINOR.PATCH[-pre][+build], with or without the v, into
+// its three numbers. It reports ok false for anything else, such as "edge".
+func ParseVersion(v string) (n [3]int, ok bool) { return parseVersion(v) }
+
+// parseVersion is parseRelease with the patch level as well.
+func parseVersion(v string) (n [3]int, ok bool) {
 	core := strings.TrimPrefix(strings.TrimSpace(v), "v")
 	core, _, _ = strings.Cut(core, "+")
 	core, _, _ = strings.Cut(core, "-")
 	parts := strings.Split(core, ".")
 	if len(parts) != 3 {
-		return 0, 0, false
+		return [3]int{}, false
 	}
-	var n [3]int
 	for i, p := range parts {
 		// Atoi accepts a sign and surrounding nothing else; only digits are allowed.
 		if p == "" || len(p) > 9 || strings.Trim(p, "0123456789") != "" {
-			return 0, 0, false
+			return [3]int{}, false
 		}
 		n[i], _ = strconv.Atoi(p)
 	}
-	return n[0], n[1], true
+	return n, true
 }
 
 // Behind reports whether an agent of agentVersion is older than a server of
@@ -81,6 +90,16 @@ func parseRelease(v string) (major, minor int, ok bool) {
 // suffix is ignored, so v0.3.0-rc.1 is v0.3.0. Anything else, and an agent that is
 // the same or newer, is not behind.
 func Behind(serverVersion, agentVersion string) bool {
+	s, sok := parseVersion(serverVersion)
+	a, aok := parseVersion(agentVersion)
+	if !sok || !aok {
+		return false
+	}
+	for i := range s {
+		if a[i] != s[i] {
+			return a[i] < s[i]
+		}
+	}
 	return false
 }
 

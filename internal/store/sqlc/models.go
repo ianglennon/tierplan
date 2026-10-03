@@ -136,3 +136,9 @@ type User struct {
 	LockedUntil       sql.NullInt64
 	Disabled          int64
 }
+
+type UserRecentEnvironment struct {
+	UserID string
+	EnvID  string
+	UsedAt int64
+}

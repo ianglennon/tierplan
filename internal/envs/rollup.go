@@ -73,6 +73,9 @@ type AgentView struct {
 	CertNotAfter time.Time
 	// ClockOffset is how far the agent's clock is ahead of the server's.
 	ClockOffset time.Duration
+	// Version is the agent version: what it reported when it last connected this
+	// run, else what it reported when it enrolled.
+	Version string
 }
 
 // ClusterView is what the swarm causes of degraded and offline are decided from.
