@@ -7,6 +7,11 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  // Relative asset URLs: the built index.html and chunk loading carry no
+  // absolute /assets/ or /theme-init.js. The Go server rewrites every "./"
+  // src/href to the public URL's base path when it serves the page (plan 02-03,
+  // D-50), so one build serves any subpath. The dev server treats "./" as "/".
+  base: "./",
   plugins: [
     // The router plugin must come before the React plugin (RESEARCH Pitfall 21).
     tanstackRouter({
