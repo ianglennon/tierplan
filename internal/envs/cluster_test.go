@@ -392,16 +392,22 @@ func TestNoManagerConnectedIsNotAManager(t *testing.T) {
 	env := r.srv.NewEnvironment(t, "Workers")
 	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now, Publisher: r.brk, Events: r.evs})
 	r.svc.WithClusters(c)
+	var workers []*agentConn
 	for i := 1; i <= 2; i++ {
-		r.connect(t, env, dockertest.FakeConfig{
+		workers = append(workers, r.connect(t, env, dockertest.FakeConfig{
 			Hostname: fmt.Sprintf("w-%d", i), SwarmState: "active", SwarmControl: false,
 			Containers: []dockertest.FakeContainer{{ID: fmt.Sprintf("w%d", i), Names: []string{fmt.Sprintf("/job-%d", i)}, State: "running"}},
 		}, &wire.Facts{
 			EngineID: fmt.Sprintf("ENG:w%d", i), Hostname: fmt.Sprintf("w-%d", i), EngineReachable: true,
 			Swarm: &wire.SwarmFacts{State: "active", NodeID: fmt.Sprintf("node-w%d", i), Control: false},
-		})
+		}))
 	}
 	var e Environment
+	// Both sessions are known to the hub before the health is read, or the second
+	// worker still counts as missing.
+	eventually(t, "both workers to be connected", func() bool {
+		return connectedNow(r.srv.Hub, env.ID, workers[0].id) && connectedNow(r.srv.Hub, env.ID, workers[1].id)
+	})
 	eventually(t, "the workers to be probed", func() bool {
 		e = r.health(t, env.ID)
 		return e.Status.State == StateOnline
