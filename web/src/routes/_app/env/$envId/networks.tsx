@@ -7,7 +7,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type NetworkRow, networksQuery } from "@/api/resources";
 import { NoPermission } from "@/components/full-page-state";
 import { RelativeTime } from "@/components/relative-time";
+import { NodesBanner } from "@/features/environments/nodes-banner";
 import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
+import { nodeSearchSchema, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -18,7 +20,11 @@ function Networks() {
   const key = "dashboard.lists.networks";
   useDocumentTitle(t(`${key}.title`));
   const allowed = usePermission("networks.read", envId);
-  const query = useQuery({ ...networksQuery(envId), enabled: allowed });
+  const { node } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const swarm = useEnvIsSwarm(envId);
+  const nodeColumn = useNodeColumn<NetworkRow>();
+  const query = useQuery({ ...networksQuery(envId, swarm ? node : undefined), enabled: allowed });
   const envName = useEnvName(envId);
   const missing = t("dashboard.time.missing");
 
@@ -64,11 +70,22 @@ function Networks() {
       columns={columns}
       query={query}
       envName={envName}
+      nodeColumn={swarm ? nodeColumn : undefined}
+      nodeFilter={
+        swarm
+          ? {
+              value: node,
+              onChange: (n) => void navigate({ search: { node: n }, replace: true }),
+            }
+          : undefined
+      }
+      banner={swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : undefined}
       getRowKey={(n) => n.id}
     />
   );
 }
 
 export const Route = createFileRoute("/_app/env/$envId/networks")({
+  validateSearch: nodeSearchSchema,
   component: Networks,
 });

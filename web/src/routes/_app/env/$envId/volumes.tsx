@@ -7,7 +7,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type VolumeRow, volumesQuery } from "@/api/resources";
 import { NoPermission } from "@/components/full-page-state";
 import { RelativeTime } from "@/components/relative-time";
+import { NodesBanner } from "@/features/environments/nodes-banner";
 import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
+import { nodeSearchSchema, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -18,7 +20,11 @@ function Volumes() {
   const key = "dashboard.lists.volumes";
   useDocumentTitle(t(`${key}.title`));
   const allowed = usePermission("volumes.read", envId);
-  const query = useQuery({ ...volumesQuery(envId), enabled: allowed });
+  const { node } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const swarm = useEnvIsSwarm(envId);
+  const nodeColumn = useNodeColumn<VolumeRow>();
+  const query = useQuery({ ...volumesQuery(envId, swarm ? node : undefined), enabled: allowed });
   const envName = useEnvName(envId);
   const missing = t("dashboard.time.missing");
 
@@ -47,11 +53,22 @@ function Volumes() {
       columns={columns}
       query={query}
       envName={envName}
+      nodeColumn={swarm ? nodeColumn : undefined}
+      nodeFilter={
+        swarm
+          ? {
+              value: node,
+              onChange: (n) => void navigate({ search: { node: n }, replace: true }),
+            }
+          : undefined
+      }
+      banner={swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : undefined}
       getRowKey={(v) => v.name}
     />
   );
 }
 
 export const Route = createFileRoute("/_app/env/$envId/volumes")({
+  validateSearch: nodeSearchSchema,
   component: Volumes,
 });

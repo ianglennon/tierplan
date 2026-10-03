@@ -1,0 +1,33 @@
+{
+  "aggregate": {
+    "banner": {
+      "text_one": "{{count}} node isn't reporting: {{names}}. The totals below leave it out.",
+      "text_other": "{{count}} nodes aren't reporting: {{names}}. The totals below leave them out.",
+      "names": "{{list}} and {{count}} more"
+    },
+    "filter": {
+      "label": "Node",
+      "all": "All nodes"
+    },
+    "caption": {
+      "across_one": "across {{count}} node",
+      "across_other": "across {{count}} nodes",
+      "on": "on {{node}}"
+    },
+    "tiles": {
+      "noManager": "No manager connected",
+      "noQuorum": "The managers have no quorum",
+      "breakdownLine": "{{node}}: {{count, number}}",
+      "breakdownMore_one": "and {{count}} more node",
+      "breakdownMore_other": "and {{count}} more nodes"
+    },
+    "header": {
+      "nodesReady": "{{ready}} of {{total}} nodes ready"
+    },
+    "engine": {
+      "agents": "Agents",
+      "agentsValue": "{{connected}} of {{expected}} connected",
+      "agentVersion": "Agent version"
+    }
+  }
+}

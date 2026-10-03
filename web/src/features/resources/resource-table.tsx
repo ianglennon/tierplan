@@ -2,10 +2,20 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import type { ReactNode } from "react";
+import { useId } from "react";
 
+import { CLUSTER_NODE } from "@/api/resources";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -90,6 +100,49 @@ export function TruncatedText({ children, mono, className }: TruncatedTextProps)
   );
 }
 
+// The Select cannot hold an empty value, and a node name is whatever an agent
+// reported, so every node is prefixed and "all nodes" is the one value without
+// the prefix: no name can collide with it.
+const ALL_NODES = "all";
+const NODE_PREFIX = "node:";
+
+interface NodeSelectProps extends NodeFilter {
+  // The nodes that reported, from the list answer.
+  nodes: readonly string[];
+}
+
+// NodeSelect is the Node filter above a swarm list: "All nodes" then each
+// hostname. The node in the URL stays selectable even when the server no longer
+// lists it (it stopped reporting), so the select never shows a blank.
+function NodeSelect({ value, onChange, nodes }: NodeSelectProps) {
+  const t = useT();
+  const id = useId();
+  const names = value && !nodes.includes(value) ? [...nodes, value] : nodes;
+  return (
+    <div className="flex items-center gap-2">
+      <Label htmlFor={id} className="text-sm text-muted-foreground">
+        {t("aggregate.filter.label")}
+      </Label>
+      <Select
+        value={value === undefined ? ALL_NODES : `${NODE_PREFIX}${value}`}
+        onValueChange={(v) => onChange(v === ALL_NODES ? undefined : v.slice(NODE_PREFIX.length))}
+      >
+        <SelectTrigger id={id} size="sm" className="min-w-40 max-w-64 max-md:h-11">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent position="popper" align="start" className="max-h-72">
+          <SelectItem value={ALL_NODES}>{t("aggregate.filter.all")}</SelectItem>
+          {names.map((n) => (
+            <SelectItem key={n} value={`${NODE_PREFIX}${n}`}>
+              {n}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 // ResourceTable is the read-only list behind a dashboard tile (D-56): a title
 // with a plural-aware count, a dense table with a sticky header, and every
 // state of the UI-SPEC: loading skeletons, empty, an inline error with Retry,
@@ -101,6 +154,9 @@ export function ResourceTable<T>({
   query,
   envName,
   getRowKey,
+  nodeColumn,
+  nodeFilter,
+  banner,
 }: ResourceTableProps<T>) {
   const t = useT();
   const key = `dashboard.lists.${resource}`;
@@ -110,16 +166,35 @@ export function ResourceTable<T>({
   const loading = query.isPending;
   const empty = !loading && !failed && rows.length === 0;
 
+  // The Node column goes right after the first one (Name).
+  const shownColumns = nodeColumn
+    ? [...columns.slice(0, 1), nodeColumn, ...columns.slice(1)]
+    : columns;
+  const nodes = data?.nodes ?? [];
+  // The swarm-wide Cluster entry is in the filter but is not a node.
+  const nodeCount = nodes.filter((n) => n !== CLUSTER_NODE).length;
+  const count = t(`${key}.count`, { count: data?.total ?? 0 });
+  let caption = count;
+  if (nodeColumn && nodeFilter?.value !== undefined) {
+    caption = `${count} ${t("aggregate.caption.on", { node: nodeFilter.value })}`;
+  } else if (nodeColumn && nodeCount > 0) {
+    caption = `${count} ${t("aggregate.caption.across", { count: nodeCount })}`;
+  }
+  // "Nothing to show on {name} right now." names the node while one is chosen.
+  const emptyName = nodeFilter?.value ?? envName;
+
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
       <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h1 className="text-2xl font-semibold">{t(`${key}.title`)}</h1>
         {data ? (
-          <span className="text-sm text-muted-foreground tabular-nums">
-            {t(`${key}.count`, { count: data.total })}
-          </span>
+          <span className="text-sm text-muted-foreground tabular-nums">{caption}</span>
         ) : null}
       </header>
+
+      {banner}
+
+      {nodeFilter ? <NodeSelect {...nodeFilter} nodes={nodes} /> : null}
 
       {failed ? (
         <Alert variant="destructive">
@@ -145,7 +220,9 @@ export function ResourceTable<T>({
             <EmptyTitle role="heading" aria-level={2} className="text-base">
               {t(`${key}.empty`)}
             </EmptyTitle>
-            <EmptyDescription>{t("dashboard.lists.emptyBody", { name: envName })}</EmptyDescription>
+            <EmptyDescription>
+              {t("dashboard.lists.emptyBody", { name: emptyName })}
+            </EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : null}
@@ -162,7 +239,7 @@ export function ResourceTable<T>({
           >
             <TableHeader>
               <TableRow className={cn(ROW, "hover:bg-transparent")}>
-                {columns.map((c) => (
+                {shownColumns.map((c) => (
                   <TableHead
                     key={c.id}
                     className={cn(
@@ -181,7 +258,7 @@ export function ResourceTable<T>({
                     // Placeholder rows have no identity of their own.
                     // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton rows
                     <TableRow key={i} className={ROW}>
-                      {columns.map((c) => (
+                      {shownColumns.map((c) => (
                         <TableCell key={c.id} className={cn(CELL, c.className)}>
                           <Skeleton className="h-4 w-24" aria-hidden="true" />
                         </TableCell>
@@ -190,7 +267,7 @@ export function ResourceTable<T>({
                   ))
                 : rows.map((row) => (
                     <TableRow key={getRowKey(row)} className={ROW}>
-                      {columns.map((c) => (
+                      {shownColumns.map((c) => (
                         <TableCell key={c.id} className={cn(CELL, c.className)}>
                           {c.cell(row)}
                         </TableCell>
