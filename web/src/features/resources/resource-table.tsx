@@ -27,7 +27,14 @@ export interface Column<T> {
 // The part of a React Query result the table reads, so it is not tied to one
 // query hook and a test can hand it plain values.
 export interface ListQuery<T> {
-  data?: { items: T[] | null; total: number; truncated: boolean };
+  data?: {
+    items: T[] | null;
+    total: number;
+    truncated: boolean;
+    // On a swarm: the nodes that reported, and the ones that should have.
+    nodes?: string[] | null;
+    notReporting?: string[] | null;
+  };
   isPending: boolean;
   isError: boolean;
   isFetching: boolean;
@@ -41,6 +48,18 @@ interface ResourceTableProps<T> {
   // The environment's name, for "Nothing to show on {name} right now."
   envName: string;
   getRowKey: (row: T) => string;
+  // Swarm lists: the Node column goes after the first column, and the Node
+  // select filters by it. Both are left out for a standalone host.
+  nodeColumn?: Column<T>;
+  nodeFilter?: NodeFilter;
+  // Shown under the title, above the filter: the "not reporting" banner.
+  banner?: ReactNode;
+}
+
+export interface NodeFilter {
+  // The node in the URL, or undefined for all nodes.
+  value?: string;
+  onChange: (node: string | undefined) => void;
 }
 
 // How many skeleton rows keep the layout stable while loading (UI-SPEC).

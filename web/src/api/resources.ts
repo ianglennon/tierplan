@@ -22,7 +22,7 @@ export function listKey(envId: string, resource: "containers" | "images" | "volu
   return ["env", envId, resource] as const;
 }
 
-export function containersQuery(envId: string) {
+export function containersQuery(envId: string, _node?: string) {
   return queryOptions({
     queryKey: listKey(envId, "containers"),
     queryFn: async () => {
@@ -36,7 +36,7 @@ export function containersQuery(envId: string) {
   });
 }
 
-export function imagesQuery(envId: string) {
+export function imagesQuery(envId: string, _node?: string) {
   return queryOptions({
     queryKey: listKey(envId, "images"),
     queryFn: async () => {
@@ -48,7 +48,7 @@ export function imagesQuery(envId: string) {
   });
 }
 
-export function volumesQuery(envId: string) {
+export function volumesQuery(envId: string, _node?: string) {
   return queryOptions({
     queryKey: listKey(envId, "volumes"),
     queryFn: async () => {
@@ -60,7 +60,7 @@ export function volumesQuery(envId: string) {
   });
 }
 
-export function networksQuery(envId: string) {
+export function networksQuery(envId: string, _node?: string) {
   return queryOptions({
     queryKey: listKey(envId, "networks"),
     queryFn: async () => {
