@@ -35,6 +35,7 @@ type tunRig struct {
 	evs   *Hub
 	svc   *Service
 	agg   *Aggregator
+	brk   *Broker
 	clk   *tunneltest.Clock
 	start time.Time
 }
@@ -62,14 +63,16 @@ func newTunRig(t *testing.T, local *dockertest.Fake) *tunRig {
 	evs := NewHub(mon, snaps, log, clk.Now)
 	r := &tunRig{st: st, mon: mon, snaps: snaps, evs: evs, svc: svc, clk: clk, start: clk.Now()}
 	r.agg = NewAggregator(svc, snaps, evs, clk.Now)
+	r.brk = NewBroker(svc, clk.Now)
 	// Registered after Start's own cleanup would be wrong: these must run first, so
 	// they are registered before the server.
 	t.Cleanup(func() {
+		r.brk.Close()
 		evs.Close()
 		mon.StopAll()
 	})
 	r.srv = tunneltest.Start(t, tunneltest.Options{
-		Clock: clk, Store: st, Observer: svc,
+		Clock: clk, Store: st, Observer: svc, Notifier: r.brk,
 		Configure: func(h *tunnel.Hub) *tunnel.Hub {
 			return h.WithTiming(10*time.Second, 30*time.Second).WithWatchInterval(5 * time.Millisecond)
 		},

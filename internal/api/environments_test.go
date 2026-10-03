@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -765,13 +766,18 @@ func newAgentFix(t *testing.T) *agentFix {
 	f.hub = envs.NewHub(mon, f.snaps, log, tclk.Now)
 	t.Cleanup(f.hub.Close)
 	f.agg = envs.NewAggregator(svc, f.snaps, f.hub, tclk.Now)
+	f.brk = envs.NewBroker(svc, tclk.Now)
+	t.Cleanup(f.brk.Close)
 	srv := tunneltest.Start(t, tunneltest.Options{
-		Clock: tclk, Store: f.st, Observer: svc,
+		Clock: tclk, Store: f.st, Observer: svc, Notifier: f.brk,
 		Configure: func(h *tunnel.Hub) *tunnel.Hub {
 			return h.WithTiming(10*time.Second, 30*time.Second).WithWatchInterval(5 * time.Millisecond)
 		},
 	})
 	svc.WithAgents(srv.Hub)
+	ctx, stopBroker := context.WithCancel(context.Background())
+	t.Cleanup(stopBroker)
+	go f.brk.Run(ctx)
 	f.h = f.build(t)
 	cookie, csrf := f.signIn(t, "admin", false)
 	// The reconnect grace is long over, so a missing agent is offline, not reconnecting.

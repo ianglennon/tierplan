@@ -93,6 +93,9 @@ type Options struct {
 	// told, in the same order. Events still records them, so a test can wait on
 	// Events.WaitLen to know the Observer has run.
 	Observer tunnel.Observer
+	// Notifier is told what the hub's Notifier is told: connections, disconnections
+	// and refused handshakes.
+	Notifier tunnel.Notifier
 }
 
 // Server is a running in-process Bayplan tunnel endpoint.
@@ -222,6 +225,9 @@ func Start(t *testing.T, opts Options) *Server {
 	ts := httptest.NewUnstartedServer(nil)
 	addr := ts.Listener.Addr().String()
 	hub := tunnel.NewHub(svc, rec, log, clock.Now).WithPublicURL(func() string { return "https://" + addr }).WithLastSeen(svc)
+	if opts.Notifier != nil {
+		hub = hub.WithNotifier(opts.Notifier)
+	}
 	if opts.AuditRefusals {
 		hub = hub.WithRefusalAudit(aud)
 	}

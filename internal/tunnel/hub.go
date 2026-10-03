@@ -148,6 +148,20 @@ type Observer interface {
 	Disconnected(s *Session, code string)
 }
 
+// Notifier is told what happens to the agents of every environment, so the health
+// stream can publish it (D-36). Unlike an Observer it is only told, never relied
+// on: it must return at once, and it may not call back into the hub.
+type Notifier interface {
+	// AgentConnected runs once a session is registered and ready.
+	AgentConnected(*Session)
+	// AgentDisconnected runs once a session has ended, with the D-40 reason code.
+	AgentDisconnected(s *Session, code string)
+	// AgentRefused runs when a handshake was turned away. envID is the environment
+	// the attempt named in its join token or certificate, which the attempt chose
+	// itself: it is a place to route the event to, never evidence of anything.
+	AgentRefused(envID, code, mode, node, ip string)
+}
+
 // Session is one live agent connection.
 type Session struct {
 	AgentID, EnvID string
@@ -230,10 +244,11 @@ func (s *Session) closeNow() {
 
 // Hub holds the live sessions by agent ID and serves /agent/connect.
 type Hub struct {
-	v   Verifier
-	o   Observer
-	log *slog.Logger
-	now func() time.Time
+	v        Verifier
+	o        Observer
+	notifier Notifier
+	log      *slog.Logger
+	now      func() time.Time
 
 	publicURL func() string
 	// pins is what the welcome tells agents are the server's pins (D-06).
@@ -298,6 +313,13 @@ func NewHub(v Verifier, o Observer, log *slog.Logger, now func() time.Time) *Hub
 		handshakes:  make(chan struct{}, maxHandshakes),
 		maxResponse: MaxResponseBytes,
 	}
+}
+
+// WithNotifier sets who is told of connections, disconnections and refused
+// handshakes. Call it before the hub serves.
+func (h *Hub) WithNotifier(n Notifier) *Hub {
+	h.notifier = n
+	return h
 }
 
 // WithPublicURL tells the hub the URL agents are told to dial: Bayplan's public

@@ -175,8 +175,14 @@ func (c *sseConn) bodyString() string {
 // the raw session ID; lastEventID may be empty.
 func (f *eventsFix) openStream(t *testing.T, cookie, lastEventID string) *sseConn {
 	t.Helper()
+	return openSSE(t, f.authFixture, f.streamPath(), cookie, lastEventID)
+}
+
+// openSSE is openStream for any stream route of the fixture's router.
+func openSSE(t *testing.T, f *authFixture, path, cookie, lastEventID string) *sseConn {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest(http.MethodGet, f.streamPath(), nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
 	req.Header.Set("User-Agent", authUA)
 	req.RemoteAddr = authIP + ":40000"
 	if cookie != "" {

@@ -86,6 +86,13 @@ type authFixture struct {
 	eventsMaxStreams int
 	// eventsMaxLifetime caps how long one stream may live; zero is the default.
 	eventsMaxLifetime time.Duration
+	// brk, when set with envSvc, is the health broker behind GET
+	// /api/environments/stream (plan 02-12); envStreamHeartbeat, envStreamMaxStreams
+	// and envStreamMaxLifetime tune that stream for a test.
+	brk                  *envs.Broker
+	envStreamHeartbeat   time.Duration
+	envStreamMaxStreams  int
+	envStreamMaxLifetime time.Duration
 	// auditRetention feeds GET /api/audit (plan 24).
 	auditRetention int
 	// tlsPin is the pin Bayplan's own self-signed certificate would have; empty
@@ -157,6 +164,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	}
 	if f.envSvc != nil && f.agg != nil && f.hub != nil {
 		api.RegisterEvents(r, api.EventsDeps{Aggregator: f.agg, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, MaxLifetime: f.eventsMaxLifetime, Log: log})
+	}
+	if f.envSvc != nil && f.brk != nil {
+		api.RegisterEnvStream(r, api.EnvStreamDeps{
+			Broker: f.brk, Checker: checker, Heartbeat: f.envStreamHeartbeat,
+			MaxStreamsPerUser: f.envStreamMaxStreams, MaxLifetime: f.envStreamMaxLifetime, Log: log,
+		})
 	}
 	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Log: log})
 	if err := httpx.VerifyAllGuarded(r); err != nil {
