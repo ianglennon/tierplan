@@ -36,6 +36,7 @@ import {
 } from "@/features/setup/schemas";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
+import { basePath } from "@/lib/base-path";
 import { toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
@@ -291,7 +292,9 @@ function SettingsForm({ settings }: { settings: Settings }) {
           <AlertDialogHeader>
             <AlertDialogTitle>{t("settings.general.confirm.title")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t("settings.general.confirm.body", { origin: window.location.origin })}
+              {t("settings.general.confirm.body", {
+                origin: window.location.origin + basePath(),
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

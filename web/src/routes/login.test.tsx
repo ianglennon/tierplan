@@ -31,9 +31,13 @@ let sent: Sent[] = [];
 // decides whether /api/me knows the caller, and `login` answers the sign-in.
 function stubApi(opts: {
   signedIn?: boolean;
+  // /api/me knows the caller once the sign-in call has been answered, so the
+  // guarded screen the user is sent to does not bounce them back to /login.
+  signedInAfterLogin?: boolean;
   needsSetup?: boolean;
   login?: () => Response | Promise<Response>;
 }) {
+  let loggedIn = false;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
@@ -49,9 +53,12 @@ function stubApi(opts: {
         });
       }
       if (path === "/api/me") {
-        return opts.signedIn ? Response.json(ME) : Response.json({ status: 401 }, { status: 401 });
+        return opts.signedIn || (opts.signedInAfterLogin && loggedIn)
+          ? Response.json(ME)
+          : Response.json({ status: 401 }, { status: 401 });
       }
       if (path === "/api/auth/login") {
+        loggedIn = true;
         return (
           opts.login?.() ?? Response.json({ user: ME.user, csrfToken: "csrf-1" }, { status: 200 })
         );
@@ -277,23 +284,23 @@ describe("/login under a base path", () => {
   afterEach(() => announceBase(null));
 
   it("sends the browser to the base plus next after sign-in", async () => {
-    stubApi({});
+    stubApi({ signedInAfterLogin: true });
     const router = renderAt("/bayplan/login?next=%2Fenv%2Fa%2Fcontainers", "/bayplan");
     await fill("admin", "pw");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(router.history.location.pathname).toBe("/bayplan/env/a/containers"));
-    expect(router.state.location.pathname).toBe("/env/a/containers");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/env/a/containers"));
   });
 
   it.each(["https%3A%2F%2Fevil.example%2F", "%2F%2Fevil.example", "%2F%5Cevil.example"])(
     "ignores an unsafe next (%s) and lands on the base root",
     async (next) => {
-      stubApi({});
+      stubApi({ signedInAfterLogin: true });
       const router = renderAt(`/bayplan/login?next=${next}`, "/bayplan");
       await fill("admin", "pw");
       fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
       await waitFor(() => expect(router.history.location.pathname).toMatch(/^\/bayplan\/?$/));
-      expect(router.state.location.pathname).toBe("/");
+      await waitFor(() => expect(router.state.location.pathname).toBe("/"));
       expect(router.history.location.href).not.toContain("evil");
     },
   );

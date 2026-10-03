@@ -15,6 +15,7 @@ import {
 import { api } from "@/api/client";
 import { listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
+import { apiUrl } from "@/lib/base-path";
 
 export type EventDTO = components["schemas"]["EventDTO"];
 export type EventType = EventDTO["type"];
@@ -281,7 +282,7 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
       void read(false);
       // Same origin, so the session cookie goes with it; a GET needs no CSRF token.
       try {
-        source = createSource(`/api/env/${encodeURIComponent(envId)}/events/stream`);
+        source = createSource(apiUrl(`/api/env/${encodeURIComponent(envId)}/events/stream`));
       } catch {
         // No EventSource in this runtime: poll, and never claim to be live.
         source = undefined;
