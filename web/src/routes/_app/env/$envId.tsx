@@ -26,6 +26,10 @@ import { formatClock, formatRelative } from "@/lib/format";
 // the engine answers or the tries run out. Exported so tests can shorten it.
 export const retryTiming = { polls: 4, delayMs: 600 };
 
+// How long an environment must stay open before it is recorded as last used.
+// Exported so tests can shorten it.
+export const recordRecentTiming = { delayMs: 2_000 };
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // PageTitle sets the tab title while a full-page state is showing. It is a
