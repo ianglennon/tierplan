@@ -316,6 +316,28 @@ type Install struct {
 		Command     string `json:"command"`
 		ComposeFile string `json:"composeFile"`
 	} `json:"standalone"`
+	ManualCleanup struct {
+		Swarm      string `json:"swarm"`
+		Standalone string `json:"standalone"`
+	} `json:"manualCleanup"`
+}
+
+// Rotated is the answer to POST /api/environments/{id}/token.
+type Rotated struct {
+	Install   Install `json:"install"`
+	EnvType   string  `json:"envType"`
+	HasAgents bool    `json:"hasAgents"`
+}
+
+// RotateToken makes a new join token and retires the current one.
+func (s *Server) RotateToken(id string) Rotated {
+	s.t.Helper()
+	code, body := s.Do(http.MethodPost, "/api/environments/"+id+"/token", nil)
+	var r Rotated
+	if code != http.StatusOK || json.Unmarshal(body, &r) != nil {
+		s.t.Fatalf("POST token: %d %s", code, body)
+	}
+	return r
 }
 
 // Created is an environment POST /api/environments created.
@@ -426,9 +448,11 @@ type Summary struct {
 	IsWorker     bool     `json:"isWorker"`
 	NotReporting []string `json:"notReporting"`
 	ByNode       []struct {
-		Node              string `json:"node"`
-		Containers        int    `json:"containers"`
-		ContainersRunning int    `json:"containersRunning"`
+		Node       string `json:"node"`
+		Containers int    `json:"containers"`
+		Images     int    `json:"images"`
+		Volumes    int    `json:"volumes"`
+		Networks   int    `json:"networks"`
 	} `json:"byNode"`
 }
 

@@ -6,6 +6,7 @@ package dockertest
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -274,6 +275,35 @@ func (n *Node) Client(t testing.TB) *client.Client {
 	return RawClient(t, n.Host())
 }
 
+// EngineInfo is the part of a node's /info the identity checks read.
+type EngineInfo struct {
+	// ID is the engine ID, Name the engine's hostname.
+	ID, Name string
+	// NodeID is the swarm node ID, empty outside a swarm.
+	NodeID string
+	// State is Swarm.LocalNodeState and Control Swarm.ControlAvailable.
+	State   string
+	Control bool
+	// ClusterID is Swarm.Cluster.ID, which only a manager reports.
+	ClusterID string
+}
+
+// Info reads the node's /info.
+func (n *Node) Info(ctx context.Context, t testing.TB) (EngineInfo, error) {
+	in, err := n.Client(t).Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return EngineInfo{}, fmt.Errorf("/info of %s: %w", n.Hostname, err)
+	}
+	out := EngineInfo{
+		ID: in.Info.ID, Name: in.Info.Name, NodeID: in.Info.Swarm.NodeID,
+		State: string(in.Info.Swarm.LocalNodeState), Control: in.Info.Swarm.ControlAvailable,
+	}
+	if in.Info.Swarm.Cluster != nil {
+		out.ClusterID = in.Info.Swarm.Cluster.ID
+	}
+	return out, nil
+}
+
 // Exec runs a command inside the node (as root, so `docker ...` talks to the
 // engine in the node) and returns its combined output. A non-zero exit is an
 // error that carries the output.
@@ -296,6 +326,17 @@ func (n *Node) Exec(ctx context.Context, cmd ...string) (string, error) {
 // commands are meant to be pasted.
 func (n *Node) Sh(ctx context.Context, line string) (string, error) {
 	return n.Exec(ctx, "sh", "-c", line)
+}
+
+// WriteFile puts a file in the node, for a stack file or a compose file the
+// install generates. The content travels base64-encoded inside the command, so
+// no quoting of it can go wrong; keep it small.
+func (n *Node) WriteFile(ctx context.Context, path string, content []byte) error {
+	enc := base64.StdEncoding.EncodeToString(content)
+	if _, err := n.Exec(ctx, "sh", "-c", "echo "+enc+" | base64 -d > "+path); err != nil {
+		return fmt.Errorf("write %s on %s: %w", path, n.Hostname, err)
+	}
+	return nil
 }
 
 // Logs is the dind container's own log, for a failure report.
