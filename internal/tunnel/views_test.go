@@ -4,6 +4,7 @@
 package tunnel_test
 
 import (
+	"sort"
 	"testing"
 	"time"
 
@@ -144,9 +145,10 @@ func TestViewsAreScopedToTheEnvironmentOrderedByAgentAndForgottenOnRequest(t *te
 			t.Fatalf("views not ordered by agent ID: %+v", views)
 		}
 	}
-	for _, v := range views {
-		if v.AgentID == other.Identity.AgentID || v.EnvID != one.ID {
-			t.Fatalf("view %+v belongs to another environment", v)
+	sort.Strings(ids)
+	for i, v := range views {
+		if v.AgentID == other.Identity.AgentID || v.EnvID != one.ID || v.AgentID != ids[i] {
+			t.Fatalf("view %+v is not the %d-th agent of the environment (%v)", v, i, ids)
 		}
 	}
 	if got := srv.Hub.Views("unknown"); len(got) != 0 {
