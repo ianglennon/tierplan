@@ -27,6 +27,7 @@ import { Route as AppEnvEnvIdContainersRouteImport } from './routes/_app/env/$en
 import { Route as AppEnvEnvIdImagesRouteImport } from './routes/_app/env/$envId/images'
 import { Route as AppEnvEnvIdNetworksRouteImport } from './routes/_app/env/$envId/networks'
 import { Route as AppEnvEnvIdVolumesRouteImport } from './routes/_app/env/$envId/volumes'
+import { Route as AppSettingsEnvironmentsEnvIdRouteImport } from './routes/_app/settings/environments_.$envId'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -117,6 +118,12 @@ const AppEnvEnvIdVolumesRoute = AppEnvEnvIdVolumesRouteImport.update({
   path: '/volumes',
   getParentRoute: () => AppEnvEnvIdRoute,
 } as any)
+const AppSettingsEnvironmentsEnvIdRoute =
+  AppSettingsEnvironmentsEnvIdRouteImport.update({
+    id: '/environments_/$envId',
+    path: '/environments/$envId',
+    getParentRoute: () => AppSettingsRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -135,6 +142,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
+  '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdRoute
   '/env/$envId/': typeof AppEnvEnvIdIndexRoute
 }
 export interface FileRoutesByTo {
@@ -152,6 +160,7 @@ export interface FileRoutesByTo {
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
+  '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdRoute
   '/env/$envId': typeof AppEnvEnvIdIndexRoute
 }
 export interface FileRoutesById {
@@ -173,6 +182,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/_app/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/_app/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
+  '/_app/settings/environments_/$envId': typeof AppSettingsEnvironmentsEnvIdRoute
   '/_app/env/$envId/': typeof AppEnvEnvIdIndexRoute
 }
 export interface FileRouteTypes {
@@ -194,6 +204,7 @@ export interface FileRouteTypes {
     | '/env/$envId/images'
     | '/env/$envId/networks'
     | '/env/$envId/volumes'
+    | '/settings/environments/$envId'
     | '/env/$envId/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -211,6 +222,7 @@ export interface FileRouteTypes {
     | '/env/$envId/images'
     | '/env/$envId/networks'
     | '/env/$envId/volumes'
+    | '/settings/environments/$envId'
     | '/env/$envId'
   id:
     | '__root__'
@@ -231,6 +243,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/images'
     | '/_app/env/$envId/networks'
     | '/_app/env/$envId/volumes'
+    | '/_app/settings/environments_/$envId'
     | '/_app/env/$envId/'
   fileRoutesById: FileRoutesById
 }
@@ -369,6 +382,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdVolumesRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
+    '/_app/settings/environments_/$envId': {
+      id: '/_app/settings/environments_/$envId'
+      path: '/environments/$envId'
+      fullPath: '/settings/environments/$envId'
+      preLoaderRoute: typeof AppSettingsEnvironmentsEnvIdRouteImport
+      parentRoute: typeof AppSettingsRoute
+    }
   }
 }
 
@@ -377,6 +397,7 @@ interface AppSettingsRouteChildren {
   AppSettingsEnvironmentsRoute: typeof AppSettingsEnvironmentsRoute
   AppSettingsGeneralRoute: typeof AppSettingsGeneralRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
+  AppSettingsEnvironmentsEnvIdRoute: typeof AppSettingsEnvironmentsEnvIdRoute
 }
 
 const AppSettingsRouteChildren: AppSettingsRouteChildren = {
@@ -384,6 +405,7 @@ const AppSettingsRouteChildren: AppSettingsRouteChildren = {
   AppSettingsEnvironmentsRoute: AppSettingsEnvironmentsRoute,
   AppSettingsGeneralRoute: AppSettingsGeneralRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
+  AppSettingsEnvironmentsEnvIdRoute: AppSettingsEnvironmentsEnvIdRoute,
 }
 
 const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(

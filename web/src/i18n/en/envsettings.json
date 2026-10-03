@@ -1,0 +1,126 @@
+{
+  "envsettings": {
+    "pageTitle": "{{name}}",
+    "list": {
+      "manage": "Manage",
+      "manageAria": "Manage {{name}}"
+    },
+    "breadcrumb": {
+      "label": "Breadcrumb",
+      "settings": "Settings",
+      "environments": "Environments"
+    },
+    "loading": "Loading the environment…",
+    "loadFailed": "Couldn't load the environment.",
+    "retry": "Try again",
+    "notFound": {
+      "heading": "Environment not found",
+      "body": "It doesn't exist, or it was removed.",
+      "back": "Back to environments"
+    },
+    "sections": {
+      "general": "General",
+      "connection": "Connection",
+      "nodes": "Nodes and agents",
+      "token": "Join token"
+    },
+    "general": {
+      "name": "Name",
+      "rename": "Rename",
+      "renameAria": "Rename {{name}}"
+    },
+    "connection": {
+      "health": "Health",
+      "connectsTo": "Connects to",
+      "moreIssues_one": "and {{count}} more issue",
+      "moreIssues_other": "and {{count}} more issues"
+    },
+    "token": {
+      "body": "The join token lets a host enrol into this environment. It stays valid until you rotate or disable it. Enrolled agents keep working when it changes.",
+      "lastChanged": "Last changed {{when}} by {{user}}.",
+      "show": "Show install command",
+      "disable": "Disable token",
+      "disabledBadge": "Disabled",
+      "disabledBody": "The join token is disabled. Show install command generates a new one.",
+      "loading": "Loading the join token…",
+      "loadFailed": "Couldn't load the join token.",
+      "retry": "Try again",
+      "disableConfirm": {
+        "title": "Disable the join token?",
+        "body": "No new host can enrol until you generate a new token with Show install command. Enrolled agents aren't affected.",
+        "cancel": "Cancel",
+        "confirm": "Disable token",
+        "pending": "Disabling…"
+      }
+    },
+    "nodes": {
+      "tableLabel": "Nodes and agents",
+      "loading": "Loading nodes…",
+      "loadFailed": "Couldn't load the nodes.",
+      "retry": "Try again",
+      "empty": "No agents have connected yet.",
+      "missing": "—",
+      "columns": {
+        "node": "Node",
+        "role": "Role",
+        "agent": "Agent",
+        "agentVersion": "Agent version",
+        "engine": "Engine",
+        "certificate": "Certificate",
+        "clock": "Clock",
+        "lastSeen": "Last seen",
+        "actions": "Actions"
+      },
+      "roles": {
+        "manager": "Manager",
+        "worker": "Worker",
+        "standalone": "Standalone",
+        "localSocket": "Local socket"
+      },
+      "agentState": {
+        "connected": "Connected",
+        "disconnected": "Disconnected"
+      },
+      "badges": {
+        "revoked": "Revoked",
+        "blocked": "Blocked",
+        "readOnly": "Read-only (set on host)",
+        "readOnlyTip": "BAYPLAN_AGENT_READ_ONLY is set on this host. The agent refuses every change Bayplan asks for."
+      },
+      "actionsFor": "Actions for {{node}}",
+      "revokeNode": "Revoke node",
+      "unblockNode": "Unblock node",
+      "fingerprintAria": "Certificate fingerprint of {{node}}",
+      "copyFingerprint": "Copy certificate fingerprint of {{node}}",
+      "fingerprintCopied": "Certificate fingerprint copied.",
+      "clockOff": "Clock off"
+    },
+    "cert": {
+      "expiresIn_one": "Expires in {{count}} day",
+      "expiresIn_other": "Expires in {{count}} days",
+      "expired": "Expired {{when}}",
+      "notRenewing": "Not renewing"
+    },
+    "revoke": {
+      "title": "Revoke {{node}}?",
+      "body": "{{node}} is disconnected now and its certificate is rejected for good. It can't enrol again until you unblock it. If the host itself may be compromised, also rotate the join token.",
+      "cancel": "Cancel",
+      "confirm": "Revoke node",
+      "pending": "Revoking…",
+      "done": "{{node}} was revoked.",
+      "rotate": "Rotate join token",
+      "alreadyRevoked": "That node was revoked while you were looking at it.",
+      "failed": "Couldn't revoke the node. Try again."
+    },
+    "unblock": {
+      "title": "Unblock {{node}}?",
+      "body": "{{node}} can enrol again with the join token. The agent that was revoked isn't revived, so install the agent on the host again.",
+      "cancel": "Cancel",
+      "confirm": "Unblock node",
+      "pending": "Unblocking…",
+      "done": "{{node}} was unblocked.",
+      "notBlocked": "That node was already unblocked.",
+      "failed": "Couldn't unblock the node. Try again."
+    }
+  }
+}
