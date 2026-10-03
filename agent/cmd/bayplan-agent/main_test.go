@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/agent/internal/connect"
 	"github.com/ianglennon/bayplan/agent/internal/privdrop"
@@ -161,5 +162,22 @@ func TestTheStartMarkerLandsInTheStateDirectory(t *testing.T) {
 	}
 	if err := touchState(filepath.Join(dir, "missing")); err == nil {
 		t.Fatal("touchState must not create the directory")
+	}
+}
+
+func TestTheStateDirectoryAndBackoffReachTheConnection(t *testing.T) {
+	h := &harness{}
+	d := h.deps(map[string]string{
+		"BAYPLAN_AGENT_URL":         "wss://bayplan.example/agent/connect",
+		"BAYPLAN_AGENT_JOIN_TOKEN":  secret,
+		"BAYPLAN_AGENT_STATE_DIR":   "/state",
+		"BAYPLAN_AGENT_BACKOFF_MIN": "2s",
+		"BAYPLAN_AGENT_BACKOFF_MAX": "20s",
+	}, nil)
+	if code := run(d); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
+	}
+	if h.gotConn.StateDir != "/state" || h.gotConn.BackoffMin != 2*time.Second || h.gotConn.BackoffMax != 20*time.Second {
+		t.Fatalf("connect got state %q backoff %v..%v, want /state and 2s..20s", h.gotConn.StateDir, h.gotConn.BackoffMin, h.gotConn.BackoffMax)
 	}
 }

@@ -26,6 +26,10 @@ const (
 	// owned by UID and GID 1000.
 	DefaultStateDir = "/var/lib/bayplan-agent"
 
+	// DefaultBackoffMin and DefaultBackoffMax bound the reconnect delay (D-41).
+	DefaultBackoffMin = time.Second
+	DefaultBackoffMax = time.Minute
+
 	// identityFile is written into the state directory when the agent enrols.
 	// Its presence means a join token is no longer needed.
 	identityFile = "identity.json"
@@ -60,6 +64,8 @@ type Config struct {
 //	BAYPLAN_AGENT_SOCKET           default /var/run/docker.sock
 //	BAYPLAN_AGENT_STATE_DIR        default /var/lib/bayplan-agent
 //	BAYPLAN_AGENT_DOCKER_GID       non-negative integer; overrides the socket's group
+//	BAYPLAN_AGENT_BACKOFF_MIN      first reconnect delay, default 1s
+//	BAYPLAN_AGENT_BACKOFF_MAX      longest reconnect delay, default 60s; at least the minimum
 func Load(env func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
 	cfg := Config{
 		URL:        env("BAYPLAN_AGENT_URL"),
@@ -82,6 +88,11 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 		return Config{}, err
 	}
 	cfg.DockerGID = gid
+
+	cfg.BackoffMin, cfg.BackoffMax, err = parseBackoff(env("BAYPLAN_AGENT_BACKOFF_MIN"), env("BAYPLAN_AGENT_BACKOFF_MAX"))
+	if err != nil {
+		return Config{}, err
+	}
 
 	token, err := readToken(env, readFile)
 	if err != nil {
@@ -123,6 +134,26 @@ func parseGID(raw string) (*int, error) {
 		return nil, fmt.Errorf("BAYPLAN_AGENT_DOCKER_GID must be a non-negative integer, got %q", raw)
 	}
 	return &n, nil
+}
+
+// parseBackoff reads the two reconnect bounds. Both must be positive durations
+// and the minimum may not exceed the maximum, whichever of them was defaulted.
+func parseBackoff(rawMin, rawMax string) (lo, hi time.Duration, err error) {
+	lo, hi = DefaultBackoffMin, DefaultBackoffMax
+	if rawMin != "" {
+		if lo, err = time.ParseDuration(rawMin); err != nil || lo <= 0 {
+			return 0, 0, fmt.Errorf("BAYPLAN_AGENT_BACKOFF_MIN must be a positive duration such as 1s, got %q", rawMin)
+		}
+	}
+	if rawMax != "" {
+		if hi, err = time.ParseDuration(rawMax); err != nil || hi <= 0 {
+			return 0, 0, fmt.Errorf("BAYPLAN_AGENT_BACKOFF_MAX must be a positive duration such as 60s, got %q", rawMax)
+		}
+	}
+	if lo > hi {
+		return 0, 0, fmt.Errorf("BAYPLAN_AGENT_BACKOFF_MIN (%s) must not be longer than BAYPLAN_AGENT_BACKOFF_MAX (%s)", lo, hi)
+	}
+	return lo, hi, nil
 }
 
 // readToken returns the token from the file when one is named, else from the

@@ -52,7 +52,7 @@ func TestEveryStateFileIsPrivateToTheAgentUser(t *testing.T) {
 			t.Errorf("%s has mode %v, want 0600", name, fi.Mode().Perm())
 		}
 	}
-	pem, err := os.ReadFile(filepath.Join(dir, KeyFile))
+	pem, err := os.ReadFile(filepath.Join(dir, KeyFile)) //nolint:gosec // a test reads the file it just wrote
 	if err != nil || !strings.Contains(string(pem), "BEGIN PRIVATE KEY") {
 		t.Errorf("key.pem is not a PKCS#8 PEM: %q, %v", pem, err)
 	}
@@ -150,7 +150,7 @@ func TestMarkConnectedWritesTheTimeOfTheHandshake(t *testing.T) {
 	if err := MarkConnected(dir); err != nil {
 		t.Fatalf("MarkConnected: %v", err)
 	}
-	b, err := os.ReadFile(filepath.Join(dir, ConnectedFile))
+	b, err := os.ReadFile(filepath.Join(dir, ConnectedFile)) //nolint:gosec // a test reads the file it just wrote
 	if err != nil {
 		t.Fatal(err)
 	}

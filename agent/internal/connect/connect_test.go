@@ -188,6 +188,9 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		_ = c.Close(websocket.StatusPolicyViolation, rep.refuse)
 		return
 	}
+	if a.Mode == wire.ModeEnrol && rep.cert == nil {
+		rep.cert = []byte("default-cert-der")
+	}
 	hb := rep.heartbeatMs
 	if hb == 0 {
 		hb = 40
@@ -266,6 +269,9 @@ func startAgent(t *testing.T, cfg Config, env runEnv) (cancel context.CancelFunc
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
 	}
+	if cfg.SocketPath == "" {
+		cfg.SocketPath = filepath.Join(t.TempDir(), "none.sock") // never the real Docker socket
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan error, 1)
 	go func() { ch <- runWith(ctx, cfg, env) }()
@@ -328,7 +334,7 @@ func TestFirstStartEnrolsWithTheTokenAndKeepsItsIdentityOnTheVolume(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.AgentID != "agent-7" || got.EnvID != "env-7" || string(got.Cert) != "issued-cert-der" || !bytes.Equal(got.Key.Public().(ed25519.PublicKey), a.Pub) {
+	if got.AgentID != "agent-7" || got.EnvID != "env-7" || string(got.Cert) != "issued-cert-der" || !bytes.Equal(publicOf(got.Key), a.Pub) {
 		t.Fatalf("saved state = %+v; want the welcome's IDs and certificate and the key the handshake proved", got)
 	}
 	if _, err := os.Stat(filepath.Join(dir, state.ConnectedFile)); err != nil {
@@ -348,7 +354,7 @@ func TestARestartReconnectsInHelloModeWithItsCertificateAndNoToken(t *testing.T)
 	}
 	aud, _ := authn.Audience(srv.url())
 	tr := authn.Transcript(wire.ModeHello, wire.ProtoVersion, serverNonce, a.Nonce, aud, a.Cert, a.EKM)
-	if !authn.Verify(saved.Key.Public().(ed25519.PublicKey), tr, a.Sig) {
+	if !authn.Verify(publicOf(saved.Key), tr, a.Sig) {
 		t.Fatal("the hello signature does not verify under the saved key over the transcript with the certificate")
 	}
 	if a.Facts.EngineReachable {

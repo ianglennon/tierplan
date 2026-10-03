@@ -37,8 +37,8 @@ const (
 // socket. A stream that starts with any other byte is closed by the agent.
 const StreamKindDockerHTTP byte = 0x01
 
-// StreamKindControl is the first byte of the one stream the agent opens after
-// the welcome. It carries newline-delimited JSON, an agent message per line
+// The control stream is the one stream the agent opens after the welcome; this is
+// its first byte. It carries newline-delimited JSON, an agent message per line
 // (heartbeats), and the server may write lines back. Each side ignores a line
 // whose type it does not know, so later plans add messages without a protocol
 // change.

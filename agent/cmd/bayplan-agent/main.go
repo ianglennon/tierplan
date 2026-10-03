@@ -90,6 +90,7 @@ func run(d deps) int {
 
 	err = d.connect(ctx, connect.Config{
 		URL: cfg.URL, JoinToken: cfg.JoinToken, SocketPath: cfg.SocketPath, Version: version.Version, Log: log,
+		StateDir: cfg.StateDir, BackoffMin: cfg.BackoffMin, BackoffMax: cfg.BackoffMax,
 	})
 	if err == nil {
 		return 0
@@ -100,7 +101,9 @@ func run(d deps) int {
 	} else {
 		log.Error("the agent stopped", "error", err)
 	}
-	// A supervisor (the restart policy or the swarm) starts it again.
+	// Only a configuration the agent cannot work with ends it: a refusal or a
+	// dropped connection is retried inside connect.Run. A supervisor (the restart
+	// policy or the swarm) starts it again.
 	return 1
 }
 
