@@ -118,8 +118,8 @@ type FakeConfig struct {
 	// ServiceRows are the services /services lists, in place of the Services count.
 	// With ?status=true each carries its ServiceStatus.
 	ServiceRows []FakeService
-	// AgentTasks are the tasks of the service named bayplan-agent, listed by /tasks
-	// when it is filtered by that service name.
+	// AgentTasks are the tasks /tasks lists. A task is listed when the request's
+	// service filter names its service, by ID or by name, as a real daemon matches.
 	AgentTasks []FakeAgentTask
 	// QuorumLost makes /nodes, /services, /tasks and /swarm answer the 500 a
 	// manager gives when the swarm has no leader. Node-local calls keep working,
@@ -157,11 +157,18 @@ type FakeService struct {
 	Desired     uint64
 	UpdateState string
 	UpdatedAt   time.Time
+	// Labels are the service's own labels (the --label of docker service create,
+	// the deploy.labels of a stack file).
+	Labels map[string]string
 }
 
-// FakeAgentTask is one task of the bayplan-agent service.
+// FakeAgentTask is one task of a service in ServiceRows, an agent's when that
+// service is one.
 type FakeAgentTask struct {
 	NodeID, State, Error string
+	// Service is the ID or name of the service the task belongs to. Empty means the
+	// service named bayplan-agent.
+	Service string
 	// ID and Created order the tasks of one node: the newest is the current one.
 	ID      string
 	Created time.Time
@@ -959,6 +966,7 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 	for _, fs := range c.ServiceRows {
 		s := swarm.Service{ID: fs.ID}
 		s.Spec.Name = fs.Name
+		s.Spec.Labels = fs.Labels
 		s.UpdatedAt = fs.UpdatedAt
 		switch fs.Mode {
 		case "global":
@@ -981,16 +989,27 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 	return out
 }
 
-// taskList is the /tasks answer. The agent tasks are listed only when the filter
-// names the bayplan-agent service, as a real daemon lists only what matches.
+// taskList is the /tasks answer. A task is listed only when the filter names its
+// service, by ID or by name, as a real daemon lists only what matches.
 func (c FakeConfig) taskList(rawFilters string) []swarm.Task {
 	out := []swarm.Task{}
 	var f map[string]map[string]bool
-	if json.Unmarshal([]byte(rawFilters), &f) != nil || !f["service"]["bayplan-agent"] {
+	if json.Unmarshal([]byte(rawFilters), &f) != nil {
 		return out
 	}
+	alias := map[string]string{} // service ID <-> name
+	for _, fs := range c.ServiceRows {
+		alias[fs.ID], alias[fs.Name] = fs.Name, fs.ID
+	}
 	for _, ft := range c.AgentTasks {
-		t := swarm.Task{ID: ft.ID, NodeID: ft.NodeID, ServiceID: "svc-agent"}
+		svc := ft.Service
+		if svc == "" {
+			svc = "bayplan-agent"
+		}
+		if !f["service"][svc] && !f["service"][alias[svc]] {
+			continue
+		}
+		t := swarm.Task{ID: ft.ID, NodeID: ft.NodeID, ServiceID: svc}
 		t.CreatedAt = ft.Created
 		t.Status = swarm.TaskStatus{State: swarm.TaskState(ft.State), Err: ft.Error}
 		out = append(out, t)

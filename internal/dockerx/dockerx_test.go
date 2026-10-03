@@ -1000,7 +1000,7 @@ func clusterManager() dockertest.FakeConfig {
 		},
 		ServiceRows: []dockertest.FakeService{
 			{ID: "s2", Name: "web", Mode: "replicated", Running: 2, Desired: 3, UpdateState: "completed", UpdatedAt: old},
-			{ID: "s1", Name: "agent", Mode: "global", Running: 4, Desired: 4},
+			{ID: "s1", Name: "bayplan-agent", Mode: "global", Running: 4, Desired: 4},
 			{ID: "s3", Name: "backup", Mode: "replicated-job", Running: 0, Desired: 1},
 		},
 		AgentTasks: []dockertest.FakeAgentTask{
@@ -1059,8 +1059,8 @@ func TestClusterReadsNodesServicesAndTheAgentTasksFromAManager(t *testing.T) {
 	if s := svc["web"]; s.Running != 2 || s.Desired != 3 || s.Mode != "replicated" || s.UpdateState != "completed" || !s.UpdatedAt.Equal(time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)) || s.UpdatedAt.Location() != time.UTC {
 		t.Errorf("web = %+v, want 2 of 3 replicated, completed, updated at 09:00 UTC", s)
 	}
-	if s := svc["agent"]; s.Mode != "global" || s.Running != 4 || s.Desired != 4 || s.UpdateState != "" {
-		t.Errorf("agent = %+v", s)
+	if s := svc["bayplan-agent"]; s.Mode != "global" || s.Running != 4 || s.Desired != 4 || s.UpdateState != "" {
+		t.Errorf("bayplan-agent = %+v", s)
 	}
 	if s := svc["backup"]; s.Mode != "replicated-job" {
 		t.Errorf("backup = %+v, want mode replicated-job", s)
@@ -1207,5 +1207,90 @@ func TestSnapshotStillFailsOnAnyOtherClusterError(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{SwarmState: "active", SwarmControl: false})
 	if _, err := newClient(t, fake).Snapshot(context.Background(), true); err == nil {
 		t.Fatal("a worker answered a manager's snapshot without an error")
+	}
+}
+
+// The agent service is found by its label, not only by the name the install
+// command gives it: a stack file deployed as `docker stack deploy ... <stack>`
+// names it <stack>_bayplan-agent, and the stack name is the user's.
+
+func TestClusterFindsTheAgentServiceWhateverItIsNamed(t *testing.T) {
+	now := time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)
+	label := map[string]string{"bayplan.agent": "true"}
+	cases := []struct {
+		name     string
+		services []dockertest.FakeService
+		wantNode string // the one node whose agent task must be reported, "" for none
+	}{
+		{"stack file install, named by the stack", []dockertest.FakeService{
+			{ID: "sa", Name: "bayplan_bayplan-agent", Mode: "global", Labels: label},
+			{ID: "sw", Name: "web"},
+		}, "n1"},
+		{"stack file install under another stack name", []dockertest.FakeService{
+			{ID: "sa", Name: "monitoring_bayplan-agent", Mode: "global", Labels: label},
+		}, "n1"},
+		{"command install carrying the label", []dockertest.FakeService{
+			{ID: "sa", Name: "bayplan-agent", Mode: "global", Labels: label},
+		}, "n1"},
+		{"command install from before the label", []dockertest.FakeService{
+			{ID: "sa", Name: "bayplan-agent", Mode: "global"},
+		}, "n1"},
+		{"a service that merely looks like the agent", []dockertest.FakeService{
+			{ID: "sa", Name: "my-bayplan-agent-fork", Mode: "global"},
+			{ID: "sw", Name: "web", Labels: map[string]string{"bayplan.agent": "false"}},
+		}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := dockertest.FakeConfig{
+				SwarmState: "active", SwarmControl: true,
+				NodeRows:    []dockertest.FakeNode{{ID: "n1", Hostname: "mgr", Role: "manager", Leader: true}},
+				ServiceRows: c.services,
+				AgentTasks: []dockertest.FakeAgentTask{
+					// The task is the agent's when its service is the first row, and is
+					// the unrelated service's in the last case.
+					{ID: "t1", NodeID: "n1", State: "running", Created: now, Service: c.services[0].ID},
+				},
+			}
+			if len(c.services) > 0 && c.services[0].Name == "bayplan-agent" {
+				cfg.AgentTasks[0].Service = "" // the install command's own default
+			}
+			got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
+			if err != nil {
+				t.Fatalf("Cluster: %v", err)
+			}
+			if c.wantNode == "" {
+				if len(got.AgentTasks) != 0 {
+					t.Errorf("agent tasks = %+v, want none: no service here is the agent", got.AgentTasks)
+				}
+				return
+			}
+			if len(got.AgentTasks) != 1 || got.AgentTasks[0].NodeID != c.wantNode || got.AgentTasks[0].State != "running" {
+				t.Errorf("agent tasks = %+v, want %s running", got.AgentTasks, c.wantNode)
+			}
+		})
+	}
+}
+
+func TestClusterDoesNotReportAnotherServicesTasksAsTheAgents(t *testing.T) {
+	now := time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)
+	cfg := dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		NodeRows: []dockertest.FakeNode{{ID: "n1", Hostname: "a", Role: "manager", Leader: true}, {ID: "n2", Hostname: "b"}},
+		ServiceRows: []dockertest.FakeService{
+			{ID: "sa", Name: "bayplan_bayplan-agent", Mode: "global", Labels: map[string]string{"bayplan.agent": "true"}},
+			{ID: "sw", Name: "web"},
+		},
+		AgentTasks: []dockertest.FakeAgentTask{
+			{ID: "t1", NodeID: "n1", State: "running", Created: now, Service: "sa"},
+			{ID: "t2", NodeID: "n2", State: "failed", Created: now, Service: "sw"},
+		},
+	}
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
+	if err != nil {
+		t.Fatalf("Cluster: %v", err)
+	}
+	if len(got.AgentTasks) != 1 || got.AgentTasks[0].NodeID != "n1" {
+		t.Errorf("agent tasks = %+v, want only n1's", got.AgentTasks)
 	}
 }
