@@ -1172,9 +1172,26 @@ func TestOverviewOfASwarmCountsNodesAndAgentsSeparatelyAndTakesTheOldestAgentVer
 	}
 }
 
+// awaitFirstProbe blocks until the monitor of a just-added local environment has
+// finished its first probe. Adding starts the monitor's loop in the background and
+// the list reads the monitor's status without waiting: an engine nobody has asked
+// yet is "not known" (an empty envType, no nodes, no engine version), by design.
+// A test that reads the overview straight after adding would race that probe, so
+// it waits on the monitor's own first-probe signal rather than on a clock.
+func (f *envFix) awaitFirstProbe(t *testing.T, id string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	f.mon.AwaitProbe(ctx, id)
+	if st := f.mon.Status(id); st.State == envs.StateUnknown {
+		t.Fatalf("the monitor of %s has no first probe result: %v", id, ctx.Err())
+	}
+}
+
 func TestOverviewOfTheLocalEnvironmentIsTheLocalSocketWithOneNodeAndNoAgent(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
 	e := f.add(t)
+	f.awaitFirstProbe(t, e.ID)
 	o := overviewOf(t, f, e.ID)
 	if !o.IsLocalSocket || o.EnvType == nil || *o.EnvType != "standalone" {
 		t.Fatalf("overview = %+v, want the local socket of a standalone engine", o)
@@ -1191,6 +1208,7 @@ func TestOverviewOfTheLocalEnvironmentIsTheLocalSocketWithOneNodeAndNoAgent(t *t
 func TestOverviewOfALocalSwarmManagerDoesNotGuessItsNodeCount(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1", SwarmState: "active", SwarmControl: true})
 	e := f.add(t)
+	f.awaitFirstProbe(t, e.ID)
 	o := overviewOf(t, f, e.ID)
 	if o.EnvType == nil || *o.EnvType != "swarm" || !o.IsLocalSocket {
 		t.Fatalf("overview = %+v, want the local socket of a swarm", o)
