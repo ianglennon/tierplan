@@ -775,6 +775,7 @@ func newAgentFix(t *testing.T) *agentFix {
 		},
 	})
 	svc.WithAgents(srv.Hub)
+	f.agentSvc, f.liveAgents = srv.Svc, srv.Hub
 	ctx, stopBroker := context.WithCancel(context.Background())
 	t.Cleanup(stopBroker)
 	go f.brk.Run(ctx)

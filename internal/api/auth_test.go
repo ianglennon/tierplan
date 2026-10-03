@@ -98,6 +98,12 @@ type authFixture struct {
 	// tlsPin is the pin Bayplan's own self-signed certificate would have; empty
 	// means it serves none (plan 02-09).
 	tlsPin string
+	// agentSvc and liveAgents, when set, replace the agents service the agent routes
+	// use and say which tunnel hub the node list reads live state from (plan 02-15).
+	// A test with a real hub sets them to the tunneltest server's, so a revoke closes
+	// a real session.
+	agentSvc   *agents.Service
+	liveAgents api.AgentSessions
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -156,8 +162,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,
 		TLSPin: func() string { return f.tlsPin }, Checker: checker, Log: log,
 	})
+	agentSvc := f.agentSvc
+	if agentSvc == nil {
+		agentSvc = agents.NewService(f.st, f.v, f.aud, f.clk.now)
+	}
 	api.RegisterAgents(r, api.AgentsDeps{
-		Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst, TLSPin: func() string { return f.tlsPin }, Log: log,
+		Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin }, Log: log,
 	})
 	if f.envSvc != nil && f.agg != nil {
 		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
