@@ -16,7 +16,8 @@ import (
 
 // Handler serves files from site, falls back to index.html for any other path
 // (client-side routes), and never invents a file under /assets/.
-func Handler(site fs.FS) http.Handler {
+func Handler(site fs.FS, base func() string) http.Handler {
+	_ = base
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")

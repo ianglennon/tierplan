@@ -26,7 +26,7 @@ const indexHTML = `<!doctype html><div id="root"></div>`
 func newRouter(t *testing.T) *httpx.Router {
 	t.Helper()
 	site := fstest.MapFS{"index.html": {Data: []byte(indexHTML)}}
-	r := httpx.New(httpx.Options{Fallback: webui.Handler(site)})
+	r := httpx.New(httpx.Options{Fallback: webui.Handler(site, nil)})
 	api.RegisterSystem(r, api.SystemDeps{})
 	return r
 }

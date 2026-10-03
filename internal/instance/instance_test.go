@@ -149,3 +149,32 @@ func TestStoredURLIsUsedWhenTheEnvironmentIsUnset(t *testing.T) {
 		t.Fatalf("locked=%v url=%q origin=%q", again.Locked(), again.PublicURL(), again.PublicOrigin())
 	}
 }
+
+func TestBasePathIsThePathOfThePublicURL(t *testing.T) {
+	cases := []struct{ url, want string }{
+		{"", ""},
+		{"https://example.com", ""},
+		{"https://example.com/bayplan", "/bayplan"},
+		{"https://example.com/tools/bayplan", "/tools/bayplan"},
+		{"http://localhost:8080", ""},
+		{"https://example.com/a%20b", "/a%20b"},
+	}
+	for _, tc := range cases {
+		i, _ := load(t, config.Config{PublicURL: tc.url})
+		if got := i.BasePath(); got != tc.want {
+			t.Errorf("BasePath for %q = %q, want %q", tc.url, got, tc.want)
+		}
+	}
+}
+
+func TestBasePathFollowsApply(t *testing.T) {
+	i, _ := load(t, config.Config{})
+	i.Apply("x", "https://example.com/bayplan")
+	if got := i.BasePath(); got != "/bayplan" {
+		t.Fatalf("after Apply, BasePath = %q", got)
+	}
+	i.Apply("x", "")
+	if got := i.BasePath(); got != "" {
+		t.Fatalf("after clearing the URL, BasePath = %q", got)
+	}
+}

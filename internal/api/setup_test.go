@@ -94,7 +94,7 @@ func newSetupFixtureThrottled(t *testing.T, cfg config.Config, wrap func(*audit.
 
 	clk := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	site := fstest.MapFS{"index.html": {Data: []byte(indexHTML)}}
-	spa := webui.Handler(site)
+	spa := webui.Handler(site, nil)
 	r := httpx.New(httpx.Options{Fallback: spa, Auditor: aud, Logger: log, PublicOrigin: inst.PublicOrigin})
 	var throttle *auth.AuditThrottle
 	var anonAudit httpx.Auditor

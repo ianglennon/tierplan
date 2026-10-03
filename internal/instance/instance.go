@@ -91,6 +91,9 @@ func (i *Instance) Secure() bool {
 	return strings.HasPrefix(i.PublicOrigin(), "https://")
 }
 
+// BasePath is a stub until the GREEN step.
+func (i *Instance) BasePath() string { return "" }
+
 // Locked reports whether BAYPLAN_PUBLIC_URL fixes the public URL.
 func (i *Instance) Locked() bool { return i.locked }
 

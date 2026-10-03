@@ -295,7 +295,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	agentSvc := agents.NewService(st, vlt, aud, nil)
 	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).WithPublicURL(inst.PublicURL)
 
-	spa := webui.Handler(web.FS())
+	spa := webui.Handler(web.FS(), inst.BasePath)
 	router := NewRouter(httpx.Options{
 		Fallback:       spa,
 		Checker:        checker,
