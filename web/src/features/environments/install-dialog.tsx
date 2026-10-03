@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { WaitingPanel } from "@/features/environments/waiting-panel";
 import { useT } from "@/i18n/use-t";
 
 // The longest name the server accepts, counted in characters.
@@ -62,6 +63,8 @@ type Step =
   | {
       kind: "install";
       install: InstallInfo;
+      envId: string;
+      envName?: string;
       envType?: EnvKind;
       hasAgents: boolean;
     };
@@ -173,6 +176,8 @@ function helperKey(kind: EnvKind, compose: boolean): string {
 
 interface InstallStepProps {
   info: InstallInfo;
+  envId: string;
+  envName?: string;
   envType?: EnvKind;
   hasAgents: boolean;
   onClose: () => void;
@@ -182,7 +187,7 @@ interface InstallStepProps {
 // and the secret notice. A new environment does not know its type yet, so
 // Swarm is first; one that has agents shows only its own type's tab, because
 // the type is locked once an agent has enrolled (D-11).
-function InstallStep({ info, envType, hasAgents, onClose }: InstallStepProps) {
+function InstallStep({ info, envId, envName, envType, hasAgents, onClose }: InstallStepProps) {
   const t = useT();
   const locked: EnvKind | undefined = hasAgents ? envType : undefined;
   const kinds: EnvKind[] = locked ? [locked] : ["swarm", "standalone"];
@@ -240,6 +245,9 @@ function InstallStep({ info, envType, hasAgents, onClose }: InstallStepProps) {
       <Alert variant="warning" role="note">
         <AlertDescription>{t("install.secretNotice")}</AlertDescription>
       </Alert>
+
+      {/* An environment that already has agents has nothing to wait for. */}
+      {hasAgents ? null : <WaitingPanel envId={envId} envName={envName} agentUrl={info.agentUrl} />}
     </div>
   );
 }
@@ -380,7 +388,13 @@ function InstallFlow({ mode, envId, onClose, onBusyChange, initialFocus }: FlowP
       const created = await create.mutateAsync(name === "" ? undefined : name);
       // The overview behind the dialog gets the new pending row.
       void queryClient.invalidateQueries({ queryKey: environmentsQuery.queryKey });
-      return { kind: "install", install: created.install, hasAgents: false };
+      return {
+        kind: "install",
+        install: created.install,
+        envId: created.id,
+        envName: created.name,
+        hasAgents: false,
+      };
     }, "create");
   }
 
@@ -391,6 +405,7 @@ function InstallFlow({ mode, envId, onClose, onBusyChange, initialFocus }: FlowP
       return {
         kind: "install",
         install: answer.install,
+        envId,
         envType: answer.envType,
         hasAgents: answer.hasAgents,
       };
@@ -456,6 +471,8 @@ function InstallFlow({ mode, envId, onClose, onBusyChange, initialFocus }: FlowP
         <>
           <InstallStep
             info={step.install}
+            envId={step.envId}
+            envName={step.envName}
             envType={step.envType}
             hasAgents={step.hasAgents}
             onClose={onClose}

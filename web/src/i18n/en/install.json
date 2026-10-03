@@ -70,6 +70,29 @@
         "link": "Settings",
         "after": ", then try again."
       }
+    },
+    "waiting": {
+      "heading": "Waiting for the first agent…",
+      "body": "This updates by itself when the agent connects.",
+      "slow": "Still waiting? Check that the host can reach {{url}}, then look at the agent's log: `docker logs bayplan-agent` (standalone) or `docker service logs bayplan-agent` (swarm).",
+      "connecting": "Agent connecting…",
+      "connected": "Connected: {{type}}, {{node}}.",
+      "type": {
+        "swarm": "Swarm",
+        "standalone": "Standalone host"
+      },
+      "kind": {
+        "swarm": "swarm",
+        "standalone": "standalone host"
+      },
+      "refusedLabel": "Refused connection attempts",
+      "refusedLead": "Refused:",
+      "refusedAt": "{{time}} from {{ip}}",
+      "more_one": "and {{count}} more attempt",
+      "more_other": "and {{count}} more attempts",
+      "online": "{{name}} is online",
+      "detected_one": "Detected a {{kind}} with {{count}} node. Opening it now…",
+      "detected_other": "Detected a {{kind}} with {{count}} nodes. Opening it now…"
     }
   }
 }

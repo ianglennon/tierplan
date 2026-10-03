@@ -15,6 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import type { InstallInfo } from "@/api/environments";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
+import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import "@/i18n";
 
@@ -108,7 +110,9 @@ async function mount(props: Props) {
   router = makeRouter(props);
   render(
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
+      <EnvHealthStreamProvider>
+        <RouterProvider router={router} />
+      </EnvHealthStreamProvider>
     </QueryClientProvider>,
   );
   await screen.findByRole("dialog");
@@ -166,6 +170,8 @@ beforeEach(() => {
       return Response.json({}, { status: 404 });
     }),
   );
+  FakeEventSource.reset();
+  vi.stubGlobal("EventSource", FakeEventSource);
   localStorage.clear();
   sessionStorage.clear();
 });
@@ -416,6 +422,62 @@ describe("InstallDialog step 2", () => {
     await createWith("edge");
     fireEvent.click(screen.getByRole("link", { name: "Change the agent URL" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("InstallDialog and the waiting panel", () => {
+  it("shows the waiting panel under the notice and follows the new environment's events", async () => {
+    await mount({ mode: "add" });
+    await createWith("edge");
+    const panel = screen.getByText("Waiting for the first agent…").closest("[role=status]");
+    if (!panel) throw new Error("the waiting panel is not a status region");
+    expect(panel.textContent).toContain("Waiting for the first agent…");
+
+    const stream = FakeEventSource.instances[0];
+    await act(async () => {
+      stream?.open();
+      stream?.sendFrame(
+        "agent.refused",
+        {
+          envId: "e9",
+          at: new Date().toISOString(),
+          code: "auth_rejected",
+          mode: "enrol",
+          node: "n",
+          ip: "203.0.113.9",
+        },
+        "1",
+      );
+    });
+    expect(
+      within(dialog()).getByText(/Refused: Bayplan rejected the agent's credentials\./),
+    ).toBeTruthy();
+    // The panel is in the dialog, not another place on the page.
+    expect(dialog().contains(panel)).toBe(true);
+  });
+
+  it("leaves the environment alone when the dialog is closed with the panel waiting", async () => {
+    await mount({ mode: "add" });
+    await createWith("edge");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(sent.filter((s) => s.method === "DELETE")).toEqual([]);
+  });
+
+  it("shows the panel for Finish setup on a pending environment", async () => {
+    await mount({ mode: "rotate", envId: "e1" });
+    fireEvent.click(screen.getByRole("button", { name: "Generate new token" }));
+    await screen.findByRole("heading", { name: "Install the agent" });
+    expect(dialog().textContent).toContain("Waiting for the first agent…");
+  });
+
+  it("does not wait for a first agent on an environment that already has them", async () => {
+    rotateResponse = () =>
+      Response.json({ install: install({}, 2), envType: "swarm", hasAgents: true });
+    await mount({ mode: "rotate", envId: "e1" });
+    fireEvent.click(screen.getByRole("button", { name: "Generate new token" }));
+    await screen.findByRole("heading", { name: "Install the agent" });
+    expect(dialog().textContent).not.toContain("Waiting for the first agent…");
   });
 });
 
