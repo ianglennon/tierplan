@@ -199,7 +199,10 @@ describe("EnvOverviewTable columns and cells", () => {
     expect(cells[6]?.textContent).toBe("—");
     expect(within(row).getByText("Pending")).toBeTruthy();
     fireEvent.click(within(row).getByRole("button", { name: "Finish setup" }));
-    expect(onFinishSetup).toHaveBeenCalledWith("p1");
+    expect(onFinishSetup).toHaveBeenCalledWith(
+      "p1",
+      within(row).getByRole("button", { name: "Finish setup" }),
+    );
   });
 
   it("leaves Finish setup out for someone without the token permission", async () => {

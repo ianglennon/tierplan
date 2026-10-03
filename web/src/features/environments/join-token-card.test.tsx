@@ -152,6 +152,16 @@ describe("JoinTokenCard", () => {
     expect(count("POST")).toBe(0);
   });
 
+  it("puts focus back on Show install command when the dialog closes", async () => {
+    await mount();
+    const show = screen.getByRole("button", { name: "Show install command" });
+    fireEvent.click(show);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(show));
+  });
+
   it("reads the token status again when the install dialog closes, because a rotation re-enables enrolment", async () => {
     disabled = true;
     await mount();

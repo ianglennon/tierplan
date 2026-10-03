@@ -4,7 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Server } from "lucide-react";
-import { useState } from "react";
+import { type MouseEvent, useRef, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
 import { NoPermission } from "@/components/full-page-state";
@@ -71,6 +71,8 @@ function EnvironmentsPage() {
     },
   );
 
+  const trigger = useRef<HTMLElement | null>(null);
+
   if (!allowed) return <NoPermission />;
 
   const items = environments.data?.items ?? [];
@@ -78,8 +80,15 @@ function EnvironmentsPage() {
   const failed = environments.isError && !loaded;
   const empty = loaded && items.length === 0;
 
-  const addEnvironment = () => setInstall({ open: true, mode: "add" });
-  const finishSetup = (envId: string) => setInstall({ open: true, mode: "rotate", envId });
+  // Whatever opened the dialog, so closing it puts focus back there.
+  const addEnvironment = (event: MouseEvent<HTMLElement>) => {
+    trigger.current = event.currentTarget;
+    setInstall({ open: true, mode: "add" });
+  };
+  const finishSetup = (envId: string, from: HTMLElement) => {
+    trigger.current = from;
+    setInstall({ open: true, mode: "rotate", envId });
+  };
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
@@ -172,6 +181,7 @@ function EnvironmentsPage() {
         open={install.open}
         mode={install.mode}
         envId={install.envId}
+        returnFocusRef={trigger}
         onOpenChange={(open) => setInstall((current) => ({ ...current, open }))}
       />
     </div>

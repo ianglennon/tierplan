@@ -45,6 +45,7 @@ export function JoinTokenCard({ envId }: JoinTokenCardProps) {
   const queryClient = useQueryClient();
   const status = useQuery(tokenStatusQuery(envId));
   const [installOpen, setInstallOpen] = useState(false);
+  const showButton = useRef<HTMLButtonElement>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [failed, setFailed] = useState(false);
   // A second click can land before the pending state has rendered.
@@ -136,6 +137,7 @@ export function JoinTokenCard({ envId }: JoinTokenCardProps) {
           type="button"
           variant="outline"
           className={`${TOUCH_HEIGHT} max-md:flex-1`}
+          ref={showButton}
           onClick={() => setInstallOpen(true)}
         >
           {t("envsettings.token.show")}
@@ -152,7 +154,13 @@ export function JoinTokenCard({ envId }: JoinTokenCardProps) {
         ) : null}
       </div>
 
-      <InstallDialog open={installOpen} mode="rotate" envId={envId} onOpenChange={changeInstall} />
+      <InstallDialog
+        open={installOpen}
+        mode="rotate"
+        envId={envId}
+        returnFocusRef={showButton}
+        onOpenChange={changeInstall}
+      />
 
       <AlertDialog open={confirmOpen} onOpenChange={changeConfirm}>
         <AlertDialogContent>

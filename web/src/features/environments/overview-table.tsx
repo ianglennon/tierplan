@@ -32,7 +32,8 @@ export interface EnvOverviewTableProps {
   // Whether this caller may finish setting up a pending environment
   // (environments.token on it). The button is left out without it.
   canFinishSetup?: (envId: string) => boolean;
-  onFinishSetup?: (envId: string) => void;
+  // The button is handed over so the dialog it opens can give focus back to it.
+  onFinishSetup?: (envId: string, trigger: HTMLElement) => void;
 }
 
 // One row is 36px and one header row is 48px; both are 44px under 768px for
@@ -292,7 +293,7 @@ function HealthCell({ env }: { env: EnvironmentItem }) {
 interface NameCellProps {
   env: EnvironmentItem;
   finish: boolean;
-  onFinishSetup?: (envId: string) => void;
+  onFinishSetup?: (envId: string, trigger: HTMLElement) => void;
   // Stretches the link over the whole stacked row, so the 44px row is the tap
   // target and not just the line of text. The row must be `relative`.
   stretch?: boolean;
@@ -320,7 +321,7 @@ function NameCell({ env, finish, onFinishSetup, stretch }: NameCellProps) {
           variant="link"
           size="xs"
           className="relative z-10 h-auto shrink-0 p-0"
-          onClick={() => onFinishSetup?.(env.id)}
+          onClick={(event) => onFinishSetup?.(env.id, event.currentTarget)}
         >
           {t("overview.finishSetup")}
         </Button>
@@ -427,7 +428,12 @@ function Header({ sort, dir, onSortChange }: HeaderProps) {
                     : "none"
                   : undefined
               }
-              className="sticky top-0 z-10 h-12 bg-muted px-3 text-xs font-semibold text-muted-foreground"
+              className={cn(
+                "sticky top-0 z-10 h-12 bg-muted px-2 text-xs font-semibold text-muted-foreground",
+                // The longest header may take two lines, so the table fits beside
+                // the open sidebar at 1280px without scrolling sideways.
+                column === "failing" && "whitespace-normal",
+              )}
             >
               {sortable ? (
                 <button
@@ -602,7 +608,7 @@ export function EnvOverviewTable({
                     // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton rows
                     <TableRow key={i} className={ROW}>
                       {COLUMNS.map((column) => (
-                        <TableCell key={column} className="px-3 py-0">
+                        <TableCell key={column} className="px-2 py-0">
                           <Skeleton className="h-4 w-20" aria-hidden="true" />
                         </TableCell>
                       ))}
@@ -616,13 +622,13 @@ export function EnvOverviewTable({
                         data-flash={flash || undefined}
                         className={cn(ROW, "transition-colors duration-150", flash && "bg-muted")}
                       >
-                        <TableCell className="px-3 py-0">
+                        <TableCell className="px-2 py-0">
                           <HealthCell env={env} />
                         </TableCell>
-                        <TableCell className="px-3 py-0">
+                        <TableCell className="px-2 py-0">
                           <NameCell env={env} finish={finish(env)} onFinishSetup={onFinishSetup} />
                         </TableCell>
-                        <TableCell className="px-3 py-0">
+                        <TableCell className="px-2 py-0">
                           <span className="inline-flex items-center gap-1">
                             <TypeBadge
                               envType={env.envType}
@@ -631,22 +637,22 @@ export function EnvOverviewTable({
                             />
                           </span>
                         </TableCell>
-                        <TableCell className="px-3 py-0">
+                        <TableCell className="px-2 py-0">
                           <NodesCell env={env} />
                         </TableCell>
-                        <TableCell className="px-3 py-0">
+                        <TableCell className="px-2 py-0">
                           <FailingCell env={env} />
                         </TableCell>
-                        <TableCell className="px-3 py-0">
+                        <TableCell className="px-2 py-0">
                           <AgentsCell env={env} />
                         </TableCell>
-                        <TableCell className="px-3 py-0 tabular-nums">
+                        <TableCell className="px-2 py-0 tabular-nums">
                           {env.engineVersion ? env.engineVersion : <Dash />}
                         </TableCell>
-                        <TableCell className="px-3 py-0">
+                        <TableCell className="px-2 py-0">
                           <AgentCell env={env} />
                         </TableCell>
-                        <TableCell className="px-3 py-0 text-muted-foreground">
+                        <TableCell className="px-2 py-0 text-muted-foreground">
                           <LastSeenCell env={env} />
                         </TableCell>
                       </TableRow>

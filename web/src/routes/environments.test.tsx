@@ -299,6 +299,41 @@ describe("the install dialog on /environments", () => {
     expect(await screen.findByLabelText("Name (optional)")).toBeTruthy();
   });
 
+  it("puts focus back on the Add environment button when the dialog closes", async () => {
+    renderAt("/environments");
+    await screen.findByRole("table");
+    const add = screen.getByRole("button", { name: "Add environment" });
+    fireEvent.click(add);
+    await screen.findByRole("heading", { name: "Add environment", level: 2 });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(add));
+  });
+
+  it("puts focus back on the empty state's Add environment button", async () => {
+    list = () => Response.json({ items: [] });
+    renderAt("/environments");
+    // The header button shows while the list loads, so wait for the empty state.
+    await screen.findByText("No environments yet");
+    const add = screen.getByRole("button", { name: "Add environment" });
+    fireEvent.click(add);
+    await screen.findByLabelText("Name (optional)");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(add));
+  });
+
+  it("puts focus back on the row's Finish setup button", async () => {
+    list = () => Response.json({ items: [ONLINE, PENDING] });
+    renderAt("/environments");
+    const finish = await screen.findByRole("button", { name: "Finish setup" });
+    fireEvent.click(finish);
+    await screen.findByRole("heading", { name: "Show install command", level: 2 });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(finish));
+  });
+
   it("Finish setup opens the rotate confirm for that environment and posts nothing until confirmed", async () => {
     list = () => Response.json({ items: [ONLINE, PENDING] });
     renderAt("/environments");
