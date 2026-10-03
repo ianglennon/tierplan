@@ -337,6 +337,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		WithRefusalAudit(agentAudit)
 	// A revoke commits first and then closes the agent's live session through the hub.
 	agentSvc.WithKicker(tunnelHub)
+	// A re-initialised swarm that is recorded, or adopted, reaches every open
+	// overview at once instead of at the next tick.
+	agentSvc.WithNotifier(broker)
 
 	// The registry rolls an environment's health up from its agents, so it reads
 	// the live ones from the hub and uses the configured windows (D-41); every

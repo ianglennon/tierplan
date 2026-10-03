@@ -484,7 +484,7 @@ func (r *rig) enrolMember(t *testing.T, c agents.Created) member {
 	tr := authn.Transcript(wire.ModeEnrol, wire.ProtoVersion, make([]byte, 32), make([]byte, 32), "h", pub, nil)
 	res, err := r.svc.Enrol(r.ctx, tunnel.EnrolRequest{
 		Token: c.JoinToken, Pub: pub, Sig: authn.Sign(priv, tr), Transcript: tr, AgentVersion: "0.2.0", IP: "198.51.100.7",
-		Facts: wire.Facts{EngineID: "ENG:" + c.EnvID[:8], Hostname: "node-1", EngineReachable: true},
+		Facts: wire.Facts{EngineID: "ENG:" + c.EnvID, Hostname: "node-1", EngineReachable: true},
 	})
 	if err != nil {
 		t.Fatalf("Enrol: %v", err)
@@ -893,6 +893,7 @@ func TestRotateTokenReportsASwarmWithAgentsAndAStandaloneHostAndNone(t *testing.
 
 	swarm := r.create(t, "Swarm")
 	req := newProof(t, "h").request(swarm.JoinToken)
+	req.Facts.EngineID = "ENG:swarm-1"
 	req.Facts.Swarm = &wire.SwarmFacts{State: "active", NodeID: "node-1", ClusterID: "cl-1", Control: true}
 	if _, err := r.svc.Enrol(r.ctx, req); err != nil {
 		t.Fatal(err)
@@ -1105,7 +1106,7 @@ func TestRevokeRefusesAnAlreadyRevokedAgentAnUnknownOneAndOneOfAnotherEnvironmen
 		t.Errorf("unknown agent = %v, want ErrAgentNotFound", err)
 	}
 	// An agent is only found through its own environment.
-	fresh, err := r.enrolWith(t, c.JoinToken, wire.Facts{EngineID: "ENG:fresh", Hostname: "fresh", EngineReachable: true})
+	fresh, err := r.enrolWith(t, c.JoinToken, worker("ENG:fresh", "node-fresh", "fresh"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1172,7 +1173,7 @@ func TestEnrolRefusesABlockedEngineIDAndABlockedSwarmNodeIDEvenWithAValidTokenUn
 		t.Errorf("a refused enrolment wrote an agent row: %d -> %d", agentsBefore, got)
 	}
 	// A different host with the same token is not affected.
-	if _, err := r.enrolWith(t, c.JoinToken, wire.Facts{EngineID: "ENG:new", Hostname: "new", EngineReachable: true}); err != nil {
+	if _, err := r.enrolWith(t, c.JoinToken, worker("ENG:new", "node-new", "new")); err != nil {
 		t.Errorf("an unrelated host was refused: %v", err)
 	}
 

@@ -190,6 +190,14 @@ func (h *Hub) verifyAuth(ctx context.Context, a wire.Auth, serverNonce []byte, p
 		}
 	}
 
+	// What the host is is not decided here. The Verifier checks the identity the
+	// agent reported (type, host, cluster and duplicates for an enrolment, a changed
+	// cluster for a hello) at its place in RESEARCH Pattern 2's order, after the
+	// block list and before the clock: agents.CheckIdentity and agents.CheckCluster.
+	// Each answers with a refusal that is turned away through turnAway, so the new
+	// codes (duplicate_environment, type_mismatch, host_mismatch, cluster_changed) are
+	// audited and published like any other.
+
 	// The agent's clock against the middle of the time the exchange took, so the
 	// round trip does not count as skew (D-45). The Verifier refuses an offset past
 	// MaxClockOffset at the right point of its own checks; the hub keeps it for

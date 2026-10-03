@@ -451,7 +451,7 @@ func TestADeniedMessageIsAuditedUnderTheAgentHubAndRemembered(t *testing.T) {
 	sink := &auditSink{}
 	srv := timed(t, func(h *tunnel.Hub) *tunnel.Hub { return h.WithAudit(sink) })
 	env := srv.NewEnvironment(t, "Production")
-	c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: &wire.Facts{Hostname: "node-1", EngineReachable: true}})
+	c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: &wire.Facts{EngineID: "ENG:node-1", Hostname: "node-1", EngineReachable: true}})
 	if c.Welcome == nil {
 		t.Fatalf("refused: %+v", c.Refuse)
 	}

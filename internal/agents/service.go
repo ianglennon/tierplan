@@ -217,6 +217,12 @@ func (s *Service) CreateEnvironment(ctx context.Context, actor audit.Actor, name
 		return Created{}, fmt.Errorf("generate environment id: %w", err)
 	}
 	envID := envUUID.String()
+	// An environment created without a name carries the placeholder until the
+	// first host that can name it does (D-23).
+	nameAuto := int64(0)
+	if name == "" {
+		name, nameAuto = placeholderName, 1
+	}
 	tokenUUID, err := uuid.NewV7()
 	if err != nil {
 		return Created{}, fmt.Errorf("generate token id: %w", err)
@@ -244,7 +250,7 @@ func (s *Service) CreateEnvironment(ctx context.Context, actor audit.Actor, name
 	defer func() { _ = tx.Rollback() }() // a no-op once committed
 	q := s.st.Q.WithTx(tx)
 	ts := now.UnixNano()
-	if err := q.InsertAgentEnvironment(ctx, sqlc.InsertAgentEnvironmentParams{ID: envID, Name: name, CreatedAt: ts, UpdatedAt: ts}); err != nil {
+	if err := q.InsertAgentEnvironment(ctx, sqlc.InsertAgentEnvironmentParams{ID: envID, Name: name, CreatedAt: ts, UpdatedAt: ts, NameAuto: nameAuto}); err != nil {
 		return Created{}, fmt.Errorf("insert environment: %w", err)
 	}
 	if err := q.InsertCA(ctx, sqlc.InsertCAParams{EnvID: envID, CertPem: string(authority.certPEM), KeySealed: sealed, CreatedAt: ts}); err != nil {
@@ -467,12 +473,17 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 
 	// The order of RESEARCH Pattern 2 for an enrolment is token, blocked identity,
 	// duplicates, version, clock, then issuance. The token is above; the version
-	// window was checked by the hub before it asked. The block list is next. Plan
-	// 02-19 adds the duplicate check after it, ahead of the clock. The host proved
-	// it holds a valid token before it is told it is blocked, so the answer is
-	// nothing a probe could use.
+	// window was checked by the hub before it asked. The block list is next, then
+	// the identity checks (type, host, cluster and duplicates). The host proved it
+	// holds a valid token before it is told it is blocked or is a duplicate, so
+	// the answer is nothing a probe could use. The identity is read here to refuse
+	// early, before a certificate is made, and decided again inside the
+	// transaction that inserts the agent, which is the decision that binds.
 	if err := s.checkBlocked(ctx, s.st.RQ, envID, req.Facts); err != nil {
 		return tunnel.EnrolResult{}, err
+	}
+	if dec, err := CheckIdentity(ctx, s.st.RQ, envID, req.Facts); err != nil {
+		return tunnel.EnrolResult{}, s.identityRefused(ctx, envID, dec, err)
 	}
 	if err := tunnel.CheckClock(req.ClockOffset); err != nil {
 		return tunnel.EnrolResult{}, err
@@ -518,6 +529,12 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	if err := s.checkBlocked(ctx, q, envID, req.Facts); err != nil {
 		return tunnel.EnrolResult{}, err
 	}
+	// A host that bound the same identity first wins: this read sees it, so the
+	// loser is refused here and nothing of it is written.
+	dec, err := CheckIdentity(ctx, q, envID, req.Facts)
+	if err != nil {
+		return tunnel.EnrolResult{}, err
+	}
 	ts := now.UnixNano()
 	if err := q.InsertAgent(ctx, sqlc.InsertAgentParams{
 		ID: agentID, EnvID: envID, Name: host, Role: role, EngineID: req.Facts.EngineID, SwarmNodeID: nodeID,
@@ -526,12 +543,10 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	}); err != nil {
 		return tunnel.EnrolResult{}, fmt.Errorf("insert the agent: %w", err)
 	}
-	// A blank environment name is the first agent's hostname (D-23); a name the
-	// admin typed is never overwritten.
-	if host != "" {
-		if _, err := q.NameEnvironmentAuto(ctx, sqlc.NameEnvironmentAutoParams{Name: host, UpdatedAt: ts, ID: envID}); err != nil {
-			return tunnel.EnrolResult{}, fmt.Errorf("name the environment: %w", err)
-		}
+	// The first host sets the type, binds the host or the cluster and may name the
+	// environment (D-11, D-23); a name the admin typed is never overwritten.
+	if err := dec.apply(ctx, q, envID, ts); err != nil {
+		return tunnel.EnrolResult{}, err
 	}
 	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
 		Actor: rbac.System(enrolActor).AuditActor(), Action: audit.ActionAgentEnrolled,
@@ -545,6 +560,37 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 		return tunnel.EnrolResult{}, fmt.Errorf("commit: %w", err)
 	}
 	return tunnel.EnrolResult{AgentID: agentID, EnvID: envID, Cert: leaf.DER, NotAfter: leaf.NotAfter}, nil
+}
+
+// identityRefused is what Enrol and Hello return for a failed identity check. A
+// manager of another cluster is recorded on the environment first, once, so the
+// overview shows cluster_changed with the cluster to adopt; the refusal is
+// returned either way. If recording fails the fault is returned instead and the
+// agent retries.
+func (s *Service) identityRefused(ctx context.Context, envID string, dec Decision, refusal error) error {
+	if !dec.RecordChange {
+		return refusal
+	}
+	ts := s.now().UTC().UnixNano()
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	rows, err := s.st.Q.WithTx(tx).RecordClusterChange(ctx, sqlc.RecordClusterChangeParams{
+		ClusterChangedAt: sql.NullInt64{Int64: ts, Valid: true}, PendingClusterID: sql.NullString{String: dec.PendingCluster, Valid: true},
+		UpdatedAt: ts, ID: envID,
+	})
+	if err != nil {
+		return fmt.Errorf("record the cluster change: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	if rows > 0 && s.notifier != nil {
+		s.notifier.Notify(envID)
+	}
+	return refusal
 }
 
 // Revoke makes an agent unwelcome for good: its row becomes revoked, the engine ID
@@ -911,6 +957,11 @@ func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.He
 	// Only an agent that has proved its identity is told its clock is wrong.
 	if err := tunnel.CheckClock(req.ClockOffset); err != nil {
 		return tunnel.HelloResult{}, err
+	}
+	// A manager that now reports another cluster is refused and the change is
+	// recorded for an admin to adopt (D-14).
+	if dec, err := CheckCluster(ctx, s.st.RQ, envID, req.Facts); err != nil {
+		return tunnel.HelloResult{}, s.identityRefused(ctx, envID, dec, err)
 	}
 	return tunnel.HelloResult{AgentID: agentID, EnvID: envID, NotAfter: leaf.NotAfter}, nil
 }

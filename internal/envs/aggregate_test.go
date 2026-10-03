@@ -575,11 +575,15 @@ func TestRemovingAnAgentEnvironmentRevokesAndDisconnectsEveryAgentAndDeletesWhat
 	r := newTunRig(t, nil)
 	r.pastGrace()
 	env := r.srv.NewEnvironment(t, "Remote")
-	one := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
-	two := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-2"}, nil)
+	// Nodes of one swarm: a standalone environment has one host only.
+	node := func(name string) *wire.Facts {
+		return &wire.Facts{EngineID: "ENG:" + name, Hostname: name, EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-" + name}}
+	}
+	one := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, node("edge-1"))
+	two := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-2"}, node("edge-2"))
 	r.whenOnline(t, env.ID)
 	// A third agent that was revoked earlier leaves block rows behind.
-	three := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-3"}, nil)
+	three := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-3"}, node("edge-3"))
 	if err := r.srv.Svc.Revoke(context.Background(), admin, env.ID, three.id, "old", "", ""); err != nil {
 		t.Fatal(err)
 	}

@@ -36,6 +36,7 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"github.com/ianglennon/bayplan/agent/internal/proxy"
+	"github.com/ianglennon/bayplan/agent/internal/facts"
 	"github.com/ianglennon/bayplan/agent/internal/state"
 	"github.com/ianglennon/bayplan/proto/authn"
 	"github.com/ianglennon/bayplan/proto/wire"
@@ -101,8 +102,6 @@ const (
 	defaultSocket = "/var/run/docker.sock"
 	// kindTimeout bounds the wait for the kind byte of a new stream.
 	kindTimeout = 10 * time.Second
-	// factsTimeout bounds the two reads of the engine's own description.
-	factsTimeout = 5 * time.Second
 	// maxRetryAfter bounds how long the agent will wait because a server said so.
 	maxRetryAfter = 5 * time.Minute
 )
@@ -303,6 +302,10 @@ func hint(code string) string {
 		return "upgrade the agent to the version Bayplan runs"
 	case wire.ReasonClockSkew:
 		return "set this host's clock, for example with NTP"
+	case wire.ReasonClusterChanged:
+		return "the swarm behind this environment was re-initialised; an administrator adopts the new cluster in the environment's settings in Bayplan, and the agent connects on its next try"
+	case wire.ReasonEngineUnreachable:
+		return "the agent could not read Docker's description of this host; check that /var/run/docker.sock is mounted into the agent and that Docker is running"
 	}
 	return ""
 }
@@ -313,10 +316,13 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	// The engine is described before the dial, so the handshake itself never
 	// waits on it. An engine that does not answer is reported, not fatal: the
 	// server shows engine_unreachable (D-40).
-	facts := readFacts(ctx, r.cfg.SocketPath, r.log)
+	reported := facts.Collect(ctx, r.cfg.SocketPath)
+	if !reported.EngineReachable {
+		r.log.Warn("the Docker engine did not answer on its socket", "socket", r.cfg.SocketPath)
+	}
 	// What the host owner set is part of the facts, so the UI can say "read-only
 	// (set on host)" and show the manual update commands (D-28).
-	facts.Policy = wire.PolicyFacts{ReadOnly: r.cfg.ReadOnly, SelfUpdate: r.cfg.SelfUpdate}
+	reported.Policy = wire.PolicyFacts{ReadOnly: r.cfg.ReadOnly, SelfUpdate: r.cfg.SelfUpdate}
 
 	cr, err := r.credentials()
 	if err != nil {
@@ -349,7 +355,7 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	c.SetReadLimit(wire.MaxHandshakeBytes)
 
 	hctx, cancel := context.WithTimeout(ctx, wire.HandshakeTimeout)
-	welcome, err := handshake(hctx, c, resp, r.cfg.Version, r.aud, cr, facts, r.env.now)
+	welcome, err := handshake(hctx, c, resp, r.cfg.Version, r.aud, cr, reported, r.env.now)
 	cancel()
 	if err != nil {
 		return false, err
@@ -649,76 +655,4 @@ func writeJSON(ctx context.Context, c *websocket.Conn, v any) error {
 		return err
 	}
 	return c.Write(ctx, websocket.MessageText, b)
-}
-
-// readFacts asks the engine, through its socket, who it is. A failure leaves
-// EngineReachable false.
-func readFacts(ctx context.Context, socketPath string, log *slog.Logger) wire.Facts {
-	f := wire.Facts{Policy: wire.PolicyFacts{SelfUpdate: false}}
-	hc := &http.Client{
-		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketPath)
-		}},
-		Timeout: factsTimeout,
-	}
-	defer hc.CloseIdleConnections()
-
-	var info struct {
-		ID, Name      string
-		ServerVersion string
-		Swarm         struct {
-			LocalNodeState   string
-			NodeID           string
-			ControlAvailable bool
-			Cluster          *struct{ ID string }
-			RemoteManagers   []struct{ NodeID string }
-		}
-	}
-	if err := getJSON(ctx, hc, "/info", &info); err != nil {
-		log.Warn("the Docker engine did not answer GET /info", "socket", socketPath, "error", err)
-		return f
-	}
-	f.EngineReachable = true
-	f.EngineID, f.Hostname, f.EngineVersion = info.ID, info.Name, info.ServerVersion
-	if st := info.Swarm.LocalNodeState; st != "" && st != "inactive" {
-		sf := &wire.SwarmFacts{State: st, NodeID: info.Swarm.NodeID, Control: info.Swarm.ControlAvailable}
-		if info.Swarm.Cluster != nil {
-			sf.ClusterID = info.Swarm.Cluster.ID
-		}
-		for _, m := range info.Swarm.RemoteManagers {
-			sf.ManagerIDs = append(sf.ManagerIDs, m.NodeID)
-		}
-		f.Swarm = sf
-	}
-
-	var ver struct {
-		Version    string
-		APIVersion string `json:"ApiVersion"`
-	}
-	if err := getJSON(ctx, hc, "/version", &ver); err != nil {
-		log.Warn("the Docker engine did not answer GET /version", "socket", socketPath, "error", err)
-		return f
-	}
-	f.APIVersion = ver.APIVersion
-	if ver.Version != "" {
-		f.EngineVersion = ver.Version
-	}
-	return f
-}
-
-func getJSON(ctx context.Context, hc *http.Client, path string, v any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+path, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d", resp.StatusCode)
-	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(v)
 }

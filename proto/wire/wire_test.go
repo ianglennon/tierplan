@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -134,5 +135,18 @@ func TestADeniedMessageHasTheShapeTheServerReads(t *testing.T) {
 	}
 	if DeniedAllowlist != "allowlist" || DeniedReadOnly != "read_only_flag" {
 		t.Fatalf("reasons = %q, %q", DeniedAllowlist, DeniedReadOnly)
+	}
+}
+
+func TestValidIdentityAcceptsDockerIDsAndNothingElse(t *testing.T) {
+	for _, ok := range []string{"7TRN:IPZB:QYBB:VPBQ:UWQD:ABJO:SQTX:3IBP:2Q5L:JQR7:EEL2:Z5ZX", "x3k2m9t0q4w5e6r7t8y9u0i1o", "9f2c8a1e-0b3d-4c5f-8a7e-1d2c3b4a5f60", "a_b.c-d", strings.Repeat("a", 128)} {
+		if !ValidIdentity(ok) {
+			t.Errorf("ValidIdentity(%q) = false", ok)
+		}
+	}
+	for _, bad := range []string{"", "has space", "semi;colon", "quote'", "new\nline", "uni\u00e9", "slash/", strings.Repeat("a", 129)} {
+		if ValidIdentity(bad) {
+			t.Errorf("ValidIdentity(%q) = true", bad)
+		}
 	}
 }

@@ -231,3 +231,26 @@ const (
 	// handshake. The agent should retry with backoff.
 	RefuseInternal = "internal_error"
 )
+
+// MaxIdentityLen is the longest engine, node or cluster ID either side accepts.
+const MaxIdentityLen = 128
+
+// ValidIdentity reports whether s may be an engine, node or cluster ID: 1 to 128
+// characters of letters, digits, colon, underscore, dot and hyphen. Real IDs are
+// hex, base 36 or colon-separated groups. The agent drops an ID that fails this
+// and the server refuses one, so none reaches SQL or the audit log.
+func ValidIdentity(s string) bool {
+	if s == "" || len(s) > MaxIdentityLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == ':', c == '_', c == '.', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}

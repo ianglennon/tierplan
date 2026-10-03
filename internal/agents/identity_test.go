@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/bayplan/proto/authn"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
@@ -150,8 +151,14 @@ func TestCheckIdentityDecidesTypeBindingAndNameForEachKindOfHost(t *testing.T) {
 			want:  wire.RefuseHostMismatch,
 		},
 		{
-			name:  "a standalone environment and its own host again: accepted, nothing to bind",
-			setup: func(t *testing.T, r *rig, id string) { r.bind(t, id, "standalone", "ENG:X", "") },
+			name: "a standalone environment and its own host again: accepted, nothing to bind",
+			setup: func(t *testing.T, r *rig, id string) {
+				r.bind(t, id, "standalone", "ENG:X", "")
+				// Named already by the host that bound it.
+				if _, err := r.st.Write.Exec(`UPDATE environments SET name = 'edge-1', name_auto = 0 WHERE id = ?`, id); err != nil {
+					t.Fatal(err)
+				}
+			},
 			facts: standalone("ENG:X", "edge-1"),
 			dec:   agents.Decision{},
 		},
@@ -559,4 +566,69 @@ func (r *rig) enrolFacts(t *testing.T, c agents.Created, f wire.Facts) member {
 		t.Fatalf("Enrol: %v", err)
 	}
 	return member{id: res.AgentID, env: res.EnvID, priv: priv, pub: pub, cert: res.Cert}
+}
+
+func TestAnEnvironmentCreatedWithoutANameStoresThePlaceholderAndWaitsForAHostToNameIt(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "")
+	if c.Name != "New environment" {
+		t.Fatalf("created name = %q, want the placeholder", c.Name)
+	}
+	if s := r.state(t, c.EnvID); s.name != "New environment" || s.nameAuto != 1 {
+		t.Fatalf("state = %+v", s)
+	}
+	if named := r.create(t, "Production"); r.state(t, named.EnvID).nameAuto != 0 {
+		t.Fatal("an environment the admin named is waiting for an automatic name")
+	}
+}
+
+func TestIdentityRefusalsTravelTheHandshakeWithTheirCodesAndAreAuditedByReason(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{AuditRefusals: true})
+	lab, other := srv.NewEnvironment(t, "lab"), srv.NewEnvironment(t, "other")
+	srv.Enrol(t, lab) // the default host of lab
+
+	// The same host offered to another environment.
+	host := wire.Facts{EngineID: "ENG:" + lab.ID, Hostname: "clone", EngineReachable: true}
+	c := srv.Dial(t, tunneltest.Agent{Token: other.Token, Facts: &host})
+	if c.Refuse == nil || c.Refuse.Code != wire.RefuseDuplicateEnvironment || !strings.Contains(c.Refuse.Detail, `"lab"`) {
+		t.Fatalf("refuse = %+v (err %v), want duplicate_environment naming lab", c.Refuse, c.Err)
+	}
+	var reason string
+	if err := srv.Store.Read.QueryRow(`SELECT reason FROM audit_log WHERE action = 'agent.enrol_refused' ORDER BY seq DESC LIMIT 1`).Scan(&reason); err != nil || reason != "duplicate_host" {
+		t.Fatalf("audit reason = %q, %v, want duplicate_host", reason, err)
+	}
+
+	// A swarm host offered to the standalone environment, and another host too.
+	swarmHost := manager("ENG:M", "node-m", "CL1", "mgr")
+	if c := srv.Dial(t, tunneltest.Agent{Token: lab.Token, Facts: &swarmHost}); c.Refuse == nil || c.Refuse.Code != wire.RefuseTypeMismatch {
+		t.Fatalf("refuse = %+v (err %v), want type_mismatch", c.Refuse, c.Err)
+	}
+	another := standalone("ENG:ELSEWHERE", "edge-9")
+	if c := srv.Dial(t, tunneltest.Agent{Token: lab.Token, Facts: &another}); c.Refuse == nil || c.Refuse.Code != wire.RefuseHostMismatch {
+		t.Fatalf("refuse = %+v (err %v), want host_mismatch", c.Refuse, c.Err)
+	}
+}
+
+func TestAManagerOfAReinitialisedSwarmIsRefusedOnItsNextHelloAndTheEnvironmentRecordsTheNewCluster(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{AuditRefusals: true})
+	env := srv.NewEnvironment(t, "prod")
+	was := manager("ENG:M1", "node-m1", "CL1", "mgr-1")
+	first := srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: &was})
+	if first.Welcome == nil {
+		t.Fatalf("enrolment refused: %+v (err %v)", first.Refuse, first.Err)
+	}
+
+	now := manager("ENG:M1", "node-m1", "CL2", "mgr-1")
+	c := srv.Dial(t, tunneltest.Agent{Identity: &first.Identity, Facts: &now})
+	if c.Refuse == nil || c.Refuse.Code != wire.ReasonClusterChanged {
+		t.Fatalf("hello refuse = %+v (err %v), want cluster_changed", c.Refuse, c.Err)
+	}
+	var cluster, pending sql.NullString
+	var at sql.NullInt64
+	if err := srv.Store.Read.QueryRow(`SELECT swarm_cluster_id, pending_cluster_id, cluster_changed_at FROM environments WHERE id = ?`, env.ID).Scan(&cluster, &pending, &at); err != nil {
+		t.Fatal(err)
+	}
+	if cluster.String != "CL1" || pending.String != "CL2" || !at.Valid {
+		t.Fatalf("environment = %v %v %v, want CL1 bound, CL2 pending, recorded", cluster, pending, at)
+	}
 }

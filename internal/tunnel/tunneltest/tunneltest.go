@@ -325,7 +325,8 @@ type Agent struct {
 	Cert []byte
 	// Proto is the protocol version sent. Zero means wire.ProtoVersion.
 	Proto int
-	// Facts are the facts reported. Nil means a reachable standalone engine.
+	// Facts are the facts reported. Nil means a reachable standalone engine whose ID
+	// is the environment's: see defaultHost.
 	Facts *wire.Facts
 	// NoMux leaves the WebSocket unwrapped after the welcome, so a test can read
 	// the server's close frame itself.
@@ -402,7 +403,11 @@ func (s *Server) Dial(t testing.TB, a Agent) *Conn {
 	if proto == 0 {
 		proto = wire.ProtoVersion
 	}
-	facts := wire.Facts{EngineID: "ENG:" + randomHex(4), Hostname: "test-host", EngineReachable: true}
+	// A host that says nothing about itself is one standalone host per environment:
+	// every default agent that enrols with the same token is that host again, which
+	// is how a test enrols several agents into one environment, and two
+	// environments never share one (an engine ID belongs to one environment).
+	facts := wire.Facts{EngineID: "ENG:" + defaultHost(a), Hostname: "test-host", EngineReachable: true}
 	if a.Facts != nil {
 		facts = *a.Facts
 	}
@@ -653,4 +658,17 @@ func randomHex(n int) string {
 		out = append(out, hexdigits[c>>4], hexdigits[c&0xf])
 	}
 	return string(out)
+}
+
+// defaultHost is the part of the default engine ID that makes it the environment's
+// own: the environment ID inside the join token or, for a hello, in the identity.
+// A token that does not parse gets a random one.
+func defaultHost(a Agent) string {
+	if a.Identity != nil && a.Identity.EnvID != "" {
+		return a.Identity.EnvID
+	}
+	if envID, _, ok := agents.ParseToken(a.Token); ok {
+		return envID
+	}
+	return randomHex(4)
 }

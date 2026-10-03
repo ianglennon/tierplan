@@ -78,3 +78,18 @@ func TestRemovingAnAgentEnvironmentDeletesItsRowsAndAudits(t *testing.T) {
 		t.Fatalf("audit = %+v", got)
 	}
 }
+
+func TestRenamingAnEnvironmentThatWaitsForAnAutomaticNameStopsTheAutomaticNaming(t *testing.T) {
+	r := newRig(t, dockertest.FakeConfig{})
+	insertAgentEnv(t, r, "agent-env-1", pendingName)
+	if _, err := r.st.Write.Exec(`UPDATE environments SET name_auto = 1 WHERE id = 'agent-env-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.svc.Rename(context.Background(), admin, "agent-env-1", "Remote", "203.0.113.5", "test"); err != nil {
+		t.Fatal(err)
+	}
+	var auto int
+	if err := r.st.Read.QueryRow(`SELECT name_auto FROM environments WHERE id = 'agent-env-1'`).Scan(&auto); err != nil || auto != 0 {
+		t.Fatalf("name_auto = %d, %v; want 0 so no host renames it again", auto, err)
+	}
+}
