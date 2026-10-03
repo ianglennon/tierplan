@@ -3,11 +3,12 @@
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { retryTiming } from "@/routes/_app/env/$envId";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
@@ -17,6 +18,13 @@ const ME = {
   csrfToken: "csrf-1",
   permissions: { global: [], environments: {} },
 };
+
+let me: typeof ME = ME;
+
+// grant gives the signed-in user these permissions on every environment.
+function grant(...perms: string[]) {
+  me = { ...ME, permissions: { global: [], environments: { "*": perms } } };
+}
 
 const LAB = {
   id: "e1",
@@ -76,7 +84,7 @@ function stubApi() {
       if (path === "/api/instance") {
         return Response.json({ instanceName: "Lab", needsSetup: false, rememberDays: 30 });
       }
-      if (path === "/api/me") return Response.json(ME);
+      if (path === "/api/me") return Response.json(me);
       if (path === "/api/version") {
         return Response.json({
           commit: "",
@@ -111,6 +119,7 @@ const countSummaryReads = () => sent.filter((s) => s.path === "/api/env/e1/summa
 
 beforeEach(() => {
   sent = [];
+  me = ME;
   setCsrfToken(null);
   retryTiming.delayMs = 1;
   retryTiming.polls = 2;
@@ -312,5 +321,239 @@ describe("environment switcher", () => {
     expect(name.className).toContain("truncate");
     expect(within(trigger).getByText("Swarm").className).toContain("shrink-0");
     expect(within(trigger).getByRole("img", { name: "Online" }).className).toContain("shrink-0");
+  });
+});
+
+// An environment whose hosts dial in through an agent (D-33): its full-page
+// states come from the problem's state, not from the local socket's codes.
+const AGENT = {
+  ...LAB,
+  kind: "agent",
+  isSelfHost: false,
+  isLocalSocket: false,
+  envType: "standalone",
+  type: "standalone",
+};
+
+function withAgentEnv(status: Record<string, unknown> = { state: "online" }, extra = {}) {
+  stub.environments = () => Response.json({ items: [{ ...AGENT, status, ...extra }] });
+}
+
+describe("agent environment full-page states (ENV-08, D-33)", () => {
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  it("asks for an agent when none has connected, and opens the install dialog for a token holder", async () => {
+    grant("environments.read", "environments.token");
+    withAgentEnv({ state: "pending" });
+    stub.summary = () => problem(503, "environment_offline", { state: "pending" });
+    renderAt("/env/e1");
+    expect(await screen.findByRole("heading", { name: "No agent has connected yet" })).toBeTruthy();
+    expect(
+      screen.getByText("Install the Bayplan agent on a host to start managing Lab host."),
+    ).toBeTruthy();
+    expect(document.title).toBe("No agent has connected yet · Lab");
+    fireEvent.click(screen.getByRole("button", { name: "Show install command" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Generate new token" })).toBeTruthy();
+  });
+
+  it("tells someone without environments.token to ask an admin, and offers no button", async () => {
+    grant("environments.read");
+    withAgentEnv({ state: "pending" });
+    stub.summary = () => problem(503, "environment_offline", { state: "pending" });
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "No agent has connected yet" });
+    expect(screen.getByText(/Ask an admin to finish setting it up\.$/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show install command" })).toBeNull();
+  });
+
+  it("shows Reconnecting with an amber pulsing icon, and no button (D-41)", async () => {
+    grant("environments.read", "environments.token", "environments.delete");
+    withAgentEnv({ state: "reconnecting" });
+    stub.summary = () => problem(503, "environment_offline", { state: "reconnecting" });
+    renderAt("/env/e1");
+    const heading = await screen.findByRole("heading", { name: "Reconnecting to Lab host…" });
+    expect(
+      screen.getByText(
+        "Bayplan just started and is waiting for the agent to reconnect. This usually takes under a minute.",
+      ),
+    ).toBeTruthy();
+    const page = heading.closest("[data-slot=empty]");
+    expect(page?.querySelector("button, a")).toBeNull();
+    const icon = page?.querySelector("[data-slot=empty-icon] svg");
+    expect(icon?.getAttribute("class")).toContain("animate-pulse");
+    expect(icon?.getAttribute("class")).toContain("text-status-warning-text");
+    expect(screen.queryByRole("heading", { name: /isn't reachable/ })).toBeNull();
+  });
+
+  it("explains an offline agent with its reason text and hint, the time, and Retry", async () => {
+    grant("environments.read");
+    withAgentEnv({ state: "offline", reason: "timeout", since: "2026-10-01T14:05:00Z" });
+    stub.summary = () =>
+      problem(503, "environment_offline", {
+        state: "offline",
+        reason: "timeout",
+        since: "2026-10-01T14:05:00Z",
+      });
+    renderAt("/env/e1");
+    expect(await screen.findByRole("heading", { name: "Lab host isn't reachable" })).toBeTruthy();
+    expect(
+      screen.getByText(/Bayplan lost contact with the agent on Lab host at \d{1,2}:\d{2}\./),
+    ).toBeTruthy();
+    expect(screen.getByText("The agent stopped answering.")).toBeTruthy();
+    expect(screen.getByText(/The agent reconnects by itself\./)).toBeTruthy();
+    // Phase 1's local-socket wording never appears for an agent environment.
+    expect(screen.queryByText(/docker\.sock is mounted into the Bayplan container/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("runs Retry for an offline agent with Retrying… and then the Attempted line", async () => {
+    grant("environments.read");
+    withAgentEnv({ state: "offline", reason: "agent_offline" });
+    stub.summary = () =>
+      problem(503, "environment_offline", { state: "offline", reason: "agent_offline" });
+    renderAt("/env/e1");
+    const button = await screen.findByRole("button", { name: "Retry" });
+    let release: () => void = () => {};
+    stub.reconnect = () =>
+      new Promise<Response>((resolve) => {
+        release = () => resolve(Response.json(AGENT, { status: 202 }));
+      });
+    fireEvent.click(button);
+    expect(await screen.findByRole("button", { name: "Retrying…" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    release();
+    expect(await screen.findByText("Attempted just now")).toBeTruthy();
+  });
+
+  it("shows only the check command that fits the environment's type (swarm)", async () => {
+    grant("environments.read");
+    withAgentEnv({ state: "offline", reason: "agent_offline" }, { envType: "swarm" });
+    stub.summary = () =>
+      problem(503, "environment_offline", { state: "offline", reason: "agent_offline" });
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "Lab host isn't reachable" });
+    expect(screen.getByText("docker service ps bayplan-agent")).toBeTruthy();
+    expect(screen.queryByText("docker ps --filter name=bayplan-agent")).toBeNull();
+  });
+
+  it("offers Open node settings and Remove environment for a revoked environment, by permission", async () => {
+    grant("environments.read", "environments.manage", "environments.delete");
+    withAgentEnv({ state: "revoked", reason: "revoked" });
+    stub.summary = () =>
+      problem(503, "environment_offline", { state: "revoked", reason: "revoked" });
+    renderAt("/env/e1");
+    expect(
+      await screen.findByRole("heading", { name: "This environment was revoked" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("An admin revoked every agent on Lab host, so Bayplan can't reach it."),
+    ).toBeTruthy();
+    const settings = screen.getByRole("link", { name: "Open node settings" });
+    expect(settings.getAttribute("href")).toBe("/settings/environments/e1");
+    const remove = screen.getByRole("link", { name: "Remove environment" });
+    expect(remove.getAttribute("href")).toBe("/settings/environments/e1#remove");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("leaves out Remove environment without environments.delete, and the settings link without environments.manage", async () => {
+    grant("environments.read");
+    withAgentEnv({ state: "revoked", reason: "revoked" });
+    stub.summary = () =>
+      problem(503, "environment_offline", { state: "revoked", reason: "revoked" });
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "This environment was revoked" });
+    expect(screen.queryByRole("link", { name: "Remove environment" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open node settings" })).toBeNull();
+  });
+
+  it("says the swarm was re-initialised and offers Remove environment", async () => {
+    grant("environments.read", "environments.delete");
+    withAgentEnv({ state: "cluster_changed", reason: "cluster_changed" });
+    stub.summary = () =>
+      problem(503, "environment_offline", { state: "cluster_changed", reason: "cluster_changed" });
+    renderAt("/env/e1");
+    expect(
+      await screen.findByRole("heading", { name: "This swarm was re-initialised" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The agents on Lab host now report a different cluster, so Bayplan refused them. Nothing was changed on the old environment.",
+      ),
+    ).toBeTruthy();
+    const remove = screen.getByRole("link", { name: "Remove environment" });
+    expect(remove.getAttribute("href")).toBe("/settings/environments/e1#remove");
+  });
+
+  it("returns to the page by itself when the stream reports the environment online", async () => {
+    grant("environments.read");
+    withAgentEnv({ state: "offline", reason: "agent_offline" });
+    stub.summary = () =>
+      problem(503, "environment_offline", { state: "offline", reason: "agent_offline" });
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "Lab host isn't reachable" });
+    await waitFor(() =>
+      expect(FakeEventSource.instances.some((s) => s.url === "/api/environments/stream")).toBe(
+        true,
+      ),
+    );
+    const stream = FakeEventSource.instances.find((s) => s.url === "/api/environments/stream");
+    const reads = countSummaryReads();
+
+    // The agent is back: the summary answers again and the stream says so. No click.
+    stub.summary = () => Response.json(SUMMARY);
+    act(() => {
+      stream?.open();
+      stream?.sendFrame(
+        "env.status",
+        {
+          envId: "e1",
+          at: "2026-10-01T14:10:00Z",
+          environment: { ...AGENT, status: { state: "online" } },
+        },
+        "7",
+      );
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Lab host isn't reachable" })).toBeNull(),
+    );
+    expect(countSummaryReads()).toBeGreaterThan(reads);
+    expect(await screen.findByRole("heading", { name: "Lab host" })).toBeTruthy();
+  });
+
+  it("moves from Reconnecting to the offline state when the stream says so", async () => {
+    grant("environments.read");
+    withAgentEnv({ state: "reconnecting" });
+    stub.summary = () => problem(503, "environment_offline", { state: "reconnecting" });
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "Reconnecting to Lab host…" });
+    await waitFor(() =>
+      expect(FakeEventSource.instances.some((s) => s.url === "/api/environments/stream")).toBe(
+        true,
+      ),
+    );
+    const stream = FakeEventSource.instances.find((s) => s.url === "/api/environments/stream");
+
+    stub.summary = () =>
+      problem(503, "environment_offline", { state: "offline", reason: "agent_offline" });
+    act(() => {
+      stream?.open();
+      stream?.sendFrame(
+        "env.status",
+        {
+          envId: "e1",
+          at: "2026-10-01T14:10:00Z",
+          environment: { ...AGENT, status: { state: "offline", reason: "agent_offline" } },
+        },
+        "8",
+      );
+    });
+    expect(await screen.findByRole("heading", { name: "Lab host isn't reachable" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /Reconnecting/ })).toBeNull();
   });
 });
