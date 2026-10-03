@@ -58,7 +58,8 @@ func TLSEnabled(cfg config.Config) bool {
 // With BAYPLAN_TLS_CERT_FILE and BAYPLAN_TLS_KEY_FILE it serves that pair. With
 // BAYPLAN_TLS_SELF_SIGNED it serves an ECDSA P-256 certificate kept under
 // <data>/tls, covering localhost, the loopback addresses, the machine host name
-// (unless it is a container ID) and the host of publicURL. That certificate is
+// (unless it is a container ID), the host of publicURL and the host of agentURL
+// (the address agents dial when it is not the public one, D-18). That certificate is
 // generated when missing or unreadable, replaced when it no longer covers every
 // name wanted, and replaced within 30 days of its expiry. The minimum version
 // is TLS 1.2.
@@ -69,7 +70,7 @@ func TLSEnabled(cfg config.Config) bool {
 // connects to an IP address. A running server therefore renews the generated
 // certificate before it expires, and reloads a supplied pair that was replaced,
 // without a restart (WR-09).
-func TLSConfig(cfg config.Config, publicURL string, now func() time.Time) (*tls.Config, error) {
+func TLSConfig(cfg config.Config, publicURL, agentURL string, now func() time.Time) (*tls.Config, error) {
 	files := cfg.TLSCertFile != "" || cfg.TLSKeyFile != ""
 	if files && cfg.TLSSelfSigned {
 		return nil, errors.New("BAYPLAN_TLS_SELF_SIGNED conflicts with BAYPLAN_TLS_CERT_FILE and BAYPLAN_TLS_KEY_FILE; use one or the other")
@@ -86,7 +87,7 @@ func TLSConfig(cfg config.Config, publicURL string, now func() time.Time) (*tls.
 		}
 		return &tls.Config{GetCertificate: src.GetCertificate, MinVersion: tls.VersionTLS12}, nil
 	case cfg.TLSSelfSigned:
-		src, err := newSelfSignedSource(filepath.Join(cfg.DataDir, selfSignedDir), wantedNames(publicURL), now)
+		src, err := newSelfSignedSource(filepath.Join(cfg.DataDir, selfSignedDir), wantedNames(publicURL, agentURL), now)
 		if err != nil {
 			return nil, fmt.Errorf("prepare the self-signed certificate (BAYPLAN_TLS_SELF_SIGNED): %w", err)
 		}
@@ -254,11 +255,12 @@ func looksLikeContainerID(h string) bool {
 }
 
 // wantedNames is the set of names the generated certificate must cover:
-// localhost and the loopback addresses, the machine host name, and the host of
-// the public URL. A host name that is a container ID is left out: it changes on
+// localhost and the loopback addresses, the machine host name, and the hosts of
+// the public URL and the agent URL, which agents dial and verify the certificate
+// against (D-06, Pitfall 3). A host name that is a container ID is left out: it changes on
 // every recreation, so including it would regenerate the certificate (and
 // strand any browser that trusted the old one) at every upgrade (WR-09).
-func wantedNames(publicURL string) names {
+func wantedNames(publicURL, agentURL string) names {
 	dns := map[string]bool{"localhost": true}
 	ips := map[string]bool{"127.0.0.1": true, "::1": true}
 	add := func(host string) {
@@ -275,8 +277,10 @@ func wantedNames(publicURL string) names {
 	if h, err := osHostname(); err == nil && !looksLikeContainerID(strings.ToLower(strings.TrimSpace(h))) {
 		add(h)
 	}
-	if u, err := url.Parse(publicURL); err == nil {
-		add(u.Hostname())
+	for _, raw := range []string{publicURL, agentURL} {
+		if u, err := url.Parse(raw); err == nil {
+			add(u.Hostname())
+		}
 	}
 	return names{dns: sortedKeys(dns), ips: sortedKeys(ips)}
 }

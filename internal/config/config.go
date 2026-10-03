@@ -43,6 +43,10 @@ type Config struct {
 	Listen    string
 	DataDir   string
 	PublicURL string // normalised origin plus optional path, no trailing slash; empty when unset
+	// AgentURL is where agents dial when that differs from the public URL, such as
+	// an internal host name or a LAN address (D-18). Normalised like PublicURL;
+	// empty when unset, and then agents dial the public URL.
+	AgentURL string
 
 	EncryptionKey string // secret
 	// TrustedProxies are the peers whose forwarded headers are believed (D-39).
@@ -111,6 +115,8 @@ var settings = []setting{
 		apply: func(c *Config, raw string) error { c.DataDir = raw; return nil }},
 	{env: "BAYPLAN_PUBLIC_URL", flag: "public-url", desc: "externally visible base URL; overrides and locks the stored value",
 		apply: func(c *Config, raw string) (err error) { c.PublicURL, err = normalisePublicURL(raw); return err }},
+	{env: "BAYPLAN_AGENT_URL", flag: "agent-url", desc: "address agents dial when it differs from the public URL; overrides and locks the stored value",
+		apply: func(c *Config, raw string) (err error) { c.AgentURL, err = normalisePublicURL(raw); return err }},
 	{env: "BAYPLAN_ENCRYPTION_KEY", secret: true, desc: "key for secrets at rest (also BAYPLAN_ENCRYPTION_KEY_FILE)",
 		apply: func(c *Config, raw string) error { c.EncryptionKey = raw; return nil }},
 	{env: "BAYPLAN_TRUSTED_PROXIES", flag: "trusted-proxies", desc: "comma-separated IPs or CIDRs of proxies whose forwarded headers are trusted",
@@ -373,6 +379,31 @@ func reservedSegment(p string) string {
 // validated, so a value entered in the setup wizard and one set in the
 // environment are held to one rule. Empty stays empty.
 func NormalisePublicURL(raw string) (string, error) { return normalisePublicURL(raw) }
+
+// AgentEndpoint is the address an agent dials for the URL it is told to use, the
+// agent URL or else the public URL: the same host and base path, https as wss and
+// http as ws, with /agent/connect on the end (D-18). It is the one place that
+// builds the address, so the install commands, the welcome and Settings agree.
+func AgentEndpoint(baseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return "", fmt.Errorf("parse the URL: %w", err)
+	}
+	var scheme string
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		scheme = "wss"
+	case "http":
+		scheme = "ws"
+	default:
+		return "", fmt.Errorf("the URL %q is not http or https", baseURL)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("the URL %q has no host", baseURL)
+	}
+	out := url.URL{Scheme: scheme, Host: u.Host, Path: strings.TrimRight(u.Path, "/") + "/agent/connect"}
+	return out.String(), nil
+}
 
 // normalisePublicURL accepts an absolute http or https URL and returns its
 // origin plus an optional path with no trailing slash. Empty stays empty.

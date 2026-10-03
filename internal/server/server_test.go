@@ -731,7 +731,7 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 
 	// A supplied certificate is the operator's own: HSTS is sent (D-37).
 	src := t.TempDir()
-	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", nil); err != nil {
+	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	supplied := map[string]string{

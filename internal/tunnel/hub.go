@@ -297,9 +297,10 @@ func NewHub(v Verifier, o Observer, log *slog.Logger, now func() time.Time) *Hub
 	}
 }
 
-// WithPublicURL tells the hub where Bayplan is reached from outside. The
-// audience of every handshake is checked against its host, and plain transport
-// is accepted only when the public URL itself is plain http. It is read on every
+// WithPublicURL tells the hub the URL agents are told to dial: Bayplan's public
+// URL, or the agent URL when an admin set one (D-18). The audience of every
+// handshake is checked against its host, and plain transport is accepted only
+// when that URL itself is plain http. It is read on every
 // connection, so a change applies at once. Without it every handshake is refused.
 func (h *Hub) WithPublicURL(f func() string) *Hub {
 	h.publicURL = f

@@ -23,7 +23,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +31,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
@@ -430,26 +430,8 @@ func ParseToken(token string) (envID, secret string, ok bool) {
 
 // AgentURL is the address an agent dials for a public URL: the same host and
 // base path, https as wss and http as ws, and /agent/connect on the end (D-18).
-func AgentURL(publicURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(publicURL))
-	if err != nil {
-		return "", fmt.Errorf("parse the public URL: %w", err)
-	}
-	var scheme string
-	switch strings.ToLower(u.Scheme) {
-	case "https":
-		scheme = "wss"
-	case "http":
-		scheme = "ws"
-	default:
-		return "", fmt.Errorf("the public URL %q is not http or https", publicURL)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("the public URL %q has no host", publicURL)
-	}
-	out := url.URL{Scheme: scheme, Host: u.Host, Path: strings.TrimRight(u.Path, "/") + "/agent/connect"}
-	return out.String(), nil
-}
+// It is config.AgentEndpoint, kept here for the callers that already use it.
+func AgentURL(publicURL string) (string, error) { return config.AgentEndpoint(publicURL) }
 
 func roleOf(f wire.Facts) string {
 	if f.Swarm == nil {

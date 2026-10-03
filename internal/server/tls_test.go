@@ -489,7 +489,7 @@ func TestTLSSuppliedCertificateIsReloadedWhenTheFilesChange(t *testing.T) {
 	a := writePair(t, crt, key, "a.example.com")
 
 	clk := &movingClock{t: fixedNow}
-	got, err := TLSConfig(config.Config{DataDir: t.TempDir(), TLSCertFile: crt, TLSKeyFile: key}, "", clk.now)
+	got, err := TLSConfig(config.Config{DataDir: t.TempDir(), TLSCertFile: crt, TLSKeyFile: key}, "", "", clk.now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,7 +659,7 @@ func TestServerTLSPinIsPublishedOnlyForTheSelfSignedCertificate(t *testing.T) {
 	}
 
 	src := t.TempDir()
-	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", nil); err != nil {
+	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	supplied := build(map[string]string{

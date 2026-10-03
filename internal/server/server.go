@@ -240,7 +240,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 
 	// HTTPS comes from a supplied pair or a generated self-signed certificate
 	// (D-12). It is prepared here so a bad pair stops startup before listening.
-	tlsCfg, err := TLSConfig(cfg, inst.PublicURL(), nil)
+	tlsCfg, err := TLSConfig(cfg, inst.PublicURL(), inst.AgentURL(), nil)
 	if err != nil {
 		_ = st.Close()
 		return nil, err
@@ -304,7 +304,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// address and people signing in do not spend each other's budget.
 	agentAudit := auth.NewAuditThrottle(aud, auth.NewIPLimiter(6*time.Second, 20, 10*time.Minute, nil), log, nil)
 	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
-		WithPublicURL(inst.PublicURL).
+		// The hub checks each handshake against the address agents are told to dial:
+		// the agent URL when one is set, else the public URL (D-18).
+		WithPublicURL(inst.AgentBase).
 		WithPins(func() []string { return selfSignedPins(cfg, tlsCfg) }).
 		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
 		WithLastSeen(agentSvc).

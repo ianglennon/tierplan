@@ -374,8 +374,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get the instance name and public URL
-         * @description publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04).
+         * Get the instance name, public URL and agent URL
+         * @description publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect.
          */
         get: operations["getSettings"];
         put?: never;
@@ -384,8 +384,8 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Change the instance name or the public URL
-         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked and changes nothing. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is audited as settings.updated with the old and new value of every changed field.
+         * Change the instance name, the public URL or the agent URL
+         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is audited as settings.updated with the old and new value of every changed field.
          */
         patch: operations["updateSettings"];
         trace?: never;
@@ -959,6 +959,12 @@ export interface components {
             name: string;
         };
         SettingsBody: {
+            /** @description The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set */
+            agentEndpoint: string;
+            /** @description The address agents dial when it differs from the public URL; empty means they dial the public URL */
+            agentUrl: string;
+            /** @description True when the BAYPLAN_AGENT_URL environment variable fixes the agent URL */
+            agentUrlLocked: boolean;
             /** @description The name shown in the header, tab titles and the sign-in page */
             instanceName: string;
             /** @description The URL users reach Bayplan at; drives the Origin check and the cookie Secure flag */
@@ -1052,6 +1058,8 @@ export interface components {
             type?: "swarm-manager" | "swarm-worker" | "standalone";
         };
         UpdateSettingsInputBody: {
+            /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while BAYPLAN_AGENT_URL is set */
+            agentUrl?: string;
             /** @description New instance name, 1 to 64 characters */
             instanceName?: string;
             /** @description New public URL, an absolute http or https URL. Refused with 409 public_url_locked while BAYPLAN_PUBLIC_URL is set */

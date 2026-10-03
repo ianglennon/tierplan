@@ -96,6 +96,7 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `BAYPLAN_LISTEN` | `:7480` | no | Address to listen on, as `host:port` or `:port`. |
 | `BAYPLAN_DATA_DIR` | `/data` | no | Directory for the database, the encryption key and the TLS certificate. |
 | `BAYPLAN_PUBLIC_URL` | unset | no | Externally visible base URL, for example `https://bayplan.example.com`. Locks the stored value (see [Public URL](#public-url)). |
+| `BAYPLAN_AGENT_URL` | unset | no | Address agents dial when it differs from the public URL, for example an internal host name or a LAN address such as `https://bayplan.internal:7480`. Locks the stored value; the API answers `409 agent_url_locked`. Unset means agents dial the public URL. |
 | `BAYPLAN_ENCRYPTION_KEY` | generated | yes | Key for secrets at rest and the audit chain: 32 random bytes as standard base64. When unset, a key is generated in `/data/bayplan.key`. |
 | `BAYPLAN_TRUSTED_PROXIES` | unset | no | Comma-separated IPs or CIDRs of reverse proxies whose forwarded headers are believed. |
 | `BAYPLAN_LOGIN_MAX_FAILURES` | `5` | no | Failed sign-ins before an account locks. |

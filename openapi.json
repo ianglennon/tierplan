@@ -1200,6 +1200,18 @@
       "SettingsBody": {
         "additionalProperties": false,
         "properties": {
+          "agentEndpoint": {
+            "description": "The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set",
+            "type": "string"
+          },
+          "agentUrl": {
+            "description": "The address agents dial when it differs from the public URL; empty means they dial the public URL",
+            "type": "string"
+          },
+          "agentUrlLocked": {
+            "description": "True when the BAYPLAN_AGENT_URL environment variable fixes the agent URL",
+            "type": "boolean"
+          },
           "instanceName": {
             "description": "The name shown in the header, tab titles and the sign-in page",
             "type": "string"
@@ -1216,7 +1228,10 @@
         "required": [
           "instanceName",
           "publicUrl",
-          "publicUrlLocked"
+          "publicUrlLocked",
+          "agentUrl",
+          "agentUrlLocked",
+          "agentEndpoint"
         ],
         "type": "object"
       },
@@ -1395,6 +1410,10 @@
       "UpdateSettingsInputBody": {
         "additionalProperties": false,
         "properties": {
+          "agentUrl": {
+            "description": "New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while BAYPLAN_AGENT_URL is set",
+            "type": "string"
+          },
           "instanceName": {
             "description": "New instance name, 1 to 64 characters",
             "type": "string"
@@ -2746,7 +2765,7 @@
     },
     "/api/settings": {
       "get": {
-        "description": "publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04).",
+        "description": "publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect.",
         "operationId": "getSettings",
         "responses": {
           "200": {
@@ -2777,13 +2796,13 @@
             "description": "Error"
           }
         },
-        "summary": "Get the instance name and public URL",
+        "summary": "Get the instance name, public URL and agent URL",
         "tags": [
           "settings"
         ]
       },
       "patch": {
-        "description": "Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked and changes nothing. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is audited as settings.updated with the old and new value of every changed field.",
+        "description": "Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is audited as settings.updated with the old and new value of every changed field.",
         "operationId": "updateSettings",
         "requestBody": {
           "content": {
@@ -2824,7 +2843,7 @@
             "description": "Error"
           }
         },
-        "summary": "Change the instance name or the public URL",
+        "summary": "Change the instance name, the public URL or the agent URL",
         "tags": [
           "settings"
         ]
