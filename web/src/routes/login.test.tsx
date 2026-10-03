@@ -229,7 +229,9 @@ describe("/login", () => {
       const router = renderAt(`/login?next=${next}`);
       await fill("admin", "pw");
       fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-      await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+      // "/" is the home page, which moves on to the last-used environment or
+      // the overview as soon as it knows which.
+      await waitFor(() => expect(["/", "/environments"]).toContain(router.state.location.pathname));
       expect(router.state.location.href).not.toContain("evil");
     },
   );
@@ -300,7 +302,7 @@ describe("/login under a base path", () => {
       await fill("admin", "pw");
       fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
       await waitFor(() => expect(router.history.location.pathname).toMatch(/^\/bayplan\/?$/));
-      await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+      await waitFor(() => expect(["/", "/environments"]).toContain(router.state.location.pathname));
       expect(router.history.location.href).not.toContain("evil");
     },
   );

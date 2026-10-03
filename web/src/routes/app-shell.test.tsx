@@ -14,7 +14,7 @@ import "@/i18n";
 const ME = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: [], environments: {} },
+  permissions: { global: [], environments: { "*": ["environments.read"] } },
 };
 
 interface Sent {
@@ -113,7 +113,7 @@ describe("app shell", () => {
     expect(
       screen.getByText(/Bayplan gives you one command that installs a small agent on it/),
     ).toBeTruthy();
-    expect(document.title).toBe("Home · Lab");
+    expect(document.title).toBe("Environments · Lab");
   });
 
   it("puts the skip link first and points it at the main landmark", async () => {

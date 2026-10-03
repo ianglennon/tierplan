@@ -28,6 +28,12 @@ const VIEWER = {
   permissions: { global: [], environments: {} },
 };
 
+// A user who may read environments but nothing in Settings.
+const READER = {
+  ...VIEWER,
+  permissions: { global: [], environments: { "*": ["environments.read"] } },
+};
+
 function environment(over: Record<string, unknown> = {}) {
   return {
     id: "e1",
@@ -177,12 +183,12 @@ describe("Settings layout", () => {
     expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
   });
 
-  it("sends a user with neither permission from /settings to the dashboard (WR-19)", async () => {
-    me = VIEWER;
+  it("sends a user with neither permission from /settings to the home page (WR-19)", async () => {
+    me = READER;
     environments = [];
     const router = renderAt("/settings");
     await screen.findByText("No environments yet");
-    expect(router.state.location.pathname).toBe("/");
+    expect(router.state.location.pathname).toBe("/environments");
   });
 
   it("hides the Environments tab from a user who may add environments but not manage them", async () => {
@@ -213,7 +219,7 @@ describe("navigation", () => {
     cleanup();
     queryClient.clear();
 
-    me = VIEWER;
+    me = READER;
     environments = [];
     renderAt("/");
     await screen.findByText("No environments yet");

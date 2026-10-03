@@ -88,6 +88,25 @@ async function visit(path: string) {
   return (await go(path)).pathname;
 }
 
+// land renders the app at a path and returns where it ends up. The home page
+// redirects from a component, so it needs rendering, not only loading.
+async function land(path: string) {
+  const router = createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries: [path] }),
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+  // Past the path itself and past "/", which /setup passes through on its way.
+  await waitFor(() => expect(["/", path]).not.toContain(router.state.location.pathname), {
+    timeout: 3000,
+  });
+  return router.state.location.pathname;
+}
+
 async function go(path: string) {
   const router = createRouter({
     routeTree,
@@ -111,7 +130,7 @@ describe("first-run redirects", () => {
 
   it("sends / to the overview once setup is done and the visitor is signed in", async () => {
     stubInstance(false);
-    expect(await visit("/")).toBe("/environments");
+    expect(await land("/")).toBe("/environments");
   });
 
   it("sends / to /login when setup is done and nobody is signed in", async () => {
@@ -134,7 +153,7 @@ describe("first-run redirects", () => {
 
   it("sends /setup back to the home page once an admin exists", async () => {
     stubInstance(false);
-    expect(await visit("/setup")).toBe("/environments");
+    expect(await land("/setup")).toBe("/environments");
   });
 
   it("sends /setup on to /login once an admin exists and nobody is signed in", async () => {
@@ -145,8 +164,9 @@ describe("first-run redirects", () => {
   it("asks the server again on every visit instead of trusting an earlier answer", async () => {
     stubInstance(true);
     expect(await visit("/")).toBe("/setup");
+    cleanup();
     stubInstance(false);
-    expect(await visit("/")).toBe("/environments");
+    expect(await land("/")).toBe("/environments");
   });
 });
 
@@ -155,41 +175,41 @@ describe("the last-used environment (D-31)", () => {
     stubInstance(false);
     recent = () => Response.json({ environmentIds: ["b", "a"] });
     list = () => Response.json({ items: [env("a", "alpha"), env("b", "bravo")] });
-    expect(await visit("/")).toBe("/env/b");
+    expect(await land("/")).toBe("/env/b");
   });
 
   it("skips a recent environment that is no longer in the list and takes the next", async () => {
     stubInstance(false);
     recent = () => Response.json({ environmentIds: ["gone", "a"] });
     list = () => Response.json({ items: [env("a", "alpha")] });
-    expect(await visit("/")).toBe("/env/a");
+    expect(await land("/")).toBe("/env/a");
   });
 
   it("sends / to the overview when the user has no recent environment", async () => {
     stubInstance(false);
     list = () => Response.json({ items: [env("a", "alpha")] });
-    expect(await visit("/")).toBe("/environments");
+    expect(await land("/")).toBe("/environments");
   });
 
   it("sends / to the overview when the only recent environment was removed", async () => {
     stubInstance(false);
     recent = () => Response.json({ environmentIds: ["x"] });
     list = () => Response.json({ items: [env("a", "alpha")] });
-    expect(await visit("/")).toBe("/environments");
+    expect(await land("/")).toBe("/environments");
   });
 
   it("sends / to the overview when the recent list cannot be read", async () => {
     stubInstance(false);
     recent = () => new Response("boom", { status: 500 });
     list = () => Response.json({ items: [env("a", "alpha")] });
-    expect(await visit("/")).toBe("/environments");
+    expect(await land("/")).toBe("/environments");
   });
 
   it("sends / to the overview, which says so, when the environment list cannot be read", async () => {
     stubInstance(false);
     recent = () => Response.json({ environmentIds: ["a"] });
     list = () => new Response("boom", { status: 500 });
-    expect(await visit("/")).toBe("/environments");
+    expect(await land("/")).toBe("/environments");
   });
 
   it("shows a skeleton, never the empty state, while the recent list loads", async () => {

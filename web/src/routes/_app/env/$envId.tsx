@@ -4,12 +4,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 import { FileQuestion, ServerCrash, ServerOff } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   EnvironmentProblemError,
   environmentsQuery,
+  recentQuery,
   reconnectEnvironment,
+  recordRecent,
   summaryQuery,
 } from "@/api/environments";
 import { FullPageState, NoPermission } from "@/components/full-page-state";
@@ -49,6 +51,23 @@ function Attempted({ at }: { at: number }) {
   return <>{t("dashboard.fullPage.attempted", { when })}</>;
 }
 
+// useRecordRecent tells the server this environment was opened, once it has
+// stayed open for recordRecentTiming.delayMs (D-31). Passing through it, or the
+// layout rendering again, does not count: the timer belongs to the environment,
+// not to a render, and leaving first cancels it. A failure is ignored, since
+// the person who opened the environment cannot do anything about it.
+function useRecordRecent(envId: string): void {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void recordRecent(envId).then((ok) => {
+        if (ok) void queryClient.invalidateQueries({ queryKey: recentQuery.queryKey });
+      });
+    }, recordRecentTiming.delayMs);
+    return () => clearTimeout(timer);
+  }, [envId, queryClient]);
+}
+
 // EnvironmentLayout wraps every page of one environment. It reads the summary
 // and turns the server's problem answers into full-page states: 503
 // environment_offline, 409 environment_unsupported, 404 environment_not_found
@@ -59,6 +78,7 @@ function EnvironmentLayout() {
   const queryClient = useQueryClient();
   const summary = useQuery(summaryQuery(envId));
   const environments = useQuery(environmentsQuery);
+  useRecordRecent(envId);
   const [attempted, setAttempted] = useState<{ envId: string; at: number } | undefined>();
 
   const name =

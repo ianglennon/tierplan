@@ -15,7 +15,7 @@ import "@/i18n";
 const ME = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: [], environments: {} },
+  permissions: { global: [], environments: { "*": ["environments.read"] } },
 };
 
 const LAB = {
@@ -58,6 +58,7 @@ const SUMMARY = {
 let sent: string[] = [];
 let environments: () => Response | Promise<Response>;
 let summary: () => Response | Promise<Response>;
+let recent: string[] = [];
 
 function stubApi() {
   vi.stubGlobal(
@@ -79,6 +80,9 @@ function stubApi() {
         });
       }
       if (path === "/api/environments") return environments();
+      if (path === "/api/me/recent-environments") {
+        return Response.json({ environmentIds: recent });
+      }
       if (path === "/api/env/e1/summary") return summary();
       if (path === "/api/env/e1/events") return Response.json({ items: [] });
       return Response.json({}, { status: 404 });
@@ -111,6 +115,7 @@ beforeEach(() => {
   setCsrfToken(null);
   environments = () => Response.json({ items: [LAB] });
   summary = () => Response.json(SUMMARY);
+  recent = [];
   stubApi();
 });
 
@@ -123,41 +128,34 @@ afterEach(() => {
 });
 
 describe("home redirect", () => {
-  it("sends / to the first environment's dashboard (ENV-07)", async () => {
+  it("sends / to the last-used environment's dashboard (ENV-07, D-31)", async () => {
+    recent = ["e1"];
     const router = renderAt("/");
     await screen.findByRole("heading", { name: "Lab host" });
     expect(router.state.location.pathname).toBe("/env/e1");
   });
 
-  it("goes to the dashboard when the first environment appears while the empty page is open", async () => {
-    environments = () => Response.json({ items: [] });
+  it("sends / to the overview when there is no last-used environment", async () => {
     const router = renderAt("/");
-    await screen.findByText("No environments yet");
-    environments = () => Response.json({ items: [LAB] });
-    await queryClient.invalidateQueries({ queryKey: ["environments"] });
-    await screen.findByRole("heading", { name: "Lab host" });
-    expect(router.state.location.pathname).toBe("/env/e1");
+    await screen.findByRole("heading", { level: 1, name: "Environments" });
+    expect(router.state.location.pathname).toBe("/environments");
   });
 
-  it("stays on the empty page when no environment exists", async () => {
+  it("ends on the overview's empty state when no environment exists", async () => {
     environments = () => Response.json({ items: [] });
     const router = renderAt("/");
     expect(await screen.findByText("No environments yet")).toBeTruthy();
-    expect(router.state.location.pathname).toBe("/");
+    expect(router.state.location.pathname).toBe("/environments");
   });
 
-  it("shows the landing's own error when the list cannot be read", async () => {
+  it("ends on the overview, which says so, when the list cannot be read", async () => {
     environments = () => new Response("boom", { status: 500 });
     const router = renderAt("/");
     expect(
-      await screen.findByText(
-        "Can't reach Bayplan. Check your connection and try again.",
-        {},
-        { timeout: 4000 },
-      ),
+      await screen.findByText("Couldn't load environments.", {}, { timeout: 6000 }),
     ).toBeTruthy();
-    expect(router.state.location.pathname).toBe("/");
-  }, 8000);
+    expect(router.state.location.pathname).toBe("/environments");
+  }, 10000);
 });
 
 describe("dashboard", () => {

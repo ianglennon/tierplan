@@ -211,7 +211,9 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
             label={t("env.copy.snippetLabel")}
           />
         )}
-        <p className="text-xs text-muted-foreground">{t("env.localHost.notDetected.footnote")}</p>
+        {mode === "wizard" ? (
+          <p className="text-xs text-muted-foreground">{t("env.localHost.notDetected.footnote")}</p>
+        ) : null}
         <div className="flex flex-col gap-2">
           {checkAgain}
           {onDone ? (

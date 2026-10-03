@@ -34,9 +34,6 @@
       "system": "System",
       "logout": "Log out"
     },
-    "home": {
-      "tabTitle": "Home"
-    },
     "account": {
       "changePassword": {
         "title": "Change password",

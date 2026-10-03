@@ -14,7 +14,7 @@ import "@/i18n";
 const ME = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: [], environments: {} },
+  permissions: { global: [], environments: { "*": ["environments.read"] } },
 };
 
 const UNREACHABLE = "Can't reach Bayplan. Check your connection and try again.";
