@@ -4,7 +4,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { environmentsQuery, summaryQuery } from "@/api/environments";
+import { type EnvironmentSummary, environmentsQuery, summaryQuery } from "@/api/environments";
+import { CLUSTER_NODE } from "@/api/resources";
+import type { components } from "@/api/schema";
 import { CountTile } from "@/components/count-tile";
 import { StatusDot, useHealthLabel } from "@/components/status-dot";
 import { TypeBadge } from "@/components/type-badge";
@@ -14,6 +16,8 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { EngineCard } from "@/features/dashboard/engine-card";
 import { EventsFeed } from "@/features/dashboard/events-feed";
+import { NodesBanner } from "@/features/environments/nodes-banner";
+import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -23,6 +27,25 @@ import { useT } from "@/i18n/use-t";
 // layout has already turned offline, unsupported, missing and forbidden
 // environments into full-page states, so what reaches here is data, a load in
 // progress, or a failure that is not one of those.
+// byNode turns the summary's per-node counts into one tile's breakdown. The
+// server's order is kept. `total` is the tile's own count: when the nodes' own
+// numbers add up to less (a swarm-wide network belongs to no node), the rest is
+// the cluster's and gets its own line, so the lines always add up to the tile.
+type NodeCounts = components["schemas"]["NodeCountsBody"];
+
+function breakdownOf(
+  byNode: NonNullable<EnvironmentSummary["byNode"]>,
+  pick: (n: NodeCounts) => number,
+  total?: number,
+): { node: string; value: number }[] {
+  const lines = byNode.map((n) => ({ node: n.node, value: pick(n) }));
+  if (total !== undefined) {
+    const rest = total - lines.reduce((sum, l) => sum + l.value, 0);
+    if (rest > 0) lines.push({ node: CLUSTER_NODE, value: rest });
+  }
+  return lines;
+}
+
 function Dashboard() {
   const { envId } = Route.useParams();
   const t = useT();
@@ -37,6 +60,7 @@ function Dashboard() {
   const canImages = usePermission("images.read", envId);
   const canVolumes = usePermission("volumes.read", envId);
   const canNetworks = usePermission("networks.read", envId);
+  const swarm = useEnvIsSwarm(envId);
   const params = { envId };
 
   const data = summary.data;
@@ -49,6 +73,16 @@ function Dashboard() {
   // host and the container ID it found.
   const isSelf = Boolean(listed?.isSelfHost && data?.selfContainerId);
   const name = data?.environment.name ?? listed?.name;
+  // A swarm's totals are over its nodes; every other environment is one node.
+  const byNode = swarm ? (data?.byNode ?? []) : [];
+  const nodesReady = swarm ? listed?.nodes : null;
+  // Nodes and Services come from a manager. The server leaves them out of the
+  // counts when none answered: say so rather than hide the tiles. A worker has
+  // its own notice, and a lost quorum is not a missing manager.
+  const managerTiles = counts?.nodes !== undefined || (swarm && !data?.isWorker);
+  const statusIssues = data?.environment.status.issues ?? listed?.status.issues ?? [];
+  const noQuorum = statusIssues.some((i) => i.code === "no_quorum");
+  const noManagerLine = noQuorum ? t("aggregate.tiles.noQuorum") : t("aggregate.tiles.noManager");
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8">
@@ -63,7 +97,14 @@ function Dashboard() {
         />
         {status ? <StatusDot state={status.state} label={healthLabel(status)} /> : null}
         {isSelf ? <Badge variant="outline">{t("dashboard.selfBadge")}</Badge> : null}
+        {nodesReady ? (
+          <span className="text-sm text-muted-foreground">
+            {t("aggregate.header.nodesReady", { ready: nodesReady.ready, total: nodesReady.total })}
+          </span>
+        ) : null}
       </header>
+
+      {swarm ? <NodesBanner notReporting={data?.notReporting} /> : null}
 
       {data?.isWorker ? (
         <Alert>
@@ -104,6 +145,7 @@ function Dashboard() {
                 })
               : undefined
           }
+          breakdown={breakdownOf(byNode, (n) => n.containers)}
           to={canContainers ? "/env/$envId/containers" : undefined}
           params={params}
           loading={loading}
@@ -112,6 +154,7 @@ function Dashboard() {
         <CountTile
           label={t("dashboard.tiles.images")}
           value={counts?.images}
+          breakdown={breakdownOf(byNode, (n) => n.images)}
           to={canImages ? "/env/$envId/images" : undefined}
           params={params}
           loading={loading}
@@ -120,6 +163,7 @@ function Dashboard() {
         <CountTile
           label={t("dashboard.tiles.volumes")}
           value={counts?.volumes}
+          breakdown={breakdownOf(byNode, (n) => n.volumes)}
           to={canVolumes ? "/env/$envId/volumes" : undefined}
           params={params}
           loading={loading}
@@ -128,22 +172,39 @@ function Dashboard() {
         <CountTile
           label={t("dashboard.tiles.networks")}
           value={counts?.networks}
+          breakdown={breakdownOf(byNode, (n) => n.networks, counts?.networks)}
           to={canNetworks ? "/env/$envId/networks" : undefined}
           params={params}
           loading={loading}
           error={failed}
         />
-        {counts?.nodes !== undefined ? (
-          <CountTile label={t("dashboard.tiles.nodes")} value={counts.nodes} />
-        ) : null}
-        {counts?.services !== undefined ? (
-          <CountTile label={t("dashboard.tiles.services")} value={counts.services} />
+        {managerTiles ? (
+          <>
+            <CountTile
+              label={t("dashboard.tiles.nodes")}
+              value={counts?.nodes}
+              subline={counts?.nodes === undefined && data ? noManagerLine : undefined}
+              loading={loading}
+            />
+            <CountTile
+              label={t("dashboard.tiles.services")}
+              value={counts?.services}
+              subline={counts?.services === undefined && data ? noManagerLine : undefined}
+              loading={loading}
+            />
+          </>
         ) : null}
       </section>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_2fr]">
-        <EngineCard engine={data?.engine} loading={loading} />
-        <EventsFeed />
+        <EngineCard
+          engine={data?.engine}
+          loading={loading}
+          isAgentEnvironment={listed?.kind === "agent"}
+          agents={listed?.agents}
+          agentVersion={listed?.agentVersion}
+        />
+        <EventsFeed showNode={swarm} />
       </div>
     </div>
   );

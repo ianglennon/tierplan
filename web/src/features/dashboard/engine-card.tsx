@@ -22,8 +22,15 @@ const GIB = 1024 ** 3;
 
 // EngineCard is the "Docker engine" card (D-55): key-value rows for what the
 // daemon reports. Anything it does not report is "—", and values wrap rather
-// than truncate.
-export function EngineCard({ engine, loading }: EngineCardProps) {
+// than truncate. On a swarm the engine is the one of the manager the last read
+// used.
+export function EngineCard({
+  engine,
+  loading,
+  agents,
+  agentVersion,
+  isAgentEnvironment,
+}: EngineCardProps) {
   const t = useT();
   const missing = t("dashboard.engine.missing");
 
@@ -39,7 +46,7 @@ export function EngineCard({ engine, loading }: EngineCardProps) {
       : undefined;
   const cpus = engine && engine.ncpu > 0 ? new Intl.NumberFormat().format(engine.ncpu) : undefined;
 
-  const rows: ReadonlyArray<[string, string | undefined]> = [
+  const rows: Array<[string, string | undefined]> = [
     [t("dashboard.engine.version"), engine?.version],
     [t("dashboard.engine.apiVersion"), engine?.apiVersion],
     [t("dashboard.engine.osArch"), osArch || undefined],
@@ -47,6 +54,21 @@ export function EngineCard({ engine, loading }: EngineCardProps) {
     [t("dashboard.engine.cpus"), cpus],
     [t("dashboard.engine.memory"), memory],
   ];
+  // An agent environment says how many of its agents are connected (a swarm
+  // only; one host has no count worth showing) and which agent version runs.
+  // The local socket has no agent and gets neither row (D-44).
+  if (isAgentEnvironment) {
+    if (agents) {
+      rows.push([
+        t("aggregate.engine.agents"),
+        t("aggregate.engine.agentsValue", {
+          connected: agents.connected,
+          expected: agents.expected,
+        }),
+      ]);
+    }
+    rows.push([t("aggregate.engine.agentVersion"), agentVersion ?? undefined]);
+  }
 
   return (
     <Card>

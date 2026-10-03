@@ -36,7 +36,7 @@ const SHORT_ID = 12;
 // EventRow is one event: when, what kind, what happened, to what, and up to two
 // facts about it (image, then exit code). Names come from the daemon and are
 // rendered as text only (T-01-91).
-function EventRow({ event }: { event: EventDTO }) {
+function EventRow({ event, showNode }: { event: EventDTO; showNode?: boolean }) {
   const t = useT();
   if (event.type === "bayplan") {
     // The message is written by Bayplan, from names agents reported; rendered as text.
@@ -77,6 +77,12 @@ function EventRow({ event }: { event: EventDTO }) {
           <TruncatedText mono className="max-w-full sm:max-w-64">
             {subject}
           </TruncatedText>
+          {showNode && event.node ? (
+            // Where it happened, on a swarm. An agent chose the name: text only.
+            <TruncatedText className="max-w-40 text-xs text-muted-foreground">
+              {event.node}
+            </TruncatedText>
+          ) : null}
           {attributes.map((a) => (
             <span key={a} className="min-w-0 truncate text-xs text-muted-foreground">
               {a}
@@ -90,8 +96,9 @@ function EventRow({ event }: { event: EventDTO }) {
 
 // EventsFeed is the dashboard's "Recent events" card (D-55, D-57): the last
 // hour best effort, then new events at the top as they happen, 50 at most.
-// Filtering is client-side over what the provider holds.
-export function EventsFeed(_props: { showNode?: boolean }) {
+// Filtering is client-side over what the provider holds. On a swarm each row
+// names its node (D-43).
+export function EventsFeed({ showNode }: { showNode?: boolean }) {
   const t = useT();
   const { events, state, ready, retry } = useEnvEvents();
   const [filter, setFilter] = useState<Filter>("all");
@@ -136,7 +143,7 @@ export function EventsFeed(_props: { showNode?: boolean }) {
       <ScrollArea className="[&_[data-slot=scroll-area-viewport]]:max-h-[480px]">
         <ol>
           {shown.map((e) => (
-            <EventRow key={e.id} event={e} />
+            <EventRow key={e.id} event={e} showNode={showNode} />
           ))}
         </ol>
       </ScrollArea>
