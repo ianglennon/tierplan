@@ -14,7 +14,7 @@ import {
 } from "react";
 
 import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
-import { WARNINGS_KEY } from "@/api/warnings";
+import { ENV_WARNINGS_KEY, WARNINGS_KEY } from "@/api/warnings";
 import type { EventSourceLike } from "@/features/dashboard/events";
 import { apiUrl } from "@/lib/base-path";
 
@@ -26,6 +26,8 @@ import { apiUrl } from "@/lib/base-path";
 //   agent.connected     agentId, node, type (manager, worker or standalone), version
 //   agent.disconnected  agentId, node, reason (closed, timeout, replaced or shutdown)
 //   agent.refused       code, mode (enrol or hello), node, ip
+//   failover            fromAgentId, fromNode, toAgentId, toNode: the manager that answers
+//                       for a swarm changed
 //   proxy.warning       kind (untrusted_forwarded, url_mismatch or websocket_failing);
 //                       envId is empty, and only a caller with settings.read gets it
 //
@@ -44,6 +46,10 @@ export interface EnvStreamFrame {
   mode?: string;
   ip?: string;
   kind?: string;
+  fromAgentId?: string;
+  fromNode?: string;
+  toAgentId?: string;
+  toNode?: string;
 }
 
 export type EnvEventName =
@@ -51,6 +57,7 @@ export type EnvEventName =
   | "agent.connected"
   | "agent.disconnected"
   | "agent.refused"
+  | "failover"
   | "proxy.warning";
 
 export interface EnvHealthEvent {
@@ -71,6 +78,7 @@ const EVENTS: readonly EnvEventName[] = [
   "agent.connected",
   "agent.disconnected",
   "agent.refused",
+  "failover",
   "proxy.warning",
 ];
 
@@ -147,6 +155,8 @@ export function EnvHealthStreamProvider({ children, createSource }: ProviderProp
     let recoverTimer: ReturnType<typeof setTimeout> | undefined;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     let lastRefresh = Number.NEGATIVE_INFINITY;
+    let warningsTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastWarnings = Number.NEGATIVE_INFINITY;
     const seen = new Set<string>();
 
     // Reads the whole list. fetchQuery, not invalidate, so it runs even when
@@ -164,6 +174,24 @@ export function EnvHealthStreamProvider({ children, createSource }: ProviderProp
       }
       lastRefresh = Date.now();
       void queryClient.fetchQuery({ ...environmentsQuery, staleTime: 0 }).catch(() => {});
+    }
+
+    // The bell's environment problems are derived from the same state, so any
+    // change that moves the list can move them too. Read again, at most once a
+    // second, whether or not the bell is open: it shows the count.
+    function refreshWarnings(): void {
+      const wait = lastWarnings + REFRESH_MS - Date.now();
+      if (wait > 0) {
+        if (warningsTimer === undefined) {
+          warningsTimer = setTimeout(() => {
+            warningsTimer = undefined;
+            if (!closed) refreshWarnings();
+          }, wait);
+        }
+        return;
+      }
+      lastWarnings = Date.now();
+      void queryClient.invalidateQueries({ queryKey: ENV_WARNINGS_KEY });
     }
 
     // A server restarts its ids from 1, so the same id alone does not make a
@@ -234,6 +262,13 @@ export function EnvHealthStreamProvider({ children, createSource }: ProviderProp
         // The counts and last-seen times are not part of env.status, so an
         // agent coming or going reads the list again.
         if (name === "agent.connected" || name === "agent.disconnected") refreshList();
+        if (name === "failover") {
+          // The manager that answers for a swarm changed: the node list shows
+          // which one leads, and the overview's counts came from the old one.
+          refreshList();
+          void queryClient.invalidateQueries({ queryKey: ["agents", frame.envId] });
+        }
+        if (name !== "agent.refused") refreshWarnings();
         const heard = listeners.current.get(frame.envId);
         if (!heard) return;
         const out: EnvHealthEvent = { name, id: message.lastEventId, data: frame };
@@ -296,6 +331,7 @@ export function EnvHealthStreamProvider({ children, createSource }: ProviderProp
       source = undefined;
       clearTimeout(recoverTimer);
       clearTimeout(refreshTimer);
+      clearTimeout(warningsTimer);
     };
   }, [queryClient, createSource]);
 

@@ -1,5 +1,53 @@
 {
   "bell": {
+    "env": {
+      "offline": {
+        "title": "{{name}} is offline",
+        "lead": "Offline since {{time}}.",
+        "leadNoTime": "Offline.",
+        "view": "View"
+      },
+      "manyOffline": {
+        "title_one": "{{count}} environment is offline",
+        "title_other": "{{count}} environments are offline",
+        "body": "Open the overview to see which.",
+        "view": "View environments"
+      },
+      "cert": {
+        "title": "An agent certificate isn't renewing",
+        "body": "{{node}} on {{env}}: the certificate expires {{when}}. Check that the agent can reach Bayplan.",
+        "bodyExpired": "{{node}} on {{env}}: the certificate expired {{when}}. Check that the agent can reach Bayplan.",
+        "view": "View nodes"
+      },
+      "manualUpdate": {
+        "title_one": "{{count}} agent needs a manual update",
+        "title_other": "{{count}} agents need a manual update",
+        "body": "Auto-update is off or the agent is outside the compatibility window.",
+        "view": "View"
+      },
+      "clock": {
+        "title": "The clock is off on {{node}}",
+        "body": "{{node}} on {{env}} is {{offset}} out of step. Bayplan refuses agents beyond 5 minutes.",
+        "view": "View nodes"
+      },
+      "pending": {
+        "title": "{{name}} still has no agent",
+        "body_one": "It was added {{count}} day ago. Finish installing the agent or remove it.",
+        "body_other": "It was added {{count}} days ago. Finish installing the agent or remove it.",
+        "finish": "Finish setup",
+        "view": "View"
+      },
+      "clusterChanged": {
+        "title": "{{name}} was re-initialised",
+        "body": "Adopt the new cluster or remove the environment.",
+        "view": "View"
+      },
+      "fold": {
+        "title": "This host is part of {{swarm}}",
+        "body": "Fold it into the swarm environment so it isn't listed twice.",
+        "review": "Review"
+      }
+    },
     "proxy": {
       "docs": "Reverse proxy docs",
       "untrustedForwarded": {

@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
-import { Server } from "lucide-react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { Server, Waypoints } from "lucide-react";
 import { type MouseEvent, useRef, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
@@ -79,6 +79,12 @@ function EnvironmentsPage() {
   const loaded = environments.data !== undefined;
   const failed = environments.isError && !loaded;
   const empty = loaded && items.length === 0;
+  // The Bayplan host manages a swarm that is enrolled through agents and could be folded
+  // into it (D-48). Only someone who may do it is told; the swarm environment is the one
+  // the fold happens in, and its settings page holds the card.
+  const foldSwarm = items.find(
+    (e) => e.kind === "agent" && e.foldOffered && hasPermission(me, "environments.manage", e.id),
+  );
 
   // Whatever opened the dialog, so closing it puts focus back there.
   const addEnvironment = (event: MouseEvent<HTMLElement>) => {
@@ -125,6 +131,24 @@ function EnvironmentsPage() {
               {environments.isFetching ? <Spinner aria-hidden="true" /> : null}
               {t("overview.error.retry")}
             </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {foldSwarm ? (
+        <Alert>
+          <Waypoints aria-hidden="true" />
+          <AlertTitle>{t("overview.fold.title", { swarm: foldSwarm.name })}</AlertTitle>
+          <AlertDescription className="flex flex-col gap-1">
+            <span>{t("overview.fold.body")}</span>
+            <Link
+              to="/settings/environments/$envId"
+              params={{ envId: foldSwarm.id }}
+              hash="fold"
+              className="w-fit rounded-sm text-accent-ink underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-md:inline-flex max-md:min-h-11 max-md:items-center"
+            >
+              {t("overview.fold.review")}
+            </Link>
           </AlertDescription>
         </Alert>
       ) : null}

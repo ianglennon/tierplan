@@ -370,3 +370,51 @@ describe("the sidebar's Environments item", () => {
     expect(screen.queryByRole("link", { name: "Environments" })).toBeNull();
   });
 });
+
+describe("the fold notice (D-48, UI-SPEC Header bell additions: Fold offered)", () => {
+  const SWARM = env("s1", "Prod swarm", "online", {
+    envType: "swarm",
+    foldOffered: true,
+    nodes: { ready: 2, total: 2 },
+  });
+  const LOCAL = env("l1", "This host", "online", {
+    kind: "local",
+    isLocalSocket: true,
+    foldOffered: true,
+    envType: "swarm",
+  });
+  const MANAGER = {
+    ...ADMIN,
+    permissions: {
+      global: [],
+      environments: { "*": ["environments.read", "environments.manage"] },
+    },
+  };
+
+  it("tells a manager that this host is part of the swarm and links to the fold card", async () => {
+    me = MANAGER;
+    list = () => Response.json({ items: [SWARM, LOCAL] });
+    renderAt("/environments");
+    expect(await screen.findByText("This host is part of Prod swarm")).toBeTruthy();
+    expect(
+      screen.getByText("Fold it into the swarm environment so it isn't listed twice."),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Review" }).getAttribute("href")).toBe(
+      "/settings/environments/s1#fold",
+    );
+  });
+
+  it("says nothing to someone who may not manage environments", async () => {
+    list = () => Response.json({ items: [SWARM, LOCAL] });
+    renderAt("/environments");
+    await screen.findByRole("table");
+    expect(screen.queryByText(/This host is part of/)).toBeNull();
+  });
+
+  it("says nothing when no fold is offered", async () => {
+    me = MANAGER;
+    renderAt("/environments");
+    await screen.findByRole("table");
+    expect(screen.queryByText(/This host is part of/)).toBeNull();
+  });
+});

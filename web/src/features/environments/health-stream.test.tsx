@@ -104,6 +104,66 @@ describe("EnvHealthStreamProvider", () => {
     expect(heard).toEqual([]);
   });
 
+  it("delivers a failover frame to the environment's listeners and reads its node list and the list again", async () => {
+    client.setQueryData(["agents", "a"], {
+      items: [],
+      manualCleanup: { swarm: "", standalone: "" },
+    });
+    client.setQueryData(["environment-warnings"], []);
+    const heard: EnvHealthEvent[] = [];
+    mount(<Listener envId="a" got={heard} />);
+    await act(async () => {
+      first().open();
+      first().sendFrame(
+        "failover",
+        {
+          envId: "a",
+          at: "2026-10-03T10:00:00Z",
+          fromAgentId: "m1",
+          fromNode: "mgr-1",
+          toAgentId: "m2",
+          toNode: "mgr-2",
+        },
+        "21",
+      );
+    });
+    expect(heard.map((e) => [e.name, e.data.fromNode, e.data.toNode])).toEqual([
+      ["failover", "mgr-1", "mgr-2"],
+    ]);
+    expect(client.getQueryState(["agents", "a"])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(["environment-warnings"])?.isInvalidated).toBe(true);
+    await vi.waitFor(() => expect(fetched).toContain("/api/environments"));
+  });
+
+  it("reads the environment problems again on a status change, an agent coming or going, but not on a refused enrolment", async () => {
+    client.setQueryData(["environment-warnings"], []);
+    mount();
+    await act(async () => {
+      first().open();
+      first().sendFrame(
+        "agent.refused",
+        {
+          envId: "a",
+          at: "2026-10-03T10:00:00Z",
+          code: "auth_rejected",
+          mode: "enrol",
+          node: "n",
+          ip: "10.0.0.1",
+        },
+        "30",
+      );
+    });
+    expect(client.getQueryState(["environment-warnings"])?.isInvalidated).toBe(false);
+    await act(async () => {
+      first().sendFrame(
+        "agent.disconnected",
+        { envId: "a", at: "2026-10-03T10:00:01Z", agentId: "x", node: "n", reason: "timeout" },
+        "31",
+      );
+    });
+    expect(client.getQueryState(["environment-warnings"])?.isInvalidated).toBe(true);
+  });
+
   it("opens one EventSource to the environments stream for the whole app", () => {
     mount(
       <>

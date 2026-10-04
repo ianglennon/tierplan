@@ -41,6 +41,11 @@
       "agent": "agent {{version}}"
     },
     "announce": "{{name}} is now {{state}}",
+    "fold": {
+      "title": "This host is part of {{swarm}}",
+      "body": "Fold it into the swarm environment so it isn't listed twice.",
+      "review": "Review"
+    },
     "error": {
       "heading": "Couldn't load environments.",
       "body": "Check the connection and try again.",
