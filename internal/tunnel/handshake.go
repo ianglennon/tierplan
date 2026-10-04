@@ -111,7 +111,7 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 	if err != nil {
 		var re *RefuseError
 		if errors.As(err, &re) {
-			h.log.Info("agent handshake refused", "ip", ip, "mode", a.Mode, "code", re.Code, "reason", re.AuditReason)
+			h.log.Info("agent handshake refused", "ip", ip, "mode", clip(a.Mode, 16), "code", re.Code, "reason", re.AuditReason)
 			// Told before the agent is, so whoever watches has the event by the time
 			// the agent can try again.
 			if h.notifier != nil {
@@ -119,7 +119,7 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 			}
 			h.turnAway(ctx, c, ip, a.Mode, a.Facts.Hostname, re.Code, re.Detail, re.AuditReason)
 		} else {
-			h.log.Error("agent handshake failed", "ip", ip, "mode", a.Mode, "error", err)
+			h.log.Error("agent handshake failed", "ip", ip, "mode", clip(a.Mode, 16), "error", err)
 			h.refuse(ctx, c, wire.RefuseInternal, "the server failed to verify this agent; it will retry")
 		}
 		return accepted{}, false
@@ -175,7 +175,7 @@ func (h *Hub) verifyAuth(ctx context.Context, a wire.Auth, serverNonce []byte, p
 		return accepted{}, malformed
 	case a.Aud != p.aud:
 		// A relay to a different host signs a different audience and fails here.
-		h.log.Warn("agent handshake addressed to a different host", "ip", p.ip, "audience", a.Aud, "expected", p.aud)
+		h.log.Warn("agent handshake addressed to a different host", "ip", p.ip, "audience", clip(a.Aud, 256), "expected", p.aud)
 		return accepted{}, &RefuseError{
 			Code:        wire.ReasonAuthRejected,
 			Detail:      "the handshake was addressed to a different host than this server's public URL",

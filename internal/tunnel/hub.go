@@ -334,10 +334,13 @@ type Hub struct {
 	// refusals records refused attempts, onUpgradeFailure hears of requests that
 	// were not an upgrade and maxResponse caps one Docker answer. All are set
 	// before the hub serves and read-only after.
-	allowInsecure    bool
-	connect          *auth.IPLimiter
-	handshakes       chan struct{}
-	perAddr          *addrInflight
+	allowInsecure bool
+	connect       *auth.IPLimiter
+	handshakes    chan struct{}
+	perAddr       *addrInflight
+	// warnLimit lets one log line per address per minute through, for what is
+	// logged before a request is admitted (IN-B-02).
+	warnLimit        *auth.IPLimiter
 	refusals         auth.AuditRecorder
 	audit            auth.AuditRecorder
 	onUpgradeFailure func(peer string)
@@ -387,6 +390,7 @@ func NewHub(v Verifier, o Observer, log *slog.Logger, now func() time.Time) *Hub
 		connect:     auth.NewIPLimiter(connectRefill, DefaultConnectBurst, connectLimiterTTL, now),
 		handshakes:  make(chan struct{}, maxHandshakes),
 		perAddr:     newAddrInflight(),
+		warnLimit:   auth.NewIPLimiter(time.Minute, 1, connectLimiterTTL, now),
 		maxResponse: MaxResponseBytes,
 		firstFrame:  firstFrameTimeout,
 	}

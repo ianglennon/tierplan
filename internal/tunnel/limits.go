@@ -6,6 +6,7 @@ package tunnel
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"regexp"
@@ -167,6 +168,20 @@ type preflightRefusal struct {
 	audit bool
 }
 
+// logBeforeAdmission writes a log line about a request that has not been admitted
+// yet, at most once per client address per minute, and drops it otherwise. These
+// lines run before admit, so without the limit any caller could fill the log with
+// them for the price of a GET (IN-B-02). Dropping loses nothing a person needs:
+// the audit throttle still counts every refusal and the proxy observer still hears
+// every request that was not an upgrade. The limiter's table fails closed, so a
+// flood from very many addresses loses lines, not memory.
+func (h *Hub) logBeforeAdmission(level slog.Level, ip, msg string, args ...any) {
+	if !h.warnLimit.Allow(ip) {
+		return
+	}
+	h.log.Log(context.Background(), level, msg, append(args, "ip", ip)...)
+}
+
 // preflight runs the checks that need nothing but the request. It returns the
 // audience the handshake must be addressed to.
 func (h *Hub) preflight(r *http.Request, ip string) (aud string, ref *preflightRefusal) {
@@ -177,7 +192,7 @@ func (h *Hub) preflight(r *http.Request, ip string) (aud string, ref *preflightR
 	}
 	if !isWebSocketUpgrade(r) {
 		// A proxy that strips the Upgrade headers lands here.
-		h.log.Warn("agent endpoint reached without a WebSocket upgrade; a reverse proxy may be dropping the Upgrade headers", "ip", ip)
+		h.logBeforeAdmission(slog.LevelWarn, ip, "agent endpoint reached without a WebSocket upgrade; a reverse proxy may be dropping the Upgrade headers")
 		if h.onUpgradeFailure != nil {
 			h.onUpgradeFailure(ip)
 		}
@@ -185,18 +200,18 @@ func (h *Hub) preflight(r *http.Request, ip string) (aud string, ref *preflightR
 	}
 	aud, plainOK, err := h.audience()
 	if err != nil {
-		h.log.Error("agent connection refused: Bayplan has no usable public URL", "error", err)
+		h.logBeforeAdmission(slog.LevelError, ip, "agent connection refused: Bayplan has no usable public URL", "error", err)
 		return "", &preflightRefusal{status: http.StatusServiceUnavailable, msg: "this server has no public URL, so it cannot accept agents"}
 	}
 	if !secureTransport(r) {
 		if !plainOK && !h.allowInsecure {
-			h.log.Warn("agent connection refused: it did not arrive over TLS", "ip", ip)
+			h.logBeforeAdmission(slog.LevelWarn, ip, "agent connection refused: it did not arrive over TLS")
 			return "", &preflightRefusal{
 				status: http.StatusForbidden, code: wire.RefuseInsecureTransport, audit: true,
 				msg: wire.RefuseInsecureTransport + ": agents must connect over wss://",
 			}
 		}
-		h.log.Warn("an agent connected over plain HTTP, so the join token and the Docker answers are not encrypted", "ip", ip)
+		h.logBeforeAdmission(slog.LevelWarn, ip, "an agent connected over plain HTTP, so the join token and the Docker answers are not encrypted")
 	}
 	return aud, nil
 }
