@@ -26,6 +26,7 @@ import (
 	"github.com/ianglennon/bayplan/agent/internal/config"
 	"github.com/ianglennon/bayplan/agent/internal/connect"
 	"github.com/ianglennon/bayplan/agent/internal/privdrop"
+	"github.com/ianglennon/bayplan/agent/internal/selfmaint"
 	"github.com/ianglennon/bayplan/agent/internal/version"
 )
 
@@ -95,6 +96,9 @@ func run(d deps) int {
 		URL: cfg.URL, JoinToken: cfg.JoinToken, SocketPath: cfg.SocketPath, Version: version.Version, Log: log,
 		StateDir: cfg.StateDir, BackoffMin: cfg.BackoffMin, BackoffMax: cfg.BackoffMax,
 		ReadOnly: cfg.ReadOnly, SelfUpdate: cfg.SelfUpdate, InstallPins: cfg.Pins,
+		Maint: selfmaint.New(selfmaint.Config{
+			SocketPath: cfg.SocketPath, SelfUpdate: cfg.SelfUpdate, StateDir: cfg.StateDir, Log: log,
+		}),
 	})
 	if err == nil {
 		return 0

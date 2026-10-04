@@ -80,6 +80,19 @@ func decodeNumbers(t *testing.T, raw []byte) map[string]any {
 	return out
 }
 
+// sub walks down nested JSON objects.
+func sub(t *testing.T, m map[string]any, keys ...string) map[string]any {
+	t.Helper()
+	for _, k := range keys {
+		next, ok := m[k].(map[string]any)
+		if !ok {
+			t.Fatalf("no object at %q in %v", k, m)
+		}
+		m = next
+	}
+	return m
+}
+
 func swarmFixture(t *testing.T, mut func(*Config)) (*fakeEngine, *Maint) {
 	t.Helper()
 	f := newFakeEngine(t)
@@ -111,8 +124,8 @@ func TestSwarmUpdatePatchesOnlyTheImageAndPostsWithTheInspectedVersion(t *testin
 
 	// Everything in the spec but the image is exactly as inspected, including the
 	// fields this client has no type for and the number a float would round.
-	want := decodeNumbers(t, []byte(serviceJSON))["Spec"].(map[string]any)
-	want["TaskTemplate"].(map[string]any)["ContainerSpec"].(map[string]any)["Image"] = newImage
+	want := sub(t, decodeNumbers(t, []byte(serviceJSON)), "Spec")
+	sub(t, want, "TaskTemplate", "ContainerSpec")["Image"] = newImage
 	got := decodeNumbers(t, post.Body)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the posted spec differs from the inspected one in more than the image:\n got: %s\nwant: %v", post.Body, want)
@@ -172,7 +185,7 @@ func TestAnUpdateOfTheOwnRepositoryInAnyOfItsFormsIsAccepted(t *testing.T) {
 			if !res.OK {
 				t.Fatalf("refused: %+v", res)
 			}
-			if got := decodeNumbers(t, f.servicePosts[0].Body)["TaskTemplate"].(map[string]any)["ContainerSpec"].(map[string]any)["Image"]; got != image {
+			if got := sub(t, decodeNumbers(t, f.servicePosts[0].Body), "TaskTemplate", "ContainerSpec")["Image"]; got != image {
 				t.Fatalf("the service got image %v, want %s", got, image)
 			}
 		})

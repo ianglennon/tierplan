@@ -42,6 +42,7 @@ import (
 
 	"github.com/ianglennon/bayplan/agent/internal/facts"
 	"github.com/ianglennon/bayplan/agent/internal/proxy"
+	"github.com/ianglennon/bayplan/agent/internal/selfmaint"
 	"github.com/ianglennon/bayplan/agent/internal/state"
 	"github.com/ianglennon/bayplan/proto/authn"
 	"github.com/ianglennon/bayplan/proto/wire"
@@ -77,6 +78,9 @@ type Config struct {
 	// SelfUpdate says whether the host lets the agent update itself. Both are
 	// reported in the handshake so the UI can show them (D-28).
 	ReadOnly, SelfUpdate bool
+	// Maint answers the server's update and uninstall messages (D-24, D-26). Nil
+	// answers every such message self_update_disabled.
+	Maint selfmaint.Service
 }
 
 // runEnv is what a test replaces: the wait between attempts, the jitter and the
@@ -524,6 +528,7 @@ func (r *runner) hooks(verified bool) controlHooks {
 	r.mu.Unlock()
 	warned := false
 	return controlHooks{
+		maint: r.cfg.Maint,
 		renew: newRenewer(cur.Cert, cur.AgentID, cur.Key, r.env.now, r.env.rnd, r.log, r.saveCert),
 		urls: func(u wire.URLUpdate) {
 			if !verified {

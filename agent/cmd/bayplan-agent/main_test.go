@@ -18,6 +18,7 @@ import (
 	"github.com/ianglennon/bayplan/agent/internal/connect"
 	"github.com/ianglennon/bayplan/agent/internal/privdrop"
 	"github.com/ianglennon/bayplan/agent/internal/version"
+	"github.com/ianglennon/bayplan/proto/wire"
 )
 
 const secret = "bpjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
@@ -195,5 +196,37 @@ func TestThePolicyFlagsReachTheConnection(t *testing.T) {
 	}
 	if !h.gotConn.ReadOnly || h.gotConn.SelfUpdate {
 		t.Fatalf("connect got ReadOnly %v SelfUpdate %v, want true and false", h.gotConn.ReadOnly, h.gotConn.SelfUpdate)
+	}
+}
+
+func TestSelfMaintenanceReachesTheConnectionAndHonoursTheHostSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		flag     string
+		wantCode string // what an update answers when no Docker is reachable
+	}{
+		{"false", wire.UpdateErrSelfUpdateDisabled},
+		{"true", wire.UpdateErrOwnContainerUnknown},
+	} {
+		t.Run("self update "+tc.flag, func(t *testing.T) {
+			h := &harness{}
+			d := h.deps(map[string]string{
+				"BAYPLAN_AGENT_URL":         "wss://bayplan.example/agent/connect",
+				"BAYPLAN_AGENT_JOIN_TOKEN":  secret,
+				"BAYPLAN_AGENT_SELF_UPDATE": tc.flag,
+				"BAYPLAN_AGENT_SOCKET":      "/nonexistent/docker.sock",
+			}, nil)
+			if code := run(d); code != 0 {
+				t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
+			}
+			if h.gotConn.Maint == nil {
+				t.Fatal("connect got no self-maintenance")
+			}
+			// Off: the switch answers. On, with no Docker to read its own container
+			// from, the agent cannot know its own repository and updates nothing.
+			res := h.gotConn.Maint.Update(context.Background(), wire.Update{T: wire.TypeUpdate, Image: "ghcr.io/ianglennon/bayplan-agent:1"})
+			if res.OK || res.Error != tc.wantCode {
+				t.Fatalf("update answered %+v, want error %s", res, tc.wantCode)
+			}
+		})
 	}
 }

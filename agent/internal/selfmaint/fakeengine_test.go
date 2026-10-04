@@ -191,7 +191,7 @@ func (f *fakeEngine) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"status":"Pulling from `+q.Get("fromImage")+`"}`+"\n"+`{"status":"Status: Downloaded newer image"}`+"\n")
+		_, _ = io.WriteString(w, `{"status":"Pulling"}`+"\n"+`{"status":"Status: Downloaded newer image"}`+"\n")
 	case strings.HasPrefix(p, "/images/") && strings.HasSuffix(p, "/json") && r.Method == http.MethodGet:
 		ref := strings.TrimSuffix(strings.TrimPrefix(p, "/images/"), "/json")
 		if im, ok := f.images[ref]; ok {
