@@ -39,15 +39,28 @@ function execCopy(text: string, host?: Element | null): boolean {
   area.style.left = "0";
   area.style.opacity = "0";
   (host ?? beside ?? document.body).append(area);
+  // Chromium answers true from execCommand("copy") even when nothing was
+  // selected and nothing was copied, so the boolean alone cannot be trusted
+  // (G-02-1a). This listener puts the text on the clipboard without depending
+  // on a selection, and a copy counts only if it ran.
+  let wrote = false;
+  const onCopyEvent = (event: ClipboardEvent) => {
+    if (!event.clipboardData) return;
+    event.clipboardData.setData("text/plain", text);
+    event.preventDefault();
+    wrote = true;
+  };
+  document.addEventListener("copy", onCopyEvent, true);
   try {
     area.focus({ preventScroll: true });
     area.select();
     // iOS ignores select() on a readonly field.
     area.setSelectionRange(0, text.length);
-    return document.execCommand("copy");
+    return document.execCommand("copy") && wrote;
   } catch {
     return false;
   } finally {
+    document.removeEventListener("copy", onCopyEvent, true);
     area.remove();
     if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
   }
