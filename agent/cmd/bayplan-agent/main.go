@@ -117,7 +117,7 @@ func run(d deps) int {
 	err = d.connect(ctx, connect.Config{
 		URL: cfg.URL, JoinToken: cfg.JoinToken, SocketPath: cfg.SocketPath, Version: version.Version, Log: log,
 		StateDir: cfg.StateDir, BackoffMin: cfg.BackoffMin, BackoffMax: cfg.BackoffMax,
-		ReadOnly: cfg.ReadOnly, SelfUpdate: cfg.SelfUpdate, InstallPins: cfg.Pins,
+		ReadOnly: cfg.ReadOnly, SelfUpdate: cfg.SelfUpdate, AllowInsecure: cfg.AllowInsecure, InstallPins: cfg.Pins,
 		Maint: selfmaint.New(selfmaint.Config{
 			SocketPath: cfg.SocketPath, SelfUpdate: cfg.SelfUpdate, StateDir: cfg.StateDir, Log: log,
 		}),

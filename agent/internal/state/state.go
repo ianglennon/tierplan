@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -252,6 +253,35 @@ func ValidPin(s string) bool {
 	}
 	raw, err := base64.StdEncoding.DecodeString(rest)
 	return err == nil && len(raw) == 32
+}
+
+// DialableURL reports whether the agent may dial s: it passes ValidURL, and it is
+// either wss, or ws to a loopback host (the name localhost in any case, or an IP
+// literal that is loopback once an IPv4-mapped address is unmapped), or allowPlain
+// is true. A plain address sends the join token, the proof and every Docker answer
+// unencrypted to a peer that was never authenticated, so it is dialed only on the
+// same machine or when the operator set BAYPLAN_AGENT_ALLOW_INSECURE on the agent
+// itself (T-02-31).
+func DialableURL(s string, allowPlain bool) bool {
+	if !ValidURL(s) {
+		return false
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "wss" || allowPlain || loopbackHost(u.Hostname())
+}
+
+// loopbackHost reports whether host (as url.URL.Hostname gives it, without IPv6
+// brackets) names this machine's loopback: localhost, 127.0.0.0/8, ::1 or an
+// IPv4-mapped loopback address.
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.Unmap().IsLoopback()
 }
 
 // live reports whether e still counts at now.

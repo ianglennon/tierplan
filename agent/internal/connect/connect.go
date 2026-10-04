@@ -80,6 +80,11 @@ type Config struct {
 	// SelfUpdate says whether the host lets the agent update itself. Both are
 	// reported in the handshake so the UI can show them (D-28).
 	ReadOnly, SelfUpdate bool
+	// AllowInsecure is BAYPLAN_AGENT_ALLOW_INSECURE: it lets the agent dial a plain
+	// ws:// address for a host that is not loopback. For development only; without
+	// it such an address is never dialed, whether it came from URL, from the stored
+	// list or from the server (T-02-31). It changes nothing for wss://.
+	AllowInsecure bool
 	// Maint answers the server's update and uninstall messages (D-24, D-26). Nil
 	// answers every such message self_update_disabled.
 	Maint selfmaint.Service
@@ -180,11 +185,17 @@ type runner struct {
 // host[:port] dialed) and the host name the server's certificate must be valid for.
 type target struct{ url, aud, host string }
 
-// newTarget reads an address the agent is going to dial.
-func newTarget(raw string) (target, error) {
+// newTarget reads an address the agent is going to dial. It refuses what
+// state.DialableURL refuses, so nothing reaches the dialer around the filters at
+// load: a plain ws:// address for a host that is not loopback is only dialed with
+// allowPlain (T-02-31).
+func newTarget(raw string, allowPlain bool) (target, error) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
 		return target{}, fmt.Errorf("%q is not a wss:// (or ws://) address", raw)
+	}
+	if !state.DialableURL(raw, allowPlain) {
+		return target{}, fmt.Errorf("%s is not an address the agent may dial: plain ws:// to another host needs BAYPLAN_AGENT_ALLOW_INSECURE=true", u.Host)
 	}
 	aud, err := authn.Audience(raw)
 	if err != nil {
@@ -217,11 +228,18 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
 		return fmt.Errorf("BAYPLAN_AGENT_URL must be a wss:// (or ws://) address: %q", cfg.URL)
 	}
+	if !state.DialableURL(cfg.URL, cfg.AllowInsecure) {
+		return fmt.Errorf("BAYPLAN_AGENT_URL %s is plain ws:// for a host that is not loopback, so the agent will not dial it: use wss://, or set BAYPLAN_AGENT_ALLOW_INSECURE=true for development only", u.Host)
+	}
 	if _, err := authn.Audience(cfg.URL); err != nil {
 		return fmt.Errorf("BAYPLAN_AGENT_URL: %w", err)
 	}
 	if u.Scheme == "ws" {
-		log.Warn("the agent endpoint is plain ws://: the join token and every Docker answer travel unencrypted")
+		if cfg.AllowInsecure {
+			log.Warn("the agent endpoint is plain ws:// and BAYPLAN_AGENT_ALLOW_INSECURE is set (development only): the join token and every Docker answer travel unencrypted")
+		} else {
+			log.Warn("the agent endpoint is plain ws:// (loopback): the join token and every Docker answer travel unencrypted")
+		}
 	}
 
 	// Until the server says otherwise the address from the environment is the only
@@ -451,7 +469,7 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	var first error
 	urls := r.dialURLs()
 	for i, raw := range urls {
-		tg, err := newTarget(raw)
+		tg, err := newTarget(raw, r.cfg.AllowInsecure)
 		if err != nil {
 			// Only addresses that passed state.ValidURL are kept, so this is a bug
 			// in what was stored, not something to stop on.

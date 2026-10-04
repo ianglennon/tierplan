@@ -42,6 +42,11 @@ const (
 	// envSelfUpdate says whether the agent may update or uninstall itself when the
 	// server asks (D-28). The default is true; a later plan implements what it gates.
 	envSelfUpdate = "BAYPLAN_AGENT_SELF_UPDATE"
+	// envAllowInsecure lets the agent dial plain ws:// to a host that is not
+	// loopback. For development only: the join token, the proof and every Docker
+	// answer then cross the network unencrypted to a server the agent cannot check
+	// (T-02-31). The default is false; wss:// is verified whatever its value.
+	envAllowInsecure = "BAYPLAN_AGENT_ALLOW_INSECURE"
 
 	// envPin is the pin of the server's certificate, or several separated by
 	// commas, as "sha256/" and a base64 SPKI hash. The install command carries it
@@ -71,6 +76,9 @@ type Config struct {
 	// ReadOnly refuses every Docker call that is not a read, and SelfUpdate says
 	// whether the agent may update itself (D-28).
 	ReadOnly, SelfUpdate bool
+	// AllowInsecure allows a plain ws:// address for a host that is not loopback
+	// (development only).
+	AllowInsecure bool
 	// Pins are the server certificate pins from the install command, validated.
 	Pins []string
 }
@@ -83,7 +91,8 @@ type Config struct {
 // an agent with no token has an identity is decided by CheckEnrolled once the
 // process has dropped its privileges.
 //
-//	BAYPLAN_AGENT_URL              required, ws:// or wss://
+//	BAYPLAN_AGENT_URL              required, wss://; ws:// only to a loopback host, or with BAYPLAN_AGENT_ALLOW_INSECURE=true
+//	BAYPLAN_AGENT_ALLOW_INSECURE   true allows ws:// to another host (development only), default false
 //	BAYPLAN_AGENT_JOIN_TOKEN_FILE  path of a Docker secret holding the token; wins over the variable
 //	BAYPLAN_AGENT_JOIN_TOKEN       the token itself
 //	BAYPLAN_AGENT_SOCKET           default /var/run/docker.sock
@@ -92,9 +101,9 @@ type Config struct {
 //	BAYPLAN_AGENT_BACKOFF_MIN      first reconnect delay, default 1s
 //	BAYPLAN_AGENT_BACKOFF_MAX      longest reconnect delay, default 60s; at least the minimum
 //
-// The two host policy flags (envReadOnly and envSelfUpdate) are true or false; a
-// value that is neither stops the agent, so that a restriction is never dropped
-// because it was misspelled.
+// The host policy flags (envReadOnly and envSelfUpdate) and envAllowInsecure are
+// true or false; a value that is neither stops the agent, so that a restriction is
+// never dropped because it was misspelled.
 func Load(env func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
 	cfg := Config{
 		URL:        env("BAYPLAN_AGENT_URL"),
@@ -108,7 +117,11 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 		cfg.StateDir = DefaultStateDir
 	}
 
-	if err := checkURL(cfg.URL); err != nil {
+	var err error
+	if cfg.AllowInsecure, err = parseFlag(env, envAllowInsecure, false); err != nil {
+		return Config{}, err
+	}
+	if err := checkURL(cfg.URL, cfg.AllowInsecure); err != nil {
 		return Config{}, err
 	}
 
@@ -186,15 +199,30 @@ func LoadHelper(env func(string) string) (Config, error) {
 	return cfg, nil
 }
 
-// checkURL requires a ws:// or wss:// address with a host. The URL itself can
-// hold no secret: the token travels in the handshake, never in a URL (D-20).
-func checkURL(raw string) error {
+// checkURL requires an address the agent may dial (state.ValidURL and
+// state.DialableURL): ws:// or wss:// with a host and no user name, query or
+// fragment. The URL itself can hold no secret, because the token travels in the
+// handshake, never in a URL (D-20); an error never repeats the value, since a
+// mistaken one may carry a password. A plain ws:// address for a host that is not
+// loopback needs allowInsecure, so a mistyped scheme cannot send the join token
+// over the network unencrypted (T-02-31).
+func checkURL(raw string, allowInsecure bool) error {
 	if raw == "" {
 		return errors.New("BAYPLAN_AGENT_URL must be set to the server's agent address, for example wss://bayplan.example/agent/connect")
 	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" {
-		return fmt.Errorf("BAYPLAN_AGENT_URL must be a ws:// or wss:// address with a host, got %q", raw)
+	if !state.ValidURL(raw) {
+		msg := "BAYPLAN_AGENT_URL must be a ws:// or wss:// address with a host and no user name, query or fragment"
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			msg += " (the host is " + u.Hostname() + ")"
+		}
+		return errors.New(msg)
+	}
+	if !state.DialableURL(raw, allowInsecure) {
+		host := ""
+		if u, err := url.Parse(raw); err == nil {
+			host = u.Hostname()
+		}
+		return fmt.Errorf("BAYPLAN_AGENT_URL is a plain ws:// address for %s: the join token and every Docker answer would cross the network unencrypted, to a server the agent cannot check. Use wss:// with a certificate the agent checks; %s=true allows it, for development only", host, envAllowInsecure)
 	}
 	return nil
 }
