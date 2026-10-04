@@ -63,7 +63,7 @@ Run the command on **any manager** node. It creates the join token as a Docker s
 | `--mode global`, `--constraint node.platform.os==linux` | One agent on every Linux node. A node you add to the swarm later enrols by itself: the service starts an agent there and the secret is already in place. |
 | `--secret source=…,target=bayplan-agent-token,mode=0400` | Mounts the token at `/run/secrets/bayplan-agent-token`, readable by root only. |
 | `--mount …docker.sock` | Gives the agent the Docker socket. This is root-equivalent on the host, which is why the agent is small, read-only and drops its privileges. |
-| `--mount type=volume,src=bayplan-agent` | The agent's key, certificate and pins. It is what lets the agent keep its identity across restarts and updates. |
+| `--mount type=volume,src=bayplan-agent` | The agent's key, certificate, pins and the addresses it dials. It is what lets the agent keep its identity across restarts and updates. |
 | `--read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID` | The agent's root file system is read-only and it has no Linux capabilities except the two it needs to drop from root to an unprivileged user at start. |
 | `--update-parallelism 1 --update-delay 10s` | A rolling update changes one node at a time with a ten-second pause. |
 | `--label` and `--container-label bayplan.agent=true` | How Bayplan finds the agent's service and containers, whatever the service is called. |
@@ -199,7 +199,7 @@ docker service update --env-add 'BAYPLAN_AGENT_URL=wss://<new address>/agent/con
 docker rm -f bayplan-agent
 ```
 
-In this release that works only for an agent that has never followed an address change. An agent that has keeps the addresses Bayplan sent it on its volume and dials them before `BAYPLAN_AGENT_URL`, so it stays refused. For such an agent, remove it and its `bayplan-agent` volume as in [Uninstall and manual cleanup](#uninstall-and-manual-cleanup) and install it again from Show install command with a valid join token. It enrols as a new agent, and the old entry stays in the node list as offline.
+The agent notices that `BAYPLAN_AGENT_URL` differs from the one it last started with and dials the new address first, also when it followed an earlier address change and was offline for a later one. An agent that last ran a version before this one notices from its first start on this version.
 
 ## Troubleshooting
 
