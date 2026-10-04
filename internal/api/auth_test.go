@@ -114,6 +114,8 @@ type authFixture struct {
 	// settingsAgents, when set, is what the settings routes count agents with and
 	// push new addresses through (plan 02-26).
 	settingsAgents api.SettingsAgents
+	// envWarningsNow is the clock of GET /api/environments/warnings; nil means the wall clock.
+	envWarningsNow func() time.Time
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -184,6 +186,15 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Agents: agentSvc, Local: foldedNodes, Live: f.liveAgents, Cluster: f.agentCluster, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
 		Updater: f.updater, ServerVersion: f.serverVersion, Log: log,
 	})
+	if f.envSvc != nil {
+		api.RegisterEnvWarnings(r, api.EnvWarningsDeps{
+			Envs: f.envSvc, Checker: checker, Now: f.envWarningsNow, Log: log,
+			Agents: api.AgentsDeps{
+				Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
+				Updater: f.updater, ServerVersion: f.serverVersion,
+			},
+		})
+	}
 	if f.envSvc != nil && f.agg != nil {
 		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 	}

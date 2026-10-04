@@ -288,6 +288,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/environments/warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the environment problems that need attention
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
+         */
+        get: operations["listEnvironmentWarnings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments/{envId}": {
         parameters: {
             query?: never;
@@ -961,6 +981,57 @@ export interface components {
             at: string;
             /** @description The Docker API path the agent refused */
             endpoint: string;
+        };
+        EnvWarningBody: {
+            /** @description For cert_not_renewing and clock_skew: the agent */
+            agentId?: string;
+            /**
+             * Format: int64
+             * @description For manual_update_needed: how many agents need an update by hand
+             */
+            count?: number;
+            /**
+             * Format: int64
+             * @description For pending_long: whole days since the environment was added
+             */
+            days?: number;
+            /** @description The environment the problem is about. Absent for manual_update_needed when it spans more than one environment */
+            envId?: string;
+            /** @description That environment's name, at most 64 characters. For fold_offered, the swarm environment */
+            envName?: string;
+            /**
+             * Format: date-time
+             * @description For cert_not_renewing: when the certificate expires
+             */
+            expiresAt?: string;
+            /**
+             * @description Which problem this is
+             * @enum {string}
+             */
+            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered";
+            /** @description For cert_not_renewing and clock_skew: the node's host name, at most 64 characters */
+            node?: string;
+            /**
+             * Format: int64
+             * @description For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind
+             */
+            offsetSeconds?: number;
+            /** @description For env_offline and cluster_changed: the environment's reason code, as in its status */
+            reason?: string;
+            /**
+             * @description error: an environment is out of reach or a certificate has expired. warning: something needs attention
+             * @enum {string}
+             */
+            severity: "error" | "warning";
+            /**
+             * Format: date-time
+             * @description When the problem began, where that is known. Items are shown newest first
+             */
+            since?: string;
+        };
+        EnvWarningsBody: {
+            /** @description Only the warnings that apply, errors first, then newest first; empty when there are none */
+            items: components["schemas"]["EnvWarningBody"][] | null;
         };
         EnvironmentAgentsBody: {
             /**
@@ -2290,6 +2361,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AddEnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvironmentWarnings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvWarningsBody"];
                 };
             };
             /** @description Error */

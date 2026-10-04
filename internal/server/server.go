@@ -131,6 +131,7 @@ func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, auth
 	api.RegisterLocalHost(r, localHost)
 	api.RegisterEnvironments(r, environments)
 	api.RegisterAgents(r, agentsDeps)
+	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: environments.Envs, Checker: environments.Checker, Agents: agentsDeps, Log: environments.Log})
 	api.RegisterDashboard(r, dashboard)
 	api.RegisterEvents(r, events)
 	api.RegisterEnvStream(r, envStream)

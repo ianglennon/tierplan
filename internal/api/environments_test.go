@@ -780,6 +780,7 @@ func newAgentFixHost(t *testing.T, dockerHost string) *agentFix {
 	})
 	svc.WithAgents(srv.Hub)
 	f.agentSvc, f.liveAgents = srv.Svc, srv.Hub
+	f.envWarningsNow = tclk.Now
 	// The server is v0.2.1 and the agents tunneltest connects are v0.2.0.
 	f.serverVersion = "v0.2.1"
 	f.updater = agents.NewUpdater(srv.Svc, agents.HubSource(srv.Hub), nil, f.serverVersion, tclk.Now)
