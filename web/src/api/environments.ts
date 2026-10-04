@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { queryOptions } from "@tanstack/react-query";
+import { type QueryClient, queryOptions } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
@@ -246,4 +246,46 @@ export async function adoptCluster(envId: string): Promise<void> {
     params: { path: { envId } },
   });
   if (!response.ok) throw new AdoptClusterError(error, response);
+}
+
+// FoldLocalError is a failed fold. It keeps the status and the problem type, which is
+// what the dialog picks its sentence from.
+export class FoldLocalError extends Error {
+  readonly status: number;
+  readonly type?: string;
+
+  constructor(body: unknown, response?: { status: number }) {
+    const problem = readProblem(body, response);
+    super(`fold failed with status ${problem.status}`);
+    this.name = "FoldLocalError";
+    this.status = problem.status;
+    this.type = problem.type;
+  }
+
+  // The host is no longer a manager of that swarm, or another admin folded it first.
+  get notOffered(): boolean {
+    return this.status === 409 && this.type === "fold_not_offered";
+  }
+}
+
+// foldLocal folds this Bayplan host into the swarm environment envId (D-48): the swarm
+// reaches the node through the Docker socket and the separate local environment is
+// retired. It is audited on the server. The caller reads the lists again afterwards
+// with refreshAfterFold.
+export async function foldLocal(envId: string): Promise<void> {
+  const { error, response } = await api.POST("/api/environments/{envId}/fold-local", {
+    params: { path: { envId } },
+  });
+  if (!response.ok) throw new FoldLocalError(error, response);
+}
+
+// refreshAfterFold reads again what a fold changes: the environments list (the local
+// environment is gone and nothing offers a fold any more) and the swarm's node list,
+// which now has a Local socket row. A fold that was refused as no longer offered
+// reads the environments too, since what is offered has changed.
+export function refreshAfterFold(queryClient: QueryClient, envId: string): Promise<unknown> {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: environmentsQuery.queryKey }),
+    queryClient.invalidateQueries({ queryKey: ["agents", envId] }),
+  ]);
 }

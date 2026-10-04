@@ -145,6 +145,11 @@ beforeEach(() => {
       }
       if (path === "/api/environments/e2/agents/a1/revoke")
         return new Response(null, { status: 204 });
+      if (path === "/api/environments/e2/fold-local" && req.method === "POST") {
+        // The local environment is retired and nothing offers a fold any more.
+        items = [{ ...AGENT_ENV, foldOffered: undefined }];
+        return Response.json({ ...AGENT_ENV, foldOffered: undefined });
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -457,6 +462,63 @@ describe("/settings/environments/$envId", () => {
     );
     renderAt("/settings/environments/e2");
     expect(await screen.findByText("Loading the environment…")).toBeTruthy();
+  });
+
+  it("puts the Local host card between Agent updates and Remove environment while a fold is offered, and not otherwise", async () => {
+    items = [env({ foldOffered: true }), { ...LOCAL, foldOffered: true }];
+    renderAt("/settings/environments/e2");
+    await screen.findByRole("heading", { level: 3, name: "Local host" });
+    expect(headings()).toEqual([
+      "General",
+      "Connection",
+      "Nodes and agents",
+      "Join token",
+      "Agent updates",
+      "Local host",
+      "Remove environment",
+    ]);
+    expect(screen.getByRole("button", { name: "Fold into edge" })).toBeTruthy();
+    cleanup();
+    // The first list is what the cache would show until the second one arrives.
+    queryClient.clear();
+
+    items = [AGENT_ENV, LOCAL];
+    renderAt("/settings/environments/e2");
+    await screen.findByRole("heading", { level: 3, name: "Remove environment" });
+    expect(screen.queryByRole("heading", { level: 3, name: "Local host" })).toBeNull();
+  });
+
+  it("hides the Local host card from someone without environments.manage", async () => {
+    items = [env({ foldOffered: true }), { ...LOCAL, foldOffered: true }];
+    current = me(["environments.read", "environments.delete"], ["settings.read"]);
+    renderAt("/settings/environments/e2");
+    await screen.findByRole("heading", { level: 3, name: "Remove environment" });
+    expect(screen.queryByRole("heading", { level: 3, name: "Local host" })).toBeNull();
+  });
+
+  it("offers the fold on the local host's own page too, and after it moves to the swarm's page", async () => {
+    items = [env({ foldOffered: true }), { ...LOCAL, foldOffered: true }];
+    const router = renderAt("/settings/environments/e1");
+    fireEvent.click(await screen.findByRole("button", { name: "Fold into edge" }));
+    const dialog = await screen.findByRole("dialog", { name: "Fold this host into edge?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge" }));
+    await waitFor(() => expect(seen).toContain("POST /api/environments/e2/fold-local"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/environments/e2"));
+    expect(await screen.findByRole("heading", { level: 2, name: "edge" })).toBeTruthy();
+  });
+
+  it("moves focus to the page title after a fold on the swarm's own page, since the card that had it is gone", async () => {
+    items = [env({ foldOffered: true }), { ...LOCAL, foldOffered: true }];
+    renderAt("/settings/environments/e2");
+    fireEvent.click(await screen.findByRole("button", { name: "Fold into edge" }));
+    const dialog = await screen.findByRole("dialog", { name: "Fold this host into edge?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { level: 3, name: "Local host" })).toBeNull(),
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: "edge" })),
+    );
   });
 
   it("lists the environment's nodes in the Nodes and agents card", async () => {

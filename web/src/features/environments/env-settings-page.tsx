@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 import { Server } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -26,6 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AdoptClusterDialog } from "@/features/environments/adopt-cluster-dialog";
 import { AgentUpdatesCard } from "@/features/environments/agent-updates-card";
 import { RenameDialog } from "@/features/environments/environments-settings";
+import { FoldCard } from "@/features/environments/fold-card";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import { JoinTokenCard } from "@/features/environments/join-token-card";
 import { NodeTable } from "@/features/environments/node-table";
@@ -216,11 +217,14 @@ interface EnvSettingsPageProps {
 // the cards General, Connection, Nodes and agents, Join token and Agent updates,
 // and Remove environment last (D-30), each shown only to someone who holds its
 // permission. The Connection card offers Adopt new cluster while the swarm was
-// re-initialised (plan 19); plan 30 adds the fold card between Agent updates and
-// Remove. Hiding a card is not access control; the server answers 403.
+// re-initialised (plan 19); the Local host card (plan 30) comes between Agent updates and
+// Remove, only while the server offers the fold. Hiding a card is not access control; the server answers 403.
 export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   const t = useT();
   const queryClient = useQueryClient();
+  const router = useRouter();
+  // The title takes focus after a fold, when the card that had it is gone.
+  const title = useRef<HTMLHeadingElement>(null);
   // The toast after a revoke offers to rotate the join token; the install
   // dialog it opens belongs to the page so the toast outlives the table's row.
   const [rotating, setRotating] = useState(false);
@@ -295,7 +299,13 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
       <header className="flex flex-col gap-2">
         <Breadcrumb name={env.name} />
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="min-w-0 text-2xl font-semibold break-words">{env.name}</h2>
+          <h2
+            ref={title}
+            tabIndex={-1}
+            className="min-w-0 text-2xl font-semibold break-words outline-none"
+          >
+            {env.name}
+          </h2>
           <TypeBadge envType={env.envType} type={env.type} isLocalSocket={env.isLocalSocket} />
           {env.isSelfHost ? (
             <Badge variant="outline" className="shrink-0">
@@ -328,6 +338,22 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
             // A rotation re-enables enrolment and makes a new token.
             if (!open)
               void queryClient.invalidateQueries({ queryKey: tokenStatusQuery(env.id).queryKey });
+          }}
+        />
+      ) : null}
+      {canManage && env.foldOffered ? (
+        <FoldCard
+          env={env}
+          // The card and its dialog are gone with the offer, so focus would fall to the
+          // body; the title is where the page starts again.
+          focusFallback={() => title.current}
+          onFolded={(swarmEnvId) => {
+            // The local host's own page is for an environment that no longer exists.
+            if (swarmEnvId !== env.id)
+              void router.navigate({
+                to: "/settings/environments/$envId",
+                params: { envId: swarmEnvId },
+              });
           }}
         />
       ) : null}

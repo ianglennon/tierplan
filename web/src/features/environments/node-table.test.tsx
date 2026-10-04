@@ -417,6 +417,56 @@ describe("NodeTable local socket", () => {
   });
 });
 
+describe("NodeTable folded local host", () => {
+  // The server's row for the Bayplan host folded into the swarm: no agent, no
+  // certificate, no clock, no version.
+  const FOLDED = {
+    id: "socket:e2",
+    node: "lab-1",
+    role: "local",
+    status: "active",
+    blocked: false,
+    connected: true,
+    agentVersion: "",
+    engineVersion: "29.8.2",
+    clockOffsetSeconds: 0,
+    readOnly: false,
+    selfUpdate: false,
+    updateAvailable: false,
+    renewalFailing: false,
+    updateState: { state: "idle" },
+  };
+
+  it("shows a Local socket row with dashes for the agent, version, certificate, clock and last seen, and no actions", async () => {
+    agents = [MGR, FOLDED] as unknown as typeof agents;
+    await mountLoaded();
+    const row = rowFor("lab-1");
+    const c = cells(row);
+    expect(c[0]?.textContent).toBe("lab-1");
+    expect(c[1]?.textContent).toBe("Local socket");
+    expect(c[2]?.textContent).toBe("—");
+    expect(c[3]?.textContent).toBe("—");
+    expect(c[4]?.textContent).toBe("29.8.2");
+    expect(c[5]?.textContent).toBe("—");
+    expect(c[6]?.textContent).toBe("—");
+    expect(c[7]?.textContent).toBe("—");
+    expect(within(row).queryByRole("button")).toBeNull();
+    // The agent beside it keeps its own row and its actions.
+    expect(within(rowFor("mgr-1")).getByRole("button", { name: "Actions for mgr-1" })).toBeTruthy();
+  });
+
+  it("offers no Revoke, Unblock or Update even for someone who may manage and revoke, and even when offline", async () => {
+    perms = [...ALL, "environments.manage"];
+    autoUpdate = false;
+    agents = [
+      MGR,
+      { ...FOLDED, connected: false, updateAvailable: true },
+    ] as unknown as typeof agents;
+    await mountLoaded();
+    expect(within(rowFor("lab-1")).queryByRole("button")).toBeNull();
+  });
+});
+
 describe("NodeTable row actions", () => {
   it("names the trigger Actions for {node} and offers Revoke node on an active row", async () => {
     await mountLoaded();

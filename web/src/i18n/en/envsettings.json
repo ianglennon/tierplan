@@ -78,7 +78,8 @@
         "manager": "Manager",
         "worker": "Worker",
         "standalone": "Standalone",
-        "localSocket": "Local socket"
+        "localSocket": "Local socket",
+        "local": "Local socket"
       },
       "agentState": {
         "connected": "Connected",
@@ -141,6 +142,19 @@
       "noChange": "There is nothing left to adopt. Another admin may have adopted it already.",
       "inUse": "Another environment already manages that cluster, so this one can't adopt it.",
       "failed": "Couldn't adopt the new cluster. Try again."
+    },
+    "fold": {
+      "title": "Local host",
+      "alert": "This Bayplan host is a manager of {{swarm}}. It can be reached through the Docker socket, so it needs no agent.",
+      "button": "Fold into {{swarm}}",
+      "dialogTitle": "Fold this host into {{swarm}}?",
+      "body": "Bayplan will reach this node through the socket, and the separate Local socket environment is retired. Nothing changes on the host. This is recorded in the audit log.",
+      "cancel": "Cancel",
+      "confirm": "Fold into {{swarm}}",
+      "pending": "Folding…",
+      "done": "{{swarm}} now reaches this host through the Docker socket.",
+      "notOffered": "This host is no longer a manager of that swarm, or it was folded a moment ago. Nothing was changed.",
+      "failed": "Couldn't fold this host. Try again."
     },
     "updates": {
       "autoLabel": "Update agents automatically",

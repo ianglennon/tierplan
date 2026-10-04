@@ -58,11 +58,20 @@ const isRevoked = (a: AgentItem) => a.status === "revoked" || a.blocked;
 // server started reports 0, which is not a measurement.
 const clockKnown = (a: AgentItem) => a.connected || a.clockOffsetSeconds !== 0;
 
+// The Bayplan host folded into a swarm (D-48): reached through the Docker socket, so it has
+// no agent, certificate or clock, and none of the agent actions apply to it.
+const isLocalNode = (a: AgentItem) => a.role === "local";
+
 function clockOff(a: AgentItem): boolean {
-  return clockKnown(a) && Math.abs(Math.trunc(a.clockOffsetSeconds)) > CLOCK_WARN_SECONDS;
+  return (
+    !isLocalNode(a) &&
+    clockKnown(a) &&
+    Math.abs(Math.trunc(a.clockOffsetSeconds)) > CLOCK_WARN_SECONDS
+  );
 }
 
 function certSoon(a: AgentItem, now: number): boolean {
+  if (!a.certNotAfter) return false;
   const end = Date.parse(a.certNotAfter);
   return !Number.isNaN(end) && end - now < CERT_WARN_DAYS * DAY;
 }
@@ -129,6 +138,7 @@ function Dash() {
 function Fingerprint({ agent }: { agent: AgentItem }) {
   const t = useT();
   const full = agent.certFingerprint;
+  if (!full) return <Dash />;
   return (
     <span className="inline-flex items-center gap-1">
       <Tooltip>
@@ -342,7 +352,9 @@ function NodeRow({
         ) : (
           <div className="flex flex-col gap-0.5">
             <Fingerprint agent={agent} />
-            <CertExpiry notAfter={agent.certNotAfter} renewalFailing={renewalFailing} />
+            {agent.certNotAfter ? (
+              <CertExpiry notAfter={agent.certNotAfter} renewalFailing={renewalFailing} />
+            ) : null}
           </div>
         )}
       </TableCell>
@@ -411,6 +423,40 @@ function NodeRow({
           </DropdownMenu>
         ) : null}
       </TableCell>
+    </TableRow>
+  );
+}
+
+// LocalNodeRow is the folded Bayplan host in a swarm's node list. Like the local-socket
+// row it has dashes for everything an agent has, and no menu: there is nothing to revoke,
+// unblock or update, because there is no agent on it.
+function LocalNodeRow({ agent }: { agent: AgentItem }) {
+  const t = useT();
+  return (
+    <TableRow className="h-9">
+      <TableCell className="max-w-56">
+        <Truncated value={agent.node} mono />
+      </TableCell>
+      <TableCell>{t("envsettings.nodes.roles.local")}</TableCell>
+      <TableCell>
+        <Dash />
+      </TableCell>
+      <TableCell>
+        <Dash />
+      </TableCell>
+      <TableCell className="max-w-32">
+        {agent.engineVersion ? <Truncated value={agent.engineVersion} mono /> : <Dash />}
+      </TableCell>
+      <TableCell>
+        <Dash />
+      </TableCell>
+      <TableCell>
+        <Dash />
+      </TableCell>
+      <TableCell>
+        <Dash />
+      </TableCell>
+      <TableCell className="w-12" />
     </TableRow>
   );
 }
@@ -588,24 +634,28 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
               : null}
             {!loading && isLocal && env ? <LocalRow env={env} /> : null}
             {!loading
-              ? sorted.map((agent) => (
-                  <NodeRow
-                    key={agent.id}
-                    agent={agent}
-                    renewalFailing={notRenewing.has(agent.node)}
-                    canRevoke={canRevoke}
-                    canUpdate={canUpdate}
-                    onUpdate={(a) => update.mutate(a)}
-                    onRevoke={(a, trigger) => {
-                      returnTo.current = trigger;
-                      setRevoking(a);
-                    }}
-                    onUnblock={(a, trigger) => {
-                      returnTo.current = trigger;
-                      setUnblocking(a);
-                    }}
-                  />
-                ))
+              ? sorted.map((agent) =>
+                  isLocalNode(agent) ? (
+                    <LocalNodeRow key={agent.id} agent={agent} />
+                  ) : (
+                    <NodeRow
+                      key={agent.id}
+                      agent={agent}
+                      renewalFailing={notRenewing.has(agent.node)}
+                      canRevoke={canRevoke}
+                      canUpdate={canUpdate}
+                      onUpdate={(a) => update.mutate(a)}
+                      onRevoke={(a, trigger) => {
+                        returnTo.current = trigger;
+                        setRevoking(a);
+                      }}
+                      onUnblock={(a, trigger) => {
+                        returnTo.current = trigger;
+                        setUnblocking(a);
+                      }}
+                    />
+                  ),
+                )
               : null}
           </TableBody>
         </table>
