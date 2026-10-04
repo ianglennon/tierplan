@@ -444,6 +444,88 @@ func TestAForwardedForHeaderFromAnUntrustedPeerDoesNotBuyMoreHandshakes(t *testi
 	}
 }
 
+// A client that reads the challenge and says nothing is let go when the first-frame
+// deadline passes, long before the 10 s the whole handshake may take (T-02-123).
+func TestASilentHandshakeIsDroppedAtTheFirstFrameDeadline(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	ws, _, typ := firstMessageFrom(t, ctx, srv, "")
+	defer func() { _ = ws.CloseNow() }()
+	if typ != wire.TypeChallenge {
+		t.Fatalf("got %q, want a challenge", typ)
+	}
+	start := time.Now()
+	_, _, err := ws.Read(ctx)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("the server sent something to a client that said nothing")
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("the server was still holding the connection after %s", elapsed.Round(100*time.Millisecond))
+	}
+	if elapsed < 2500*time.Millisecond || elapsed > 6*time.Second {
+		t.Fatalf("a silent handshake was dropped %s after the challenge, want between 2.5 s and 6 s", elapsed.Round(10*time.Millisecond))
+	}
+}
+
+// Dropping the silent handshakes gives the address its slots back: sixteen silent
+// ones fill the address, and a few seconds later it can start another.
+func TestTheFirstFrameDeadlineGivesTheAddressItsSlotsBack(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{
+		Wrap:      trustLoopback,
+		Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000) },
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for i := range 16 {
+		if _, _, typ := holdFrom(t, ctx, srv, "198.51.100.7"); typ != wire.TypeChallenge {
+			t.Fatalf("silent handshake %d got %q, want a challenge", i+1, typ)
+		}
+	}
+	if _, ref, typ := holdFrom(t, ctx, srv, "198.51.100.7"); typ != wire.TypeRefuse || ref.Code != wire.RefuseRateLimited {
+		t.Fatalf("a 17th handshake got %q %+v, want rate_limited", typ, ref)
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		ws, _, typ := firstMessageFrom(t, ctx, srv, "198.51.100.7")
+		_ = ws.CloseNow()
+		if typ == wire.TypeChallenge {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the silent handshakes still held every slot of the address 8 s after their challenges")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// The deadline is for the agent's first and only message before the welcome. An
+// agent that is a little slow still gets in; one that is slower than the deadline
+// does not, and the server has closed the connection by then.
+func TestAnAgentThatAnswersWithinTheDeadlineIsWelcomedAndOneThatDoesNotIsDropped(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{})
+
+	t.Run("answers after 1 s", func(t *testing.T) {
+		env := srv.NewEnvironment(t, "Prompt")
+		p := srv.Begin(t, tunneltest.Agent{Token: env.Token})
+		time.Sleep(time.Second)
+		if c := p.Finish(); c.Welcome == nil {
+			t.Fatalf("an agent that answered after 1 s was not welcomed: %+v (err %v)", c.Refuse, c.Err)
+		}
+	})
+	t.Run("answers after 4 s", func(t *testing.T) {
+		env := srv.NewEnvironment(t, "Slow")
+		p := srv.Begin(t, tunneltest.Agent{Token: env.Token})
+		time.Sleep(4 * time.Second)
+		if c := p.Finish(); c.Welcome != nil {
+			t.Fatal("an agent that answered 4 s after the challenge was welcomed, want the connection closed at the deadline")
+		}
+	})
+}
+
 func TestRateLimitAdmitsTheBurstFromOneAddressAndRefusesTheRest(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{}) // the default burst, 200, on a clock that does not move
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
