@@ -180,6 +180,27 @@ If the agent connects by an IP address (for example the proxy's address on a Doc
 
 **Do not use `BAYPLAN_AGENT_ALLOW_INSECURE` to get around a certificate problem.** It exists for local development only (see [Development only](#development-only-plain-ws)).
 
+## Change Bayplan's agent address
+
+Agents dial the agent URL (`BAYPLAN_AGENT_URL`, or the public URL when it is not set) with `/agent/connect` added. Bayplan accepts an agent only when the host and port it dialled are the current ones. A change of path only (for example a new base path) keeps them.
+
+When you change the address in Settings, General:
+
+- Every agent that is connected over `wss://` is sent the new address over its tunnel straight away, keeps its current connection, and dials the new address from its next connection. A move to a plain `http` agent URL is not sent this way.
+- Agents on plain `ws://` are not told, and neither are agents that are offline. The confirmation counts the offline ones.
+- From then on Bayplan refuses any agent that dials a different host or port, with `auth_rejected` and the audit reason `audience`. There is no fallback period. The agent keeps the previous address in its list for 30 days, but that helps only if you change the address back.
+
+To get a refused agent back, either change the address back in Settings (the agent reconnects by itself), or start it again with the new address on its existing `bayplan-agent` volume, so it keeps its identity and needs no join token:
+
+```sh
+# swarm, on a manager
+docker service update --env-add 'BAYPLAN_AGENT_URL=wss://<new address>/agent/connect' bayplan-agent
+# standalone: this keeps the volume; then run the command from Show install command, which carries the new address
+docker rm -f bayplan-agent
+```
+
+In this release that works only for an agent that has never followed an address change. An agent that has keeps the addresses Bayplan sent it on its volume and dials them before `BAYPLAN_AGENT_URL`, so it stays refused. For such an agent, remove it and its `bayplan-agent` volume as in [Uninstall and manual cleanup](#uninstall-and-manual-cleanup) and install it again from Show install command with a valid join token. It enrols as a new agent, and the old entry stays in the node list as offline.
+
 ## Troubleshooting
 
 Start with the agent's own log. It says what it tried and why it stopped, in one line per event, and it never prints the join token:
@@ -195,7 +216,7 @@ Bayplan shows the same reason on the environment, in the overview's tooltip, in 
 |------|---------------|------------|
 | `agent_offline` | The agent on a node is not connected. | Check that it is running (`docker ps` on a standalone host, `docker service ps bayplan-agent` on a swarm) and look at its log. It reconnects by itself when it can reach Bayplan. |
 | `tls_untrusted` | The agent does not trust Bayplan's certificate. | Use a certificate from a public CA, or give the agent the pin: see [BAYPLAN_AGENT_PIN](#a-proxy-with-its-own-certificate-bayplan_agent_pin). With Bayplan's own certificate, reinstall with the command from Show install command, which carries the pin. |
-| `auth_rejected` | Bayplan rejected the agent's credentials: a wrong, replaced or disabled join token, or an unknown agent. Every token problem looks like this to the agent, on purpose. | Generate a new join token and reinstall the agent with the new command. The audit log says which it was. |
+| `auth_rejected` | Bayplan rejected the agent's credentials: a wrong, replaced or disabled join token, or an unknown agent. Every token problem looks like this to the agent, on purpose. It is also what an agent gets when it dials an address that is no longer Bayplan's agent URL, because it was offline or on plain `ws://` when the address changed. | For a token problem, generate a new join token and reinstall the agent with the new command. The audit log entry's reason tells which it was: `audience` means the address, and [Change Bayplan's agent address](#change-bayplans-agent-address) says how to get the agent back. |
 | `cert_expired` | The agent's certificate expired before it could renew (the host was off or cut off for a month). | Reinstall the agent with a fresh join token. It enrols again with a new certificate. While it can reach Bayplan an agent renews by itself, two thirds of the way through the certificate's life. |
 | `revoked` | An admin revoked the node. | Remove the agent from the host. To let it back in, see [Revoke, unblock and enrol again](#revoke-unblock-and-enrol-again). |
 | `blocked` | The node is blocked from enrolling. | Unblock it in Settings, Environments, in the nodes list. |
