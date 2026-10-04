@@ -80,13 +80,25 @@ smoke:
 
 # Dev loop (D-77): Go with live reload plus Vite with HMR. Open
 # http://localhost:5173/; Vite proxies /api to the Go server on 127.0.0.1:7480.
+#
+# From another machine, make Vite listen beyond loopback and tell both servers the
+# address the browser will use:
+#   make dev DEV_WEB_HOST=0.0.0.0 DEV_PUBLIC_URL=http://<this machine's name>:5173
+# and open that address. The public URL must be the address in the browser's bar,
+# because the Origin check (D-36) compares the two and refuses every change from
+# any other origin. DEV_PUBLIC_URL= (empty) leaves the public URL unset, so the
+# setup wizard asks for it. Do not do this on a network you do not trust.
+# DEV_LISTEN=0.0.0.0:7480 is a different thing: it lets the dev swarm's nodes reach
+# the Go server (make dev-swarm), and a remote browser does not need it.
+# The Go server on :7480 serves web/dist as the last `make web` or `pnpm -C web
+# build` left it; the Vite dev server never writes web/dist.
 # There is deliberately no dev flag or env var that skips the setup-token gate (D-79).
 dev:
 	$(MAKE) -j2 dev-go dev-web
 
 # air is run via `go run`, never added to go.mod. All settings are command-line
 # overrides, so there is no .air.toml. The devspa tag serves the SPA from
-# web/dist on disk, so Vite rebuilds are visible without recompiling Go.
+# web/dist on disk as it is at the moment (it is not rebuilt by Vite's dev server).
 #
 # The agent settings are for the local swarm (make dev-swarm) and for development
 # only. BAYPLAN_AGENT_URL is where agents dial: the dev swarm's network sees this
@@ -97,9 +109,11 @@ dev:
 # target. To let the dev swarm's nodes reach the server, listen on every interface:
 # make dev DEV_LISTEN=0.0.0.0:7480 (the default stays loopback).
 DEV_LISTEN ?= 127.0.0.1:7480
+DEV_PUBLIC_URL ?= http://localhost:5173
+DEV_WEB_HOST ?=
 DEV_SWARM_GATEWAY ?= 172.31.250.1
 dev-go:
-	BAYPLAN_LISTEN=$(DEV_LISTEN) BAYPLAN_DATA_DIR=./.devdata BAYPLAN_PUBLIC_URL=http://localhost:5173 \
+	BAYPLAN_LISTEN=$(DEV_LISTEN) BAYPLAN_DATA_DIR=./.devdata BAYPLAN_PUBLIC_URL='$(DEV_PUBLIC_URL)' \
 	BAYPLAN_AGENT_URL=http://$(DEV_SWARM_GATEWAY):7480 BAYPLAN_AGENT_ALLOW_INSECURE=true \
 	go run github.com/air-verse/air@v1.67.4 \
 		-tmp_dir .devdata/air \
@@ -109,8 +123,10 @@ dev-go:
 		-build.include_ext go \
 		-build.exclude_dir web,bin,.devdata,.git,.planning,.claude,scripts
 
+# BAYPLAN_DEV_PUBLIC_URL lets the public URL's host name past Vite's host check
+# (web/vite.config.ts); without it Vite answers only localhost and IP addresses.
 dev-web:
-	pnpm -C web dev
+	BAYPLAN_DEV_PUBLIC_URL='$(DEV_PUBLIC_URL)' pnpm -C web dev $(if $(DEV_WEB_HOST),--host $(DEV_WEB_HOST))
 
 # A local Docker Swarm of three managers and a worker (docker:29-dind, privileged),
 # with the agent built from this tree loaded on every node (D-60). The command it
