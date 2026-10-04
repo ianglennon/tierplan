@@ -77,6 +77,8 @@ func runControl(ctx context.Context, st net.Conn, socketPath string, every time.
 type controlHooks struct {
 	// renew schedules the agent's certificate renewal and takes the server's answer.
 	renew *renewer
+	// urls takes the addresses and pins the server pushed (D-19).
+	urls func(wire.URLUpdate)
 }
 
 // renewLine is the renew message, ready to write.
@@ -131,6 +133,11 @@ func readControl(st net.Conn, log *slog.Logger, hooks controlHooks) error {
 		case wire.TypeRenewed, wire.TypeRenewRefused:
 			if hooks.renew != nil {
 				hooks.renew.handle(head.T, sc.Bytes())
+			}
+		case wire.TypeURLs:
+			var u wire.URLUpdate
+			if hooks.urls != nil && json.Unmarshal(sc.Bytes(), &u) == nil {
+				hooks.urls(u)
 			}
 		default:
 			log.Debug("ignored a control message of an unknown type", "type", head.T)

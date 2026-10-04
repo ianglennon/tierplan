@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -368,7 +369,21 @@ type URLEntry struct {
 // ValidURL reports whether s is an address the agent would dial: a ws or wss URL
 // with a host, no user name, query or fragment, no control characters and at most
 // MaxURLLen bytes.
-func ValidURL(s string) bool { return false }
+func ValidURL(s string) bool {
+	if s == "" || len(s) > MaxURLLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] <= 0x20 || s[i] == 0x7f { // control characters and spaces
+			return false
+		}
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
+		return false
+	}
+	return u.Hostname() != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && !u.ForceQuery
+}
 
 // live reports whether e still counts at now.
 func (e URLEntry) live(now time.Time) bool {
@@ -381,18 +396,100 @@ func (e URLEntry) live(now time.Time) bool {
 // lists stays after those for URLOverlap from the first time it was left out, and
 // is then dropped; hearing the same list again does not extend that. Invalid
 // entries are ignored and the result is capped at MaxURLs.
-func MergeURLs(current []URLEntry, fromServer []string, now time.Time) []URLEntry { return nil }
+func MergeURLs(current []URLEntry, fromServer []string, now time.Time) []URLEntry {
+	var out []URLEntry
+	listed := map[string]bool{}
+	for _, u := range fromServer {
+		if !ValidURL(u) || listed[u] {
+			continue
+		}
+		listed[u] = true
+		out = append(out, URLEntry{URL: u})
+	}
+	for _, e := range current {
+		if listed[e.URL] || !ValidURL(e.URL) || !e.live(now) {
+			continue
+		}
+		listed[e.URL] = true
+		if e.ExpiresAt.IsZero() {
+			e.ExpiresAt = now.Add(URLOverlap)
+		}
+		out = append(out, e)
+	}
+	if len(out) > MaxURLs {
+		out = out[:MaxURLs]
+	}
+	return out
+}
 
 // ActiveURLs is the addresses that count at now, in dial order.
-func ActiveURLs(entries []URLEntry, now time.Time) []string { return nil }
+func ActiveURLs(entries []URLEntry, now time.Time) []string {
+	var out []string
+	for _, e := range entries {
+		if e.live(now) {
+			out = append(out, e.URL)
+		}
+	}
+	return out
+}
 
 // EqualURLs reports whether two lists hold the same addresses and deadlines in the
 // same order.
-func EqualURLs(a, b []URLEntry) bool { return false }
+func EqualURLs(a, b []URLEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].URL != b[i].URL || !a[i].ExpiresAt.Equal(b[i].ExpiresAt) {
+			return false
+		}
+	}
+	return true
+}
 
 // LoadURLs reads the addresses in dir. A directory with no urls.json has none, and
-// an entry that is not a valid address is dropped.
-func LoadURLs(dir string) ([]URLEntry, error) { return nil, nil }
+// an entry that is not a valid address is dropped: the file is the agent's own, but
+// an address is dialed with the join token, so nothing odd is kept.
+func LoadURLs(dir string) ([]URLEntry, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, URLsFile)) //nolint:gosec // the name is a constant joined to the agent's own state directory
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", URLsFile, err)
+	}
+	var entries []URLEntry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("%s is damaged: %w", filepath.Join(dir, URLsFile), err)
+	}
+	out := entries[:0]
+	for _, e := range entries {
+		if ValidURL(e.URL) {
+			out = append(out, e)
+		}
+	}
+	if len(out) > MaxURLs {
+		out = out[:MaxURLs]
+	}
+	return out, nil
+}
 
 // SaveURLs replaces urls.json with entries, atomically and private to the agent.
-func SaveURLs(dir string, entries []URLEntry) error { return nil }
+func SaveURLs(dir string, entries []URLEntry) error {
+	if entries == nil {
+		entries = []URLEntry{}
+	}
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal the addresses: %w", err)
+	}
+	tmp := filepath.Join(dir, URLsFile+tmpSuffix)
+	if err := writeFile(tmp, append(data, '\n')); err != nil {
+		return fmt.Errorf("save %s: %w", URLsFile, err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, URLsFile)); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("save %s: %w", URLsFile, err)
+	}
+	return nil
+}

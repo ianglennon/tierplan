@@ -213,6 +213,10 @@ type Session struct {
 	control atomic.Bool
 	ctlMu   sync.Mutex
 	ctl     *yamux.Stream
+	// welcomeURLs is the address list the welcome carried. When the control stream
+	// opens and the current list differs, the agent is told at once: the address
+	// changed in the moments between its welcome and its control stream.
+	welcomeURLs []string
 	// renewing is set while a renewal for this session is being made, so a flood of
 	// renew lines is one renewal and not a queue of them.
 	renewing atomic.Bool
@@ -439,7 +443,29 @@ func (h *Hub) URLs() []string {
 // agent whose control stream cannot be written to is logged and left, and learns
 // the address from its next welcome. A session that has not opened its control
 // stream yet is told when it does (see agentStream).
-func (h *Hub) PushURLs(urls, pins []string) int { return 0 }
+func (h *Hub) PushURLs(urls, pins []string) int {
+	if len(urls) == 0 {
+		return 0
+	}
+	h.mu.Lock()
+	live := make([]*Session, 0, len(h.sessions))
+	for _, s := range h.sessions {
+		if s.control.Load() {
+			live = append(live, s)
+		}
+	}
+	h.mu.Unlock()
+	msg := wire.URLUpdate{T: wire.TypeURLs, URLs: urls, Pins: pins}
+	for _, s := range live {
+		go func() {
+			// A control stream that is not set up yet is told when it is (agentStream).
+			if err := s.sendControl(msg); err != nil && !errors.Is(err, errNoControlStream) {
+				h.log.Warn("could not tell an agent the new server address; it learns it from its next welcome", "agent_id", s.AgentID, "environment_id", s.EnvID, "error", err)
+			}
+		}()
+	}
+	return len(live)
+}
 
 // Handler serves GET /agent/connect.
 func (h *Hub) Handler() http.Handler { return http.HandlerFunc(h.serve) }

@@ -96,6 +96,7 @@ type UpdateSettingsInput struct {
 
 // RegisterSettings registers GET and PATCH /api/settings: the instance name
 // (D-03), the public URL (D-04) and the agent URL (D-18). All are global settings.
+// A change of the address agents dial is pushed to the connected agents (D-19).
 func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
@@ -114,6 +115,26 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			AgentEndpoint:   d.Instance.AgentEndpoint(),
 		}
 	}
+	// withAgents adds how many agents are enrolled and how many of those have no
+	// connection. A count that cannot be made is logged and left at zero: the
+	// settings page is not worth less because the agents table was busy.
+	withAgents := func(ctx context.Context, b SettingsBody) SettingsBody {
+		if d.Agents == nil {
+			return b
+		}
+		ids, err := d.Agents.EnrolledAgentIDs(ctx)
+		if err != nil {
+			d.Log.Warn("could not count the enrolled agents", "error", err)
+			return b
+		}
+		b.EnrolledAgents = len(ids)
+		for _, id := range ids {
+			if !d.Agents.Connected(id) {
+				b.OfflineAgents++
+			}
+		}
+		return b
+	}
 	// Changes are rare and must reach the cache in the order they reach the
 	// database, so one at a time.
 	var mu sync.Mutex
@@ -125,10 +146,11 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		Summary:     "Get the instance name, public URL and agent URL",
 		Description: "publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), " +
 			"agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: " +
-			"the agent URL, else the public URL, with its path and /agent/connect.",
+			"the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are " +
+			"not revoked and offlineAgents those of them with no connection now (D-19).",
 		Tags: []string{"settings"},
-	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(context.Context, *struct{}) (*SettingsOutput, error) {
-		return &SettingsOutput{CacheControl: "no-store", Body: current()}, nil
+	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*SettingsOutput, error) {
+		return &SettingsOutput{CacheControl: "no-store", Body: withAgents(ctx, current())}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -140,7 +162,9 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			"(instance_name_required, instance_name_too_long, invalid_public_url, " + codeInvalidAgentURL + "). A different public URL while " +
 			"BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set " +
 			"answers 409 " + problemAgentURLLocked + "; both change nothing. An empty agentUrl clears it. A change takes effect at once: " +
-			"the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is " +
+			"the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents " +
+			"dial changes, every connected agent is told the new address and the server's pins over its tunnel and keeps the old " +
+			"address as a fallback for 30 days; agents with no connection learn it when they next connect. Each change is " +
 			"audited as settings.updated with the old and new value of every changed field.",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateSettingsInput) (*SettingsOutput, error) {
@@ -218,7 +242,7 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			}
 		}
 		if len(details) == 0 {
-			return &SettingsOutput{CacheControl: "no-store", Body: before}, nil
+			return &SettingsOutput{CacheControl: "no-store", Body: withAgents(ctx, before)}, nil
 		}
 
 		tx, err := d.Store.Write.BeginTx(ctx, nil)
@@ -259,6 +283,16 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		// Only after the commit, so a rollback leaves the cache and the database in step.
 		d.Instance.Apply(name, url)
 		d.Instance.ApplyAgentURL(agentURL)
-		return &SettingsOutput{CacheControl: "no-store", Body: current()}, nil
+		after := current()
+		// What agents dial changed, by either URL: every connected agent is told the
+		// new address and the server's current pins now, and keeps the old address as
+		// a fallback (D-19). Offline agents learn it from their next welcome. A change
+		// that leaves the endpoint where it was (the public URL under an agent URL, a
+		// name) tells nobody anything.
+		if d.Agents != nil && after.AgentEndpoint != "" && after.AgentEndpoint != before.AgentEndpoint {
+			n := d.Agents.PushURLs([]string{after.AgentEndpoint}, d.Agents.Pins())
+			d.Log.Info("told the connected agents the new server address", "agents", n)
+		}
+		return &SettingsOutput{CacheControl: "no-store", Body: withAgents(ctx, after)}, nil
 	})
 }

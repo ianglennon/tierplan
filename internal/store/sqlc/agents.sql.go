@@ -367,6 +367,34 @@ func (q *Queries) IsBlocked(ctx context.Context, arg IsBlockedParams) (int64, er
 	return count, err
 }
 
+const listActiveAgentIDs = `-- name: ListActiveAgentIDs :many
+SELECT id FROM agents WHERE status = 'active' ORDER BY id
+`
+
+// The agents that may connect: everything not revoked.
+func (q *Queries) ListActiveAgentIDs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveAgentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentsByEnv = `-- name: ListAgentsByEnv :many
 SELECT id, env_id, name, role, engine_id, swarm_node_id, public_key, cert_serial, cert_fingerprint, cert_not_after, agent_version, status, created_at, last_seen_at, revoked_at, revoked_by, revoke_reason FROM agents WHERE env_id = ? ORDER BY created_at, id
 `

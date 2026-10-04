@@ -51,3 +51,28 @@ func TestTunnelFollowsTheAgentURLNotThePublicURL(t *testing.T) {
 		t.Fatalf("a plain connection with an http agent URL = %d, want it past the preflight", code)
 	}
 }
+
+// A welcome, and a push when an address changes, carry the endpoint agents are told
+// to dial: the agent URL when one is set, else the public URL, with the base path
+// (D-18, D-19).
+func TestTheHubTellsAgentsTheEndpointFromTheAgentURLElseThePublicURL(t *testing.T) {
+	build := func(env map[string]string) *Server {
+		t.Helper()
+		env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = srv.Close() })
+		return srv
+	}
+	if got := build(map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.test/bp"}).tunnel.URLs(); len(got) != 1 || got[0] != "wss://bayplan.test/bp/agent/connect" {
+		t.Errorf("public URL only: %v", got)
+	}
+	if got := build(map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.test", "BAYPLAN_AGENT_URL": "https://10.0.0.5:7480"}).tunnel.URLs(); len(got) != 1 || got[0] != "wss://10.0.0.5:7480/agent/connect" {
+		t.Errorf("agent URL set: %v", got)
+	}
+	if got := build(map[string]string{}).tunnel.URLs(); len(got) != 0 {
+		t.Errorf("no URL set: %v, want no address to hand out", got)
+	}
+}

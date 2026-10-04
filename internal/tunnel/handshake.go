@@ -57,6 +57,9 @@ type accepted struct {
 	IP           string
 	// ClockOffset is how far the agent's clock is ahead of the server's.
 	ClockOffset time.Duration
+	// URLs is the address list the welcome carried, so the session can tell the
+	// agent when it has changed before the control stream opened.
+	URLs []string
 }
 
 // handshake runs the challenge, auth and welcome exchange. It sends a refuse
@@ -115,9 +118,10 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 		return accepted{}, false
 	}
 
+	acc.URLs = h.URLs()
 	if err := writeJSON(ctx, c, wire.Welcome{
 		T: wire.TypeWelcome, AgentID: acc.AgentID, EnvID: acc.EnvID, Cert: acc.Cert,
-		HeartbeatMs: int(h.heartbeat / time.Millisecond), Pins: h.Pins(), ServerTime: h.now().UnixMilli(),
+		HeartbeatMs: int(h.heartbeat / time.Millisecond), URLs: acc.URLs, Pins: h.Pins(), ServerTime: h.now().UnixMilli(),
 	}); err != nil {
 		h.log.Warn("agent went away before the welcome", "agent_id", acc.AgentID, "error", err)
 		return accepted{}, false

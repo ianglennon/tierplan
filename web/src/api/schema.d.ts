@@ -523,7 +523,7 @@ export interface paths {
         };
         /**
          * Get the instance name, public URL and agent URL
-         * @description publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect.
+         * @description publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19).
          */
         get: operations["getSettings"];
         put?: never;
@@ -533,7 +533,7 @@ export interface paths {
         head?: never;
         /**
          * Change the instance name, the public URL or the agent URL
-         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is audited as settings.updated with the old and new value of every changed field.
+         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every connected agent is told the new address and the server's pins over its tunnel and keeps the old address as a fallback for 30 days; agents with no connection learn it when they next connect. Each change is audited as settings.updated with the old and new value of every changed field.
          */
         patch: operations["updateSettings"];
         trace?: never;
@@ -1392,8 +1392,18 @@ export interface components {
             agentUrl: string;
             /** @description True when the BAYPLAN_AGENT_URL environment variable fixes the agent URL */
             agentUrlLocked: boolean;
+            /**
+             * Format: int64
+             * @description How many agents are enrolled and not revoked, across all environments. A change of the public URL or the agent URL needs a confirmation while this is above 0
+             */
+            enrolledAgents: number;
             /** @description The name shown in the header, tab titles and the sign-in page */
             instanceName: string;
+            /**
+             * Format: int64
+             * @description How many of the enrolled agents have no connection now. They cannot be told a new address and learn it only when they next connect, if the old address still reaches Bayplan
+             */
+            offlineAgents: number;
             /** @description The URL users reach Bayplan at; drives the Origin check and the cookie Secure flag */
             publicUrl: string;
             /** @description True when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL */

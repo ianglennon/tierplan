@@ -332,6 +332,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		// The hub checks each handshake against the address agents are told to dial:
 		// the agent URL when one is set, else the public URL (D-18).
 		WithPublicURL(inst.AgentBase).
+		// Every welcome, and every push when an address changes, carries the
+		// endpoint agents are told to dial (D-19).
+		WithEndpoint(inst.AgentEndpoint).
 		WithPins(func() []string { return selfSignedPins(cfg, tlsCfg) }).
 		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
 		WithLastSeen(agentSvc).
@@ -434,7 +437,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
 		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
-		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Log: log}, tunnelHub.Handler())
+		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log}, tunnelHub.Handler())
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		tunnelHub.Close()
@@ -634,3 +637,20 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 		return nil
 	}
 }
+
+// settingsAgents gives the settings routes what they know of agents: the agents
+// service counts the enrolled ones, and the hub says which are connected and tells
+// them a new address (D-19).
+type settingsAgents struct {
+	svc *agents.Service
+	hub *tunnel.Hub
+}
+
+func (a settingsAgents) EnrolledAgentIDs(ctx context.Context) ([]string, error) {
+	return a.svc.EnrolledAgentIDs(ctx)
+}
+func (a settingsAgents) Connected(agentID string) bool    { return a.hub.Session(agentID) != nil }
+func (a settingsAgents) PushURLs(urls, pins []string) int { return a.hub.PushURLs(urls, pins) }
+func (a settingsAgents) Pins() []string                   { return a.hub.Pins() }
+
+var _ api.SettingsAgents = settingsAgents{}

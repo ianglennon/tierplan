@@ -993,6 +993,17 @@ func (s *Service) Renew(ctx context.Context, agentID, ip string) (tunnel.RenewRe
 	return tunnel.RenewResult{Cert: leaf.DER, NotAfter: leaf.NotAfter}, nil
 }
 
+// EnrolledAgentIDs is the IDs of the agents that may connect: the active ones, in
+// every environment. Settings counts them to say how many agents a change of
+// address concerns and how many of those are offline (D-19).
+func (s *Service) EnrolledAgentIDs(ctx context.Context) ([]string, error) {
+	ids, err := s.st.RQ.ListActiveAgentIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list the enrolled agents: %w", err)
+	}
+	return ids, nil
+}
+
 // StillActive reports whether the agent exists and has not been revoked. The hub
 // asks it when it registers a session. It implements tunnel.Verifier.
 func (s *Service) StillActive(agentID string) bool {

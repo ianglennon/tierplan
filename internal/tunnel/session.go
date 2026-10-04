@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -223,6 +224,14 @@ func (h *Hub) agentStream(s *Session, st *yamux.Stream) {
 	s.ctlMu.Lock()
 	s.ctl = st
 	s.ctlMu.Unlock()
+	// An address that changed after this agent's welcome, and before it opened its
+	// control stream, was pushed to sessions that had a control stream and so not to
+	// this one: say it now. Both ends merge a repeated list into the same state.
+	if cur := h.URLs(); len(cur) > 0 && !slices.Equal(cur, s.welcomeURLs) {
+		if err := s.sendControl(wire.URLUpdate{T: wire.TypeURLs, URLs: cur, Pins: h.Pins()}); err != nil {
+			h.log.Warn("could not tell an agent the new server address", "agent_id", s.AgentID, "error", err)
+		}
+	}
 	h.readControl(s, st)
 }
 

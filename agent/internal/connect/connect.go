@@ -12,8 +12,12 @@
 // needed again (D-01, D-03). After the welcome the agent opens a control stream
 // and heartbeats on it (D-41). When the connection ends it reconnects with
 // jittered exponential backoff and never gives up. The server's certificate is
-// verified by the system roots or by a pin (tls.go). Renewal arrives in a later
-// plan.
+// verified by the system roots or by a pin (tls.go).
+//
+// The agent keeps its certificate fresh by asking for a new one over the control
+// stream (renew.go), and keeps the address it dials and the server's pins current
+// from what the server tells it (D-19): the newest address is dialed first and the
+// previous one is a fallback for 30 days.
 package connect
 
 import (
@@ -139,10 +143,6 @@ type runner struct {
 	cfg Config
 	env runEnv
 	log *slog.Logger
-	aud string
-	// host is the name or address of the server, which its certificate must be
-	// valid for.
-	host string
 
 	// cur is the identity, once the agent has one. It is also kept in memory when
 	// there is no state directory, so a reconnect in the same process never
@@ -162,8 +162,29 @@ type runner struct {
 	// lastCode is the refusal code last logged, so a refusal that repeats every
 	// minute is said once.
 	lastCode string
-	// pins are the server pins kept from welcomes, with their overlap deadlines.
+	// pins are the server pins kept from welcomes and pushes, with their overlap
+	// deadlines. urls are the addresses to dial, newest first, with the overlap
+	// deadline of every one but the newest. Both are guarded by mu, because a push
+	// arrives on the control reader while the next connection is being made.
 	pins []state.PinEntry
+	urls []state.URLEntry
+}
+
+// target is one address to dial: the URL, the audience the handshake signs (the
+// host[:port] dialed) and the host name the server's certificate must be valid for.
+type target struct{ url, aud, host string }
+
+// newTarget reads an address the agent is going to dial.
+func newTarget(raw string) (target, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
+		return target{}, fmt.Errorf("%q is not a wss:// (or ws://) address", raw)
+	}
+	aud, err := authn.Audience(raw)
+	if err != nil {
+		return target{}, err
+	}
+	return target{url: raw, aud: aud, host: u.Hostname()}, nil
 }
 
 func runWith(ctx context.Context, cfg Config, env runEnv) error {
@@ -190,15 +211,18 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
 		return fmt.Errorf("BAYPLAN_AGENT_URL must be a wss:// (or ws://) address: %q", cfg.URL)
 	}
-	aud, err := authn.Audience(cfg.URL)
-	if err != nil {
+	if _, err := authn.Audience(cfg.URL); err != nil {
 		return fmt.Errorf("BAYPLAN_AGENT_URL: %w", err)
 	}
 	if u.Scheme == "ws" {
 		log.Warn("the agent endpoint is plain ws://: the join token and every Docker answer travel unencrypted")
 	}
 
-	r := &runner{cfg: cfg, env: env, log: log, aud: aud, host: u.Hostname()}
+	// Until the server says otherwise the address from the environment is the only
+	// one. Once it has pushed one, the stored list rules and the environment's
+	// address is just one more entry in it, kept for 30 days: an operator who wants
+	// to move an agent changes the address in Bayplan.
+	r := &runner{cfg: cfg, env: env, log: log, urls: []state.URLEntry{{URL: cfg.URL}}}
 	if cfg.StateDir != "" {
 		cur, ok, err := state.Load(cfg.StateDir)
 		if err != nil {
@@ -210,6 +234,12 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 		if r.pins, err = state.LoadPins(cfg.StateDir); err != nil {
 			log.Warn("the agent could not read its stored server pins; it will trust only the install pin and the system roots", "error", err)
 			r.pins = nil
+		}
+		stored, err := state.LoadURLs(cfg.StateDir)
+		if err != nil {
+			log.Warn("the agent could not read the addresses the server gave it; it will dial BAYPLAN_AGENT_URL", "error", err)
+		} else if len(state.ActiveURLs(stored, env.now())) > 0 {
+			r.urls = stored
 		}
 	}
 	if !r.have && cfg.JoinToken == "" {
@@ -369,6 +399,12 @@ func (r *runner) hint(code string) string {
 
 // once makes one connection: dial, handshake, serve. welcomed reports whether
 // the server accepted the agent, so the caller can reset its failure count.
+//
+// The addresses are tried in order, the newest first (D-19). An address that cannot
+// be reached, or whose certificate cannot be verified, hands over to the next, and
+// the error the caller sees is the newest address's. Once a WebSocket is open to an
+// address the answer is final, whatever it is: a refusal from the server is not a
+// reason to ask another address.
 func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	// The engine is described before the dial, so the handshake itself never
 	// waits on it. An engine that does not answer is reported, not fatal: the
@@ -386,39 +422,85 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 		return false, err
 	}
 
+	var first error
+	urls := r.dialURLs()
+	for i, raw := range urls {
+		tg, err := newTarget(raw)
+		if err != nil {
+			// Only addresses that passed state.ValidURL are kept, so this is a bug
+			// in what was stored, not something to stop on.
+			r.log.Warn("the agent skipped an address it cannot dial", "error", err)
+			continue
+		}
+		welcomed, reached, err := r.attempt(ctx, tg, reported, cr)
+		if reached || ctx.Err() != nil {
+			return welcomed, err
+		}
+		if first == nil {
+			first = err
+		}
+		if i+1 < len(urls) {
+			r.log.Info("the agent could not connect to that address and tries the previous one", "address", tg.aud, "error", err)
+		}
+	}
+	if first == nil {
+		first = errors.New("the agent has no address to dial")
+	}
+	return false, first
+}
+
+// dialURLs is the addresses to dial now, newest first. It is never empty: the
+// address from the environment is the last resort.
+func (r *runner) dialURLs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if urls := state.ActiveURLs(r.urls, r.env.now()); len(urls) > 0 {
+		return urls
+	}
+	return []string{r.cfg.URL}
+}
+
+// attempt dials one address and, if the server answers, runs the handshake and
+// serves the session. reached is whether a WebSocket was opened to it: false means
+// the address could not be used and another may be tried.
+func (r *runner) attempt(ctx context.Context, tg target, reported wire.Facts, cr credentials) (welcomed, reached bool, err error) {
 	client := r.cfg.HTTPClient
 	if client == nil {
-		client = newHTTPClient(state.ActivePins(r.pins, r.env.now()), r.cfg.InstallPins, r.env.roots, r.host)
+		r.mu.Lock()
+		pins := state.ActivePins(r.pins, r.env.now())
+		r.mu.Unlock()
+		client = newHTTPClient(pins, r.cfg.InstallPins, r.env.roots, tg.host)
 		defer client.CloseIdleConnections()
 	}
-	c, resp, err := websocket.Dial(ctx, r.cfg.URL, &websocket.DialOptions{ //nolint:bodyclose // coder/websocket reads and closes the body of a refused upgrade itself
+	c, resp, err := websocket.Dial(ctx, tg.url, &websocket.DialOptions{ //nolint:bodyclose // coder/websocket reads and closes the body of a refused upgrade itself
 		HTTPClient:   client,
 		Subprotocols: []string{wire.Subprotocol},
 	})
 	if err != nil {
 		if u := asUntrusted(err); u != nil {
-			return false, u
+			return false, false, u
 		}
-		return false, fmt.Errorf("connect to %s: %w", r.aud, err)
+		return false, false, fmt.Errorf("connect to %s: %w", tg.aud, err)
 	}
 	// CloseNow, never a graceful close: a peer that stopped answering would make
 	// a close handshake wait (Pitfall 6).
 	defer func() { _ = c.CloseNow() }()
 	if c.Subprotocol() != wire.Subprotocol {
-		return false, fmt.Errorf("%s does not speak %s", r.aud, wire.Subprotocol)
+		return false, true, fmt.Errorf("%s does not speak %s", tg.aud, wire.Subprotocol)
 	}
 	// Until the handshake is over the raw connection keeps its read limit; the
 	// net.Conn wrapper removes it (Pitfall 4), so it is made only afterwards.
 	c.SetReadLimit(wire.MaxHandshakeBytes)
 
 	hctx, cancel := context.WithTimeout(ctx, wire.HandshakeTimeout)
-	welcome, err := handshake(hctx, c, resp, r.cfg.Version, r.aud, cr, reported, r.env.now)
+	welcome, err := handshake(hctx, c, resp, r.cfg.Version, tg.aud, cr, reported, r.env.now)
 	cancel()
 	if err != nil {
-		return false, err
+		return false, true, err
 	}
-	if err := r.accept(cr, welcome, resp != nil && resp.TLS != nil); err != nil {
-		return false, err
+	verified := resp != nil && resp.TLS != nil
+	if err := r.accept(cr, welcome, verified, tg); err != nil {
+		return false, true, err
 	}
 	r.forceEnrol = false
 
@@ -428,16 +510,74 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	}
 	// A server cannot make the agent spin: the floor is far below any real setting.
 	every = max(every, minHeartbeat)
-	return true, serve(ctx, c, r.cfg.SocketPath, every, r.env.now, r.log, proxy.Policy{ReadOnly: r.cfg.ReadOnly}, r.hooks())
+	return true, true, serve(ctx, c, r.cfg.SocketPath, every, r.env.now, r.log, proxy.Policy{ReadOnly: r.cfg.ReadOnly}, r.hooks(verified))
 }
 
 // hooks is what the control stream of the next session hands the server's messages
-// to: the renewal of the certificate the agent holds now.
-func (r *runner) hooks() controlHooks {
+// to: the renewal of the certificate the agent holds now, and the addresses and pins
+// the server pushes. verified says the session ran over TLS that was verified: what a
+// server pushes over any other session is not taken, so a spoofed server cannot send
+// the agent, and its join token, somewhere else (T-02-84).
+func (r *runner) hooks(verified bool) controlHooks {
 	r.mu.Lock()
 	cur := r.cur
 	r.mu.Unlock()
-	return controlHooks{renew: newRenewer(cur.Cert, cur.AgentID, cur.Key, r.env.now, r.env.rnd, r.log, r.saveCert)}
+	warned := false
+	return controlHooks{
+		renew: newRenewer(cur.Cert, cur.AgentID, cur.Key, r.env.now, r.env.rnd, r.log, r.saveCert),
+		urls: func(u wire.URLUpdate) {
+			if !verified {
+				if !warned {
+					warned = true
+					r.log.Warn("the server sent new addresses over a connection that was not verified; the agent ignored them")
+				}
+				return
+			}
+			r.mergeURLs(u.URLs)
+			r.mergePins(u.Pins)
+		},
+	}
+}
+
+// pushable reports whether the agent will take an address from the server: one it
+// could dial, over wss. A verified session is TLS, so a plain ws:// address could
+// only be a downgrade.
+func pushable(raw string) bool {
+	if !state.ValidURL(raw) {
+		return false
+	}
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "wss"
+}
+
+// mergeURLs keeps the addresses a welcome or a push lists, the newest first, and the
+// ones it no longer lists for 30 days (state.MergeURLs), saving them when they
+// changed. A list with nothing usable in it changes nothing. It is only called for a
+// verified session.
+func (r *runner) mergeURLs(fromServer []string) {
+	var usable []string
+	for _, u := range fromServer[:min(len(fromServer), wire.MaxPushedURLs)] {
+		if pushable(u) {
+			usable = append(usable, u)
+		}
+	}
+	if len(usable) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	merged := state.MergeURLs(r.urls, usable, r.env.now())
+	if state.EqualURLs(merged, r.urls) {
+		return
+	}
+	r.urls = merged
+	r.log.Info("the server changed the address the agent dials; the previous one stays as a fallback for 30 days", "address", usable[0])
+	if r.cfg.StateDir == "" {
+		return
+	}
+	if err := state.SaveURLs(r.cfg.StateDir, merged); err != nil {
+		r.log.Warn("the agent could not save the new address; after a restart it will dial the one it dials now", "dir", r.cfg.StateDir, "error", err)
+	}
 }
 
 // saveCert keeps a renewed certificate: the identity on the volume is replaced
@@ -500,7 +640,7 @@ func (r *runner) credentials() (credentials, error) {
 // agent as connected. verified says the session ran over TLS that was verified;
 // pins from any other session are not taken, so a spoofed server cannot plant one
 // (T-02-33).
-func (r *runner) accept(cr credentials, w wire.Welcome, verified bool) error {
+func (r *runner) accept(cr credentials, w wire.Welcome, verified bool, tg target) error {
 	switch cr.mode {
 	case wire.ModeEnrol:
 		if len(w.Cert) == 0 {
@@ -510,7 +650,7 @@ func (r *runner) accept(cr credentials, w wire.Welcome, verified bool) error {
 		r.mu.Lock()
 		r.cur, r.have = cur, true
 		r.mu.Unlock()
-		r.log.Info("enrolled with Bayplan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", r.aud)
+		r.log.Info("enrolled with Bayplan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", tg.aud)
 		if r.cfg.StateDir != "" {
 			if err := state.Save(r.cfg.StateDir, cur); err != nil {
 				// Staying connected beats stopping: the identity is in memory, and
@@ -525,10 +665,11 @@ func (r *runner) accept(cr credentials, w wire.Welcome, verified bool) error {
 		if w.AgentID != mine {
 			return fmt.Errorf("the server welcomed agent %q but this agent is %q", w.AgentID, mine)
 		}
-		r.log.Info("connected to Bayplan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", r.aud)
+		r.log.Info("connected to Bayplan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", tg.aud)
 	}
 	if verified {
 		r.mergePins(w.Pins)
+		r.mergeURLs(w.URLs)
 	}
 	if r.cfg.StateDir != "" {
 		if err := state.MarkConnected(r.cfg.StateDir); err != nil {
@@ -541,6 +682,8 @@ func (r *runner) accept(cr credentials, w wire.Welcome, verified bool) error {
 // mergePins keeps the pins a welcome lists, and for 30 days the ones it no longer
 // does (state.MergePins), saving them when they changed.
 func (r *runner) mergePins(fromServer []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	merged := state.MergePins(r.pins, fromServer, r.env.now())
 	if state.EqualPins(merged, r.pins) {
 		return
