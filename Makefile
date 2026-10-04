@@ -251,12 +251,16 @@ edge-context:
 	cp -R agent/image/state dist/edge-agent/agent/image/state
 	cp agent/Dockerfile dist/edge-agent/Dockerfile
 
-# --- End-to-end (D-80, RESEARCH Pattern 11) ---
-# The built image under Docker Compose with a docker:29-dind sidecar, driven by
-# Playwright through setup, sign-in, the dashboard and the audit log. Needs
-# Docker with buildx and compose. Build outputs live under .devdata/, which is
-# git-ignored. BAYPLAN_E2E_PORT moves the published port off 7480.
+# --- End-to-end (D-80, D-59, RESEARCH Pattern 11) ---
+# The built image behind Caddy at https://127.0.0.1:8443/bayplan with a generated
+# certificate, under Docker Compose with a docker:29-dind sidecar it manages and a
+# second dind daemon that plays the remote host, driven by Playwright through
+# setup, sign-in, the dashboard, the audit log, settings and the agent golden
+# path (add an environment, run the copied command, switch to it, revoke it).
+# Needs Docker with buildx and compose. Build outputs live under .devdata/, which
+# is git-ignored. BAYPLAN_E2E_HTTPS_PORT moves the published port off 8443.
 E2E_DIST := .devdata/dist-e2e
+E2E_TLS := .devdata/e2e-tls
 E2E_COMPOSE := docker compose -f e2e/compose.yaml
 # --with-deps installs the OS libraries Chromium needs and may use sudo; drop it
 # (E2E_BROWSER_ARGS=chromium) on a machine that already has them.
@@ -279,15 +283,27 @@ e2e-image: web
 proxy-smoke: e2e-image
 	scripts/proxy-smoke.sh
 
+# The certificate the proxy serves is generated here (7 days, SANs 127.0.0.1,
+# localhost and the proxy's address on the compose network) with its SPKI pin,
+# which the agent spec gives the agent as BAYPLAN_AGENT_PIN. The agent image is
+# built and loaded into the remote host's Docker under the name the install
+# command uses for an edge server, so the run needs no registry.
 # The stack is always torn down, with its volumes, whatever the tests do, and
 # the exit status is the tests' own. A failed run prints the container logs.
-e2e: e2e-image
+e2e: e2e-image agent-image
 	@set -e; \
+	go run scripts/e2e-cert.go -out $(E2E_TLS); \
 	trap '$(E2E_COMPOSE) down -v' EXIT; \
 	$(E2E_COMPOSE) up -d --wait || { $(E2E_COMPOSE) logs --no-color --tail 100; exit 1; }; \
+	docker save bayplan-agent:dev | $(E2E_COMPOSE) exec -T agenthost docker load; \
+	$(E2E_COMPOSE) exec -T agenthost docker tag bayplan-agent:dev ghcr.io/ianglennon/bayplan-agent:edge; \
 	pnpm -C e2e install --frozen-lockfile; \
 	pnpm -C e2e exec playwright install $(E2E_BROWSER_ARGS); \
 	status=0; \
 	pnpm -C e2e exec playwright test || status=$$?; \
-	if [ "$$status" -ne 0 ]; then $(E2E_COMPOSE) logs --no-color --tail 100 bayplan || true; fi; \
+	if [ "$$status" -ne 0 ]; then \
+		$(E2E_COMPOSE) logs --no-color --tail 100 bayplan || true; \
+		$(E2E_COMPOSE) logs --no-color --tail 50 caddy || true; \
+		$(E2E_COMPOSE) exec -T agenthost docker logs --tail 50 bayplan-agent || true; \
+	fi; \
 	exit $$status

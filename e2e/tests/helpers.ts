@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { test as base, expect, type Page, type TestInfo } from "@playwright/test";
 
-import { COMPOSE_FILE } from "./env";
+import { at, COMPOSE_FILE } from "./env";
 
 // compose runs `docker compose -f e2e/compose.yaml <args>` against the stack
 // `make e2e` brought up and returns what it printed.
@@ -12,6 +12,8 @@ export function compose(...args: string[]): string {
   return execFileSync("docker", ["compose", "-f", COMPOSE_FILE, ...args], {
     encoding: "utf8",
     timeout: 120_000,
+    // A proxy's access log runs past the 1 MiB default after a few page loads.
+    maxBuffer: 64 * 1024 * 1024,
   });
 }
 
@@ -33,6 +35,19 @@ export function setupToken(): string {
 // manages. Its DOCKER_HOST points the docker CLI at the shared socket.
 export function dind(cmd: string): string {
   return compose("exec", "-T", "dind", "sh", "-c", cmd).trim();
+}
+
+// dockerExec runs a shell script inside one service of the stack with
+// `docker compose exec -T <service> sh -c <script>`, as a person at a prompt on
+// that machine would. For "agenthost" it is a shell on the remote Docker host:
+// the golden path pastes the install command Bayplan showed into it. It returns
+// what the script printed; a non-zero exit throws with the script's output.
+export function dockerExec(container: string, script: string): string {
+  return execFileSync(
+    "docker",
+    ["compose", "-f", COMPOSE_FILE, "exec", "-T", container, "sh", "-c", script],
+    { encoding: "utf8", timeout: 180_000 },
+  ).trim();
 }
 
 // dindCount is the number of lines a dind command prints: `docker ps -aq` and
@@ -122,6 +137,24 @@ export const test = base.extend<{ tracker: PageTracker }>({
 });
 
 export { expect };
+
+// openFirstEnvironment opens the first environment in the overview and returns
+// its dashboard's id. A person who has opened none yet lands on the overview, not
+// on a dashboard (D-31: "/" goes to the environment last opened, and a page needs
+// a couple of seconds on screen to count), so the specs go through the overview
+// the way that person would. Before the agent spec there is exactly one, the
+// Docker host Bayplan manages through its socket.
+export async function openFirstEnvironment(page: Page): Promise<string> {
+  await page.goto(at("/environments"));
+  await expect(page.getByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
+  // The name link carries the whole name as its title, in the table and in the
+  // stacked rows under 768px alike.
+  await page.getByRole("main").locator("a[title]").first().click();
+  await expect(page).toHaveURL(/\/bayplan\/env\/[^/]+$/);
+  const id = /\/env\/([^/]+)$/.exec(new URL(page.url()).pathname)?.[1];
+  if (!id) throw new Error(`no environment id in ${page.url()}`);
+  return id;
+}
 
 // What the version footer says: "Bayplan v0.1.0" for a release, "Bayplan dev
 // (abc1234)" for a build without a version.

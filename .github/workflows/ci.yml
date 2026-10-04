@@ -7,7 +7,8 @@
 # Supply chain (T-01-12): every action is pinned to a full commit SHA with the
 # release tag in a trailing comment, the token is read-only and there are no
 # secrets. Plan 15 added the engine matrix (the integration job); plan 27 added
-# release-check and the main-only edge image; plan 28 adds the e2e job. The swarm
+# release-check and the main-only edge image; plan 28 adds the e2e job (plan 02-32
+# runs it behind Caddy at a subpath with a real agent and adds proxy-smoke). The swarm
 # job (Phase 2) runs the multi-node suite on Engines 24 and 29.
 name: CI
 
@@ -297,6 +298,32 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # Plan 02-32: the same image behind Caddy, nginx and Traefik with the files in
+  # docs/proxy, at the root of a host and at /bayplan (make proxy-smoke, about
+  # 2.5 minutes; the proxy images are pulled). The e2e job above covers Caddy at
+  # a subpath through a browser and a real agent; this one covers the three
+  # documented configurations, and the three deliberately broken nginx ones that
+  # Bayplan must notice.
+  proxy-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - run: make proxy-smoke
+
   # D-75: every push to main publishes ghcr.io/ianglennon/bayplan:edge for amd64
   # and arm64, signed with keyless cosign. It is the only tag a push can move;
   # versioned tags come from release.yml. This job runs only on main and never
@@ -308,7 +335,7 @@ jobs:
   # :edge pushed but unsigned (WR-11).
   edge:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, test, gen-check, licences, spdx, build, integration, release-check, e2e]
+    needs: [lint, test, gen-check, licences, spdx, build, integration, release-check, e2e, proxy-smoke]
     concurrency:
       group: edge-publish
       cancel-in-progress: false

@@ -7,7 +7,7 @@
 
 import { readFileSync } from "node:fs";
 
-import { AUTH_STATE, BASE_URL } from "./env";
+import { AUTH_STATE, at, ORIGIN } from "./env";
 import { compose, expect, test } from "./helpers";
 
 test.use({ storageState: AUTH_STATE });
@@ -17,7 +17,7 @@ test.use({ storageState: AUTH_STATE });
 const TYPED = "Tr0ub4dor&3 hunter";
 
 test("the audit log lists what happened, filters by action and exports CSV", async ({ page }) => {
-  await page.goto("/audit");
+  await page.goto(at("/audit"));
   await expect(page.getByRole("heading", { name: "Audit log", level: 1 })).toBeVisible();
 
   const table = page.getByRole("table", { name: "Audit log" });
@@ -71,11 +71,12 @@ test("a password typed as the username never reaches the audit log, its export o
   // token travel with this request. The empty storage state matters, because
   // test.use() above would otherwise hand this context the admin's cookie.
   const anonymous = await playwright.request.newContext({
-    baseURL: BASE_URL,
+    baseURL: ORIGIN,
+    ignoreHTTPSErrors: true,
     storageState: { cookies: [], origins: [] },
   });
   try {
-    const refused = await anonymous.post("/api/auth/login", {
+    const refused = await anonymous.post(at("/api/auth/login"), {
       data: { username: TYPED, password: "wrong wrong wrong", remember: false },
     });
     expect(refused.status()).toBe(401);
@@ -85,8 +86,8 @@ test("a password typed as the username never reaches the audit log, its export o
 
   // The signed-in admin reads the audit log back in both export formats.
   const exports = [
-    { format: "json", url: "/api/audit/export?format=json" },
-    { format: "csv", url: "/api/audit/export?format=csv" },
+    { format: "json", url: at("/api/audit/export?format=json") },
+    { format: "csv", url: at("/api/audit/export?format=csv") },
   ];
   for (const { format, url } of exports) {
     const res = await page.request.get(url);

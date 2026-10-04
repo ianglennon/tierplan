@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+#
+# Caddy in front of Bayplan for the end-to-end run (plan 02-32, D-59). It is
+# docs/proxy/Caddyfile's subpath site with two differences that only a test
+# needs: the certificate is a file `make e2e` generated (scripts/e2e-cert.go),
+# because no public CA can sign 127.0.0.1, and the site has no host name, so it
+# answers the browser at 127.0.0.1 and the agent at the proxy's own address on the
+# compose network alike.
+#
+# Caddy sets X-Forwarded-For, X-Forwarded-Proto and Host by itself, passes the
+# agent's WebSocket upgrade through and flushes the event stream at once.
+{
+	# The certificate is supplied, so there is nothing to obtain, and the admin API
+	# has no reason to listen.
+	auto_https off
+	admin off
+}
+
+https://:443 {
+	tls /certs/cert.pem /certs/key.pem
+
+	# The access log is how the run shows that the agent's WebSocket and the event
+	# stream really went through the proxy: Caddy writes a line when a request ends,
+	# so the agent spec reads it after the session was closed.
+	log {
+		output stdout
+		format json
+	}
+
+	# handle_path removes /bayplan before the request reaches Bayplan, which is
+	# told its public URL ends in /bayplan and serves both forms.
+	handle_path /bayplan/* {
+		reverse_proxy bayplan:7480
+	}
+	redir /bayplan /bayplan/ permanent
+}

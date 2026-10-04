@@ -46,7 +46,8 @@ No tool is added to `go.mod` for development: golangci-lint, sqlc, goreleaser, a
 | `make spdx` | Checks SPDX headers (below). |
 | `make licences` | Checks dependency licences against the allowlist (below). |
 | `make dco` | Checks every commit in a range is signed off. |
-| `make e2e` | Playwright against the built image, with a `docker:29-dind` sidecar. Needs Docker with buildx and Compose. See below. |
+| `make e2e` | Playwright against the built image behind Caddy at a subpath, with a `docker:29-dind` sidecar it manages and a second one that hosts a real agent. Needs Docker with buildx and Compose. See below. |
+| `make proxy-smoke` | The built image behind Caddy, nginx and Traefik with the files in `docs/proxy`, plus three deliberately broken nginx setups. Needs Docker, curl and jq. |
 | `make release-check` | Validates `.goreleaser.yaml` and builds this machine's binary the way a release does. |
 | `make smoke` | Starts `bin/bayplan` and checks its basic contract. |
 | `make image`, `make image-smoke` | Build the release image locally (not pushed) and run checks against it. Need Docker with buildx. |
@@ -56,11 +57,13 @@ CI runs thin wrappers over these same targets, so you can reproduce a CI failure
 
 ### End-to-end tests
 
-`make e2e` builds `bayplan:e2e` from the current tree, starts it with Docker Compose next to a `docker:29-dind` daemon that it manages through a shared unix socket, and drives setup, sign-in, the dashboard, settings and the audit log in Chromium. It always tears the stack down with its volumes. Notes:
+`make e2e` builds `bayplan:e2e` and the agent image, generates a throwaway TLS certificate (`scripts/e2e-cert.go`, seven days, under `.devdata/e2e-tls`), and starts Bayplan with Docker Compose behind Caddy at `https://127.0.0.1:8443/bayplan`. Next to it run a `docker:29-dind` daemon that Bayplan manages through a shared unix socket and a second `docker:29-dind` daemon (`agenthost`) that plays a remote host. Playwright drives setup, sign-in, the dashboard, settings and the audit log through the proxy, then the golden path for a remote host: add an environment, run the copied command on `agenthost`, watch it come online, switch to it and revoke it. It always tears the stack down with its volumes. Notes:
 
 - It runs `playwright install --with-deps chromium`, which installs OS libraries and may use `sudo`. On a machine that already has them, run `make e2e E2E_BROWSER_ARGS=chromium`.
-- `BAYPLAN_E2E_PORT` moves the published port off 7480.
-- The HTML report is written to `.devdata/playwright-report`.
+- `BAYPLAN_E2E_HTTPS_PORT` moves the published port off 8443. It is the only published port and binds 127.0.0.1.
+- Every spec's address carries the `/bayplan` prefix: open pages with `page.goto(at("/audit"))`, not a bare path, because Playwright would drop a base path held in `baseURL`.
+- The agent reaches Caddy by its fixed address on the compose network, 172.30.0.10, because a nested Docker cannot resolve compose names, and trusts the harness certificate through `BAYPLAN_AGENT_PIN`, the documented setting for a proxy with its own certificate.
+- The HTML report is written to `.devdata/playwright-report`. The agent spec keeps its trace and screenshots even when it passes.
 - A new spec file must be added to `order` in `e2e/playwright.config.ts` and must import `test` from `./helpers`, which fails the test on any CSP violation or any request to another origin.
 
 ## The development loop

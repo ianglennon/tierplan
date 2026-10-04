@@ -1,19 +1,36 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 The Bayplan Authors
 #
-# The end-to-end topology (D-80, RESEARCH Pattern 11): the freshly built image
-# under test, managing a docker:29-dind daemon through a unix socket that the
-# two containers share. Bayplan runs on the host's Docker and manages the dind
-# daemon, so its own container is not inside the managed engine.
+# The end-to-end topology (D-80, D-59, RESEARCH Pattern 11): the freshly built
+# image under test behind Caddy at https://127.0.0.1:<port>/bayplan, managing a
+# docker:29-dind daemon through a unix socket that the two containers share, and
+# receiving one agent from a second dind daemon.
 #
-# It exercises the real unix socket, the DOCKER_HOST override (D-21), the
-# socket-group detection and the privilege drop to UID 1000 (D-17), which a unit
-# test cannot reach. `make e2e` builds bayplan:e2e, brings this up and runs
-# Playwright against it.
+#   browser --https--> caddy (172.30.0.10) --http--> bayplan:7480
+#   agenthost's agent --wss--> caddy (by IP, pinned) --> bayplan
 #
-# The run claims the instance with a known password and Bayplan controls a
-# privileged dind daemon, so the port is published on 127.0.0.1 only.
+# Bayplan runs on the host's Docker and manages the dind daemon, so its own
+# container is not inside the managed engine. The run exercises the real unix
+# socket, the DOCKER_HOST override (D-21), the socket-group detection and the
+# privilege drop to UID 1000 (D-17), a real reverse proxy at a subpath, the
+# __Secure- session cookie scoped to /bayplan, the SSE health stream and the agent
+# WebSocket through that proxy (PLAT-04), which a unit test cannot reach.
+#
+# `make e2e` generates the certificate (.devdata/e2e-tls), builds bayplan:e2e,
+# brings this up, loads the agent image into agenthost and runs Playwright.
+#
+# The run claims the instance with a known password and Bayplan controls
+# privileged dind daemons, so the one published port is on 127.0.0.1 only (WR-12).
 name: bayplan-e2e
+
+networks:
+  default:
+    ipam:
+      config:
+        # A fixed subnet so the proxy has a fixed address. The agent reaches
+        # Bayplan by that address, because a nested Docker cannot resolve compose
+        # service names (RESEARCH Pitfall 17).
+        - subnet: 172.30.0.0/24
 
 services:
   dind:
@@ -33,20 +50,56 @@ services:
       retries: 60
       start_period: 2s
 
+  # The remote host: a Docker daemon of its own that the golden path installs the
+  # agent on by running the command Bayplan shows, as a person would on a server.
+  agenthost:
+    image: docker:29-dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 2s
+
   bayplan:
     image: bayplan:e2e
     environment:
       DOCKER_HOST: unix:///shared/docker.sock
+      # The address people use, and the one the browser's session cookie and the
+      # setup wizard's public URL follow: the proxy's published port and the
+      # subpath. Setting it locks the field in Settings.
+      BAYPLAN_PUBLIC_URL: https://127.0.0.1:${BAYPLAN_E2E_HTTPS_PORT:-8443}/bayplan
+      # The address agents dial: the proxy on the compose network (an IP in the
+      # certificate), which the browser's loopback address is not.
+      BAYPLAN_AGENT_URL: https://172.30.0.10/bayplan
+      # The proxy's address on the compose network, so its X-Forwarded-For and
+      # X-Forwarded-Proto are believed.
+      BAYPLAN_TRUSTED_PROXIES: 172.30.0.0/24
     volumes:
       - sock:/shared
       - data:/data
-    ports:
-      # Loopback only (WR-12): the run claims this instance with a known admin
-      # password and Bayplan controls a privileged dind daemon, so nothing on the
-      # LAN may reach it.
-      - "127.0.0.1:${BAYPLAN_E2E_PORT:-7480}:7480"
     depends_on:
       dind:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2
+    networks:
+      default:
+        ipv4_address: 172.30.0.10
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../.devdata/e2e-tls:/certs:ro
+    ports:
+      # Loopback only (WR-12): the run claims this instance with a known admin
+      # password and Bayplan controls privileged dind daemons, so nothing on the
+      # LAN may reach it.
+      - "127.0.0.1:${BAYPLAN_E2E_HTTPS_PORT:-8443}:443"
+    depends_on:
+      bayplan:
         condition: service_healthy
 
 volumes:

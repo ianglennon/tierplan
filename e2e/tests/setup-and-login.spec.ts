@@ -11,7 +11,7 @@
 
 import { type Page, test as base } from "@playwright/test";
 
-import { ADMIN, AUTH_STATE, BASE_URL } from "./env";
+import { ADMIN, AUTH_STATE, at, BASE_URL, ORIGIN } from "./env";
 import {
   expect,
   expectVersionFooter,
@@ -29,7 +29,11 @@ let tracker: PageTracker;
 base.beforeAll(async ({ browser }) => {
   // A context of its own: the browser must keep its session cookie from one
   // test to the next.
-  const context = await browser.newContext({ baseURL: BASE_URL, locale: "en-GB" });
+  const context = await browser.newContext({
+    baseURL: ORIGIN,
+    ignoreHTTPSErrors: true,
+    locale: "en-GB",
+  });
   page = await context.newPage();
   tracker = await trackPage(page);
 });
@@ -40,7 +44,7 @@ base.afterEach(async ({}, info) => {
 
 base.afterAll(async () => {
   try {
-    tracker.assertSameOrigin(BASE_URL);
+    tracker.assertSameOrigin(ORIGIN);
     tracker.assertNoCspViolations();
   } finally {
     await page.context().close();
@@ -48,8 +52,8 @@ base.afterAll(async () => {
 });
 
 base("a fresh instance sends every address to the setup wizard", async () => {
-  await page.goto("/");
-  await expect(page).toHaveURL(/\/setup$/);
+  await page.goto(at("/"));
+  await expect(page).toHaveURL(/\/bayplan\/setup$/);
   await expect(page.getByRole("heading", { name: "Set up Bayplan", level: 2 })).toBeVisible();
   await expectVersionFooter(page);
 });
@@ -90,7 +94,11 @@ base("/welcome offers the dind host and managing it opens the dashboard", async 
   await expectVersionFooter(page);
 
   await page.getByRole("button", { name: "Manage this host" }).click();
-  await expect(page).toHaveURL(/\/env\/[^/]+$/);
+  // Nothing has been opened yet, so home is the overview (D-31), with the one
+  // host it just added; its dashboard is a click away.
+  await expect(page).toHaveURL(/\/bayplan\/environments$/);
+  await page.getByRole("main").locator("a[title]").first().click();
+  await expect(page).toHaveURL(/\/bayplan\/env\/[^/]+$/);
   await expect(page.getByRole("region", { name: "Dashboard" })).toBeVisible();
   await expectVersionFooter(page);
 });
@@ -103,12 +111,12 @@ base("Log out ends the session and returns to the sign-in page", async () => {
   await expectVersionFooter(page);
 
   // The session is really gone, not only hidden: a signed-in address bounces back.
-  await page.goto("/audit");
+  await page.goto(at("/audit"));
   await expect(page).toHaveURL(/\/login\?next=/);
 });
 
 base("a wrong password shows one message that does not say which half was wrong", async () => {
-  await page.goto("/login");
+  await page.goto(at("/login"));
   await page.getByLabel("Username").fill(ADMIN.username);
   await page.getByLabel("Password", { exact: true }).fill("not the right passphrase");
   await page.getByRole("button", { name: "Sign in" }).click();
@@ -127,13 +135,26 @@ base("the right password signs in with Keep me signed in and a refresh keeps the
   await page.getByLabel(/Keep me signed in/).check();
   await page.getByRole("button", { name: "Sign in" }).click();
 
-  await expect(page).toHaveURL(/\/env\/[^/]+$/);
-  await expect(page.getByRole("region", { name: "Dashboard" })).toBeVisible();
+  // Home is the environment this admin last opened, else the overview (D-31);
+  // either way the signed-in shell is up.
+  const home = /\/bayplan\/(environments|env\/[^/]+)$/;
+  await expect(page).toHaveURL(home);
+  await expect(page.getByRole("button", { name: "User menu" })).toBeVisible();
 
   await page.reload();
-  await expect(page).toHaveURL(/\/env\/[^/]+$/);
-  await expect(page.getByRole("region", { name: "Dashboard" })).toBeVisible();
+  await expect(page).toHaveURL(home);
   await expect(page.getByRole("button", { name: "User menu" })).toBeVisible();
+
+  // Behind a subpath over https the session cookie is __Secure- (a __Host- cookie
+  // must be at the root) and is sent to /bayplan only, so another application on
+  // the same host never receives it (D-50, D-59).
+  const cookies = await page.context().cookies();
+  const session = cookies.find((c) => c.name.endsWith("bayplan_session"));
+  expect(session?.name).toBe("__Secure-bayplan_session");
+  expect(session?.path).toBe("/bayplan");
+  expect(session?.secure).toBe(true);
+  expect(session?.httpOnly).toBe(true);
+  expect(session?.sameSite).toBe("Lax");
 
   // The later specs start from this signed-in browser.
   await page.context().storageState({ path: AUTH_STATE });
