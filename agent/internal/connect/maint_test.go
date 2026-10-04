@@ -223,3 +223,95 @@ func TestAMalformedUpdateLineIsIgnoredAndTheNextOneStillWorks(t *testing.T) {
 		t.Fatalf("%d updates ran, want only the well-formed one", n)
 	}
 }
+
+// uninstalls returns what the stub was asked to uninstall.
+func (s *stubMaint) uninstalls() []wire.Uninstall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]wire.Uninstall(nil), s.uninstall...)
+}
+
+// nextResult waits for the next update_result the agent sent the fake server.
+func nextResult(t *testing.T, f *fakeServer) wire.UpdateResult {
+	t.Helper()
+	select {
+	case res := <-f.results:
+		return res
+	case <-time.After(3 * time.Second):
+		t.Fatal("the server got no update_result")
+		return wire.UpdateResult{}
+	}
+}
+
+// maintScript sends an update and then an uninstall as soon as the control stream is
+// open, the way the server's updater and its remove-environment flow do.
+func maintScript(t *testing.T) func(int, wire.Auth) reply {
+	t.Helper()
+	return func(int, wire.Auth) reply {
+		return reply{heartbeatMs: 30, toAgent: []string{
+			`{"t":"update","id":"upd-1","image":"ghcr.io/ianglennon/bayplan-agent:0.2.1"}`,
+			`{"t":"uninstall","id":"un-1","removeData":true,"service":true}`,
+		}}
+	}
+}
+
+func TestOnASessionThatWasNotVerifiedAnUpdateAndAnUninstallAreRefusedAndNothingIsRunning(t *testing.T) {
+	svc := &stubMaint{}
+	a := newFakeServer(t, maintScript(t)) // plain ws://: the server was never verified
+	startAgent(t, Config{URL: a.url(), JoinToken: "bpjt_x", StateDir: t.TempDir(), Maint: svc}, fastEnv())
+
+	got := map[string]wire.UpdateResult{}
+	for range 2 {
+		res := nextResult(t, a)
+		got[res.ID] = res
+	}
+	for _, id := range []string{"upd-1", "un-1"} {
+		res, ok := got[id]
+		if !ok || res.OK || res.Error != insecureSessionCode || res.T != wire.TypeUpdateResult {
+			t.Errorf("result for %s = %+v (present %v), want ok:false and insecure_session", id, res, ok)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if u, x := svc.gotUpdates(), svc.uninstalls(); len(u) != 0 || len(x) != 0 {
+		t.Fatalf("self-maintenance ran on an unverified session: updates %+v uninstalls %+v", u, x)
+	}
+}
+
+func TestOnAVerifiedSessionAnUpdateAndAnUninstallRunAsTheyAlwaysDid(t *testing.T) {
+	svc := &stubMaint{}
+	a := newFakeServerTLS(t, maintScript(t))
+	startAgent(t, Config{URL: a.url(), JoinToken: "bpjt_x", StateDir: t.TempDir(), InstallPins: []string{serverPin(a)}, Maint: svc}, fastEnv())
+
+	got := map[string]wire.UpdateResult{}
+	for range 2 {
+		res := nextResult(t, a)
+		got[res.ID] = res
+	}
+	for _, id := range []string{"upd-1", "un-1"} {
+		if res, ok := got[id]; !ok || !res.OK || res.Error != "" {
+			t.Errorf("result for %s = %+v (present %v), want ok", id, res, ok)
+		}
+	}
+	if u, x := svc.gotUpdates(), svc.uninstalls(); len(u) != 1 || len(x) != 1 || !x[0].RemoveData || !x[0].Service {
+		t.Fatalf("self-maintenance got updates %+v uninstalls %+v", u, x)
+	}
+}
+
+func TestAnUnverifiedSessionRefusesEvenWithoutSelfMaintenanceAndKeepsHeartbeating(t *testing.T) {
+	a := newFakeServer(t, maintScript(t))
+	startAgent(t, Config{URL: a.url(), JoinToken: "bpjt_x", StateDir: t.TempDir()}, fastEnv())
+	for range 2 {
+		if res := nextResult(t, a); res.OK || res.Error != insecureSessionCode {
+			t.Fatalf("result = %+v, want insecure_session", res)
+		}
+	}
+	select {
+	case <-a.beats:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no heartbeat after the refusals")
+	}
+}
+
+// insecureSessionCode is the machine code of the refusal, spelt out so that the
+// test pins what goes over the wire.
+const insecureSessionCode = "insecure_session"

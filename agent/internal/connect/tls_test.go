@@ -326,7 +326,7 @@ func (l *lockedBuffer) String() string {
 
 func newFakeServerTLS(t *testing.T, script func(n int, a wire.Auth) reply) *fakeServer {
 	t.Helper()
-	f := &fakeServer{script: script, beats: make(chan wire.Heartbeat, 256), denied: make(chan wire.Denied, 256), started: make(chan int, 64)}
+	f := &fakeServer{script: script, beats: make(chan wire.Heartbeat, 256), denied: make(chan wire.Denied, 256), results: make(chan wire.UpdateResult, 64), started: make(chan int, 64)}
 	f.ts = httptest.NewUnstartedServer(http.HandlerFunc(f.handle))
 	f.ts.Config.ErrorLog = log.New(io.Discard, "", 0) // refused handshakes are what these tests are about
 	f.ts.StartTLS()

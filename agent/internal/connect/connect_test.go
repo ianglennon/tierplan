@@ -102,12 +102,13 @@ type fakeServer struct {
 	kinds   []byte
 	beats   chan wire.Heartbeat
 	denied  chan wire.Denied
-	started chan int // connection number, after the welcome
+	results chan wire.UpdateResult // every update_result the agent wrote
+	started chan int               // connection number, after the welcome
 }
 
 func newFakeServer(t *testing.T, script func(n int, a wire.Auth) reply) *fakeServer {
 	t.Helper()
-	f := &fakeServer{script: script, beats: make(chan wire.Heartbeat, 256), denied: make(chan wire.Denied, 256), started: make(chan int, 64)}
+	f := &fakeServer{script: script, beats: make(chan wire.Heartbeat, 256), denied: make(chan wire.Denied, 256), results: make(chan wire.UpdateResult, 64), started: make(chan int, 64)}
 	f.ts = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(func() {
 		f.ts.CloseClientConnections()
@@ -221,6 +222,13 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			if v := rep.onRenew(); v != nil {
 				b, _ := json.Marshal(v)
 				_, _ = st.Write(append(b, '\n'))
+			}
+		}
+		var ur wire.UpdateResult
+		if json.Unmarshal(sc.Bytes(), &ur) == nil && ur.T == wire.TypeUpdateResult {
+			select {
+			case f.results <- ur:
+			default:
 			}
 		}
 		var d wire.Denied
