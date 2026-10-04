@@ -180,6 +180,9 @@ func ClientIP(ctx context.Context) string {
 	return c.ip
 }
 
+// EffectiveScheme is a stub for the RED run.
+func EffectiveScheme(context.Context) string { return "http" }
+
 func peerTrusted(ctx context.Context) bool {
 	c, _ := ctx.Value(clientKey{}).(client)
 	return c.trustedPeer
