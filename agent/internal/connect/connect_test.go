@@ -480,37 +480,229 @@ func runUntilSleeps(t *testing.T, cfg Config, stopAt int) (*sleeps, error) {
 	return sl, err
 }
 
-func TestARevokedOrBlockedAgentWaitsTheMaximumLogsTheCodeOnceAndKeepsItsIdentity(t *testing.T) {
-	for _, code := range []string{wire.ReasonRevoked, wire.ReasonBlocked} {
-		t.Run(code, func(t *testing.T) {
+// identityFiles are the files that make up an agent's identity on its volume.
+var identityFiles = []string{state.IdentityFile, state.KeyFile, state.CertFile}
+
+// noIdentityOnDisk reports whether none of the identity files exists in dir.
+func noIdentityOnDisk(dir string) bool {
+	for _, name := range identityFiles {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+	}
+	return true
+}
+
+// D-10: a host that rejoins its swarm gets a new task that finds the identity of
+// the agent the reaper revoked. With a join token at hand the agent drops that
+// identity and enrols again, as a new agent, by itself.
+func TestARevokedAgentWithAJoinTokenDiscardsItsIdentityAndEnrolsAgain(t *testing.T) {
+	dir := t.TempDir()
+	saved := enrolledState(t, dir)
+	var mu sync.Mutex
+	var onDiskAtEnrol []bool
+	srv := newFakeServer(t, func(_ int, a wire.Auth) reply {
+		if a.Mode == wire.ModeHello {
+			return reply{refuse: wire.ReasonRevoked}
+		}
+		mu.Lock()
+		onDiskAtEnrol = append(onDiskAtEnrol, !noIdentityOnDisk(dir))
+		mu.Unlock()
+		return reply{cert: []byte("rejoined-cert-der")}
+	})
+	var logs bytes.Buffer
+	startAgent(t, Config{
+		URL: srv.url(), JoinToken: "bpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+		Log: slog.New(slog.NewTextHandler(&logs, nil)),
+	}, fastEnv())
+
+	first, _ := srv.authN(t, 1)
+	second, _ := srv.authN(t, 2)
+	if first.Mode != wire.ModeHello || second.Mode != wire.ModeEnrol || second.Token != "bpjt_tok" {
+		t.Fatalf("modes = %q then %q (token %q); want hello, refused revoked, then enrol with the token", first.Mode, second.Mode, second.Token)
+	}
+	if bytes.Equal(second.Pub, publicOf(saved.Key)) {
+		t.Error("the re-enrolment presented the old key; it must be a fresh one")
+	}
+	mu.Lock()
+	if len(onDiskAtEnrol) == 0 || onDiskAtEnrol[0] {
+		t.Errorf("identity files still on disk when the agent enrolled again (%v); the revoked identity must be gone first", onDiskAtEnrol)
+	}
+	mu.Unlock()
+	waitUntil(t, "the new identity to be saved", func() bool {
+		s, ok, _ := state.Load(dir)
+		return ok && string(s.Cert) == "rejoined-cert-der"
+	})
+	got, _, _ := state.Load(dir)
+	if got.Key.Equal(saved.Key) {
+		t.Error("the saved identity still has the revoked agent's key")
+	}
+	if !strings.Contains(logs.String(), "code=revoked") {
+		t.Errorf("the refusal was not logged:\n%s", logs.String())
+	}
+	if n := srv.attempts(); n != 2 {
+		t.Errorf("the agent made %d attempts, want 2 (hello, then one enrolment)", n)
+	}
+}
+
+// Without a join token nothing the agent can do changes the answer, so it keeps
+// its identity, waits the maximum and says once what it needs.
+func TestARevokedAgentWithNoJoinTokenWaitsTheMaximumAndSaysOnceThatItNeedsAToken(t *testing.T) {
+	dir := t.TempDir()
+	saved := enrolledState(t, dir)
+	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonRevoked} })
+	var logs bytes.Buffer
+	sl, err := runUntilSleeps(t, Config{
+		URL: srv.url(), StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)), SocketPath: filepath.Join(dir, "none.sock"),
+		BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+	}, 3)
+	if err != nil {
+		t.Fatalf("Run = %v; a refusal never ends an enrolled agent", err)
+	}
+	for i, d := range sl.all() {
+		if d != 60*time.Second {
+			t.Errorf("wait %d = %v, want the 60s maximum", i+1, d)
+		}
+	}
+	if n := strings.Count(logs.String(), "code=revoked"); n != 1 {
+		t.Errorf("the code revoked was logged %d times, want once:\n%s", n, logs.String())
+	}
+	if n := strings.Count(logs.String(), "join token"); n != 1 || strings.Contains(logs.String(), "discard") {
+		t.Errorf("want one hint that a join token is needed to enrol again, and no talk of discarding:\n%s", logs.String())
+	}
+	got, ok, err := state.Load(dir)
+	if err != nil || !ok || !got.Key.Equal(saved.Key) || string(got.Cert) != "saved-cert-der" {
+		t.Fatalf("the identity changed or went away: %+v %v %v", got, ok, err)
+	}
+	for n := 1; n <= srv.attempts(); n++ {
+		if a, _ := srv.authN(t, n); a.Mode != wire.ModeHello {
+			t.Errorf("attempt %d used mode %q, want hello: with no token there is nothing to enrol with", n, a.Mode)
+		}
+	}
+	if srv.attempts() < 3 {
+		t.Errorf("the agent tried %d times, want it to keep retrying", srv.attempts())
+	}
+}
+
+// A blocked host is on an administrator's list: its identity is still good and a
+// join token does not help, so the agent keeps both and waits.
+func TestABlockedAgentWaitsTheMaximumLogsTheCodeOnceAndKeepsItsIdentity(t *testing.T) {
+	for _, token := range []string{"", "bpjt_tok"} {
+		t.Run("token="+token, func(t *testing.T) {
 			dir := t.TempDir()
 			saved := enrolledState(t, dir)
-			srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: code} })
+			srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonBlocked} })
 			var logs bytes.Buffer
-			log := slog.New(slog.NewTextHandler(&logs, nil))
 			sl, err := runUntilSleeps(t, Config{
-				URL: srv.url(), StateDir: dir, Log: log, SocketPath: filepath.Join(dir, "none.sock"),
-				BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+				URL: srv.url(), JoinToken: token, StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+				SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
 			}, 3)
 			if err != nil {
-				t.Fatalf("Run = %v; a refusal never ends the agent", err)
+				t.Fatalf("Run = %v; a refusal never ends an enrolled agent", err)
 			}
 			for i, d := range sl.all() {
 				if d != 60*time.Second {
 					t.Errorf("wait %d = %v, want the 60s maximum", i+1, d)
 				}
 			}
-			if n := strings.Count(logs.String(), "code="+code); n != 1 {
-				t.Errorf("the code %s was logged %d times, want once:\n%s", code, n, logs.String())
+			if n := strings.Count(logs.String(), "code=blocked"); n != 1 {
+				t.Errorf("the code blocked was logged %d times, want once:\n%s", n, logs.String())
 			}
 			got, ok, err := state.Load(dir)
 			if err != nil || !ok || !got.Key.Equal(saved.Key) || string(got.Cert) != "saved-cert-der" {
 				t.Fatalf("the identity changed or went away: %+v %v %v", got, ok, err)
 			}
-			if srv.attempts() < 3 {
-				t.Errorf("the agent tried %d times, want it to keep retrying", srv.attempts())
+			for n := 1; n <= srv.attempts(); n++ {
+				if a, _ := srv.authN(t, n); a.Mode != wire.ModeHello {
+					t.Errorf("attempt %d used mode %q, want hello", n, a.Mode)
+				}
 			}
 		})
+	}
+}
+
+// A manually revoked host is also blocked. The agent drops the revoked identity
+// and enrols once; the block refuses it, and from there it waits the maximum
+// between tries: no loop of enrolments faster than the backoff, and no exit that
+// a restart policy would turn into one.
+func TestARevokedAgentWhoseHostIsBlockedEnrolsOnceThenWaitsTheMaximum(t *testing.T) {
+	dir := t.TempDir()
+	enrolledState(t, dir)
+	srv := newFakeServer(t, func(_ int, a wire.Auth) reply {
+		if a.Mode == wire.ModeHello {
+			return reply{refuse: wire.ReasonRevoked}
+		}
+		return reply{refuse: wire.ReasonBlocked}
+	})
+	var logs bytes.Buffer
+	sl, err := runUntilSleeps(t, Config{
+		URL: srv.url(), JoinToken: "bpjt_tok", StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+		SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+	}, 4)
+	if err != nil {
+		t.Fatalf("Run = %v; a blocked enrolment after a revoke must wait, not end the agent", err)
+	}
+	waits := sl.all()
+	if len(waits) != 4 {
+		t.Fatalf("waits = %v, want 4", waits)
+	}
+	// After the hello is refused revoked the agent enrols at once (the wait is
+	// whatever the rejoin needs); every wait after a blocked refusal is the maximum.
+	for i, d := range waits[1:] {
+		if d != 60*time.Second {
+			t.Errorf("wait %d = %v, want the 60s maximum after a blocked refusal", i+2, d)
+		}
+	}
+	if n := srv.attempts(); n != 4 {
+		t.Errorf("the agent made %d attempts for 4 waits; it must try once per wait, never faster", n)
+	}
+	if a, _ := srv.authN(t, 1); a.Mode != wire.ModeHello {
+		t.Errorf("attempt 1 used mode %q, want hello", a.Mode)
+	}
+	for n := 2; n <= 4; n++ {
+		if a, _ := srv.authN(t, n); a.Mode != wire.ModeEnrol || a.Token != "bpjt_tok" {
+			t.Errorf("attempt %d used mode %q, want enrol with the token", n, a.Mode)
+		}
+	}
+	if n := strings.Count(logs.String(), "code=blocked"); n != 1 {
+		t.Errorf("the code blocked was logged %d times, want once:\n%s", n, logs.String())
+	}
+	if !noIdentityOnDisk(dir) {
+		t.Error("the revoked identity is still on disk")
+	}
+}
+
+// An agent that was just re-enrolled and is revoked again at once does not enrol a
+// third agent: it waits the maximum first, so a host cannot spin up a new agent
+// row every second.
+func TestAnAgentRevokedRightAfterRejoiningWaitsBeforeEnrollingAgain(t *testing.T) {
+	dir := t.TempDir()
+	enrolledState(t, dir)
+	srv := newFakeServer(t, func(n int, a wire.Auth) reply {
+		if a.Mode == wire.ModeEnrol {
+			return reply{cert: []byte("second-cert-der"), drop: true}
+		}
+		return reply{refuse: wire.ReasonRevoked}
+	})
+	sl, err := runUntilSleeps(t, Config{
+		URL: srv.url(), JoinToken: "bpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+		BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+	}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrols := 0
+	for n := 1; n <= srv.attempts(); n++ {
+		if a, _ := srv.authN(t, n); a.Mode == wire.ModeEnrol {
+			enrols++
+		}
+	}
+	if enrols != 1 {
+		t.Errorf("the agent enrolled %d times in %v of waiting, want once", enrols, sl.all())
+	}
+	got, ok, err := state.Load(dir)
+	if err != nil || !ok || string(got.Cert) != "second-cert-der" {
+		t.Errorf("the identity on disk = %+v %v %v, want the one the re-enrolment saved", got, ok, err)
 	}
 }
 
