@@ -5,6 +5,8 @@ package connect
 
 import (
 	"encoding/json"
+	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,5 +319,144 @@ func TestAFirstStartRecordsTheEnvironmentURL(t *testing.T) {
 	})
 	if _, err := os.Stat(filepath.Join(dir, state.URLsFile)); err == nil {
 		t.Error("urls.json was written although nothing changed")
+	}
+}
+
+// --- plain ws:// addresses the agent stored or learned (T-02-31) ---
+
+const plainElsewhere = "ws://plain.example/agent/connect"
+
+// hostRecorder passes every request on to a real transport, and records the
+// requests made to a host whose address must never be dialed. It answers requests
+// for that host itself, with an error, so the test depends on no DNS.
+type hostRecorder struct {
+	host string
+	next http.RoundTripper
+	rt   recordingTransport
+}
+
+func newHostRecorder(host string) *hostRecorder {
+	return &hostRecorder{host: host, next: http.DefaultTransport.(*http.Transport).Clone()}
+}
+
+func (h *hostRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Hostname() == h.host {
+		return h.rt.RoundTrip(r)
+	}
+	return h.next.RoundTrip(r)
+}
+
+func (h *hostRecorder) client() *http.Client { return &http.Client{Transport: h} }
+
+func TestAStoredPlainAddressForAnotherHostIsNeverDialedWithoutTheSwitch(t *testing.T) {
+	dir := t.TempDir()
+	enrolledState(t, dir)
+	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
+	if err := state.SaveURLs(dir, []state.URLEntry{{URL: plainElsewhere}, {URL: srv.url()}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SaveEnvURL(dir, srv.url()); err != nil {
+		t.Fatal(err)
+	}
+	rec := newHostRecorder("plain.example")
+	logs := &lockedBuffer{}
+	startAgent(t, Config{URL: srv.url(), StateDir: dir, HTTPClient: rec.client(), Log: slog.New(slog.NewTextHandler(logs, nil))}, fastEnv())
+	waitUntil(t, "the agent to connect to the loopback address", func() bool { return srv.attempts() >= 1 })
+
+	if got := rec.rt.seen(); len(got) != 0 {
+		t.Errorf("the agent made requests %v to a stored plain address for another host", got)
+	}
+	if n := strings.Count(logs.String(), "ignored stored addresses"); n != 1 {
+		t.Errorf("the agent logged the ignored stored address %d times, want once: %s", n, logs.String())
+	}
+	if strings.Contains(logs.String(), "skipped an address it cannot dial") {
+		t.Errorf("the stored plain address reached the dial list: %s", logs.String())
+	}
+}
+
+func TestAStoredPlainAddressIsTriedWithTheSwitch(t *testing.T) {
+	dir := t.TempDir()
+	enrolledState(t, dir)
+	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
+	if err := state.SaveURLs(dir, []state.URLEntry{{URL: plainElsewhere}, {URL: srv.url()}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SaveEnvURL(dir, srv.url()); err != nil {
+		t.Fatal(err)
+	}
+	rec := newHostRecorder("plain.example")
+	startAgent(t, Config{URL: srv.url(), StateDir: dir, HTTPClient: rec.client(), AllowInsecure: true}, fastEnv())
+	waitUntil(t, "the agent to go on to the next address", func() bool { return srv.attempts() >= 1 })
+	if len(rec.rt.seen()) == 0 {
+		t.Error("with the switch the stored plain address was never tried")
+	}
+	if got := urlsOnDisk(t, dir); len(got) != 2 || got[0].URL != plainElsewhere {
+		t.Errorf("urls.json = %+v, want both stored addresses untouched", got)
+	}
+}
+
+func TestTheRecordedStartAddressIsNeverDialed(t *testing.T) {
+	dir := t.TempDir()
+	enrolledState(t, dir)
+	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
+	if err := state.SaveURLs(dir, []state.URLEntry{{URL: srv.url()}}); err != nil {
+		t.Fatal(err)
+	}
+	// An older BAYPLAN_AGENT_URL, plain and for another host, is only compared.
+	if err := state.SaveEnvURL(dir, plainElsewhere); err != nil {
+		t.Fatal(err)
+	}
+	rec := newHostRecorder("plain.example")
+	startAgent(t, Config{URL: srv.url(), StateDir: dir, HTTPClient: rec.client()}, fastEnv())
+	waitUntil(t, "the agent to connect", func() bool { return srv.attempts() >= 1 })
+	waitUntil(t, "env-url.json to be rewritten", func() bool {
+		got, ok, err := state.LoadEnvURL(dir)
+		return err == nil && ok && got == srv.url()
+	})
+	if got := rec.rt.seen(); len(got) != 0 {
+		t.Errorf("the agent made requests %v to the address it last started with", got)
+	}
+	for _, e := range urlsOnDisk(t, dir) {
+		if e.URL == plainElsewhere {
+			t.Errorf("the recorded plain address was added to the dial list: %+v", urlsOnDisk(t, dir))
+		}
+	}
+}
+
+func TestNewTargetRefusesWhatDialableURLRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		url        string
+		allowPlain bool
+		ok         bool
+	}{
+		{"wss://bayplan.example/agent/connect", false, true},
+		{"ws://127.0.0.1:7480/agent/connect", false, true},
+		{plainElsewhere, false, false},
+		{plainElsewhere, true, true},
+		{"wss://user:pw@bayplan.example/agent/connect", true, false},
+		{"https://bayplan.example/agent/connect", true, false},
+	} {
+		_, err := newTarget(tc.url, tc.allowPlain)
+		if (err == nil) != tc.ok {
+			t.Errorf("newTarget(%q, %v) = %v, want ok %v", tc.url, tc.allowPlain, err, tc.ok)
+		}
+	}
+}
+
+func TestAPushedPlainAddressIsIgnoredEvenWithTheSwitch(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		dir := t.TempDir()
+		a := newFakeServerTLS(t, nil)
+		a.script = func(int, wire.Auth) reply {
+			return reply{heartbeatMs: 30, toAgent: []string{
+				pushLine(t, nil, "ws://insecure.example/agent/connect", "ws://127.0.0.1:1/agent/connect"),
+			}}
+		}
+		startAgent(t, Config{URL: a.url(), JoinToken: "bpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}, AllowInsecure: allow}, fastEnv())
+		a.authN(t, 1)
+		time.Sleep(250 * time.Millisecond)
+		if _, err := os.Stat(filepath.Join(dir, state.URLsFile)); err == nil {
+			t.Errorf("switch %v: urls.json was written from a push of plain addresses: %+v", allow, urlsOnDisk(t, dir))
+		}
 	}
 }
