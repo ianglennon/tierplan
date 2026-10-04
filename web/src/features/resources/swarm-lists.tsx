@@ -44,3 +44,13 @@ export function useNodeColumn<T extends { node: string }>(): Column<T> {
     cell: (row) => <TruncatedText className="max-w-48">{row.node}</TruncatedText>,
   };
 }
+
+// nodeRowKey is the React key of a row in an aggregated list. A swarm list holds
+// one row per node (D-46), and the server appends each node's rows with no
+// de-duplication (envs.Aggregate.addRows), so the same image ID or volume name
+// repeats across nodes and a bare ID is not a unique key (CR-D-01). A standalone
+// row's node may be empty or absent and keys as "|<id>". IDs and Docker volume
+// names never contain "|", so the key is unambiguous.
+export function nodeRowKey(node: string | undefined, id: string): string {
+  return `${node ?? ""}|${id}`;
+}
