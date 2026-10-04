@@ -144,7 +144,7 @@ Set `BAYPLAN_PUBLIC_URL` to the address people type, and list the proxy in `BAYP
 - compression of `text/event-stream` holds events back (Bayplan itself never compresses it);
 - the proxy must pass `Origin` and `Host` through unchanged.
 
-This build ships no proxy-specific configuration; treat the notes above as the contract.
+[docs/reverse-proxy.md](docs/reverse-proxy.md) has working Caddy, nginx and Traefik configurations at the root of a host and at a subpath, says which forwarded headers Bayplan believes and which it ignores, and explains the proxy warnings that appear in the bell. `make proxy-smoke` tests all three.
 
 ## Data and backups
 
@@ -182,5 +182,6 @@ The source code, version and commit are linked from **Settings > About**, as the
 
 - [SECURITY.md](SECURITY.md): reporting a vulnerability, privately.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and sending changes.
+- [docs/reverse-proxy.md](docs/reverse-proxy.md): running Bayplan behind Caddy, nginx or Traefik, at the root or a subpath.
 - [docs/threat-model.md](docs/threat-model.md): what Bayplan protects, what it does not, and the risks that remain.
 - [docs/release-checklist.md](docs/release-checklist.md): how a release is cut.

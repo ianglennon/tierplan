@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image
+.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image proxy-smoke
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -267,6 +267,15 @@ e2e-image: web
 	mkdir -p $(E2E_DIST)/linux/amd64
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o $(E2E_DIST)/linux/amd64/bayplan ./cmd/bayplan
 	docker buildx build --platform linux/amd64 -f Dockerfile -t bayplan:e2e --load $(E2E_DIST)
+
+# Bayplan behind Caddy, nginx and Traefik, each with the file in docs/proxy, at
+# the root of a host and at /bayplan: the index and its base meta, /api/version, a
+# WebSocket upgrade of the agent endpoint, an unbuffered event stream, and three
+# deliberately broken nginx setups that Bayplan must notice. Needs Docker, curl
+# and jq; the proxy images are pulled when they are not local. One PASS or FAIL
+# line per check; any FAIL fails the target.
+proxy-smoke: e2e-image
+	scripts/proxy-smoke.sh
 
 # The stack is always torn down, with its volumes, whatever the tests do, and
 # the exit status is the tests' own. A failed run prints the container logs.
