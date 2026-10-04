@@ -5,6 +5,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"strings"
@@ -123,6 +124,90 @@ func TestCheckEnrolledFindsTheIdentityInACustomStateDirectory(t *testing.T) {
 	}
 	if !cfg.Enrolled || cfg.StateDir != "/state" {
 		t.Fatalf("Enrolled=%v StateDir=%q, want true and /state", cfg.Enrolled, cfg.StateDir)
+	}
+}
+
+// recorded is a readFile that remembers every name asked for and reads nothing.
+type recorded struct{ names []string }
+
+func (r *recorded) read(name string) ([]byte, error) {
+	r.names = append(r.names, name)
+	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+}
+
+// TestLoadReadsNothingInTheStateDirectory pins G-02-5: Load runs as root before
+// the privilege drop, and root without capabilities cannot open the state
+// directory, so Load must not try, with or without a token.
+func TestLoadReadsNothingInTheStateDirectory(t *testing.T) {
+	for name, m := range map[string]map[string]string{
+		"default": {"BAYPLAN_AGENT_URL": goodURL},
+		"custom":  {"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_STATE_DIR": "/state"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var r recorded
+			cfg, err := Load(env(m), r.read)
+			if err != nil {
+				t.Fatalf("Load without a token must succeed and leave the check to CheckEnrolled: %v", err)
+			}
+			if cfg.Enrolled {
+				t.Error("Enrolled = true straight after Load")
+			}
+			if len(r.names) != 0 {
+				t.Errorf("Load read %v, want nothing", r.names)
+			}
+		})
+	}
+}
+
+func TestCheckEnrolledWithATokenReadsNothing(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env   map[string]string
+		files map[string]string
+	}{
+		"variable": {map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "bpjt_a_b"}, nil}, //nolint:gosec // a test fixture, not a credential
+		"file": {
+			map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t"},
+			map[string]string{"/run/secrets/t": "bpjt_a_b\n"}, //nolint:gosec // a test fixture, not a credential
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(env(tc.env), files(tc.files))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var r recorded
+			if err := cfg.CheckEnrolled(r.read); err != nil {
+				t.Fatal(err)
+			}
+			if len(r.names) != 0 {
+				t.Errorf("CheckEnrolled read %v, want nothing when a token is present", r.names)
+			}
+			if cfg.Enrolled {
+				t.Error("Enrolled = true for a tokened start, want false")
+			}
+		})
+	}
+}
+
+func TestCheckEnrolledReportsAStateDirectoryItCannotRead(t *testing.T) {
+	cfg := load(t, map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_STATE_DIR": "/state"})
+	err := cfg.CheckEnrolled(func(name string) ([]byte, error) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+	})
+	if err == nil {
+		t.Fatal("want an error when the identity cannot be read")
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("the error %v does not wrap fs.ErrPermission", err)
+	}
+	if !strings.Contains(err.Error(), "read the enrolled state in /state") {
+		t.Errorf("the error %q does not name the state directory", err)
+	}
+	if strings.Contains(err.Error(), "bpjt_") {
+		t.Errorf("the error carries a token: %q", err)
+	}
+	if cfg.Enrolled {
+		t.Error("Enrolled = true after a read error")
 	}
 }
 

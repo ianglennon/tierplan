@@ -39,12 +39,31 @@ type harness struct {
 	// removeErr is what the stubbed removal helper returns; gotRemove what it was given.
 	removeErr error
 	gotRemove selfmaint.RemoveVolumeOptions
+	// stateLocked makes every read under the state directory fail with a permission
+	// error until the stubbed drop has run: what the agent meets as root with every
+	// capability but SETUID and SETGID dropped, which cannot open UID 1000's 0700
+	// directory (G-02-5). stateUnreadable keeps refusing after the drop as well.
+	stateLocked, stateUnreadable bool
+	dropped                      bool
+}
+
+// inState says whether a path is under the state directory the environment names.
+func inState(env map[string]string, name string) bool {
+	dir := env["BAYPLAN_AGENT_STATE_DIR"]
+	if dir == "" {
+		dir = "/var/lib/bayplan-agent"
+	}
+	return strings.HasPrefix(name, dir+"/")
 }
 
 func (h *harness) deps(env map[string]string, files map[string]string) deps {
 	return deps{
 		getenv: func(k string) string { return env[k] },
 		readFile: func(name string) ([]byte, error) {
+			if inState(env, name) && (h.stateUnreadable || (h.stateLocked && !h.dropped)) {
+				h.events = append(h.events, "denied "+name)
+				return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+			}
 			if v, ok := files[name]; ok {
 				h.events = append(h.events, "read "+name)
 				return []byte(v), nil
@@ -57,6 +76,7 @@ func (h *harness) deps(env map[string]string, files map[string]string) deps {
 			if h.dropErr != nil {
 				return privdrop.Result{}, h.dropErr
 			}
+			h.dropped = true
 			return privdrop.Result{Dropped: true, GID: 998}, nil
 		},
 		connect: func(_ context.Context, c connect.Config) error {
@@ -129,6 +149,100 @@ func TestTheTokenFileIsReadBeforeThePrivilegesAreDropped(t *testing.T) {
 	for _, want := range []string{"bayplan.example", "token_present=true", "uid=1000"} {
 		if !strings.Contains(h.stderr.String(), want) {
 			t.Errorf("the start line does not contain %q: %s", want, h.stderr.String())
+		}
+	}
+}
+
+// TestNothingInTheStateDirectoryIsReadBeforeTheDrop pins the order that G-02-5
+// broke: with a token file and a state directory that refuses every read until the
+// privileges are dropped (as capability-less root meets it), the agent reads the
+// token, drops, and connects, and never touches the state directory as root (D-22).
+func TestNothingInTheStateDirectoryIsReadBeforeTheDrop(t *testing.T) {
+	h := &harness{stateLocked: true}
+	d := h.deps(
+		map[string]string{
+			"BAYPLAN_AGENT_URL":             "wss://bayplan.example/agent/connect",
+			"BAYPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/bayplan-agent-token",
+		},
+		map[string]string{"/run/secrets/bayplan-agent-token": secret + "\n"},
+	)
+	if code := run(d); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
+	}
+	if want := []string{"read /run/secrets/bayplan-agent-token", "drop", "connect"}; !reflect.DeepEqual(h.events, want) {
+		t.Fatalf("events = %v, want %v", h.events, want)
+	}
+	if strings.Contains(h.stderr.String(), secret) || strings.Contains(h.stdout.String(), secret) {
+		t.Fatalf("the token reached the output: %s", h.stderr.String())
+	}
+}
+
+// TestAnEnrolledAgentWithoutATokenStartsWhenRootCannotReadItsStateDirectory is the
+// G-02-5 regression: no join token, an identity on the state volume, and a state
+// directory that root cannot open before the drop. The agent must drop first, then
+// find its identity as UID 1000 and connect with no token, in the default state
+// directory and in a custom one.
+func TestAnEnrolledAgentWithoutATokenStartsWhenRootCannotReadItsStateDirectory(t *testing.T) {
+	for name, dir := range map[string]string{"default": "/var/lib/bayplan-agent", "custom": "/state"} {
+		t.Run(name, func(t *testing.T) {
+			h := &harness{stateLocked: true}
+			env := map[string]string{"BAYPLAN_AGENT_URL": "wss://bayplan.example/agent/connect"}
+			if name == "custom" {
+				env["BAYPLAN_AGENT_STATE_DIR"] = dir
+			}
+			d := h.deps(env, map[string]string{dir + "/identity.json": "{}"})
+			if code := run(d); code != 0 {
+				t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
+			}
+			if want := []string{"drop", "read " + dir + "/identity.json", "connect"}; !reflect.DeepEqual(h.events, want) {
+				t.Fatalf("events = %v, want %v", h.events, want)
+			}
+			if h.gotConn.JoinToken != "" {
+				t.Errorf("connect got a token %q, want none", h.gotConn.JoinToken)
+			}
+			for _, want := range []string{"token_present=false", "enrolled=true"} {
+				if !strings.Contains(h.stderr.String(), want) {
+					t.Errorf("the start line does not contain %q: %s", want, h.stderr.String())
+				}
+			}
+		})
+	}
+}
+
+// TestAnAgentWithNoTokenAndNoIdentityStopsAfterTheDrop pins that the refusal keeps
+// its exit code and message but is now decided after the drop, as UID 1000, and
+// that the agent never connects.
+func TestAnAgentWithNoTokenAndNoIdentityStopsAfterTheDrop(t *testing.T) {
+	h := &harness{stateLocked: true}
+	d := h.deps(map[string]string{"BAYPLAN_AGENT_URL": "wss://bayplan.example/agent/connect"}, nil)
+	if code := run(d); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if want := []string{"drop"}; !reflect.DeepEqual(h.events, want) {
+		t.Fatalf("events = %v, want %v", h.events, want)
+	}
+	for _, name := range []string{"BAYPLAN_AGENT_JOIN_TOKEN_FILE", "BAYPLAN_AGENT_JOIN_TOKEN"} {
+		if !strings.Contains(h.stderr.String(), name) {
+			t.Errorf("stderr %q does not name %s", h.stderr.String(), name)
+		}
+	}
+}
+
+// TestAnIdentityUnreadableAfterTheDropStopsTheAgent pins that an identity the
+// dropped user still cannot read is reported with the state directory, exits 2 and
+// never connects.
+func TestAnIdentityUnreadableAfterTheDropStopsTheAgent(t *testing.T) {
+	h := &harness{stateUnreadable: true}
+	d := h.deps(map[string]string{"BAYPLAN_AGENT_URL": "wss://bayplan.example/agent/connect"}, map[string]string{"/var/lib/bayplan-agent/identity.json": "{}"})
+	if code := run(d); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if slices.Contains(h.events, "connect") {
+		t.Fatalf("events = %v: the agent connected without being able to read its identity", h.events)
+	}
+	for _, want := range []string{"read the enrolled state in", "/var/lib/bayplan-agent"} {
+		if !strings.Contains(h.stderr.String(), want) {
+			t.Errorf("stderr %q does not contain %q", h.stderr.String(), want)
 		}
 	}
 }
