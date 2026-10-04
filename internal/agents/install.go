@@ -48,6 +48,18 @@ type InstallParams struct {
 	// Generation numbers the token (env_join_tokens.generation, from 1). It is in
 	// the name of the swarm secret so every rotation creates a fresh name.
 	Generation int
+	// AllowInsecure is the server's own BAYPLAN_AGENT_ALLOW_INSECURE (development
+	// only). With it on and a ws:// Endpoint, every install text also sets
+	// BAYPLAN_AGENT_ALLOW_INSECURE=true on the agent, which otherwise refuses to dial
+	// plain ws:// to another host (T-02-31). Nothing else may set it, and it never
+	// appears for a wss:// Endpoint.
+	AllowInsecure bool
+}
+
+// agentSwitch reports whether the commands built from p must carry the agent's
+// BAYPLAN_AGENT_ALLOW_INSECURE: the server's switch is on and the address is plain.
+func (p InstallParams) agentSwitch() bool {
+	return p.AllowInsecure && strings.HasPrefix(p.Endpoint, "ws://")
 }
 
 // Install is everything an admin copies to connect hosts to an agent environment.
@@ -139,6 +151,7 @@ func BuildInstall(p InstallParams) (Install, error) {
 		" --update-parallelism 1 --update-delay 10s" +
 		" --label " + labelPair + " --container-label " + labelPair +
 		envFlag("--env", "BAYPLAN_AGENT_URL", p.Endpoint) +
+		insecureFlag("--env", p) +
 		optionalEnvFlag("--env", "BAYPLAN_AGENT_PIN", p.Pin) +
 		envFlag("--env", "BAYPLAN_AGENT_JOIN_TOKEN_FILE", tokenFilePath) +
 		" " + image
@@ -148,6 +161,7 @@ func BuildInstall(p InstallParams) (Install, error) {
 		" -v " + dockerSock + ":" + dockerSock + " -v " + VolumeName + ":" + stateDir +
 		" --label " + labelPair +
 		envFlag("-e", "BAYPLAN_AGENT_URL", p.Endpoint) +
+		insecureFlag("-e", p) +
 		optionalEnvFlag("-e", "BAYPLAN_AGENT_PIN", p.Pin) +
 		envFlag("-e", "BAYPLAN_AGENT_JOIN_TOKEN", p.Token) +
 		" " + image
@@ -248,6 +262,23 @@ func sq(v string) string { return "'" + v + "'" }
 
 func envFlag(flag, name, value string) string { return " " + flag + " " + sq(name+"="+value) }
 
+// insecureFlag is the agent's development switch as a flag, or "" when p does
+// not need it. Name and value are fixed literals, so nothing from input is quoted.
+func insecureFlag(flag string, p InstallParams) string {
+	if !p.agentSwitch() {
+		return ""
+	}
+	return envFlag(flag, "BAYPLAN_AGENT_ALLOW_INSECURE", "true")
+}
+
+// insecureYAML is the same switch as a line of a compose environment block.
+func insecureYAML(p InstallParams) string {
+	if !p.agentSwitch() {
+		return ""
+	}
+	return "      BAYPLAN_AGENT_ALLOW_INSECURE: " + yamlString("true") + "\n"
+}
+
 func optionalEnvFlag(flag, name, value string) string {
 	if value == "" {
 		return ""
@@ -278,6 +309,7 @@ func swarmStack(p InstallParams, image, secret string) string {
 	b.WriteString("    labels:\n      bayplan.agent: \"true\"\n")
 	b.WriteString("    environment:\n")
 	b.WriteString("      BAYPLAN_AGENT_URL: " + yamlString(p.Endpoint) + "\n")
+	b.WriteString(insecureYAML(p))
 	if p.Pin != "" {
 		b.WriteString("      BAYPLAN_AGENT_PIN: " + yamlString(p.Pin) + "\n")
 	}
@@ -312,6 +344,7 @@ func standaloneCompose(p InstallParams, image string) string {
 	b.WriteString("    labels:\n      bayplan.agent: \"true\"\n")
 	b.WriteString("    environment:\n")
 	b.WriteString("      BAYPLAN_AGENT_URL: " + yamlString(p.Endpoint) + "\n")
+	b.WriteString(insecureYAML(p))
 	if p.Pin != "" {
 		b.WriteString("      BAYPLAN_AGENT_PIN: " + yamlString(p.Pin) + "\n")
 	}

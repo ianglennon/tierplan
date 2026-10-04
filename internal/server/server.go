@@ -346,6 +346,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		WithUpdateHint(func(tooOld bool, envType string) string {
 			return agents.UpdateHint(tooOld, envType, agents.InstallParams{
 				Endpoint: inst.AgentEndpoint(), Pin: tlsPin(), ServerVersion: buildinfo.Get().Version,
+				AllowInsecure: cfg.AgentAllowInsecure,
 			})
 		}).
 		WithAllowInsecure(cfg.AgentAllowInsecure).
@@ -444,8 +445,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
 		Log:     log,
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Updater: updater, Log: log},
-		api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, Updater: updater, Log: log},
+		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
+		api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
 		api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
 		api.EventsDeps{Aggregator: aggregator, Log: log},
 		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},

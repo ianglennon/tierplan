@@ -49,6 +49,10 @@ type AgentsDeps struct {
 	// TLSPin returns the SPKI pin of the self-signed certificate Bayplan serves, or
 	// "" when it serves none. Nil means none.
 	TLSPin func() string
+	// AgentAllowInsecure is the server's BAYPLAN_AGENT_ALLOW_INSECURE, a development
+	// switch. It only decides whether the install and the manual update command for a
+	// plain ws:// address also tell the agent to accept it (T-02-31).
+	AgentAllowInsecure bool
 	// Local says which node of an environment is the folded local host, so the node
 	// list can show it beside the agents. Nil means none is (D-48).
 	Local FoldedNodes
@@ -329,7 +333,7 @@ func (d AgentsDeps) updates() updateView {
 		if role == "leader" || role == "manager" || role == "worker" {
 			envType = agents.EnvTypeSwarm
 		}
-		return agents.ManualUpdateCommand(envType, agents.AgentImage(version), agents.InstallParams{Endpoint: endpoint, Pin: pin, ServerVersion: version})
+		return agents.ManualUpdateCommand(envType, agents.AgentImage(version), agents.InstallParams{Endpoint: endpoint, Pin: pin, ServerVersion: version, AllowInsecure: d.AgentAllowInsecure})
 	}}
 	if d.Updater != nil {
 		v.state = d.Updater.State
@@ -443,6 +447,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		}
 		install, err := agents.BuildInstall(agents.InstallParams{
 			Token: rot.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: rot.Generation,
+			AllowInsecure: d.AgentAllowInsecure,
 		})
 		if err != nil {
 			// The token is retired and cannot be shown again. A value that breaks the

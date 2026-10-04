@@ -59,6 +59,10 @@ type EnvironmentsDeps struct {
 	// "" when it serves a supplied certificate or plain HTTP, and then the install
 	// carries no pin (D-06). Nil means none.
 	TLSPin func() string
+	// AgentAllowInsecure is the server's BAYPLAN_AGENT_ALLOW_INSECURE, a development
+	// switch. It only decides whether the install for a plain ws:// address also tells
+	// the agent to accept it (T-02-31); a wss:// install never carries it.
+	AgentAllowInsecure bool
 	// Checker filters the list to the environments the caller may read.
 	Checker *rbac.Checker
 	// Updater is asked to look at an environment's agents when automatic updates
@@ -553,6 +557,7 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 	}
 	install, err := agents.BuildInstall(agents.InstallParams{
 		Token: created.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: created.Generation,
+		AllowInsecure: d.AgentAllowInsecure,
 	})
 	if err != nil {
 		// The environment exists and its token cannot be shown again. A value that

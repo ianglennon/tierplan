@@ -195,8 +195,11 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 			cancel()
 			t.Fatal(err)
 		}
+		// done carries the exit once; exited closes so a cleanup can still wait
+		// after done was read.
 		done = make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
+		exited := make(chan struct{})
+		go func() { done <- cmd.Wait(); close(exited) }()
 		var stopped bool
 		stop = func() {
 			if stopped {
@@ -204,7 +207,7 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 			}
 			stopped = true
 			cancel()
-			<-done
+			<-exited
 		}
 		t.Cleanup(stop)
 		return done, log, stop
