@@ -140,7 +140,9 @@ beforeEach(() => {
           version: "v0.1.0",
         });
       }
-      if (path === "/third-party-notices.json") return noticesAnswer();
+      if (path === "/third-party-notices.json" || path === "/bayplan/third-party-notices.json") {
+        return noticesAnswer();
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -709,6 +711,20 @@ describe("About tab", () => {
     expect(within(chi).getByText("MIT")).toBeTruthy();
     expect(within(region).getByText(/shadcn\/ui components/)).toBeTruthy();
     expect(calls.some((c) => c.path === "/third-party-notices.json")).toBe(true);
+  });
+
+  it("reads the notices file under the base path the server announced (plan 02-32)", async () => {
+    announceBase("/bayplan");
+    try {
+      // Behind a proxy the file is at /bayplan/third-party-notices.json; a request
+      // to the root would reach whatever else the host serves there.
+      renderAt("/settings/about");
+      await screen.findByRole("region", { name: "Third-party notices list" });
+      expect(calls.some((c) => c.path === "/bayplan/third-party-notices.json")).toBe(true);
+      expect(calls.some((c) => c.path === "/third-party-notices.json")).toBe(false);
+    } finally {
+      announceBase(null);
+    }
   });
 
   it("says so, and offers a retry, when the notices file is missing or is not a list", async () => {

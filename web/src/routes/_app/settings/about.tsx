@@ -20,6 +20,7 @@ import {
 import { fetchVersion } from "@/components/version-footer";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
+import { withBase } from "@/lib/base-path";
 
 // The licence is an SPDX identifier, not translatable copy.
 const LICENCE = "AGPL-3.0-or-later";
@@ -47,7 +48,7 @@ function isNotice(v: unknown): v is Notice {
 // fallback answers with the app shell instead, which is not a list, so that is
 // an error as well.
 async function fetchNotices(): Promise<Notice[]> {
-  const res = await globalThis.fetch("/third-party-notices.json");
+  const res = await globalThis.fetch(withBase("/third-party-notices.json"));
   if (!res.ok) throw new Error(`GET /third-party-notices.json: ${res.status}`);
   const body: unknown = await res.json();
   if (!Array.isArray(body) || !body.every(isNotice)) {
