@@ -233,9 +233,12 @@ Next:
   1. Start Bayplan so the nodes can reach it. The nodes see this machine as ${GATEWAY}:
        make dev DEV_LISTEN=0.0.0.0:7480
      (dev-go tells agents to dial http://${GATEWAY}:7480 over plain ws://, which is for
-     development only. 0.0.0.0 makes the dev server reachable from your network; the
-     setup-token gate still applies, but do not do this on a network you do not trust.)
+     development only. DEV_LISTEN=0.0.0.0:7480 is what lets the nodes reach the
+     server and makes it reachable from your network; the setup-token gate still
+     applies, but do not do this on a network you do not trust.)
   2. In the UI at http://localhost:5173 choose Environments, Add environment, Agent.
+     From another machine add DEV_WEB_HOST=0.0.0.0 DEV_PUBLIC_URL=http://<this machine's name>:5173
+     to the make dev command and open that address (see CONTRIBUTING.md).
   3. Paste the swarm command on a manager:
        docker exec -i ${m1} sh
      then paste, press Enter, and press Ctrl-D.

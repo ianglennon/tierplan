@@ -75,20 +75,30 @@ CI runs thin wrappers over these same targets, so you can reproduce a CI failure
 make dev
 ```
 
-Open <http://localhost:5173/>. Vite serves the SPA there and proxies `/api` to the Go server on `127.0.0.1:7480`, which air rebuilds when a `.go` file changes. Development data lives in `.devdata/` (git-ignored). The Go side is built with the `devspa` tag, so it serves the SPA from `web/dist` on disk.
+Open <http://localhost:5173/>. Vite serves the SPA there and proxies `/api` to the Go server on `127.0.0.1:7480`, which air rebuilds when a `.go` file changes. Development data lives in `.devdata/` (git-ignored). The Go side is built with the `devspa` tag, so port 7480 serves the SPA from web/dist on disk, as the last make web or pnpm -C web build left it. The Vite dev server never writes web/dist, so edits you see on :5173 are not on :7480 until you build again.
+
+**From another machine.** Make Vite listen beyond loopback and tell both servers the address the browser will use:
+
+```sh
+make dev DEV_WEB_HOST=0.0.0.0 DEV_PUBLIC_URL=http://<this machine's name>:5173
+```
+
+Then open that address. The public URL must be the address in the browser's bar, because the Origin check (D-36) compares the two and refuses every change that comes from any other origin, including the setup-token form. `DEV_PUBLIC_URL=` (empty) leaves the public URL unset, so the setup wizard asks for it. The setup-token gate still applies (D-79). This opens the dev server to your network, so do not do it on a network you do not trust. `DEV_LISTEN` is a different setting: `DEV_LISTEN=0.0.0.0:7480` is what lets the dev swarm's nodes reach the Go server (below), and a remote browser does not need it.
 
 **The setup token flow applies in development too.** A new `.devdata` prints a setup token in the Go server's output, and `BAYPLAN_DATA_DIR=./.devdata go run ./cmd/bayplan setup-token` prints it again. There is deliberately no flag or setting that skips it (D-79), and no change should add one. Development needs a Docker socket to show a host; without one the app shows its "no Docker socket" screens.
 
 ### Local swarm
 
-`make dev-swarm` starts four privileged `docker:29-dind` containers (`bayplan-dev-m1` to `bayplan-dev-m3` and `bayplan-dev-w1`) on a network called `bayplan-dev-swarm`, makes them a swarm of three managers and a worker, builds the agent from this tree (`make agent-image`) and loads it on every node under the name the install command uses. It then prints the next steps: start the server with `make dev DEV_LISTEN=0.0.0.0:7480` so the nodes can reach it, add an agent environment in the UI, and paste the swarm command into `docker exec -i bayplan-dev-m1 sh`.
+`make dev-swarm` starts four privileged `docker:29-dind` containers (`bayplan-dev-m1` to `bayplan-dev-m3` and `bayplan-dev-w1`) on a network called `bayplan-dev-swarm`, makes them a swarm of three managers and a worker, builds the agent from this tree (`make agent-image`) and loads it on every node under the name the install command uses. It then prints the next steps: start the server with `make dev DEV_LISTEN=0.0.0.0:7480` so the nodes can reach it (to browse from another machine as well, add `DEV_WEB_HOST=0.0.0.0 DEV_PUBLIC_URL=http://<this machine's name>:5173`, see above), add an agent environment in the UI, and paste the swarm command into `docker exec -i bayplan-dev-m1 sh`.
 
 `make dev-swarm-down` removes those four containers, their volumes and the network, by name, and only if they carry the label `bayplan.dev-swarm=true`. It never runs a prune command, so nothing else on your Docker host is touched. `DEV_SWARM_ENGINE` (default 29) and `DEV_SWARM_SUBNET` (default `172.31.250.0/24`) change the engine version and the network.
+
+`DEV_SWARM_DNS` sets the DNS servers the nodes' Docker daemons hand to the agents, as IP addresses separated by commas or spaces. Without it the script uses the host's non-loopback IPv4 nameservers from `/etc/resolv.conf`, or from `/run/systemd/resolve/resolv.conf` when the first file lists only loopback ones such as systemd-resolved's `127.0.0.53`. This matters because the nodes sit on a user-defined network, where each node sees only Docker's own resolver at `127.0.0.11`; the inner daemon strips that as loopback and, with nothing left, falls back to `8.8.8.8`, which cannot resolve your LAN names. Run `scripts/dev-swarm.sh dns` to see what would be used; with none found it says so and how to fix it. A value that is not a non-loopback IP address is refused before anything is created.
 
 Three things to know:
 
 - Remote update and uninstall need a TLS-verified session. An agent refuses an `update` or an `uninstall` from the server over a session that is not TLS-verified, which is what the plain `ws://` connection of this swarm is, and answers `insecure_session`. So on the dev swarm "Update agent" shows "Update failed: the agent's connection isn't TLS-verified, so it won't update itself", and removing an environment with "Also uninstall the agent from the hosts" falls back to the manual cleanup command. To exercise either end to end, use a server with a certificate the agents verify (for the real-engine tests, `servertest` does this with its self-signed certificate and the pins in the install command).
-- The agents dial the server over plain `ws://`, because there is no certificate for a bare address. `make dev-go` sets `BAYPLAN_AGENT_URL` and `BAYPLAN_AGENT_ALLOW_INSECURE=true` for this, and the server logs a warning at start while the second is on. That is for development only and is set nowhere else. `DEV_LISTEN=0.0.0.0` also makes the dev server reachable from your network; the setup-token gate still applies, but do not do this on a network you do not trust.
+- The agents dial the server over plain `ws://`, because there is no certificate for a bare address. `make dev-go` sets `BAYPLAN_AGENT_URL` and `BAYPLAN_AGENT_ALLOW_INSECURE=true` for this, and the server logs a warning at start while the second is on. That is for development only and is set nowhere else. `DEV_LISTEN=0.0.0.0:7480` also makes the Go server reachable from your network; the setup-token gate still applies, but do not do this on a network you do not trust.
 - If your shell predates your `docker` group membership, run the targets through `sg docker -c 'make dev-swarm'`. Both `make test-swarm` and `make dev-swarm` need Docker to run privileged containers, which is root-equivalent on that machine.
 
 ## SPDX headers
