@@ -30,7 +30,7 @@ Bayplan's own host does not need an agent: it uses the Docker socket directly.
 ## Before you install
 
 1. **Bayplan must be reachable from the host.** The agent dials `<agent URL>/agent/connect` over `wss://`. The agent URL is `BAYPLAN_AGENT_URL`, or the public URL (`BAYPLAN_PUBLIC_URL`) when it is not set. The install command shows the exact address under **Connects to**. If Bayplan is behind a reverse proxy, the proxy has to pass WebSocket upgrades and Bayplan has to trust its `X-Forwarded-Proto` header: see [Running Bayplan behind a reverse proxy](reverse-proxy.md).
-2. **Bayplan must have a certificate the agent can check.** Either a certificate from a public CA, Bayplan's own self-signed certificate (the install command carries its pin), or a proxy's private certificate (add `BAYPLAN_AGENT_PIN`, see below). The agent never connects without checking the certificate.
+2. **Bayplan must have a certificate the agent can check.** Either a certificate from a public CA, Bayplan's own self-signed certificate (the install command carries its pin), or a proxy's private certificate (add `BAYPLAN_AGENT_PIN`, see below). On `wss://` the agent always checks the certificate, and no setting skips the check. It does not dial plain `ws://` to another host unless `BAYPLAN_AGENT_ALLOW_INSECURE=true` is set on the agent, which is for development only (see [Development only](#development-only-plain-ws)).
 3. **Docker Engine 24 to 29** on every host. Older engines are shown as unsupported.
 4. **The host's clock must be right** to within five minutes (use NTP). Bayplan refuses an agent beyond that.
 
@@ -163,11 +163,11 @@ These two are set by whoever owns the host, in the agent's environment (`-e` on 
 | `BAYPLAN_AGENT_READ_ONLY` | `false` | The agent refuses every Docker request that is not a `GET` or `HEAD`, whatever the allowlist says. The node list shows **Read-only (set on host)**. Today the allowlist is read-only anyway; the flag keeps a host read-only when a later release adds changes. |
 | `BAYPLAN_AGENT_SELF_UPDATE` | `true` | Whether the agent may update or uninstall itself when Bayplan asks. With `false` the node list gives you the update command to run by hand and removing the environment leaves the agent in place (see [Updates](#updates) and [Uninstall and manual cleanup](#uninstall-and-manual-cleanup)). |
 
-Smaller settings, rarely needed: `BAYPLAN_AGENT_SOCKET` (default `/var/run/docker.sock`), `BAYPLAN_AGENT_STATE_DIR` (default `/var/lib/bayplan-agent`), `BAYPLAN_AGENT_DOCKER_GID` (the group of the socket, when it cannot be detected), `BAYPLAN_AGENT_BACKOFF_MIN` and `BAYPLAN_AGENT_BACKOFF_MAX` (reconnect delay, 1 s to 60 s by default).
+Smaller settings, rarely needed: `BAYPLAN_AGENT_SOCKET` (default `/var/run/docker.sock`), `BAYPLAN_AGENT_STATE_DIR` (default `/var/lib/bayplan-agent`), `BAYPLAN_AGENT_DOCKER_GID` (the group of the socket, when it cannot be detected), `BAYPLAN_AGENT_BACKOFF_MIN` and `BAYPLAN_AGENT_BACKOFF_MAX` (reconnect delay, 1 s to 60 s by default), and `BAYPLAN_AGENT_ALLOW_INSECURE` (development only, see [Development only](#development-only-plain-ws)).
 
 ## A proxy with its own certificate: BAYPLAN_AGENT_PIN
 
-The agent checks Bayplan's certificate in one of three ways, and never skips the check:
+These three ways apply to `wss://`, the only scheme a real install uses. The agent checks Bayplan's certificate in one of them and never skips the check:
 
 1. **A certificate from a public CA** (Let's Encrypt, a commercial CA): nothing to configure.
 2. **Bayplan's own self-signed certificate** (`BAYPLAN_TLS_SELF_SIGNED=true`): the install command carries `BAYPLAN_AGENT_PIN`, the pin of Bayplan's key. The key survives renewals, so the pin does not change.
@@ -266,13 +266,14 @@ An agent that is refused when it first connects also gets one of these. They app
 | `type_mismatch` | A swarm manager used a standalone environment's command, or the other way round. | Add the host as its own environment. |
 | `host_mismatch` | A standalone environment already manages a different host. | Add this host as its own environment. |
 | `insecure_transport` (agent log: HTTP 403 "did not arrive over TLS") | Bayplan's public URL is `https`, but the agent's connection reached it as plain HTTP. Usually a proxy that does not send `X-Forwarded-Proto: https`, or Bayplan does not list the proxy in `BAYPLAN_TRUSTED_PROXIES`. | Fix the proxy as described in [Running Bayplan behind a reverse proxy](reverse-proxy.md). The bell shows "Forwarded headers from an untrusted address" when this is the cause. |
-| `rate_limited` | Too many connection attempts from one address, or too many handshakes at once. | The agent waits as long as Bayplan asks and tries again. |
+| `rate_limited` | Too many connection attempts from one address, too many handshakes at once, or more than 16 handshakes at once from one address (an IPv6 /64 counts as one address). | The agent waits as long as Bayplan asks and tries again. |
 | `internal_error` | Bayplan failed while handling a valid request. | The agent retries. Look at Bayplan's log. |
 
 A few things that are not codes:
 
 - **The environment stays "Waiting for the first agent" and no refusal is listed.** The agent never reached Bayplan's handshake. Look at the agent's log: a DNS problem (see the next item) or a routing problem, a proxy that does not pass the upgrade (Bayplan warns in the bell: "WebSocket connections are failing"), or an `insecure_transport` refusal that has no environment to show it under.
 - **The agent cannot resolve Bayplan's host name, but the host can.** The agent runs on Docker's default bridge (the install commands set no network). Containers there get the host's `resolv.conf` without its loopback servers. When the host lists only loopback resolvers (Pi-hole, dnsmasq or unbound on `127.0.0.1`, or a Docker that itself runs in a container), nothing is left and Docker silently uses `8.8.8.8` and `8.8.4.4`, which cannot resolve LAN names. (systemd-resolved's `127.0.0.53` is handled: Docker reads `/run/systemd/resolve/resolv.conf` instead.) To tell: the agent's log shows a lookup failing "on 8.8.8.8:53", and the Docker daemon's log says "No non-localhost DNS nameservers are left in resolv.conf. Using default external servers". The agent image has no shell, so read the file on the host that `docker inspect -f '{{.ResolvConfPath}}' bayplan-agent` names. Fixes: on a standalone host, run the agent again with `--dns <your DNS server>`; on a swarm, `docker service update --dns-add <your DNS server> bayplan-agent`; or set `"dns": ["<your DNS server>"]` in `/etc/docker/daemon.json` and restart Docker; or give the agent an IP address as Bayplan's URL (with a certificate that lists that IP).
+- **The agent stops at start and its log names `BAYPLAN_AGENT_ALLOW_INSECURE`.** `BAYPLAN_AGENT_URL` is a plain `ws://` address for another host, and the agent will not dial it unencrypted. Use `wss://` with a certificate the agent checks: the command from **Show install command** on a Bayplan that has a certificate. The switch exists only for the development swarm.
 - **The agent exits and Docker restarts it again and again.** It exits on a refusal and Docker's restart policy brings it back after a longer pause each time, up to about a minute. Fix the cause in the table; the loop stops by itself.
 - **An update or an uninstall answers `insecure_session`.** Both are accepted only on a session that checked Bayplan's certificate, and this agent is on plain `ws://`. Use `wss://` with a certificate the agent checks.
 - **The agent cannot reach Docker** (the socket is not mounted, Docker is stopped, or the socket file is left over from a Docker that is no longer running). The agent cannot say anything to Bayplan before it has read its engine, so the environment stays pending with no reason of its own, and after two minutes the waiting panel adds the line that points you to the agent's log. The log says "the Docker engine did not answer on its socket"; start Docker, or mount `/var/run/docker.sock` into the agent, and it connects by itself.
@@ -335,4 +336,9 @@ A stack-file install: `docker stack rm <stack>`, then remove the stack's network
 
 ## Development only: plain ws://
 
-`BAYPLAN_AGENT_ALLOW_INSECURE=true` lets agents connect over plain `ws://` although Bayplan's public URL is `https`. Join tokens and every Docker answer then cross the network unencrypted, and update and uninstall are refused on such a session. It exists for the development swarm (`make dev-swarm`) and for nothing else: never set it on a Bayplan you use for real, and never use it to get past a certificate problem. Fix the certificate instead (see [BAYPLAN_AGENT_PIN](#a-proxy-with-its-own-certificate-bayplan_agent_pin)).
+There are two switches with the same name, and plain `ws://` needs both.
+
+- **On Bayplan**, `BAYPLAN_AGENT_ALLOW_INSECURE=true` lets agents connect over plain `ws://` although Bayplan's public URL is `https`. While it is on, the install commands and files for a `ws://` address also set `BAYPLAN_AGENT_ALLOW_INSECURE=true` on the agent.
+- **On the agent**, `BAYPLAN_AGENT_ALLOW_INSECURE=true` lets it dial plain `ws://` to another host. Without it the agent stops at start with a message naming the switch, and it never dials a stored plain address for another host. `ws://` to `127.0.0.1`, `::1` or `localhost` needs no switch. Addresses Bayplan pushes to a connected agent are taken only as `wss://`.
+
+Join tokens and every Docker answer then cross the network unencrypted, and update and uninstall are refused on such a session (`insecure_session`). It exists for the development swarm (`make dev-swarm`) and for nothing else: never set it on a Bayplan you use for real, and never use it to get past a certificate problem. Fix the certificate instead (see [BAYPLAN_AGENT_PIN](#a-proxy-with-its-own-certificate-bayplan_agent_pin)).
