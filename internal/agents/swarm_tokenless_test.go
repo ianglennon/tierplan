@@ -108,4 +108,31 @@ func TestSwarmAgentsRestartWithoutAJoinToken(t *testing.T) {
 	if got := len(f.srv.AuditRows("agent.enrolled")); got != enrolled {
 		t.Errorf("agent.enrolled audit rows = %d, want the same %d", got, enrolled)
 	}
+
+	// Put the token back with the command docs/agent.md shows. The rotate command is
+	// not used: it reads the current secret from the service and fails with none.
+	rot := f.srv.RotateToken(f.env.ID)
+	t.Logf("add the token back:\n%s", quiet(sh(t, mgr, " printf %s '"+rot.Install.JoinToken+"' | docker secret create "+rot.Install.SecretName+" - "+
+		"&& docker service update --secret-add source="+rot.Install.SecretName+",target=bayplan-agent-token,mode=0400 --env-add BAYPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/bayplan-agent-token "+agentName)))
+	waitServiceUpdated(t, mgr)
+	spec = inspectService(t, mgr, agentName)
+	secrets := spec.TaskTemplate.ContainerSpec.Secrets
+	if len(secrets) != 1 || secrets[0].SecretName != rot.Install.SecretName || secrets[0].File.Mode != 0o400 {
+		t.Errorf("service secrets = %+v, want only %s with mode 0400", secrets, rot.Install.SecretName)
+	}
+	if !slices.Contains(spec.TaskTemplate.ContainerSpec.Env, "BAYPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/bayplan-agent-token") {
+		t.Errorf("service env = %v, want BAYPLAN_AGENT_JOIN_TOKEN_FILE", spec.TaskTemplate.ContainerSpec.Env)
+	}
+	f.waitSwarmOnline(t, 2)
+	for _, n := range f.sw.Nodes() {
+		if log := runningAgentLog(t, n); !strings.Contains(log, "token_present=true") {
+			t.Errorf("%s: the running agent's log lacks token_present=true after the token was put back:\n%s", n.Hostname, log)
+		}
+	}
+	if got := agentIDs(f.srv.Agents(f.env.ID)); !slices.Equal(got, ids) {
+		t.Errorf("agent IDs changed after the token was put back:\n before %v\n after  %v", ids, got)
+	}
+	if got := len(f.srv.AuditRows("agent.enrolled")); got != enrolled {
+		t.Errorf("agent.enrolled audit rows = %d after the token was put back, want the same %d", got, enrolled)
+	}
 }
