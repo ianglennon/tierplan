@@ -5,11 +5,13 @@
 package agents_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/server/servertest"
 )
@@ -198,5 +200,99 @@ func TestStandaloneFailingAndManyContainers(t *testing.T) {
 	// The failing count never overstates while the policies of the new containers are read, a few at a time.
 	if e, _ := srv.Environment(env.ID); e.Failing == nil || e.Failing.Failing != 1 {
 		t.Errorf("failing = %+v, want one failing container", e.Failing)
+	}
+}
+
+// TestStandaloneAgentRestartsWithoutAJoinToken recreates an enrolled standalone
+// agent the way docs/agent-updates.md tells an operator to update one by hand:
+// the same hardening flags (every capability dropped but SETUID and SETGID), the
+// same state volume, and no join token. It must come back as the same agent with
+// no new enrolment (G-02-5, D-03). Before the fix the agent read its identity
+// file as root without CAP_DAC_OVERRIDE, was refused by the 0700 state
+// directory, and exited 2 in a loop.
+func TestStandaloneAgentRestartsWithoutAJoinToken(t *testing.T) {
+	host := dockertest.StartHost(t, "")
+	dockertest.LoadAgentImage(t, host)
+	dumpOnFailure(t, host)
+	srv := servertest.Start(t, servertest.Options{Host: host.Gateway})
+
+	env := srv.CreateAgentEnvironment("")
+	sh(t, host, env.Install.Standalone.Command)
+	srv.WaitOnline(env.ID, 60*time.Second)
+
+	identityOf := func() string {
+		out := sh(t, host, `cat "$(docker volume inspect -f '{{.Mountpoint}}' bayplan-agent)/identity.json"`)
+		var id struct {
+			AgentID string `json:"agentId"`
+		}
+		if err := json.Unmarshal([]byte(out), &id); err != nil || id.AgentID == "" {
+			t.Fatalf("identity.json = %q (%v), want an agentId", out, err)
+		}
+		return id.AgentID
+	}
+	agentID := identityOf()
+	enrolled := len(srv.AuditRows("agent.enrolled"))
+	if enrolled != 1 {
+		t.Fatalf("agent.enrolled audit rows after the install = %d, want 1", enrolled)
+	}
+	before := srv.Agents(env.ID)
+	if len(before) != 1 {
+		t.Fatalf("agent rows after the install = %+v, want 1", before)
+	}
+	oldContainer := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.Id}}' bayplan-agent"))
+
+	// The token-less update an operator is shown, minus its docker pull: the image
+	// is loaded into the node already and ghcr.io does not resolve to a registry here.
+	manual := agents.ManualUpdateCommand("standalone", env.Install.Image, agents.InstallParams{Endpoint: env.Install.AgentURL, Pin: env.Install.Pin})
+	recreate, ok := strings.CutPrefix(manual, " docker pull "+env.Install.Image+" && ")
+	if !ok {
+		t.Fatalf("the manual update command does not start with its docker pull: %q", manual)
+	}
+	for _, want := range []string{"--cap-drop ALL --cap-add SETUID --cap-add SETGID", "-v bayplan-agent:/var/lib/bayplan-agent"} {
+		if !strings.Contains(recreate, want) {
+			t.Fatalf("the recreate command lacks %q: %s", want, recreate)
+		}
+	}
+	if strings.Contains(recreate, "JOIN_TOKEN") {
+		t.Fatalf("the recreate command carries a join token: %s", recreate)
+	}
+	sh(t, host, recreate)
+
+	var log string
+	srv.WaitFor("the recreated agent to connect as the same agent", 90*time.Second, func() (bool, string) {
+		id, _ := host.Sh(execCtx(t, time.Minute), "docker inspect -f '{{.Id}}' bayplan-agent")
+		out, _ := host.Sh(execCtx(t, time.Minute), "docker logs bayplan-agent 2>&1")
+		log = out
+		ok := strings.TrimSpace(id) != "" && strings.TrimSpace(id) != oldContainer &&
+			strings.Contains(out, "connected to Bayplan") && strings.Contains(out, "agent_id="+agentID)
+		return ok, out[max(0, len(out)-600):]
+	})
+
+	if n := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.RestartCount}}' bayplan-agent")); n != "0" {
+		t.Errorf("RestartCount = %s, want 0: the agent started at once", n)
+	}
+	capDrop := strings.ReplaceAll(strings.TrimSpace(sh(t, host, "docker inspect -f '{{.HostConfig.CapDrop}}' bayplan-agent")), "CAP_", "")
+	if capDrop != "[ALL]" {
+		t.Errorf("CapDrop = %s, want [ALL] (D-22)", capDrop)
+	}
+	for _, want := range []string{"token_present=false", "enrolled=true"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("the agent log lacks %q:\n%s", want, log)
+		}
+	}
+	if strings.Contains(log, "enrolled with Bayplan") {
+		t.Errorf("the agent enrolled again instead of reconnecting:\n%s", log)
+	}
+
+	srv.WaitOnline(env.ID, 60*time.Second)
+	after := srv.Agents(env.ID)
+	if len(after) != 1 || !after[0].Connected || after[0].ID != before[0].ID {
+		t.Errorf("agents after the recreate = %+v, want the one agent %s connected", after, before[0].ID)
+	}
+	if got := identityOf(); got != agentID {
+		t.Errorf("identity.json names agent %s after the recreate, want %s", got, agentID)
+	}
+	if got := len(srv.AuditRows("agent.enrolled")); got != enrolled {
+		t.Errorf("agent.enrolled audit rows = %d after the recreate, want the same %d", got, enrolled)
 	}
 }
