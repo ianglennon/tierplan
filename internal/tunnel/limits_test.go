@@ -280,7 +280,7 @@ func firstMessageFrom(t *testing.T, ctx context.Context, srv *tunneltest.Server,
 func TestOneAddressCannotHoldEveryHandshakeSlot(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{
 		Wrap:      trustLoopback,
-		Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000) },
+		Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000).WithFirstFrameTimeout(time.Minute) },
 	})
 	env := srv.NewEnvironment(t, "Production")
 	id := enrolled(t, srv, env)
@@ -319,7 +319,9 @@ func TestOneAddressCannotHoldEveryHandshakeSlot(t *testing.T) {
 
 // holdFrom opens a handshake that says it comes from xff and does not answer the
 // challenge, so it holds its slot until the test ends or closes it. It returns the
-// connection and what the server sent first.
+// connection and what the server sent first. A test that holds handshakes while
+// it opens more sets WithFirstFrameTimeout(time.Minute), so the first-frame
+// deadline cannot let the held ones go before the test has looked.
 func holdFrom(t *testing.T, ctx context.Context, srv *tunneltest.Server, xff string) (*websocket.Conn, wire.Refuse, string) {
 	t.Helper()
 	ws, ref, typ := firstMessageFrom(t, ctx, srv, xff)
@@ -332,7 +334,7 @@ func holdFrom(t *testing.T, ctx context.Context, srv *tunneltest.Server, xff str
 func TestConcurrentHandshakeCapRefusesThe65thWithRateLimitedAndARetryAfter(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{
 		Wrap:      trustLoopback,
-		Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000) },
+		Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000).WithFirstFrameTimeout(time.Minute) },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -376,7 +378,7 @@ func TestConcurrentHandshakeCapRefusesThe65thWithRateLimitedAndARetryAfter(t *te
 func TestTheHandshakeCapPerAddressCountsAnIPv6SlashSixtyFourAsOneAddress(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{
 		Wrap:      trustLoopback,
-		Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000) },
+		Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000).WithFirstFrameTimeout(time.Minute) },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -428,7 +430,7 @@ func TestAForwardedForHeaderFromAnUntrustedPeerDoesNotBuyMoreHandshakes(t *testi
 	srv := tunneltest.Start(t, tunneltest.Options{
 		Wrap: func(next http.Handler) http.Handler { return httpx.ClientIPMiddleware(nil)(next) },
 		Configure: func(h *tunnel.Hub) *tunnel.Hub {
-			return h.WithConnectLimit(1000)
+			return h.WithConnectLimit(1000).WithFirstFrameTimeout(time.Minute)
 		},
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -524,6 +526,37 @@ func TestAnAgentThatAnswersWithinTheDeadlineIsWelcomedAndOneThatDoesNotIsDropped
 			t.Fatal("an agent that answered 4 s after the challenge was welcomed, want the connection closed at the deadline")
 		}
 	})
+}
+
+func TestWithFirstFrameTimeoutReplacesTheDeadlineOnlyWhenPositive(t *testing.T) {
+	// dropped reports how long a silent handshake lasts, or ok false when it is
+	// still open after limit.
+	dropped := func(t *testing.T, d time.Duration, limit time.Duration) (time.Duration, bool) {
+		t.Helper()
+		srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithFirstFrameTimeout(d) }})
+		ctx, cancel := context.WithTimeout(context.Background(), limit)
+		defer cancel()
+		ws, _, typ := firstMessageFrom(t, ctx, srv, "")
+		defer func() { _ = ws.CloseNow() }()
+		if typ != wire.TypeChallenge {
+			t.Fatalf("got %q, want a challenge", typ)
+		}
+		start := time.Now()
+		_, _, err := ws.Read(ctx)
+		if err == nil {
+			t.Fatal("the server sent something to a client that said nothing")
+		}
+		return time.Since(start), ctx.Err() == nil
+	}
+
+	if elapsed, ok := dropped(t, 300*time.Millisecond, 2*time.Second); !ok || elapsed > 2*time.Second {
+		t.Errorf("with a deadline of 300 ms a silent handshake lasted %s (dropped %v), want it dropped quickly", elapsed, ok)
+	}
+	for _, d := range []time.Duration{0, -time.Second} {
+		if elapsed, ok := dropped(t, d, 1500*time.Millisecond); ok {
+			t.Errorf("with a deadline of %s a silent handshake was dropped after %s, want the 3 s default", d, elapsed)
+		}
+	}
 }
 
 func TestRateLimitAdmitsTheBurstFromOneAddressAndRefusesTheRest(t *testing.T) {
