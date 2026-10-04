@@ -35,6 +35,8 @@ function agent(id: string, node: string, extra: Record<string, unknown> = {}) {
     lastSeen: iso(-5 * 60_000),
     readOnly: false,
     selfUpdate: true,
+    updateAvailable: false,
+    updateState: { state: "idle" } as { state: string; reason?: string },
     ...extra,
   };
 }
@@ -85,6 +87,7 @@ function env(kind: "agent" | "local") {
     failingServices: null,
     nodes: null,
     updateAvailable: false,
+    autoUpdate,
   };
 }
 
@@ -95,6 +98,8 @@ interface Sent {
 }
 
 const ALL = ["environments.read", "environments.revoke"];
+// The environment's automatic-update setting: absent until a test sets it.
+let autoUpdate: boolean | undefined;
 let perms: string[];
 let sent: Sent[];
 let agents: ReturnType<typeof agent>[];
@@ -102,17 +107,20 @@ let kind: "agent" | "local";
 let agentsAnswer: () => Response | Promise<Response>;
 let revokeAnswer: () => Response | Promise<Response>;
 let unblockAnswer: () => Response | Promise<Response>;
+let updateAnswer: () => Response | Promise<Response>;
 let client: QueryClient;
 let writeText: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
 
 beforeEach(() => {
   perms = ALL;
+  autoUpdate = undefined;
   kind = "agent";
   sent = [];
   agents = [MGR, EXPIRING, DOWN, REVOKED, UNBLOCKED, READONLY];
   agentsAnswer = () => Response.json({ items: agents });
   revokeAnswer = () => new Response(null, { status: 204 });
   unblockAnswer = () => new Response(null, { status: 204 });
+  updateAnswer = () => new Response(null, { status: 202 });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -144,6 +152,7 @@ beforeEach(() => {
       if (path === "/api/env/e2/agents") return agentsAnswer();
       if (/\/api\/environments\/e2\/agents\/[^/]+\/revoke$/.test(path)) return revokeAnswer();
       if (/\/api\/environments\/e2\/agents\/[^/]+\/unblock$/.test(path)) return unblockAnswer();
+      if (/\/api\/environments\/e2\/agents\/[^/]+\/update$/.test(path)) return updateAnswer();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -648,5 +657,141 @@ describe("NodeTable on a large swarm", () => {
     expect(scroller?.className).toContain("overflow-auto");
     expect(scroller?.className).toContain("max-h-");
     expect(screen.getAllByRole("button", { name: /^Actions for / })).toHaveLength(50);
+  });
+});
+
+describe("NodeTable agent updates", () => {
+  const BEHIND = agent("a9", "old-1", { agentVersion: "0.1.0", updateAvailable: true });
+
+  beforeEach(() => {
+    perms = [...ALL, "environments.manage"];
+    autoUpdate = false;
+    agents = [agent("a1", "mgr-1", { role: "manager" }), BEHIND];
+  });
+
+  it("offers Update agent on a connected agent that is behind when automatic updates are off", async () => {
+    await mountLoaded();
+    await openMenu("old-1");
+    expect(await screen.findByRole("menuitem", { name: "Update agent" })).toBeTruthy();
+    cleanup();
+
+    // An up-to-date agent has nothing to update.
+    await mountLoaded();
+    await openMenu("mgr-1");
+    expect(screen.queryByRole("menuitem", { name: "Update agent" })).toBeNull();
+  });
+
+  it("offers it with automatic updates on, to nobody without environments.manage, and not for a host that refuses", async () => {
+    autoUpdate = true;
+    await mountLoaded();
+    await openMenu("old-1");
+    expect(screen.queryByRole("menuitem", { name: "Update agent" })).toBeNull();
+    cleanup();
+
+    autoUpdate = false;
+    perms = ALL;
+    await mountLoaded();
+    await openMenu("old-1");
+    expect(screen.queryByRole("menuitem", { name: "Update agent" })).toBeNull();
+    cleanup();
+
+    perms = [...ALL, "environments.manage"];
+    agents = [agent("a1", "mgr-1", { role: "manager" }), { ...BEHIND, selfUpdate: false }];
+    await mountLoaded();
+    await openMenu("old-1");
+    expect(screen.queryByRole("menuitem", { name: "Update agent" })).toBeNull();
+  });
+
+  it("posts the update without asking and reads the list again", async () => {
+    await mountLoaded();
+    const before = agentReads().length;
+    await openMenu("old-1");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Update agent" }));
+    await waitFor(() =>
+      expect(posts().map((p) => p.path)).toEqual(["/api/environments/e2/agents/a9/update"]),
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(agentReads().length).toBeGreaterThan(before));
+  });
+
+  it("says why a refused update was refused, in a toast, and reads the list again", async () => {
+    updateAnswer = () => Response.json({ type: "self_update_disabled" }, { status: 409 });
+    await mountLoaded();
+    await openMenu("old-1");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Update agent" }));
+    expect(
+      await screen.findByText(
+        "The owner of that host turned agent self-update off. Update it by hand.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows Updating… with a spinner while an update runs and no action for that row", async () => {
+    agents = [
+      agent("a1", "mgr-1", { role: "manager" }),
+      { ...BEHIND, updateState: { state: "updating" } },
+    ];
+    await mountLoaded();
+    const cell = cells(rowFor("old-1"))[3] as HTMLElement;
+    expect(within(cell).getByRole("status").textContent).toBe("Updating…");
+    await openMenu("mgr-1");
+    cleanup();
+  });
+
+  it("shows Update failed with the reason, in the offline colours, and the code in a tooltip", async () => {
+    agents = [
+      agent("a1", "mgr-1", { role: "manager" }),
+      { ...BEHIND, updateState: { state: "failed", reason: "image_not_own_repository" } },
+      agent("a8", "odd-1", { updateState: { state: "failed", reason: "from_the_future" } }),
+    ];
+    await mountLoaded();
+    const failed = within(cells(rowFor("old-1"))[3] as HTMLElement).getByText(/^Update failed:/);
+    expect(failed.textContent).toBe(
+      "Update failed: the update image isn't from the agent's own repository",
+    );
+    expect(failed.className).toContain("text-status-offline-text");
+    // A reason this build has no wording for is shown as it came.
+    expect(
+      within(cells(rowFor("odd-1"))[3] as HTMLElement).getByText("Update failed: from_the_future"),
+    ).toBeTruthy();
+  });
+
+  it("shows a neutral Update badge beside the version of an agent that is behind", async () => {
+    await mountLoaded();
+    expect(within(cells(rowFor("old-1"))[3] as HTMLElement).getByText("Update")).toBeTruthy();
+    expect(within(cells(rowFor("mgr-1"))[3] as HTMLElement).queryByText("Update")).toBeNull();
+  });
+
+  it("reads the list again every few seconds while an agent is updating, and stops when none is", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.setSystemTime(NOW);
+    agents = [
+      agent("a1", "mgr-1", { role: "manager" }),
+      { ...BEHIND, updateState: { state: "updating" } },
+    ];
+    mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    const first = agentReads().length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3100);
+    });
+    expect(agentReads().length).toBeGreaterThan(first);
+
+    agents = [
+      agent("a1", "mgr-1", { role: "manager" }),
+      agent("a9", "old-1", { agentVersion: "0.2.1" }),
+    ];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3100);
+    });
+    const settled = agentReads().length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(agentReads().length).toBe(settled);
   });
 });

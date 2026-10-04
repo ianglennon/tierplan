@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Ellipsis } from "lucide-react";
 import { useRef, useState } from "react";
 
-import { type AgentItem, agentsQuery } from "@/api/agents";
+import {
+  type AgentItem,
+  agentsQuery,
+  isUpdating,
+  refreshAfterAgentUpdate,
+  UpdateActionError,
+  updateAgent,
+} from "@/api/agents";
 import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
 import { CERT_WARN_DAYS, CertExpiry } from "@/components/cert-expiry";
 import { copyText } from "@/components/copyable-code";
@@ -21,10 +28,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvHealthEvents } from "@/features/environments/health-stream";
 import { RevokeDialog, UnblockDialog } from "@/features/environments/revoke-dialog";
+import { updateProblemKey } from "@/features/environments/update-problem";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatClockOffset } from "@/lib/format";
@@ -153,6 +162,73 @@ function Fingerprint({ agent }: { agent: AgentItem }) {
   );
 }
 
+// The update failure reasons that have wording of their own; any other code is
+// shown as it came, since a newer agent can say something this build has not seen.
+const KNOWN_UPDATE_REASONS = new Set([
+  "image_not_own_repository",
+  "image_invalid",
+  "not_a_manager",
+  "self_update_disabled",
+  "busy",
+  "own_container_unknown",
+  "update_failed",
+  "not_implemented",
+  "no_answer",
+  "no_new_version",
+  "rolled_back",
+]);
+
+// AgentVersionCell is the Agent version column: the version, with a neutral
+// "Update" badge when the agent is behind the server, then "Updating…" with a
+// spinner while an update runs, and "Update failed: {reason}" in the offline
+// colours when it did not finish. A swarm rolls through its nodes, so rows that
+// show different versions while it runs are expected (UI-SPEC "Agent updates").
+function AgentVersionCell({ agent }: { agent: AgentItem }) {
+  const t = useT();
+  const state = agent.updateState;
+  if (isUpdating(agent)) {
+    return (
+      <span role="status" className="inline-flex items-center gap-2 text-sm">
+        <Spinner aria-hidden="true" />
+        {t("envsettings.nodes.updating")}
+      </span>
+    );
+  }
+  if (state?.state === "failed") {
+    const reason = state.reason ?? "";
+    const wording = KNOWN_UPDATE_REASONS.has(reason)
+      ? t(`envsettings.updateReasons.${reason}`)
+      : reason || t("envsettings.updateReasons.update_failed");
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: the tooltip must open on keyboard focus (UI-SPEC long text)
+            tabIndex={0}
+            className="rounded-sm text-sm text-status-offline-text focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {t("envsettings.nodes.updateFailed", { reason: wording })}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-sm font-mono break-all">
+          {reason || "update_failed"}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  if (!agent.agentVersion) return <Dash />;
+  return (
+    <span className="flex items-center gap-2">
+      <Truncated value={agent.agentVersion} mono />
+      {agent.updateAvailable ? (
+        <Badge variant="secondary" className="shrink-0">
+          {t("envsettings.nodes.updateBadge")}
+        </Badge>
+      ) : null}
+    </span>
+  );
+}
+
 function ClockCell({ agent }: { agent: AgentItem }) {
   const t = useT();
   if (!clockKnown(agent)) return <Dash />;
@@ -174,16 +250,36 @@ interface RowProps {
   // The environment's status issues name a node whose certificate is not renewing.
   renewalFailing: boolean;
   canRevoke: boolean;
+  // Whether this row offers Update agent: the caller may manage the environment and
+  // automatic updates are off. Whether the agent can take it is decided per row.
+  canUpdate: boolean;
   // The menu button comes along, so focus can go back to it after the dialog.
   onRevoke: (agent: AgentItem, trigger: HTMLElement | null) => void;
   onUnblock: (agent: AgentItem, trigger: HTMLElement | null) => void;
+  onUpdate: (agent: AgentItem) => void;
 }
 
-function NodeRow({ agent, renewalFailing, canRevoke, onRevoke, onUnblock }: RowProps) {
+function NodeRow({
+  agent,
+  renewalFailing,
+  canRevoke,
+  canUpdate,
+  onRevoke,
+  onUnblock,
+  onUpdate,
+}: RowProps) {
   const t = useT();
   const revoked = isRevoked(agent);
   const canRevokeThis = canRevoke && agent.status === "active";
   const canUnblockThis = canRevoke && agent.blocked;
+  // An agent that is behind, connected, allowed by its host and not already updating.
+  const canUpdateThis =
+    canUpdate &&
+    agent.status === "active" &&
+    agent.connected &&
+    agent.selfUpdate &&
+    agent.updateAvailable &&
+    !isUpdating(agent);
   // Set when a menu item was chosen, so closing the menu does not hand focus
   // back to its button over the dialog that is opening.
   const chose = useRef(false);
@@ -233,8 +329,8 @@ function NodeRow({ agent, renewalFailing, canRevoke, onRevoke, onUnblock }: RowP
           />
         )}
       </TableCell>
-      <TableCell className="max-w-32">
-        {agent.agentVersion ? <Truncated value={agent.agentVersion} mono /> : <Dash />}
+      <TableCell className="max-w-48">
+        <AgentVersionCell agent={agent} />
       </TableCell>
       <TableCell className="max-w-32">
         {agent.engineVersion ? <Truncated value={agent.engineVersion} mono /> : <Dash />}
@@ -254,7 +350,7 @@ function NodeRow({ agent, renewalFailing, canRevoke, onRevoke, onUnblock }: RowP
         <RelativeTime value={agent.lastSeen} />
       </TableCell>
       <TableCell className="w-12 text-end">
-        {canRevokeThis || canUnblockThis ? (
+        {canRevokeThis || canUnblockThis || canUpdateThis ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -276,6 +372,17 @@ function NodeRow({ agent, renewalFailing, canRevoke, onRevoke, onUnblock }: RowP
                 event.preventDefault();
               }}
             >
+              {canUpdateThis ? (
+                <DropdownMenuItem
+                  className="max-md:min-h-11"
+                  onSelect={() => {
+                    chose.current = true;
+                    onUpdate(agent);
+                  }}
+                >
+                  {t("envsettings.nodes.updateAgent")}
+                </DropdownMenuItem>
+              ) : null}
               {canRevokeThis ? (
                 <DropdownMenuItem
                   variant="destructive"
@@ -356,6 +463,7 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
   const queryClient = useQueryClient();
   const now = useNow();
   const canRevoke = usePermission("environments.revoke", envId);
+  const canManage = usePermission("environments.manage", envId);
   const environments = useQuery(environmentsQuery);
   const env = environments.data?.items?.find((e) => e.id === envId);
   const isLocal = env?.kind === "local";
@@ -380,7 +488,20 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
 
   const loading = environments.isPending || (!isLocal && agents.isPending);
   const failed = !loading && !isLocal && agents.isError;
-  const list = isLocal ? [] : (agents.data ?? []);
+  const list = isLocal ? [] : (agents.data?.items ?? []);
+  // Update agent is for an environment whose automatic updates are off: with them
+  // on, Bayplan updates the agents by itself (D-28).
+  const canUpdate = canManage && env?.kind === "agent" && env.autoUpdate === false;
+
+  const update = useMutation({
+    mutationFn: (target: AgentItem) => updateAgent(envId, target.id),
+    onSuccess: () => refreshAfterAgentUpdate(queryClient, envId),
+    onError: (error) => {
+      toastError(t(updateProblemKey(error instanceof UpdateActionError ? error.type : undefined)));
+      // The row is stale: the agent may have gone, or been updated, meanwhile.
+      void refreshAfterAgentUpdate(queryClient, envId);
+    },
+  });
 
   if (failed) {
     return (
@@ -472,6 +593,8 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
                     agent={agent}
                     renewalFailing={notRenewing.has(agent.node)}
                     canRevoke={canRevoke}
+                    canUpdate={canUpdate}
+                    onUpdate={(a) => update.mutate(a)}
                     onRevoke={(a, trigger) => {
                       returnTo.current = trigger;
                       setRevoking(a);

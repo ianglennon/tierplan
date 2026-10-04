@@ -24,11 +24,13 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdoptClusterDialog } from "@/features/environments/adopt-cluster-dialog";
+import { AgentUpdatesCard } from "@/features/environments/agent-updates-card";
 import { RenameDialog } from "@/features/environments/environments-settings";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import { JoinTokenCard } from "@/features/environments/join-token-card";
 import { NodeTable } from "@/features/environments/node-table";
 import { ReasonText } from "@/features/environments/reason-text";
+import { RemoveEnvironmentCard } from "@/features/environments/remove-environment-card";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { settingsQuery } from "@/features/settings/general-form";
 import { hasPermission, useDocumentTitle, useMe } from "@/hooks/use-me";
@@ -211,10 +213,11 @@ interface EnvSettingsPageProps {
 }
 
 // EnvSettingsPage is Settings > Environments > {env} (D-38): the breadcrumb and
-// the cards General, Connection and Join token, each shown only to someone who
-// holds its permission. The Connection card offers Adopt new cluster while the
-// swarm was re-initialised (plan 19); plans 29 and 30 add the agent update, remove
-// and fold cards. Hiding a card is not access control; the server answers 403.
+// the cards General, Connection, Nodes and agents, Join token and Agent updates,
+// and Remove environment last (D-30), each shown only to someone who holds its
+// permission. The Connection card offers Adopt new cluster while the swarm was
+// re-initialised (plan 19); plan 30 adds the fold card between Agent updates and
+// Remove. Hiding a card is not access control; the server answers 403.
 export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -232,8 +235,9 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   const canRevoke = hasPermission(me, "environments.revoke", envId);
   const canRead = hasPermission(me, "environments.read", envId);
   const canSettings = hasPermission(me, "settings.read");
+  const canDelete = hasPermission(me, "environments.delete", envId);
 
-  if (!(canManage || canToken || canRevoke || canSettings)) return <NoPermission />;
+  if (!(canManage || canToken || canRevoke || canSettings || canDelete)) return <NoPermission />;
 
   if (environments.isPending) {
     return (
@@ -313,6 +317,7 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
         </SettingsCard>
       ) : null}
       {canToken && env.kind === "agent" ? <JoinTokenCard envId={env.id} /> : null}
+      {canManage && canRead && env.kind === "agent" ? <AgentUpdatesCard env={env} /> : null}
       {canToken && env.kind === "agent" ? (
         <InstallDialog
           open={rotating}
@@ -326,6 +331,7 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
           }}
         />
       ) : null}
+      {canDelete ? <RemoveEnvironmentCard env={env} /> : null}
     </div>
   );
 }

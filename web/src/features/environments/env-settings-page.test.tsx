@@ -17,6 +17,7 @@ const ALL = [
   "environments.manage",
   "environments.token",
   "environments.revoke",
+  "environments.delete",
 ];
 
 function me(envPerms: string[], globalPerms: string[] = ["settings.read", "environments.manage"]) {
@@ -213,11 +214,82 @@ describe("/settings/environments/$envId", () => {
     ).not.toBeNull();
   });
 
-  it("renders General, Connection, Nodes and agents and Join token in that order for a caller who holds every permission", async () => {
+  it("renders General, Connection, Nodes and agents, Join token, Agent updates and Remove environment in that order for a caller who holds every permission", async () => {
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "General" });
     await screen.findByRole("heading", { level: 3, name: "Join token" });
-    expect(headings()).toEqual(["General", "Connection", "Nodes and agents", "Join token"]);
+    expect(headings()).toEqual([
+      "General",
+      "Connection",
+      "Nodes and agents",
+      "Join token",
+      "Agent updates",
+      "Remove environment",
+    ]);
+  });
+
+  it("makes Remove environment the last card, with the anchor remove, and scrolls to it for #remove", async () => {
+    const scroll = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      renderAt("/settings/environments/e2#remove");
+      const heading = await screen.findByRole("heading", { level: 3, name: "Remove environment" });
+      const section = heading.closest("section");
+      expect(section?.id).toBe("remove");
+      expect(section?.nextElementSibling).toBeNull();
+      await waitFor(() => expect(scroll).toHaveBeenCalled());
+      expect(scroll.mock.contexts.at(-1)).toBe(section);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it("does not scroll to Remove environment without the anchor", async () => {
+    const scroll = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      renderAt("/settings/environments/e2");
+      await screen.findByRole("heading", { level: 3, name: "Remove environment" });
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it("hides Remove environment without environments.delete, and Agent updates without environments.manage or on the local socket", async () => {
+    current = me(["environments.read", "environments.manage", "environments.token"]);
+    renderAt("/settings/environments/e2");
+    await screen.findByRole("heading", { level: 3, name: "Agent updates" });
+    expect(screen.queryByRole("heading", { name: "Remove environment" })).toBeNull();
+    cleanup();
+
+    current = me(["environments.read", "environments.token", "environments.delete"]);
+    renderAt("/settings/environments/e2");
+    await screen.findByRole("heading", { level: 3, name: "Remove environment" });
+    expect(screen.queryByRole("heading", { name: "Agent updates" })).toBeNull();
+    cleanup();
+
+    // The host Bayplan runs on has no agents to update.
+    current = me(ALL);
+    renderAt("/settings/environments/e1");
+    await screen.findByRole("heading", { level: 3, name: "Remove environment" });
+    expect(screen.queryByRole("heading", { name: "Agent updates" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Join token" })).toBeNull();
+  });
+
+  it("keeps Phase 1's Remove host wording for the local socket, with no uninstall box and no manual command", async () => {
+    renderAt("/settings/environments/e1");
+    const heading = await screen.findByRole("heading", { level: 3, name: "Remove environment" });
+    const button = within(heading.closest("section") as HTMLElement).getByRole("button", {
+      name: "Remove host",
+    });
+    fireEvent.click(button);
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove lab-1?" });
+    expect(within(dialog).getByRole("button", { name: "Remove host" })).toBeTruthy();
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+    expect(within(dialog).queryByText("Manual cleanup command")).toBeNull();
   });
 
   it("shows the health dot with its label and the agent URL in use on the Connection card", async () => {
@@ -316,7 +388,7 @@ describe("/settings/environments/$envId", () => {
     current = me(["environments.read", "environments.manage", "environments.revoke"]);
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "General" });
-    expect(headings()).toEqual(["General", "Connection", "Nodes and agents"]);
+    expect(headings()).toEqual(["General", "Connection", "Nodes and agents", "Agent updates"]);
     expect(seen).not.toContain("GET /api/environments/e2/token");
   });
 
@@ -363,7 +435,8 @@ describe("/settings/environments/$envId", () => {
   it("has no Join token card, no Connects to and no token read for the local socket host", async () => {
     renderAt("/settings/environments/e1");
     await screen.findByRole("heading", { level: 3, name: "General" });
-    expect(headings()).toEqual(["General", "Connection", "Nodes and agents"]);
+    await screen.findByRole("heading", { level: 3, name: "Remove environment" });
+    expect(headings()).toEqual(["General", "Connection", "Nodes and agents", "Remove environment"]);
     expect(screen.queryByText("Connects to")).toBeNull();
     await waitFor(() => expect(seen).toContain("GET /api/environments"));
     expect(seen).not.toContain("GET /api/environments/e1/token");
