@@ -240,6 +240,10 @@ func TestRevokeRacingAHelloFiftyTimesNeverLeavesASessionForTheRevokedAgent(t *te
 		} else if hello.Refuse == nil || hello.Refuse.Code != wire.ReasonRevoked {
 			t.Fatalf("round %d: hello = %+v (err %v), want a welcome that is then closed or a revoked refusal", i, hello.Refuse, hello.Err)
 		}
+		// A refused handshake keeps its slot until the agent finishes the close, and
+		// all of these come from one address, which may hold 16 at once (T-02-24): an
+		// agent that has been refused lets go, so the test does too.
+		_ = hello.WS.CloseNow()
 		// The close frame reaches the agent a moment before the hub has unregistered
 		// the session, so the registry is given a short while to settle. A session
 		// that was never closed would stay.

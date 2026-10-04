@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -316,26 +317,38 @@ func TestOneAddressCannotHoldEveryHandshakeSlot(t *testing.T) {
 	waitFor(t, "the enrolled agent's session", func() bool { return srv.Hub.Session(id.AgentID) != nil })
 }
 
+// holdFrom opens a handshake that says it comes from xff and does not answer the
+// challenge, so it holds its slot until the test ends or closes it. It returns the
+// connection and what the server sent first.
+func holdFrom(t *testing.T, ctx context.Context, srv *tunneltest.Server, xff string) (*websocket.Conn, wire.Refuse, string) {
+	t.Helper()
+	ws, ref, typ := firstMessageFrom(t, ctx, srv, xff)
+	t.Cleanup(func() { _ = ws.CloseNow() })
+	return ws, ref, typ
+}
+
+// The 64 slots are the global bound: with 16 held from each of four addresses
+// they are all taken, and the per-address cap is not what refuses the 65th.
 func TestConcurrentHandshakeCapRefusesThe65thWithRateLimitedAndARetryAfter(t *testing.T) {
-	srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000) }})
+	srv := tunneltest.Start(t, tunneltest.Options{
+		Wrap:      trustLoopback,
+		Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000) },
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	held := make([]*websocket.Conn, 0, 64)
-	for i := range 64 {
-		ws, _, typ := firstMessage(t, ctx, srv)
-		if typ != wire.TypeChallenge {
-			t.Fatalf("handshake %d got %q, want a challenge", i+1, typ)
+	for _, addr := range []string{"198.51.100.1", "198.51.100.2", "198.51.100.3", "198.51.100.4"} {
+		for i := range 16 {
+			ws, _, typ := holdFrom(t, ctx, srv, addr)
+			if typ != wire.TypeChallenge {
+				t.Fatalf("handshake %d from %s got %q, want a challenge", i+1, addr, typ)
+			}
+			held = append(held, ws)
 		}
-		held = append(held, ws)
 	}
-	t.Cleanup(func() {
-		for _, ws := range held {
-			_ = ws.CloseNow()
-		}
-	})
 
-	ws, ref, typ := firstMessage(t, ctx, srv)
+	ws, ref, typ := firstMessageFrom(t, ctx, srv, "198.51.100.5")
 	defer func() { _ = ws.CloseNow() }()
 	if typ != wire.TypeRefuse || ref.Code != wire.RefuseRateLimited || ref.RetryAfterMs <= 0 {
 		t.Fatalf("the 65th handshake got %q %+v, want a refusal rate_limited with retryAfterMs", typ, ref)
@@ -345,7 +358,7 @@ func TestConcurrentHandshakeCapRefusesThe65thWithRateLimitedAndARetryAfter(t *te
 	_ = held[0].CloseNow()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		ws2, _, typ := firstMessage(t, ctx, srv)
+		ws2, _, typ := firstMessageFrom(t, ctx, srv, "198.51.100.5")
 		_ = ws2.CloseNow()
 		if typ == wire.TypeChallenge {
 			break
@@ -354,6 +367,80 @@ func TestConcurrentHandshakeCapRefusesThe65thWithRateLimitedAndARetryAfter(t *te
 			t.Fatal("the slot of a closed handshake was never freed")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// One IPv6 /64 is one client for the cap, as it is for the attempt budget, and an
+// IPv4-mapped IPv6 address is its IPv4 address, so rotating addresses inside a
+// block a provider hands to one customer buys no more slots (T-02-24).
+func TestTheHandshakeCapPerAddressCountsAnIPv6SlashSixtyFourAsOneAddress(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{
+		Wrap:      trustLoopback,
+		Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000) },
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	held := make([]*websocket.Conn, 0, 16)
+	for i := range 16 {
+		ws, _, typ := holdFrom(t, ctx, srv, "2001:db8:1:2::"+strconv.Itoa(i+1))
+		if typ != wire.TypeChallenge {
+			t.Fatalf("handshake %d from the /64 got %q, want a challenge", i+1, typ)
+		}
+		held = append(held, ws)
+	}
+	if _, ref, typ := holdFrom(t, ctx, srv, "2001:db8:1:2::ffff"); typ != wire.TypeRefuse || ref.Code != wire.RefuseRateLimited || ref.RetryAfterMs <= 0 {
+		t.Fatalf("a 17th handshake from the same /64 got %q %+v, want rate_limited with retryAfterMs", typ, ref)
+	}
+	if _, _, typ := holdFrom(t, ctx, srv, "2001:db8:1:3::1"); typ != wire.TypeChallenge {
+		t.Fatalf("a handshake from another /64 got %q, want a challenge", typ)
+	}
+
+	// Closing a held handshake gives its address's count back.
+	_ = held[0].CloseNow()
+	waitFor(t, "the /64 to get a slot back", func() bool {
+		ws, _, typ := firstMessageFrom(t, ctx, srv, "2001:db8:1:2::ffff")
+		_ = ws.CloseNow()
+		return typ == wire.TypeChallenge
+	})
+
+	// An IPv4-mapped address and its IPv4 address share one count.
+	for i := range 16 {
+		addr := "198.51.100.9"
+		if i%2 == 0 {
+			addr = "::ffff:198.51.100.9"
+		}
+		if _, _, typ := holdFrom(t, ctx, srv, addr); typ != wire.TypeChallenge {
+			t.Fatalf("handshake %d from 198.51.100.9 got %q, want a challenge", i+1, typ)
+		}
+	}
+	for _, addr := range []string{"198.51.100.9", "::ffff:198.51.100.9"} {
+		if _, ref, typ := holdFrom(t, ctx, srv, addr); typ != wire.TypeRefuse || ref.Code != wire.RefuseRateLimited {
+			t.Fatalf("a 17th handshake from %s got %q %+v, want rate_limited: the mapped and plain forms are one address", addr, typ, ref)
+		}
+	}
+}
+
+// X-Forwarded-For names the client only when the peer is a trusted proxy (D-51,
+// T-02-126). From any other peer it is just a header, so sixteen different values
+// are still one address, the peer's.
+func TestAForwardedForHeaderFromAnUntrustedPeerDoesNotBuyMoreHandshakes(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{
+		Wrap: func(next http.Handler) http.Handler { return httpx.ClientIPMiddleware(nil)(next) },
+		Configure: func(h *tunnel.Hub) *tunnel.Hub {
+			return h.WithConnectLimit(1000)
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for i := range 16 {
+		if _, _, typ := holdFrom(t, ctx, srv, "198.51.100."+strconv.Itoa(i+1)); typ != wire.TypeChallenge {
+			t.Fatalf("handshake %d got %q, want a challenge", i+1, typ)
+		}
+	}
+	if _, ref, typ := holdFrom(t, ctx, srv, "198.51.100.200"); typ != wire.TypeRefuse || ref.Code != wire.RefuseRateLimited || ref.RetryAfterMs <= 0 {
+		t.Fatalf("a 17th handshake with yet another X-Forwarded-For got %q %+v, want rate_limited: the header of an untrusted peer counts for nothing", typ, ref)
 	}
 }
 
