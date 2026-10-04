@@ -87,6 +87,14 @@ type FakeConfig struct {
 	SwarmState string
 	// SwarmControl is Info.Swarm.ControlAvailable.
 	SwarmControl bool
+	// EngineID is Info.ID. Default "FAKE:ID".
+	EngineID string
+	// SwarmNodeID is Info.Swarm.NodeID.
+	SwarmNodeID string
+	// SwarmClusterID is Info.Swarm.Cluster.ID; empty leaves Cluster unset, as an
+	// engine outside a swarm reports it. A real worker leaves it unset too, which a
+	// fake worker does not do unless this is empty.
+	SwarmClusterID string
 	// FailInfo makes /info answer 500, for the partial-failure path.
 	FailInfo bool
 
@@ -263,6 +271,7 @@ func (c FakeConfig) withDefaults() FakeConfig {
 	def(&c.Hostname, "fake-node")
 	def(&c.OperatingSystem, "Ubuntu 26.04 LTS")
 	def(&c.SwarmState, "inactive")
+	def(&c.EngineID, "FAKE:ID")
 	if len(c.Components) == 0 {
 		c.Components = []Component{{Name: "Engine", Version: c.Version}}
 	}
@@ -479,7 +488,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, system.Info{
-			ID:              "FAKE:ID",
+			ID:              cfg.EngineID,
 			Name:            cfg.Hostname,
 			ServerVersion:   cfg.Version,
 			OperatingSystem: cfg.OperatingSystem,
@@ -490,10 +499,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			NCPU:            4,
 			MemTotal:        8 << 30,
 			SecurityOptions: cfg.SecurityOptions,
-			Swarm: swarm.Info{
-				LocalNodeState:   swarm.LocalNodeState(cfg.SwarmState),
-				ControlAvailable: cfg.SwarmControl,
-			},
+			Swarm:           cfg.swarmInfo(),
 		})
 	case "/events":
 		f.serveEvents(w, r)
@@ -588,6 +594,19 @@ func (f *Fake) serveInspect(w http.ResponseWriter, id string, cfg FakeConfig) {
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(name), MaximumRetryCount: max},
 		},
 	})
+}
+
+// swarmInfo is Info.Swarm: the state, the node ID and the cluster ID when one is set.
+func (c FakeConfig) swarmInfo() swarm.Info {
+	info := swarm.Info{
+		NodeID:           c.SwarmNodeID,
+		LocalNodeState:   swarm.LocalNodeState(c.SwarmState),
+		ControlAvailable: c.SwarmControl,
+	}
+	if c.SwarmClusterID != "" {
+		info.Cluster = &swarm.ClusterInfo{ID: c.SwarmClusterID}
+	}
+	return info
 }
 
 func (c FakeConfig) swarmManager() bool { return c.SwarmState == "active" && c.SwarmControl }

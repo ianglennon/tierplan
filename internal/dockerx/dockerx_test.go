@@ -256,6 +256,30 @@ func TestProbeLabelsTheSwarmRole(t *testing.T) {
 	}
 }
 
+func TestProbeReportsTheEngineIDTheSwarmNodeIDAndOnAManagerTheClusterID(t *testing.T) {
+	cases := []struct {
+		name                     string
+		cfg                      dockertest.FakeConfig
+		wantEngine, wantNode     string
+		wantCluster, description string
+	}{
+		{"standalone", dockertest.FakeConfig{EngineID: "ENG:solo"}, "ENG:solo", "", "", "a host outside any swarm has an engine ID and nothing else"},
+		{"manager", dockertest.FakeConfig{EngineID: "ENG:m", SwarmState: "active", SwarmControl: true, SwarmNodeID: "node-m", SwarmClusterID: "cluster-1"}, "ENG:m", "node-m", "cluster-1", "a manager reports its node and its cluster"},
+		{"worker", dockertest.FakeConfig{EngineID: "ENG:w", SwarmState: "active", SwarmNodeID: "node-w", SwarmClusterID: "cluster-1"}, "ENG:w", "node-w", "", "a worker's cluster ID is never kept, as the agent drops it"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := newClient(t, dockertest.NewFake(t, c.cfg)).Probe(context.Background())
+			if err != nil {
+				t.Fatalf("Probe: %v", err)
+			}
+			if res.EngineID != c.wantEngine || res.SwarmNodeID != c.wantNode || res.SwarmClusterID != c.wantCluster {
+				t.Errorf("engine %q node %q cluster %q, want %q %q %q (%s)", res.EngineID, res.SwarmNodeID, res.SwarmClusterID, c.wantEngine, c.wantNode, c.wantCluster, c.description)
+			}
+		})
+	}
+}
+
 type failingTransport struct{ path string }
 
 func (f failingTransport) DialContext(_ context.Context, _, _ string) (net.Conn, error) {
