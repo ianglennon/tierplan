@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+import { defineConfig, devices } from "@playwright/test";
+
+// The copy fallback only breaks on an insecure context (plain http by a name
+// that is not localhost), and jsdom cannot show it: its select() never moves
+// focus. So this suite runs a real Chromium against a test page served by Vite
+// at http://bayplan.test, a name the browser maps to 127.0.0.1. It is separate
+// from the ordered Docker-stack suite in playwright.config.ts.
+const PORT = process.env.BAYPLAN_COPY_HARNESS_PORT ?? "5179";
+
+export default defineConfig({
+  testDir: "./copy",
+  workers: 1,
+  forbidOnly: Boolean(process.env.CI),
+  reporter: [["list"]],
+  outputDir: "../.devdata/playwright-copy-results",
+  use: {
+    ...devices["Desktop Chrome"],
+    baseURL: `http://bayplan.test:${PORT}`,
+    launchOptions: {
+      args: ["--host-resolver-rules=MAP bayplan.test 127.0.0.1"],
+    },
+  },
+  webServer: {
+    command: `pnpm -C ../web exec vite --config vite.harness.config.ts --host 127.0.0.1 --port ${PORT} --strictPort`,
+    url: `http://127.0.0.1:${PORT}/`,
+    reuseExistingServer: !process.env.CI,
+    timeout: 60_000,
+  },
+});
