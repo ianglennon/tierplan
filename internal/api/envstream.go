@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -63,6 +64,10 @@ type EnvStreamDeps struct {
 //   - failover: FromAgentID, FromNode, ToAgentID, ToNode. A read of the cluster
 //     stopped being answered by a manager and went to another; the environment shows
 //     degraded until the first is back (D-43)
+//   - proxy.warning: Kind (untrusted_forwarded, url_mismatch or websocket_failing),
+//     with an empty EnvID. A kind of reverse proxy problem has appeared; only a
+//     caller who holds settings.read is sent it, and the bell reads
+//     GET /api/warnings again (D-53)
 //
 // The first frame is named snapshot, has no id and carries {"items": [...]} with
 // every environment the caller may read.
@@ -82,6 +87,7 @@ type EnvStreamEventBody struct {
 	FromNode    string           `json:"fromNode,omitempty"`
 	ToAgentID   string           `json:"toAgentId,omitempty"`
 	ToNode      string           `json:"toNode,omitempty"`
+	Kind        string           `json:"kind,omitempty"`
 }
 
 // envStreamEventBody maps a broker event to what the stream sends, or reports
@@ -100,6 +106,8 @@ func envStreamEventBody(ev envs.HealthEvent) (EnvStreamEventBody, bool) {
 		body.Code, body.Mode, body.Node, body.IP = d.Code, d.Mode, d.Node, d.IP
 	case envs.FailoverData:
 		body.FromAgentID, body.FromNode, body.ToAgentID, body.ToNode = d.FromAgentID, d.FromNode, d.ToAgentID, d.ToNode
+	case envs.ProxyWarningData:
+		body.Kind = d.Kind
 	default:
 		return EnvStreamEventBody{}, false
 	}
@@ -140,7 +148,9 @@ func RegisterEnvStream(r *httpx.Router, d EnvStreamDeps) {
 // httpx.StillAuthorized and works out again which environments the caller may read,
 // so a sign-out, a disabled user and a withdrawn grant end or narrow the stream
 // within one ping (WR-02, T-02-46). An event for an environment the caller cannot
-// read is never written, and an event with no environment is not sent to anyone.
+// read is never written, and an event with no environment is sent only when it
+// is a proxy warning and the caller holds settings.read, the permission that lets
+// them read the same warnings from GET /api/warnings.
 func serveEnvStream(w http.ResponseWriter, req *http.Request, d EnvStreamDeps, lim *streamLimiter) {
 	ctx := req.Context()
 	p := httpx.PrincipalFrom(ctx)
@@ -156,8 +166,12 @@ func serveEnvStream(w http.ResponseWriter, req *http.Request, d EnvStreamDeps, l
 	}
 	defer release()
 
+	// readable is what the caller may read now: per environment, and whether they
+	// hold settings.read, which is what a proxy warning needs.
+	var settingsRead bool
 	readable := func() (map[string][]rbac.Perm, error) {
-		_, perEnv, err := d.Checker.EffectivePermissions(ctx, p)
+		global, perEnv, err := d.Checker.EffectivePermissions(ctx, p)
+		settingsRead = slices.Contains(global, rbac.PermSettingsRead)
 		return perEnv, err
 	}
 	perEnv, err := readable()
@@ -214,7 +228,12 @@ func serveEnvStream(w http.ResponseWriter, req *http.Request, d EnvStreamDeps, l
 	}
 
 	send := func(ev envs.HealthEvent) bool {
-		if ev.EnvID == "" || !canRead(perEnv, ev.EnvID) {
+		switch {
+		case ev.EnvID == "" && ev.Type == envs.EventProxyWarning:
+			if !settingsRead {
+				return true
+			}
+		case ev.EnvID == "" || !canRead(perEnv, ev.EnvID):
 			return true
 		}
 		body, ok := envStreamEventBody(ev)

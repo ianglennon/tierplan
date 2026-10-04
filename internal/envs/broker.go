@@ -18,8 +18,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
-// Types of the events on the health stream (D-36, D-37). failover and
-// proxy.warning are reserved: later plans publish them on the same stream.
+// Types of the events on the health stream (D-36, D-37). proxy.warning belongs to
+// no environment (D-53).
 const (
 	EventEnvStatus         = "env.status"
 	EventAgentConnected    = "agent.connected"
@@ -97,6 +97,20 @@ type AgentRefusedData struct {
 type FailoverData struct {
 	FromAgentID, FromNode string
 	ToAgentID, ToNode     string
+}
+
+// ProxyWarningData is the data of a proxy.warning event: a kind of reverse proxy
+// problem (the httpx.Signal kinds) that has just appeared. The event belongs to no
+// environment; the stream shows it to whoever holds settings.read.
+type ProxyWarningData struct {
+	Kind string
+}
+
+// PublishProxyWarning announces that a kind of proxy problem has appeared, so an
+// open bell reads the warnings again at once. kind is cleaned and cut like any
+// other text on the stream.
+func (b *Broker) PublishProxyWarning(kind string) {
+	b.Publish(HealthEvent{Type: EventProxyWarning, Data: ProxyWarningData{Kind: cleanText(kind, maxEventText)}})
 }
 
 // healthSub is one subscriber's channel.

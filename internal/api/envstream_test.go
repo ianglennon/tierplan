@@ -40,6 +40,7 @@ type streamEvent struct {
 	FromNode    string        `json:"fromNode"`
 	ToAgentID   string        `json:"toAgentId"`
 	ToNode      string        `json:"toNode"`
+	Kind        string        `json:"kind"`
 }
 
 type snapshotBody struct {
@@ -314,5 +315,44 @@ func TestEnvStreamDeliversAManagerFailoverToAnAdminWatching(t *testing.T) {
 	fr, ev := nextOf(t, c, "failover")
 	if fr.id == "" || ev.EnvID != env.ID || ev.FromAgentID != "a1" || ev.FromNode != "mgr-2" || ev.ToAgentID != "a2" || ev.ToNode != "mgr-1" || ev.At == "" {
 		t.Fatalf("failover = %+v (id %q), want mgr-2 to mgr-1 for %s with a time", ev, fr.id, env.ID)
+	}
+}
+
+func TestEnvStreamDeliversAProxyWarningToWhoeverHoldsSettingsReadAndToNobodyElse(t *testing.T) {
+	f := newAgentFix(t)
+	f.envStreamHeartbeat = 20 * time.Millisecond
+	f.h = f.build(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	f.addUser(t, "viewer", false)
+	f.grantRead(t, "viewer", env.ID)
+	viewer, _ := f.signIn(t, "viewer", false)
+	f.addUser(t, "nobody", false)
+	nobody, _ := f.signIn(t, "nobody", false)
+
+	admin := f.openEnvStream(t, f.cookie, "")
+	reader := f.openEnvStream(t, viewer, "")
+	none := f.openEnvStream(t, nobody, "")
+	for _, c := range []*sseConn{admin, reader, none} {
+		nextFrame(t, c) // the snapshot
+	}
+
+	f.brk.PublishProxyWarning("url_mismatch")
+	// An event the viewer may see, after the warning, shows where the warning would have been.
+	f.brk.Publish(refused(env.ID, "198.51.100.2"))
+
+	fr, ev := nextOf(t, admin, "proxy.warning")
+	if fr.id == "" || ev.EnvID != "" || ev.Kind != "url_mismatch" || ev.At == "" {
+		t.Fatalf("proxy.warning = %+v (id %q), want kind url_mismatch, no environment and a time", ev, fr.id)
+	}
+	for name, c := range map[string]*sseConn{"an environments.read viewer": reader, "a user with no grant": none} {
+		for {
+			got, ok := c.next(150 * time.Millisecond)
+			if !ok {
+				break
+			}
+			if got.event == "proxy.warning" {
+				t.Fatalf("%s received a proxy.warning: %+v", name, got)
+			}
+		}
 	}
 }

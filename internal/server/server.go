@@ -322,8 +322,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.
 	broker := envs.NewBroker(envSvc, nil)
+	// The proxy observer notices a reverse proxy that is misconfigured from the
+	// requests it carries and from agent endpoint requests that are not upgrades,
+	// remembers it for an hour and tells the open bells when a kind appears (D-53).
+	proxyObs := httpx.NewProxyObserver(inst.PublicURL, nil).OnNew(broker.PublishProxyWarning)
 	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
 		WithNotifier(broker).
+		OnUpgradeFailure(proxyObs.RecordUpgradeFailure).
 		// The hub checks each handshake against the address agents are told to dial:
 		// the agent URL when one is set, else the public URL (D-18).
 		WithPublicURL(inst.AgentBase).
@@ -377,6 +382,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Auditor:        anonAudit,
 		MutationGuard:  auth.NewCSRFGuard(sessions),
 		TrustedProxies: cfg.TrustedProxies,
+		Proxy:          proxyObs,
 		PublicOrigin:   inst.PublicOrigin,
 		Logger:         log,
 		// Strict-Transport-Security when the request came over TLS or the
@@ -415,6 +421,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Audit:    aud,
 		DataDir:  info,
 		Vault:    vlt,
+		Proxy:    proxyObs,
 		// Five password-change attempts per user at once, then one every 12
 		// seconds (T-01-60): ample for a person, slow for a guesser.
 		Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),

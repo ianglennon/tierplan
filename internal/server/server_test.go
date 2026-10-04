@@ -434,6 +434,95 @@ func TestBuildSignsInWithTheSessionAuthenticatorAndCSRFGuard(t *testing.T) {
 	}
 }
 
+// A reverse proxy that is not in BAYPLAN_TRUSTED_PROXIES shows up in the bell, and
+// one that is does not (plan 02-25, D-51, D-53).
+func TestBuildReportsForwardedHeadersFromAPeerThatIsNotATrustedProxy(t *testing.T) {
+	build := func(trusted string) (*Server, *http.Cookie) {
+		env := map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}
+		if trusted != "" {
+			env["BAYPLAN_TRUSTED_PROXIES"] = trusted
+		}
+		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = srv.Close() })
+		const password = "correct horse battery"
+		hash, err := auth.HashPassword(password)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		tx, err := srv.Store().Write.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		now := time.Now().UnixNano()
+		if err := srv.Store().Q.WithTx(tx).InsertUser(ctx, sqlc.InsertUserParams{
+			ID: "u1", Username: "admin", PasswordHash: hash, CreatedAt: now, UpdatedAt: now, PasswordChangedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := rbac.AssignGlobalRole(ctx, tx, srv.Store().Q, rbac.PrincipalUser, "u1", rbac.AdminRoleID); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"username":"admin","password":"`+password+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || len(rec.Result().Cookies()) != 1 {
+			t.Fatalf("login: %d %s", rec.Code, rec.Body)
+		}
+		return srv, rec.Result().Cookies()[0]
+	}
+	warnings := func(srv *Server, cookie *http.Cookie, forwarded bool) []string {
+		req := httptest.NewRequest(http.MethodGet, "/api/warnings", nil)
+		req.AddCookie(cookie)
+		if forwarded {
+			req.Header.Set("X-Forwarded-For", "203.0.113.9")
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		var body struct {
+			Items []struct {
+				ID string `json:"id"`
+				IP string `json:"ip"`
+			} `json:"items"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil {
+			t.Fatalf("GET /api/warnings: %d %s", rec.Code, rec.Body)
+		}
+		var out []string
+		for _, it := range body.Items {
+			if strings.HasPrefix(it.ID, "proxy_") {
+				out = append(out, it.ID+"@"+it.IP)
+			}
+		}
+		return out
+	}
+
+	srv, cookie := build("")
+	if got := warnings(srv, cookie, false); len(got) != 0 {
+		t.Fatalf("without any forwarded header: %v, want no proxy warning", got)
+	}
+	// httptest requests come from 192.0.2.1. The first request carries the header
+	// and is recorded as it passes; the second one reads it back.
+	warnings(srv, cookie, true)
+	if got := warnings(srv, cookie, false); len(got) != 1 || got[0] != "proxy_untrusted_forwarded@192.0.2.1" {
+		t.Fatalf("after a request with X-Forwarded-For from an untrusted peer: %v, want proxy_untrusted_forwarded naming 192.0.2.1", got)
+	}
+
+	srv, cookie = build("192.0.2.0/24")
+	warnings(srv, cookie, true)
+	if got := warnings(srv, cookie, false); len(got) != 0 {
+		t.Fatalf("from a trusted proxy: %v, want no proxy warning", got)
+	}
+}
+
 // Environments (plan 16): the local host is managed only after an admin opts
 // in, and a restart picks the environment up again and resumes monitoring it.
 func TestBuildAddsNoEnvironmentAndNeverContactsDockerUntilAnAdminOptsIn(t *testing.T) {

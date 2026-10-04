@@ -328,7 +328,7 @@ func TestOneRequestCanRecordSeveralKinds(t *testing.T) {
 	rig.send(probe{peer: "198.51.100.7:5000", host: "other.example.com", headers: map[string]string{"X-Forwarded-For": "203.0.113.9"}})
 	got := kinds(rig.obs.Signals())
 	slices.Sort(got)
-	if !slices.Equal(got, []string{SignalURLMismatch, SignalUntrustedForwarded}) {
+	if !slices.Equal(got, []string{SignalUntrustedForwarded, SignalURLMismatch}) {
 		t.Fatalf("kinds = %v, want url_mismatch and untrusted_forwarded", got)
 	}
 }

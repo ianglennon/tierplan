@@ -146,12 +146,10 @@ func (h *Hub) audience() (aud string, plainOK bool, err error) {
 }
 
 // secureTransport reports whether the connection reached Bayplan over TLS, either
-// directly or through a proxy Bayplan trusts to say so.
+// directly or through a proxy Bayplan trusts to say so: the effective scheme
+// believes X-Forwarded-Proto from a trusted peer and from nobody else (D-51).
 func secureTransport(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	return httpx.PeerTrusted(r.Context()) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return r.TLS != nil || httpx.EffectiveScheme(r.Context()) == "https"
 }
 
 func isWebSocketUpgrade(r *http.Request) bool {

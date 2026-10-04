@@ -154,6 +154,31 @@ func TestAnUpgradeFailureRunsTheHookWithThePeerAndAnswers426(t *testing.T) {
 	}
 }
 
+func TestAnUpgradeFailureIsRecordedByTheProxyObserverAndAnOriginRefusalIsNot(t *testing.T) {
+	obs := httpx.NewProxyObserver(func() string { return "" }, nil)
+	ts, _ := plainServer(t, "http", false, func(h *tunnel.Hub) *tunnel.Hub { return h.OnUpgradeFailure(obs.RecordUpgradeFailure) })
+
+	if status, _ := upgradeRequest(t, ts.URL, map[string]string{"Origin": "https://evil.example"}); status != http.StatusForbidden {
+		t.Fatalf("a browser request answered %d, want 403", status)
+	}
+	if got := obs.Signals(); len(got) != 0 {
+		t.Fatalf("a browser's request to the agent endpoint recorded %+v, want nothing: it is not a proxy fault", got)
+	}
+
+	resp, err := http.Get(ts.URL + "/agent/connect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUpgradeRequired {
+		t.Fatalf("status %d, want 426", resp.StatusCode)
+	}
+	got := obs.Signals()
+	if len(got) != 1 || got[0].Kind != httpx.SignalWebSocketFailing || got[0].Peer != "127.0.0.1" {
+		t.Fatalf("signals = %+v, want one websocket_failing from 127.0.0.1", got)
+	}
+}
+
 func TestInsecureTransportIsRefusedUnlessTrustedProxyOrAllowedByTheOperator(t *testing.T) {
 	cases := []struct {
 		name      string
