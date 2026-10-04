@@ -244,6 +244,78 @@ func firstMessage(t *testing.T, ctx context.Context, srv *tunneltest.Server) (*w
 	return ws, ref, head.T
 }
 
+// firstMessageFrom is firstMessage for a caller that says, in X-Forwarded-For,
+// which address it comes from. The header counts only behind a client-address
+// middleware that trusts the peer (trustLoopback).
+func firstMessageFrom(t *testing.T, ctx context.Context, srv *tunneltest.Server, xff string) (*websocket.Conn, wire.Refuse, string) {
+	t.Helper()
+	opts := &websocket.DialOptions{HTTPClient: srv.HTTP.Client(), Subprotocols: []string{wire.Subprotocol}}
+	if xff != "" {
+		opts.HTTPHeader = http.Header{"X-Forwarded-For": []string{xff}}
+	}
+	ws, _, err := websocket.Dial(ctx, srv.URL(), opts) //nolint:bodyclose // a WebSocket upgrade response has no body to close
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	_, data, err := ws.Read(ctx)
+	if err != nil {
+		_ = ws.CloseNow()
+		t.Fatalf("read the first message: %v", err)
+	}
+	var head struct{ T string }
+	_ = json.Unmarshal(data, &head)
+	var ref wire.Refuse
+	if head.T == wire.TypeRefuse {
+		_ = json.Unmarshal(data, &ref)
+	}
+	return ws, ref, head.T
+}
+
+// TestOneAddressCannotHoldEveryHandshakeSlot is the regression for T-02-24 and
+// WR-B-02. A client that upgrades, reads the challenge and never answers holds one
+// of the 64 handshake slots; before the per-address cap one address could hold
+// them all, and every enrolled agent's reconnect was refused rate_limited for as
+// long as it kept going.
+func TestOneAddressCannotHoldEveryHandshakeSlot(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{
+		Wrap:      trustLoopback,
+		Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000) },
+	})
+	env := srv.NewEnvironment(t, "Production")
+	id := enrolled(t, srv, env)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var challenged, refused int
+	for i := range 64 {
+		ws, ref, typ := firstMessageFrom(t, ctx, srv, "198.51.100.7")
+		switch typ {
+		case wire.TypeChallenge:
+			challenged++
+			t.Cleanup(func() { _ = ws.CloseNow() }) // silent: it never answers, it holds its slot
+		case wire.TypeRefuse:
+			refused++
+			_ = ws.CloseNow()
+			if ref.Code != wire.RefuseRateLimited || ref.RetryAfterMs <= 0 {
+				t.Errorf("flood handshake %d refused as %+v, want rate_limited with retryAfterMs", i+1, ref)
+			}
+		default:
+			_ = ws.CloseNow()
+			t.Fatalf("flood handshake %d got %q", i+1, typ)
+		}
+	}
+	if challenged != 16 || refused != 48 {
+		t.Errorf("a silent flood from one address got %d challenges and %d refusals of 64, want 16 and 48", challenged, refused)
+	}
+
+	// The enrolled agent comes from another address and is not the flood's problem.
+	c := srv.Hello(t, id)
+	if c.Welcome == nil {
+		t.Fatalf("the enrolled agent was not welcomed during the flood: %+v (err %v)", c.Refuse, c.Err)
+	}
+	waitFor(t, "the enrolled agent's session", func() bool { return srv.Hub.Session(id.AgentID) != nil })
+}
+
 func TestConcurrentHandshakeCapRefusesThe65thWithRateLimitedAndARetryAfter(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithConnectLimit(1000) }})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
