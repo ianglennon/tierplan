@@ -100,6 +100,8 @@ type Options struct {
 	// hold a handshake between its verification and the registration of the session.
 	// The wrapper must pass StillActive through.
 	Verifier func(real tunnel.Verifier) tunnel.Verifier
+	// Log is where the hub logs, so a test can read what it wrote. Nil discards it.
+	Log *slog.Logger
 }
 
 // Server is a running in-process Bayplan tunnel endpoint.
@@ -232,7 +234,11 @@ func Start(t *testing.T, opts Options) *Server {
 	if opts.Verifier != nil {
 		verifier = opts.Verifier(svc)
 	}
-	hub := tunnel.NewHub(verifier, rec, log, clock.Now).WithPublicURL(func() string { return "https://" + addr }).WithLastSeen(svc)
+	hubLog := log
+	if opts.Log != nil {
+		hubLog = opts.Log
+	}
+	hub := tunnel.NewHub(verifier, rec, hubLog, clock.Now).WithPublicURL(func() string { return "https://" + addr }).WithLastSeen(svc)
 	if opts.Notifier != nil {
 		hub = hub.WithNotifier(opts.Notifier)
 	}

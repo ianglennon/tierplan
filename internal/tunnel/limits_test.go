@@ -56,10 +56,17 @@ func (a *auditSink) all() []audit.Entry {
 // fake verifier.
 func plainServer(t *testing.T, publicScheme string, trustLoopback bool, configure func(*tunnel.Hub) *tunnel.Hub) (*httptest.Server, *fakeVerifier) {
 	t.Helper()
+	return loggedPlainServer(t, publicScheme, trustLoopback, slog.New(slog.DiscardHandler), nil, configure)
+}
+
+// loggedPlainServer is plainServer with the hub's logger and clock chosen by the
+// test, for a test that reads what the hub wrote or moves time.
+func loggedPlainServer(t *testing.T, publicScheme string, trustLoopback bool, log *slog.Logger, now func() time.Time, configure func(*tunnel.Hub) *tunnel.Hub) (*httptest.Server, *fakeVerifier) {
+	t.Helper()
 	v := &fakeVerifier{}
 	ts := httptest.NewUnstartedServer(nil)
 	addr := ts.Listener.Addr().String()
-	hub := tunnel.NewHub(v, newObserver(), slog.New(slog.DiscardHandler), nil).
+	hub := tunnel.NewHub(v, newObserver(), log, now).
 		WithPublicURL(func() string { return publicScheme + "://" + addr })
 	if configure != nil {
 		hub = configure(hub)
@@ -78,6 +85,78 @@ func plainServer(t *testing.T, publicScheme string, trustLoopback bool, configur
 		ts.Close()
 	})
 	return ts, v
+}
+
+// logRecord is one record a recordingHandler kept.
+type logRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]string
+}
+
+// recordingHandler keeps every record it is given, safe for concurrent use. The
+// attributes of a handler made with WithAttrs and of a group are kept flat.
+type recordingHandler struct {
+	mu      *sync.Mutex
+	records *[]logRecord
+	attrs   map[string]string
+}
+
+func newRecordingLogger() (*slog.Logger, *recordingHandler) {
+	h := &recordingHandler{mu: &sync.Mutex{}, records: &[]logRecord{}, attrs: map[string]string{}}
+	return slog.New(h), h
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	rec := logRecord{level: r.Level, msg: r.Message, attrs: map[string]string{}}
+	for k, v := range h.attrs {
+		rec.attrs[k] = v
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		rec.attrs[a.Key] = a.Value.String()
+		return true
+	})
+	h.mu.Lock()
+	*h.records = append(*h.records, rec)
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs(as []slog.Attr) slog.Handler {
+	n := &recordingHandler{mu: h.mu, records: h.records, attrs: map[string]string{}}
+	for k, v := range h.attrs {
+		n.attrs[k] = v
+	}
+	for _, a := range as {
+		n.attrs[a.Key] = a.Value.String()
+	}
+	return n
+}
+
+func (h *recordingHandler) WithGroup(string) slog.Handler { return h }
+
+// first is the first of rs, or the zero record, so a failure message shows one
+// record and not a hundred.
+func first(rs []logRecord) logRecord {
+	if len(rs) == 0 {
+		return logRecord{}
+	}
+	return rs[0]
+}
+
+// containing returns the records whose message contains substr.
+func (h *recordingHandler) containing(substr string) []logRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []logRecord
+	for _, r := range *h.records {
+		if strings.Contains(r.msg, substr) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // upgradeRequest sends an upgrade request and returns the status and, when the
@@ -555,6 +634,128 @@ func TestWithFirstFrameTimeoutReplacesTheDeadlineOnlyWhenPositive(t *testing.T) 
 	for _, d := range []time.Duration{0, -time.Second} {
 		if elapsed, ok := dropped(t, d, 1500*time.Millisecond); ok {
 			t.Errorf("with a deadline of %s a silent handshake was dropped after %s, want the 3 s default", d, elapsed)
+		}
+	}
+}
+
+// getFrom is a plain GET of the agent endpoint that says, in X-Forwarded-For, which
+// address it comes from.
+func getFrom(t *testing.T, url, xff string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url+"/agent/connect", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Forwarded-For", xff)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// These lines are written before a request is admitted, so a caller could
+// otherwise fill the log with them for the price of a GET (IN-B-02, T-02-124). The
+// proxy observer, which reads the same requests as a misconfiguration signal, must
+// still hear every one (D-53).
+func TestPreAdmissionWarningsAreWrittenOncePerAddressPerMinute(t *testing.T) {
+	log, rec := newRecordingLogger()
+	clock := tunneltest.NewClock(time.Now())
+	var mu sync.Mutex
+	hooked := 0
+	ts, _ := loggedPlainServer(t, "http", true, log, clock.Now, func(h *tunnel.Hub) *tunnel.Hub {
+		return h.OnUpgradeFailure(func(string) {
+			mu.Lock()
+			hooked++
+			mu.Unlock()
+		})
+	})
+	const notUpgrade = "without a WebSocket upgrade"
+
+	for range 50 {
+		if status := getFrom(t, ts.URL, "198.51.100.7"); status != http.StatusUpgradeRequired {
+			t.Fatalf("status %d, want 426", status)
+		}
+	}
+	if got := rec.containing(notUpgrade); len(got) != 1 || got[0].level != slog.LevelWarn || got[0].attrs["ip"] != "198.51.100.7" {
+		t.Fatalf("50 requests from one address wrote %d records (first: %+v), want exactly one WARN naming 198.51.100.7", len(got), first(got))
+	}
+	mu.Lock()
+	if hooked != 50 {
+		t.Errorf("the upgrade-failure hook ran %d times for 50 requests, want 50: the proxy observer must hear every one", hooked)
+	}
+	mu.Unlock()
+
+	if getFrom(t, ts.URL, "198.51.100.8"); len(rec.containing(notUpgrade)) != 2 {
+		t.Errorf("a second address wrote %d records in all, want its own record (2)", len(rec.containing(notUpgrade)))
+	}
+
+	clock.Advance(61 * time.Second)
+	getFrom(t, ts.URL, "198.51.100.7")
+	if got := len(rec.containing(notUpgrade)); got != 3 {
+		t.Errorf("a request 61 s later left %d records in all, want one more (3)", got)
+	}
+}
+
+func TestPlainTransportWarningsAreWrittenOncePerAddressPerMinute(t *testing.T) {
+	t.Run("accepted over plain HTTP", func(t *testing.T) {
+		log, rec := newRecordingLogger()
+		ts, _ := loggedPlainServer(t, "http", false, log, nil, nil)
+		for range 20 {
+			if status, _ := upgradeRequest(t, ts.URL, nil); status != http.StatusSwitchingProtocols {
+				t.Fatalf("status %d, want 101", status)
+			}
+		}
+		if got := rec.containing("connected over plain HTTP"); len(got) != 1 || got[0].level != slog.LevelWarn {
+			t.Fatalf("20 plain upgrades wrote %d records (first: %+v), want exactly one WARN", len(got), first(got))
+		}
+	})
+	t.Run("refused over plain HTTP", func(t *testing.T) {
+		log, rec := newRecordingLogger()
+		ts, _ := loggedPlainServer(t, "https", false, log, nil, nil)
+		for range 20 {
+			status, body := upgradeRequest(t, ts.URL, nil)
+			if status != http.StatusForbidden || !strings.Contains(body, wire.RefuseInsecureTransport) {
+				t.Fatalf("status %d (%s), want 403 insecure_transport", status, body)
+			}
+		}
+		if got := rec.containing("did not arrive over TLS"); len(got) != 1 || got[0].level != slog.LevelWarn {
+			t.Fatalf("20 refused plain upgrades wrote %d records (first: %+v), want exactly one WARN", len(got), first(got))
+		}
+	})
+}
+
+// What an agent says about itself is untrusted input and goes into a log line
+// before anything about it is believed (T-02-125).
+func TestHandshakeLogLinesClipTheAgentsAudienceAndMode(t *testing.T) {
+	log, rec := newRecordingLogger()
+	srv := tunneltest.Start(t, tunneltest.Options{Log: log})
+	env := srv.NewEnvironment(t, "Production")
+
+	c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Aud: strings.Repeat("a", 4000)})
+	if c.Refuse == nil || c.Refuse.Code != wire.ReasonAuthRejected {
+		t.Fatalf("a handshake with a 4000-byte audience: %+v (err %v), want auth_rejected", c.Refuse, c.Err)
+	}
+	got := rec.containing("addressed to a different host")
+	if len(got) != 1 {
+		t.Fatalf("%d wrong-audience records, want 1", len(got))
+	}
+	if n := len(got[0].attrs["audience"]); n == 0 || n > 256 {
+		t.Errorf("the audience in the log line is %d bytes, want 1 to 256", n)
+	}
+
+	c = srv.Dial(t, tunneltest.Agent{Token: env.Token, Mode: strings.Repeat("m", 4000)})
+	if c.Refuse == nil {
+		t.Fatalf("a handshake with a 4000-byte mode: %+v (err %v), want a refusal", c.Refuse, c.Err)
+	}
+	got = rec.containing("agent handshake refused")
+	if len(got) == 0 {
+		t.Fatal("no \"agent handshake refused\" record")
+	}
+	for _, r := range got {
+		if n := len(r.attrs["mode"]); n > 16 {
+			t.Errorf("the mode in the log line is %d bytes, want at most 16", n)
 		}
 	}
 }
