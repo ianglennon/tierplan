@@ -208,6 +208,69 @@ if [ "${LAST_OUT##*$'\n'}" != "403" ]; then
   failures=$((failures + 1))
 fi
 
+# --- Dev swarm DNS (G-02-2a): which DNS servers the inner dockerds get ---
+# dns_run <VAR=value...>: runs `dev-swarm.sh dns` with only the given DNS settings,
+# leaving stdout in DNS_OUT, stderr in DNS_ERR and the exit status in DNS_RC.
+dns_run() {
+  DNS_OUT="$(env -u DEV_SWARM_DNS -u DEV_SWARM_RESOLV_CONF -u DEV_SWARM_SYSTEMD_RESOLV_CONF "$@" \
+    scripts/dev-swarm.sh dns 2>"${scratch}/dns.err")"
+  DNS_RC=$?
+  DNS_ERR="$(cat "${scratch}/dns.err")"
+}
+# dns_want <name> <want-stdout> <VAR=value...>: exit 0 and exactly this stdout.
+dns_want() {
+  local name="$1" want="$2"
+  shift 2
+  dns_run "$@"
+  if [ "${DNS_RC}" -ne 0 ] || [ "${DNS_OUT}" != "${want}" ]; then
+    echo "SCRIPT TEST FAIL: ${name} (exit ${DNS_RC}; got '${DNS_OUT}', want '${want}')"
+    [ -n "${DNS_ERR}" ] && echo "${DNS_ERR}" | sed 's/^/    /'
+    failures=$((failures + 1))
+  fi
+}
+# dns_refused <name> <entry> <VAR=value...>: exit 2, naming the entry and DEV_SWARM_DNS.
+dns_refused() {
+  local name="$1" entry="$2"
+  shift 2
+  dns_run "$@"
+  if [ "${DNS_RC}" -ne 2 ] || ! grep -qF -- "${entry}" <<<"${DNS_ERR}" || ! grep -qF "DEV_SWARM_DNS" <<<"${DNS_ERR}"; then
+    echo "SCRIPT TEST FAIL: ${name} (want exit 2 naming '${entry}' and DEV_SWARM_DNS; exit ${DNS_RC}, stderr: ${DNS_ERR})"
+    failures=$((failures + 1))
+  fi
+}
+
+printf '# generated\nsearch home.test\nnameserver 192.168.1.1\nnameserver 127.0.0.1\nnameserver ::1\n' >"${scratch}/resolv-mixed.conf"
+printf 'nameserver 127.0.0.53\noptions edns0 trust-ad\nsearch home.test\n' >"${scratch}/resolv-stub.conf"
+printf '# systemd\nnameserver 192.168.2.251\nsearch home.test\n' >"${scratch}/resolv-systemd.conf"
+printf 'nameserver 127.0.0.1\nnameserver ::1\n' >"${scratch}/resolv-loopback.conf"
+
+dns_want "dns-explicit" "192.168.2.251" DEV_SWARM_DNS=192.168.2.251
+dns_want "dns-explicit-list" $'192.168.2.251\n10.0.0.53' "DEV_SWARM_DNS=192.168.2.251, 10.0.0.53"
+dns_want "dns-explicit-comma-only" $'192.168.2.251\n10.0.0.53' "DEV_SWARM_DNS=192.168.2.251,10.0.0.53"
+dns_want "dns-explicit-ipv6" "2001:db8::53" DEV_SWARM_DNS=2001:db8::53
+dns_refused "dns-refuse-loopback-v4" "127.0.0.1" DEV_SWARM_DNS=127.0.0.1
+dns_refused "dns-refuse-loopback-v6" "::1" DEV_SWARM_DNS=::1
+dns_refused "dns-refuse-flag" "--insecure-registry=x" DEV_SWARM_DNS=--insecure-registry=x
+dns_refused "dns-refuse-octet-range" "999.1.1.1" DEV_SWARM_DNS=999.1.1.1
+dns_refused "dns-refuse-zone-index" "fe80::1%eth0" "DEV_SWARM_DNS=fe80::1%eth0"
+dns_refused "dns-refuse-one-bad-in-list" "bad.example" "DEV_SWARM_DNS=192.168.2.251 bad.example"
+dns_want "dns-detect-resolv-conf" "192.168.1.1" "DEV_SWARM_RESOLV_CONF=${scratch}/resolv-mixed.conf" \
+  "DEV_SWARM_SYSTEMD_RESOLV_CONF=${scratch}/resolv-systemd.conf"
+dns_want "dns-detect-systemd-fallback" "192.168.2.251" "DEV_SWARM_RESOLV_CONF=${scratch}/resolv-stub.conf" \
+  "DEV_SWARM_SYSTEMD_RESOLV_CONF=${scratch}/resolv-systemd.conf"
+dns_want "dns-explicit-beats-detection" "10.9.8.7" DEV_SWARM_DNS=10.9.8.7 "DEV_SWARM_RESOLV_CONF=${scratch}/resolv-mixed.conf"
+
+for variant in loopback-only systemd-missing; do
+  case "${variant}" in
+    loopback-only) dns_run "DEV_SWARM_RESOLV_CONF=${scratch}/resolv-stub.conf" "DEV_SWARM_SYSTEMD_RESOLV_CONF=${scratch}/resolv-loopback.conf" ;;
+    systemd-missing) dns_run "DEV_SWARM_RESOLV_CONF=${scratch}/resolv-loopback.conf" "DEV_SWARM_SYSTEMD_RESOLV_CONF=${scratch}/no-such-file" ;;
+  esac
+  if [ "${DNS_RC}" -ne 0 ] || [ -n "${DNS_OUT}" ] || ! grep -qF "8.8.8.8" <<<"${DNS_ERR}" || ! grep -qF "DEV_SWARM_DNS" <<<"${DNS_ERR}"; then
+    echo "SCRIPT TEST FAIL: dns-none-found-${variant} (want exit 0, empty stdout, a warning naming 8.8.8.8 and DEV_SWARM_DNS; exit ${DNS_RC}, stdout '${DNS_OUT}', stderr '${DNS_ERR}')"
+    failures=$((failures + 1))
+  fi
+done
+
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"
   exit 1
