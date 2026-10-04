@@ -644,7 +644,7 @@ func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.
 		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
 		c := f.openStream(t, f.cookie, "")
 		actor := audit.Actor{Type: audit.ActorUser, ID: "id-admin", Name: "admin"}
-		if err := f.svc.Remove(context.Background(), actor, f.env.ID, authIP, authUA); err != nil {
+		if err := f.svc.Remove(context.Background(), actor, f.env.ID, authIP, authUA, false); err != nil {
 			t.Fatal(err)
 		}
 		c.waitEnded(t, time.Second, "the environment was removed")

@@ -423,7 +423,7 @@ func TestRemovingAnAgentEnvironmentMakesTheHubForgetItsAgents(t *testing.T) {
 	if len(r.srv.Hub.Views(env.ID)) != 1 {
 		t.Fatal("the hub has no view of the agent")
 	}
-	if err := r.svc.Remove(context.Background(), admin, env.ID, "203.0.113.5", "test"); err != nil {
+	if err := r.svc.Remove(context.Background(), admin, env.ID, "203.0.113.5", "test", false); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.srv.Hub.Views(env.ID); len(got) != 0 {
@@ -597,7 +597,7 @@ func TestRemovingAnAgentEnvironmentRevokesAndDisconnectsEveryAgentAndDeletesWhat
 		t.Fatal("the agents have no sessions")
 	}
 
-	if err := r.svc.Remove(context.Background(), admin, env.ID, "203.0.113.5", "test"); err != nil {
+	if err := r.svc.Remove(context.Background(), admin, env.ID, "203.0.113.5", "test", false); err != nil {
 		t.Fatal(err)
 	}
 

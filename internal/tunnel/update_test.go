@@ -157,3 +157,31 @@ func TestAnUpdateResultWithNoObserverIsIgnored(t *testing.T) {
 	}
 	stays(t, srv.Hub.Session(c.Identity.AgentID), "an update_result nobody asked for does not end the session")
 }
+
+func TestSendUninstallWritesTheFrozenUninstallLineAndAlwaysSendsThatType(t *testing.T) {
+	rec := newUpdateRecorder()
+	srv := withUpdates(t, rec)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	lines := readControlLines(t, c.OpenControl(t))
+	rec.wait(t, func() bool { return len(rec.opened) == 1 })
+
+	if err := srv.Hub.SendUninstall(c.Identity.AgentID, wire.Uninstall{T: "update", ID: "x1", RemoveData: true}); err != nil {
+		t.Fatalf("SendUninstall: %v", err)
+	}
+	if got, want := string(lines.next()), `{"t":"uninstall","id":"x1","removeData":true}`; got != want {
+		t.Fatalf("the agent was sent %s, want %s (the type is always uninstall, and service is absent unless set)", got, want)
+	}
+	if err := srv.Hub.SendUninstall(c.Identity.AgentID, wire.Uninstall{ID: "x2", RemoveData: true, Service: true}); err != nil {
+		t.Fatalf("SendUninstall: %v", err)
+	}
+	if got, want := string(lines.next()), `{"t":"uninstall","id":"x2","removeData":true,"service":true}`; got != want {
+		t.Fatalf("the agent was sent %s, want %s", got, want)
+	}
+}
+
+func TestSendUninstallToAnAgentThatIsNotConnectedIsErrAgentGone(t *testing.T) {
+	srv := withUpdates(t, newUpdateRecorder())
+	if err := srv.Hub.SendUninstall("no-such-agent", wire.Uninstall{}); !errors.Is(err, tunnel.ErrAgentGone) {
+		t.Fatalf("err = %v, want ErrAgentGone", err)
+	}
+}

@@ -122,6 +122,19 @@ type AgentSource interface {
 	KickEnv(envID, code string)
 }
 
+// AgentUninstaller tells the agents of an environment to remove themselves from their
+// hosts (D-30). agents.Updater is one.
+type AgentUninstaller interface {
+	// UninstallAll asks every online agent of the environment to uninstall, waits up to
+	// timeout for their answers, audits each confirmation under actor and returns the
+	// IDs of the agents that confirmed.
+	UninstallAll(ctx context.Context, actor audit.Actor, envID, ip, ua string, timeout time.Duration) []string
+}
+
+// UninstallWait is how long removing an environment waits for its agents to confirm
+// that they are uninstalling (D-30).
+const UninstallWait = 30 * time.Second
+
 // Service is the environment registry: it stores the environments an admin
 // opted in, audits every change, starts and stops their monitors, and resolves
 // {envId} for the policy.
@@ -136,9 +149,13 @@ type Service struct {
 
 	// agents, health and clusters are set before the service is used (WithAgents,
 	// WithHealth, WithClusters).
-	agents   AgentSource
-	health   HealthConfig
-	clusters *Clusters
+	agents      AgentSource
+	health      HealthConfig
+	clusters    *Clusters
+	uninstaller AgentUninstaller
+	// uninstallWait is how long Remove waits for the agents; UninstallWait unless a
+	// test changed it.
+	uninstallWait time.Duration
 
 	mu     sync.Mutex
 	runCtx context.Context
@@ -168,6 +185,24 @@ func NewService(s *store.Store, w *audit.Writer, m *Monitor, dockerHost string, 
 // the service is used.
 func (s *Service) WithAgents(src AgentSource) *Service {
 	s.agents = src
+	return s
+}
+
+// WithUninstaller tells the service who removes the agents from their hosts when an
+// admin removes an environment and asks for that. Without it Remove only revokes. Call
+// it before the service is used.
+func (s *Service) WithUninstaller(u AgentUninstaller) *Service {
+	s.uninstaller = u
+	return s
+}
+
+// WithUninstallWait changes how long Remove waits for agents to confirm an uninstall,
+// which is UninstallWait unless this is called. A value of zero or less keeps the
+// default. It exists for tests, which cannot wait 30 seconds.
+func (s *Service) WithUninstallWait(d time.Duration) *Service {
+	if d > 0 {
+		s.uninstallWait = d
+	}
 	return s
 }
 
@@ -619,7 +654,28 @@ const removedReason = "environment_removed"
 // deletion has committed every live session is closed. The environment's CA, tokens,
 // agents and blocks go with the row through the foreign keys, so a later hello from
 // any of them finds no environment and is refused auth_rejected.
-func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua string) error {
+//
+// With uninstall set, an agent environment's online agents are first told to remove
+// themselves from their hosts and given UninstallWait to confirm (D-30). Whatever they
+// answer, or do not, the revoking and the deletion then happen as usual: an agent that
+// was offline, refused or never answered is left for the admin's manual cleanup command.
+func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua string, uninstall bool) error {
+	if uninstall && s.uninstaller != nil {
+		row, err := s.st.RQ.GetEnvironment(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("get environment: %w", err)
+		}
+		if row.Kind == KindAgent {
+			wait := s.uninstallWait
+			if wait <= 0 {
+				wait = UninstallWait
+			}
+			s.uninstaller.UninstallAll(ctx, actor, id, ip, ua, wait)
+		}
+	}
 	tx, err := s.st.Write.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)

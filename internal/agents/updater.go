@@ -112,6 +112,8 @@ func AgentOf(s *tunnel.Session) Agent {
 type UpdateHub interface {
 	// SendUpdate writes an update to one agent's control stream.
 	SendUpdate(agentID string, msg wire.Update) error
+	// SendUninstall writes an uninstall to one agent's control stream.
+	SendUninstall(agentID string, msg wire.Uninstall) error
 	// Connected lists the agents of an environment that have a live session.
 	Connected(envID string) []Agent
 }
@@ -123,6 +125,10 @@ type hubSource struct{ h *tunnel.Hub }
 
 func (s hubSource) SendUpdate(agentID string, msg wire.Update) error {
 	return s.h.SendUpdate(agentID, msg)
+}
+
+func (s hubSource) SendUninstall(agentID string, msg wire.Uninstall) error {
+	return s.h.SendUninstall(agentID, msg)
 }
 
 func (s hubSource) Connected(envID string) []Agent {
@@ -198,6 +204,8 @@ type Updater struct {
 	// tried is the image an automatic update was last started for, by key, so that
 	// a release that breaks does not loop: it is not started again by itself.
 	tried map[string]string
+	// un is the uninstalls that were sent and not yet answered.
+	un map[uninstallKey]*uninstallWait
 }
 
 var _ tunnel.UpdateObserver = (*Updater)(nil)
@@ -216,7 +224,7 @@ func NewUpdater(svc *Service, hub UpdateHub, clusterManager func(envID string) (
 		svc: svc, hub: hub, manager: clusterManager, version: serverVersion, now: now, log: slog.Default(),
 		answerFor: defaultAnswerTimeout, standaloneFor: defaultStandaloneConfirm, swarmFor: defaultSwarmConfirm,
 		pend: map[string]*pendingUpdate{}, member: map[string]*pendingUpdate{},
-		failed: map[string]string{}, tried: map[string]string{},
+		failed: map[string]string{}, tried: map[string]string{}, un: map[uninstallKey]*uninstallWait{},
 	}
 }
 
@@ -412,10 +420,14 @@ func (u *Updater) failLocked(p *pendingUpdate, reason string) func() {
 
 // ----- results and timers -----
 
-// HandleResult takes an agent's answer to an update. An answer is matched to the
-// update in flight by the agent that sent it and the id it echoes; any other is
-// ignored, so an agent cannot affect an update that is not its own.
+// HandleResult takes an agent's answer to an update or an uninstall. An answer is
+// matched to the update (or uninstall) in flight by the agent that sent it and the id
+// it echoes; any other is ignored, so an agent cannot affect an update that is not its
+// own.
 func (u *Updater) HandleResult(agentID string, res wire.UpdateResult) {
+	if u.deliverUninstall(agentID, res) {
+		return
+	}
 	var job func()
 	u.mu.Lock()
 	var p *pendingUpdate

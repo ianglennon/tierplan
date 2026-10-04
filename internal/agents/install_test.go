@@ -425,3 +425,20 @@ func TestManualUpdateCommandUpdateHintCarriesTheCommandForTheEnvironmentType(t *
 		t.Errorf("hint for an unknown type = %q, want none", h)
 	}
 }
+
+func TestCleanupCommandsAreTheOnesTheInstallGivesAndNameTheGivenSecretGeneration(t *testing.T) {
+	in, err := agents.BuildInstall(agents.InstallParams{Token: "bpjt_x", Endpoint: "wss://bayplan.example/agent/connect", ServerVersion: "v0.2.1", Generation: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	swarm, standalone := agents.CleanupCommands(3)
+	if swarm != in.SwarmCleanup || standalone != in.StandaloneCleanup {
+		t.Fatalf("CleanupCommands differ from the install's: %q %q", swarm, standalone)
+	}
+	if !strings.Contains(swarm, "docker secret rm "+agents.SecretName(3)) || strings.Contains(swarm+standalone, "bpjt_") {
+		t.Fatalf("the swarm cleanup must name generation 3's secret and carry no token: %q", swarm)
+	}
+	if other, _ := agents.CleanupCommands(4); !strings.Contains(other, agents.SecretName(4)) {
+		t.Fatalf("generation 4: %q", other)
+	}
+}

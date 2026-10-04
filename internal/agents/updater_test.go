@@ -25,11 +25,41 @@ type fakeUpdateHub struct {
 	agents  map[string][]agents.Agent // by environment
 	sent    []sentUpdate
 	sendErr error
+
+	uninstalls  []sentUninstall
+	onUninstall func(agentID string, msg wire.Uninstall)
+	goneAgents  map[string]bool
 }
 
 type sentUpdate struct {
 	AgentID string
 	Msg     wire.Update
+}
+
+type sentUninstall struct {
+	AgentID string
+	Msg     wire.Uninstall
+}
+
+// SendUninstall records the message and then runs onUninstall, which a test uses to
+// answer it, outside the hub's lock.
+func (h *fakeUpdateHub) SendUninstall(agentID string, msg wire.Uninstall) error {
+	h.mu.Lock()
+	if h.sendErr != nil {
+		h.mu.Unlock()
+		return h.sendErr
+	}
+	if h.goneAgents[agentID] {
+		h.mu.Unlock()
+		return tunnel.ErrAgentGone
+	}
+	h.uninstalls = append(h.uninstalls, sentUninstall{agentID, msg})
+	hook := h.onUninstall
+	h.mu.Unlock()
+	if hook != nil {
+		hook(agentID, msg)
+	}
+	return nil
 }
 
 func (h *fakeUpdateHub) SendUpdate(agentID string, msg wire.Update) error {

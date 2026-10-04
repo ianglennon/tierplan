@@ -162,10 +162,19 @@ func BuildInstall(p InstallParams) (Install, error) {
 	in.SwarmStackFile = swarmStack(p, image, secret)
 	in.StandaloneComposeFile = standaloneCompose(p, image)
 
-	in.SwarmCleanup = " docker service rm " + ServiceName + " && docker secret rm " + secret +
-		"\n docker volume rm " + VolumeName + "   # on every node that ran the agent"
-	in.StandaloneCleanup = " docker rm -f " + ServiceName + " && docker volume rm " + VolumeName
+	in.SwarmCleanup, in.StandaloneCleanup = CleanupCommands(p.Generation)
 	return in, nil
+}
+
+// CleanupCommands are the commands that take the agent off a host by hand, for hosts
+// whose agent Bayplan could not uninstall: offline, refusing self-update, or no answer
+// (D-30). generation is the join token's current generation, which names the swarm
+// secret. They carry no join token.
+func CleanupCommands(generation int) (swarm, standalone string) {
+	swarm = " docker service rm " + ServiceName + " && docker secret rm " + SecretName(generation) +
+		"\n docker volume rm " + VolumeName + "   # on every node that ran the agent"
+	standalone = " docker rm -f " + ServiceName + " && docker volume rm " + VolumeName
+	return swarm, standalone
 }
 
 // ManualUpdateCommand is the command an operator runs to bring an agent of the

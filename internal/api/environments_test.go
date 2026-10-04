@@ -780,6 +780,7 @@ func newAgentFix(t *testing.T) *agentFix {
 	f.serverVersion = "v0.2.1"
 	f.updater = agents.NewUpdater(srv.Svc, agents.HubSource(srv.Hub), nil, f.serverVersion, tclk.Now)
 	t.Cleanup(f.updater.Close)
+	svc.WithUninstaller(f.updater)
 	ctx, stopBroker := context.WithCancel(context.Background())
 	t.Cleanup(stopBroker)
 	go f.brk.Run(ctx)

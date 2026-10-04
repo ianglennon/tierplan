@@ -246,6 +246,7 @@ type UpdateEnvironmentInput struct {
 // RemoveEnvironmentInput removes an environment.
 type RemoveEnvironmentInput struct {
 	EnvironmentPathInput
+	UninstallAgents bool `query:"uninstallAgents" default:"false" doc:"Also tell every online agent of the environment to remove itself from its host before the environment is removed"`
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 }
@@ -445,15 +446,19 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		Path:          "/api/environments/{envId}",
 		Summary:       "Remove an environment",
 		DefaultStatus: http.StatusNoContent,
-		Description: "Needs environments.delete. Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched " +
-			"(D-20). Audited as environment.removed.",
+		Description: "Needs environments.delete. Stops managing the host. Revokes every agent, disables the join token and deletes the environment, " +
+			"and changes nothing in Docker: its containers, networks and volumes are untouched (D-20, D-30). With uninstallAgents=true each online agent is " +
+			"first told to uninstall itself (a swarm's agents through one manager, which removes the agent service and its token secret; every agent " +
+			"removes its own container and state volume), and the request waits up to 30 seconds for their answers. Whatever they answer, or do not, the " +
+			"revoking and deletion follow, so hosts that were offline or refused keep their agent until the admin runs the manual cleanup command that GET " +
+			"/api/env/{envId}/agents gives. Audited as environment.removed, agent.revoked per agent, and agent.uninstalled per agent that confirmed.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsDelete, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RemoveEnvironmentInput) (*struct{}, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
-		if err := d.Envs.Remove(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent); err != nil {
+		if err := d.Envs.Remove(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent, in.UninstallAgents); err != nil {
 			return nil, fail("remove environment", err)
 		}
 		return nil, nil

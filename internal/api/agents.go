@@ -195,7 +195,8 @@ type AgentBody struct {
 
 // AgentListBody is every agent of an environment.
 type AgentListBody struct {
-	Items []AgentBody `json:"items" doc:"One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent"`
+	Items         []AgentBody        `json:"items" doc:"One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent"`
+	ManualCleanup InstallCleanupBody `json:"manualCleanup" doc:"The commands that take the agent off a host by hand, for the hosts Bayplan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token"`
 }
 
 // AgentListOutput wraps AgentListBody for huma.
@@ -486,7 +487,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		Description: "Every enrolled agent with its node name, role, status, whether its host is blocked, whether it is connected, versions, " +
 			"the full certificate fingerprint and expiry, clock offset, when it was last seen, the policy flags the host owner set and the last " +
 			"request it refused. Problems come first: revoked agents, then agents that are not connected, then the rest by node name. A " +
-			"local-socket environment has none. Never carries a key, a token or a serial. 404 environment_not_found when the environment does " +
+			"local-socket environment has none, and an empty manualCleanup. Never carries a key, a token or a serial. 404 environment_not_found when the environment does " +
 			"not exist or the caller may not read it. Needs environments.read on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRead, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *EnvironmentPathInput) (*AgentListOutput, error) {
@@ -497,7 +498,18 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		if err != nil {
 			return nil, fail("list agents", err)
 		}
-		return &AgentListOutput{CacheControl: "no-store", Body: AgentListBody{Items: agentBodies(nodes, d.Live, in.EnvID, leaderAgent(d, in.EnvID), time.Now(), d.updates())}}, nil
+		// A local-socket environment has no agents and no token, and so no cleanup.
+		var swarm, standalone string
+		switch st, err := d.Agents.TokenStatus(ctx, in.EnvID); {
+		case err == nil:
+			swarm, standalone = agents.CleanupCommands(st.Generation)
+		case !errors.Is(err, agents.ErrEnvironmentNotFound):
+			return nil, fail("token status", err)
+		}
+		return &AgentListOutput{CacheControl: "no-store", Body: AgentListBody{
+			Items:         agentBodies(nodes, d.Live, in.EnvID, leaderAgent(d, in.EnvID), time.Now(), d.updates()),
+			ManualCleanup: InstallCleanupBody{Swarm: swarm, Standalone: standalone},
+		}}, nil
 	})
 
 	httpx.Register(r, huma.Operation{

@@ -5,7 +5,9 @@ package envs
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
@@ -68,7 +70,7 @@ func TestAnUnnamedAgentEnvironmentIsListedUnderAPlaceholderNameAndStaysBlankInTh
 func TestRemovingAnAgentEnvironmentDeletesItsRowsAndAudits(t *testing.T) {
 	r := newRig(t, dockertest.FakeConfig{})
 	insertAgentEnv(t, r, "agent-env-1", "Remote")
-	if err := r.svc.Remove(context.Background(), admin, "agent-env-1", "203.0.113.5", "test"); err != nil {
+	if err := r.svc.Remove(context.Background(), admin, "agent-env-1", "203.0.113.5", "test", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.svc.Get(context.Background(), "agent-env-1"); err == nil {
@@ -91,5 +93,101 @@ func TestRenamingAnEnvironmentThatWaitsForAnAutomaticNameStopsTheAutomaticNaming
 	var auto int
 	if err := r.st.Read.QueryRow(`SELECT name_auto FROM environments WHERE id = 'agent-env-1'`).Scan(&auto); err != nil || auto != 0 {
 		t.Fatalf("name_auto = %d, %v; want 0 so no host renames it again", auto, err)
+	}
+}
+
+// fakeUninstaller records what Remove asked of it and looks at the database while it
+// is asked, to prove that the agents are told before anything is revoked.
+type fakeUninstaller struct {
+	r         *rig
+	calls     []uninstallCall
+	confirmed []string
+	envRows   int
+	audited   int
+}
+
+type uninstallCall struct {
+	actor        audit.Actor
+	envID, ip, u string
+	timeout      time.Duration
+}
+
+func (f *fakeUninstaller) UninstallAll(_ context.Context, actor audit.Actor, envID, ip, ua string, timeout time.Duration) []string {
+	f.calls = append(f.calls, uninstallCall{actor, envID, ip, ua, timeout})
+	_ = f.r.st.Read.QueryRow(`SELECT COUNT(*) FROM environments WHERE id = ?`, envID).Scan(&f.envRows)
+	_ = f.r.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE env_id = ? AND action IN ('environment.removed', 'agent.revoked')`, envID).Scan(&f.audited)
+	return f.confirmed
+}
+
+func TestRemovingAnAgentEnvironmentWithUninstallTellsTheAgentsFirstAndThenRevokesAndDeletesAsAlways(t *testing.T) {
+	r := newRig(t, dockertest.FakeConfig{})
+	insertAgentEnv(t, r, "agent-env-1", "Remote")
+	un := &fakeUninstaller{r: r}
+	r.svc.WithUninstaller(un)
+
+	if err := r.svc.Remove(context.Background(), admin, "agent-env-1", "203.0.113.5", "test", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(un.calls) != 1 {
+		t.Fatalf("the uninstaller was asked %d times, want once", len(un.calls))
+	}
+	c := un.calls[0]
+	if c.actor != admin || c.envID != "agent-env-1" || c.ip != "203.0.113.5" || c.u != "test" || c.timeout != UninstallWait {
+		t.Fatalf("call = %+v, want the admin, the environment, the caller's address and agent, and the %v wait", c, UninstallWait)
+	}
+	if un.envRows != 1 || un.audited != 0 {
+		t.Fatalf("while the agents were being told: %d environment rows and %d removal or revocation audit rows, want 1 and 0: nothing may be revoked or deleted first", un.envRows, un.audited)
+	}
+	if _, err := r.svc.Get(context.Background(), "agent-env-1"); err == nil {
+		t.Fatal("the environment is still there")
+	}
+}
+
+func TestRemovingAnEnvironmentWithoutUninstallNeverAsksTheUninstaller(t *testing.T) {
+	r := newRig(t, dockertest.FakeConfig{})
+	insertAgentEnv(t, r, "agent-env-1", "Remote")
+	un := &fakeUninstaller{r: r}
+	r.svc.WithUninstaller(un)
+	if err := r.svc.Remove(context.Background(), admin, "agent-env-1", "", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(un.calls) != 0 {
+		t.Fatalf("the uninstaller was asked: %+v", un.calls)
+	}
+}
+
+func TestRemovingTheLocalHostWithUninstallAsksNoOneAndAnUnknownEnvironmentIsNotFound(t *testing.T) {
+	r := newRig(t, dockertest.FakeConfig{})
+	e := r.add(t)
+	un := &fakeUninstaller{r: r}
+	r.svc.WithUninstaller(un)
+	if err := r.svc.Remove(context.Background(), admin, "nope", "", "", true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unknown environment: %v, want ErrNotFound", err)
+	}
+	if err := r.svc.Remove(context.Background(), admin, e.ID, "", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(un.calls) != 0 {
+		t.Fatalf("the uninstaller was asked about the local host or an unknown environment: %+v", un.calls)
+	}
+}
+
+func TestRemovingWithUninstallStillRemovesWhenNothingConfirms(t *testing.T) {
+	r := newRig(t, dockertest.FakeConfig{})
+	insertAgentEnv(t, r, "agent-env-1", "Remote")
+	r.svc.WithUninstaller(&fakeUninstaller{r: r})
+	if err := r.svc.Remove(context.Background(), admin, "agent-env-1", "", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.svc.Get(context.Background(), "agent-env-1"); err == nil {
+		t.Fatal("an environment whose agents did not answer was not removed")
+	}
+}
+
+func TestRemovingWithUninstallAndNoUninstallerConfiguredJustRemoves(t *testing.T) {
+	r := newRig(t, dockertest.FakeConfig{})
+	insertAgentEnv(t, r, "agent-env-1", "Remote")
+	if err := r.svc.Remove(context.Background(), admin, "agent-env-1", "", "", true); err != nil {
+		t.Fatal(err)
 	}
 }

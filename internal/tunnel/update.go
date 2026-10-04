@@ -52,6 +52,22 @@ func (h *Hub) SendUpdate(agentID string, msg wire.Update) error {
 	return nil
 }
 
+// SendUninstall tells one agent to remove itself from its host (D-30). The type is
+// always uninstall, as SendUpdate's is always update. It returns at once: the agent's
+// answer arrives later through the UpdateObserver, as an update_result. ErrAgentGone
+// means the agent has no live session, or no control stream yet, or the write failed.
+func (h *Hub) SendUninstall(agentID string, msg wire.Uninstall) error {
+	s := h.Session(agentID)
+	if s == nil {
+		return fmt.Errorf("%w: agent %s has no live session", ErrAgentGone, agentID)
+	}
+	msg.T = wire.TypeUninstall
+	if err := s.sendControl(msg); err != nil {
+		return fmt.Errorf("%w: %w", ErrAgentGone, err)
+	}
+	return nil
+}
+
 // updateResult hands an agent's answer to the observer, after cutting what the
 // agent controls to a safe size.
 func (h *Hub) updateResult(s *Session, res wire.UpdateResult) {

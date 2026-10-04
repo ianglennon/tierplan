@@ -384,6 +384,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		return id, id != ""
 	}, buildinfo.Get().Version, nil).WithLogger(log)
 	tunnelHub.WithUpdateObserver(updater)
+	// Removing an environment can first have its online agents uninstall themselves,
+	// through the same control streams, and hears their answers the same way (D-30).
+	envSvc.WithUninstaller(updater)
 	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
