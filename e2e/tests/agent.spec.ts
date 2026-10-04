@@ -218,5 +218,12 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
     const log = compose("logs", "--no-color", "caddy");
     expect(log).toContain('"uri":"/bayplan/api/environments/stream"');
     expect(log).toContain('"uri":"/bayplan/assets/');
+
+    // And Bayplan found nothing wrong with the proxy through all of it: no
+    // untrusted forwarder, no host or scheme mismatch, no failing WebSocket.
+    const warnings = await page.request.get(at("/api/warnings"));
+    expect(warnings.ok()).toBe(true);
+    const ids = ((await warnings.json()) as { items: { id: string }[] }).items.map((w) => w.id);
+    expect(ids.filter((id) => id.startsWith("proxy_")), "proxy warnings").toEqual([]);
   });
 });

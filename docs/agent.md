@@ -225,7 +225,7 @@ A few things that are not codes:
 - **The environment stays "Waiting for the first agent" and no refusal is listed.** The agent never reached Bayplan's handshake. Look at the agent's log: a DNS or routing problem, a proxy that does not pass the upgrade (Bayplan warns in the bell: "WebSocket connections are failing"), or an `insecure_transport` refusal that has no environment to show it under.
 - **The agent exits and Docker restarts it again and again.** It exits on a refusal and Docker's restart policy brings it back after a longer pause each time, up to about a minute. Fix the cause in the table; the loop stops by itself.
 - **An update or an uninstall answers `insecure_session`.** Both are accepted only on a session that checked Bayplan's certificate, and this agent is on plain `ws://`. Use `wss://` with a certificate the agent checks.
-- **The agent cannot reach Docker.** Its environment stays pending with no reason of its own. Look at the agent's log for `engine_unreachable`.
+- **The agent cannot reach Docker** (the socket is not mounted, Docker is stopped, or the socket file is left over from a Docker that is no longer running). The agent cannot say anything to Bayplan before it has read its engine, so the environment stays pending with no reason of its own, and after two minutes the waiting panel adds the line that points you to the agent's log. The log says "the Docker engine did not answer on its socket"; start Docker, or mount `/var/run/docker.sock` into the agent, and it connects by itself.
 
 ## Cloned machines and the engine ID
 
