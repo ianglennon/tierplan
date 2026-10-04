@@ -743,6 +743,89 @@ describe("swarm lists", () => {
     }
   });
 
+  it("renders the same volume name on two nodes as two rows with no duplicate-key warning (CR-D-01)", async () => {
+    answers["/api/env/e1/volumes"] = () =>
+      Response.json({
+        items: [
+          { name: "pgdata", node: "n1", driver: "local" },
+          { name: "pgdata", node: "n2", driver: "local" },
+        ],
+        total: 2,
+        truncated: false,
+        nodes: ["n1", "n2"],
+        notReporting: [],
+      });
+    const spy = sameKeyWarnings();
+    try {
+      renderAt("/env/e1/volumes");
+      await screen.findAllByText("pgdata");
+      const rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      expect(sameKeyWarningsOf(spy)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keys networks and containers by node too, so the same id on two nodes gives two rows", async () => {
+    answers["/api/env/e1/networks"] = () =>
+      Response.json({
+        items: ["n1", "n2"].map((node) => ({
+          id: "b1",
+          name: "bridge",
+          node,
+          driver: "bridge",
+          scope: "local",
+          subnets: [],
+          created: ago(86_400_000),
+        })),
+        total: 2,
+        truncated: false,
+        nodes: ["n1", "n2"],
+        notReporting: [],
+      });
+    answers["/api/env/e1/containers"] = () =>
+      Response.json({
+        items: [row("c1", "web", "n1"), row("c1", "web", "n2")],
+        total: 2,
+        truncated: false,
+        nodes: ["n1", "n2"],
+        notReporting: [],
+      });
+    const spy = sameKeyWarnings();
+    try {
+      renderAt("/env/e1/networks");
+      await screen.findAllByText("bridge");
+      let rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      cleanup();
+      renderAt("/env/e1/containers");
+      await screen.findAllByText("web");
+      rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      expect(sameKeyWarningsOf(spy)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps standalone keys unique when rows carry no node", async () => {
+    envItem = LAB;
+    const spy = sameKeyWarnings();
+    try {
+      renderAt("/env/e1/images");
+      await screen.findByText("nginx:1.27, nginx:latest");
+      expect(screen.getAllByRole("row").slice(1)).toHaveLength(2);
+      cleanup();
+      renderAt("/env/e1/volumes");
+      await screen.findByText("pgdata");
+      expect(screen.getAllByRole("row").slice(1)).toHaveLength(1);
+      expect(sameKeyWarningsOf(spy)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("shows the banner on every list when a node is missing", async () => {
     for (const resource of ["images", "volumes", "networks"] as const) {
       answers[`/api/env/e1/${resource}`] = () =>
