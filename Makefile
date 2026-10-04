@@ -208,14 +208,16 @@ image:
 image-smoke:
 	scripts/image-smoke.sh
 
-# The agent image for this machine's architecture, tagged bayplan-agent:dev and
-# loaded into the local engine. The context is laid out as goreleaser lays it
+# The agent image for this machine's architecture, tagged AGENT_TAG (default
+# bayplan-agent:dev) and loaded into the local engine. The context is laid out as goreleaser lays it
 # out: $TARGETPLATFORM/bayplan-agent plus agent/image/state/. The binary is a
-# plain build (version "dev"); set AGENT_VERSION=v0.1.0 to stamp one. Needs
-# Docker with buildx.
+# plain build (version "dev"); set AGENT_VERSION=v0.1.0 to stamp one. The
+# self-update tests build two, make agent-image AGENT_VERSION=v0.2.0
+# AGENT_TAG=bayplan-agent:v0.2.0 and the same for v0.2.1. Needs Docker with buildx.
 AGENT_ARCH ?= $(shell go env GOARCH)
 AGENT_CTX := .devdata/agent-image
 AGENT_VERSION_PKG := github.com/ianglennon/bayplan/agent/internal/version
+AGENT_TAG ?= bayplan-agent:dev
 agent-image:
 	rm -rf $(AGENT_CTX)
 	mkdir -p $(AGENT_CTX)/linux/$(AGENT_ARCH) $(AGENT_CTX)/agent/image
@@ -223,7 +225,7 @@ agent-image:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(AGENT_ARCH) go -C agent build -trimpath \
 		-ldflags "-s -w $(if $(AGENT_VERSION),-X $(AGENT_VERSION_PKG).Version=$(AGENT_VERSION))" \
 		-o $(CURDIR)/$(AGENT_CTX)/linux/$(AGENT_ARCH)/bayplan-agent ./cmd/bayplan-agent
-	docker buildx build --platform linux/$(AGENT_ARCH) -f agent/Dockerfile -t bayplan-agent:dev --load $(AGENT_CTX)
+	docker buildx build --platform linux/$(AGENT_ARCH) -f agent/Dockerfile -t $(AGENT_TAG) --load $(AGENT_CTX)
 
 # Runs bayplan-agent:dev with the documented hardening flags: UID 1000, no
 # root capability left, no-new-privileges (also without the security option, as

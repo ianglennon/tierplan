@@ -31,6 +31,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/ianglennon/bayplan/internal/auth"
+	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/server"
@@ -48,6 +49,12 @@ type Options struct {
 	Host string
 	// Env is extra BAYPLAN_* settings, applied over the defaults.
 	Env map[string]string
+	// Version is the version the server reports, as a release build would: it sets
+	// buildinfo.Version for this test process before the server is built, and puts
+	// the previous value back when the test ends. Empty keeps whatever is set, which
+	// in a test binary is a development build. Servers in one process must not run
+	// at the same time with different versions, so a test that sets it is not parallel.
+	Version string
 }
 
 // Server is a running Bayplan with an admin signed in.
@@ -62,6 +69,12 @@ type Server struct {
 	http   *http.Client
 	cookie *http.Cookie
 	csrf   string
+
+	// env is the BAYPLAN_* settings the server was built from, kept so Restart builds
+	// the same one on the same address. cancel and done stop the running server.
+	env    map[string]string
+	cancel context.CancelFunc
+	done   chan error
 }
 
 // Start builds the real server on 0.0.0.0:<free port> with a generated
@@ -74,13 +87,16 @@ func Start(t testing.TB, o Options) *Server {
 	if net.ParseIP(o.Host) == nil {
 		t.Fatalf("servertest.Start: Host %q is not an IP address", o.Host)
 	}
+	if o.Version != "" {
+		// Registered before the server's own cleanup, so it runs after the server
+		// has stopped: the server reads the version while it runs.
+		prev := buildinfo.Version
+		buildinfo.Version = o.Version
+		t.Cleanup(func() { buildinfo.Version = prev })
+	}
 
 	dataDir := filepath.Join(t.TempDir(), "data")
-	var (
-		srv     *server.Server
-		port    int
-		publicU string
-	)
+	s := &Server{DataDir: dataDir, t: t}
 	// The port has to be known before Build (it is in the public URL), so one is
 	// picked by binding and releasing it. The window is small; a taken port makes
 	// Run fail and the next try picks another.
@@ -94,56 +110,28 @@ func Start(t testing.TB, o Options) *Server {
 		if !ok {
 			t.Fatalf("pick a port: %v is not a TCP address", ln.Addr())
 		}
-		port = addr.Port
-		publicU = "https://" + net.JoinHostPort(o.Host, strconv.Itoa(port))
+		port := addr.Port
+		s.URL = "https://" + net.JoinHostPort(o.Host, strconv.Itoa(port))
 
-		env := map[string]string{
+		s.env = map[string]string{
 			"BAYPLAN_DATA_DIR":        dataDir,
 			"BAYPLAN_LISTEN":          "0.0.0.0:" + strconv.Itoa(port),
-			"BAYPLAN_PUBLIC_URL":      publicU,
+			"BAYPLAN_PUBLIC_URL":      s.URL,
 			"BAYPLAN_TLS_SELF_SIGNED": "true",
 		}
 		for k, v := range o.Env {
-			env[k] = v
+			s.env[k] = v
 		}
-		fl := pflag.NewFlagSet("servertest", pflag.ContinueOnError)
-		config.BindFlags(fl)
-		cfg, err := config.Load(fl, func(k string) string { return env[k] }, os.ReadFile)
-		if err != nil {
-			t.Fatalf("servertest config: %v", err)
+		if s.boot() {
+			break
 		}
-		srv, err = server.Build(context.Background(), cfg, serverLog())
-		if err != nil {
-			t.Fatalf("build the server: %v", err)
+		if attempt >= 4 {
+			t.Fatal("servertest: the server could not listen on any port it tried")
 		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		done := make(chan error, 1)
-		go func() { done <- srv.Run(ctx) }()
-		t.Cleanup(func() {
-			cancel()
-			select {
-			case <-done:
-			case <-time.After(20 * time.Second):
-				t.Error("servertest: the server did not shut down within 20s")
-			}
-		})
-		// Run returns at once when it cannot listen; a server that is serving does not.
-		select {
-		case err := <-done:
-			cancel()
-			if attempt >= 4 {
-				t.Fatalf("servertest: the server stopped at start: %v", err)
-			}
-			_ = os.RemoveAll(dataDir) // Run has closed the server
-			done <- nil               // the cleanup above reads one value
-			continue
-		case <-time.After(300 * time.Millisecond):
-		}
-		break
+		_ = os.RemoveAll(dataDir) // Run has closed the server
 	}
+	t.Cleanup(s.stop)
 
-	s := &Server{URL: publicU, DataDir: dataDir, t: t, srv: srv}
 	s.http = &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		RootCAs: s.trustServerCertificate(),
 	}}}
@@ -151,6 +139,76 @@ func Start(t testing.TB, o Options) *Server {
 	s.waitReady()
 	s.signIn()
 	return s
+}
+
+// boot builds the server from s.env and starts serving. It reports false when the
+// server stopped at once, which is what a port that was taken in the meantime looks
+// like; any other failure ends the test.
+func (s *Server) boot() bool {
+	s.t.Helper()
+	fl := pflag.NewFlagSet("servertest", pflag.ContinueOnError)
+	config.BindFlags(fl)
+	cfg, err := config.Load(fl, func(k string) string { return s.env[k] }, os.ReadFile)
+	if err != nil {
+		s.t.Fatalf("servertest config: %v", err)
+	}
+	srv, err := server.Build(context.Background(), cfg, serverLog())
+	if err != nil {
+		s.t.Fatalf("build the server: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.Run(ctx) }()
+	// Run returns at once when it cannot listen; a server that is serving does not.
+	select {
+	case <-done:
+		cancel()
+		return false
+	case <-time.After(300 * time.Millisecond):
+	}
+	s.srv, s.cancel, s.done = srv, cancel, done
+	return true
+}
+
+// stop shuts the running server down and waits for it. It is safe to call twice.
+func (s *Server) stop() {
+	if s.cancel == nil {
+		return
+	}
+	s.cancel()
+	select {
+	case <-s.done:
+	case <-time.After(20 * time.Second):
+		s.t.Error("servertest: the server did not shut down within 20s")
+	}
+	s.cancel = nil
+}
+
+// Restart stops the server and starts another on the same address, with the same
+// data directory, certificate and settings, so everything that dials it (the agents)
+// finds it again, as after an upgrade. A non-empty version is set as buildinfo.Version
+// first, which is how a test upgrades the server from one release to the next; empty
+// keeps the version. It signs the admin in again, since the cookie of the old run is
+// not what the new one hands out.
+func (s *Server) Restart(version string) {
+	s.t.Helper()
+	s.stop()
+	if version != "" {
+		buildinfo.Version = version
+	}
+	// The listening port is released as the old server stops; a short wait covers a
+	// kernel that has not finished with it.
+	for attempt := 0; ; attempt++ {
+		if s.boot() {
+			break
+		}
+		if attempt >= 20 {
+			s.t.Fatal("servertest: the restarted server could not listen on its old address")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	s.waitReady()
+	s.login()
 }
 
 // serverLog is where the server under test writes its log: nowhere, unless
@@ -271,7 +329,13 @@ func (s *Server) signIn() {
 	if err := tx.Commit(); err != nil {
 		s.t.Fatal(err)
 	}
+	s.login()
+}
 
+// login signs the admin in over HTTPS and keeps the session cookie and CSRF token.
+func (s *Server) login() {
+	s.t.Helper()
+	s.cookie, s.csrf = nil, ""
 	resp, err := s.http.Post(s.URL+"/api/auth/login", "application/json",
 		strings.NewReader(`{"username":"admin","password":"`+adminPassword+`"}`))
 	if err != nil {
@@ -556,6 +620,10 @@ type Agent struct {
 	ClockOffsetSeconds int    `json:"clockOffsetSeconds"`
 	RevokedAt          string `json:"revokedAt"`
 	RevokeReason       string `json:"revokeReason"`
+	UpdateState        struct {
+		State  string `json:"state"`
+		Reason string `json:"reason"`
+	} `json:"updateState"`
 }
 
 // Agents lists the agents of an environment.
@@ -604,4 +672,38 @@ func (s *Server) WaitOnline(id string, timeout time.Duration) Environment {
 		return ok && e.Status.State == "online" && e.Engine.Version != "", fmt.Sprintf("%+v", e.Status)
 	})
 	return got
+}
+
+// AuditRow is one row of the audit log, as far as a test needs.
+type AuditRow struct {
+	ActorID  string
+	TargetID string
+	Result   string
+	Reason   string
+	Details  map[string]string
+}
+
+// AuditRows lists the audit rows of an action, oldest first.
+func (s *Server) AuditRows(action string) []AuditRow {
+	s.t.Helper()
+	rows, err := s.srv.Store().Read.Query(
+		`SELECT actor_id, target_id, result, reason, details FROM audit_log WHERE action = ? ORDER BY seq`, action)
+	if err != nil {
+		s.t.Fatalf("read the audit log: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []AuditRow
+	for rows.Next() {
+		var r AuditRow
+		var details string
+		if err := rows.Scan(&r.ActorID, &r.TargetID, &r.Result, &r.Reason, &details); err != nil {
+			s.t.Fatalf("read the audit log: %v", err)
+		}
+		_ = json.Unmarshal([]byte(details), &r.Details)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		s.t.Fatalf("read the audit log: %v", err)
+	}
+	return out
 }

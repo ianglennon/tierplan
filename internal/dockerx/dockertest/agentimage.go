@@ -54,6 +54,19 @@ func LoadAgentImage(t testing.TB, nodes ...*Node) {
 	loadImage(t, LocalAgentImage, ReleaseAgentImage, nodes)
 }
 
+// LoadAgentImageAs is LoadAgentImage for an image built under another tag (make
+// agent-image AGENT_VERSION=v0.2.1 AGENT_TAG=bayplan-agent:v0.2.1): it copies src
+// into every node and tags it as target, the name an install command or an update
+// of that version uses. The test is skipped, with the command that builds src, when
+// this machine's engine does not have it.
+func LoadAgentImageAs(t testing.TB, src, target string, nodes ...*Node) {
+	t.Helper()
+	if _, err := hostClient(t).ImageInspect(context.Background(), src); err != nil {
+		t.Skipf("the agent image %s is not on this machine's engine (%v): run `make agent-image AGENT_TAG=%s AGENT_VERSION=<version>` first", src, err, src)
+	}
+	loadImage(t, src, target, nodes)
+}
+
 // LoadImage copies an image the machine's engine has, pulling it first when it
 // does not, into every node under the same name. It is for the small images a
 // test starts inside a node, such as busybox.
