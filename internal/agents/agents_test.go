@@ -357,6 +357,71 @@ func TestACertificateOfOneEnvironmentDoesNotVerifyAgainstAnothers(t *testing.T) 
 	}
 }
 
+// T-02-21: an expiry may be reported only for a certificate the CA issued. A forged
+// certificate, whatever its dates, must look exactly like any other certificate
+// the CA did not sign, or a caller could use the dates to learn which environments
+// exist.
+func TestVerifyLeafReportsExpiryOnlyForACertificateItsCAIssued(t *testing.T) {
+	r := newRig(t)
+	a, b := r.create(t, "A"), r.create(t, "B")
+	res, err := r.svc.Enrol(r.ctx, newProof(t, "h").request(a.JoinToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM := func(env string) string {
+		var s string
+		if err := r.st.Read.QueryRow(`SELECT cert_pem FROM env_cas WHERE env_id = ?`, env).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	ca := caPEM(a.EnvID)
+
+	t.Run("a certificate the CA issued", func(t *testing.T) {
+		if _, err := agents.VerifyLeaf(ca, res.Cert, fixedNow); err != nil {
+			t.Errorf("at the issue time: %v", err)
+		}
+		if _, err := agents.VerifyLeaf(ca, res.Cert, fixedNow.Add(31*24*time.Hour)); !errors.Is(err, agents.ErrLeafExpired) {
+			t.Errorf("31 days later: err = %v, want ErrLeafExpired", err)
+		}
+		if _, err := agents.VerifyLeaf(ca, res.Cert, fixedNow.Add(-10*time.Minute)); !errors.Is(err, agents.ErrLeafNotYetValid) {
+			t.Errorf("10 minutes early: err = %v, want ErrLeafNotYetValid", err)
+		}
+		if _, err := agents.VerifyLeaf(ca, res.Cert, fixedNow.Add(-3*time.Minute)); err != nil {
+			t.Errorf("3 minutes early, inside the skew allowance (D-45): %v", err)
+		}
+	})
+
+	t.Run("a forgery says neither expired nor not yet valid", func(t *testing.T) {
+		pub, _, _ := ed25519.GenerateKey(rand.Reader)
+		for name, made := range map[string]time.Time{
+			"made 60 days ago":       fixedNow.Add(-60 * 24 * time.Hour),
+			"made now":               fixedNow,
+			"made 60 days in future": fixedNow.Add(60 * 24 * time.Hour),
+		} {
+			forged := tunneltest.ForeignCert(t, a.EnvID, "an-agent", pub, made)
+			_, err := agents.VerifyLeaf(ca, forged, fixedNow)
+			if err == nil {
+				t.Errorf("%s: the forgery verified", name)
+				continue
+			}
+			if errors.Is(err, agents.ErrLeafExpired) || errors.Is(err, agents.ErrLeafNotYetValid) {
+				t.Errorf("%s: err = %v, a certificate the CA did not sign must not report its dates", name, err)
+			}
+		}
+	})
+
+	t.Run("another environment's CA never learns the expiry", func(t *testing.T) {
+		_, err := agents.VerifyLeaf(caPEM(b.EnvID), res.Cert, fixedNow.Add(31*24*time.Hour))
+		if err == nil {
+			t.Fatal("a certificate of environment A verified against environment B's CA (D-07)")
+		}
+		if errors.Is(err, agents.ErrLeafExpired) || errors.Is(err, agents.ErrLeafNotYetValid) {
+			t.Errorf("err = %v, another CA must not report the dates", err)
+		}
+	})
+}
+
 func TestACASealedKeyOpensOnlyForItsOwnEnvironment(t *testing.T) {
 	r := newRig(t)
 	a, b := r.create(t, "A"), r.create(t, "B")
@@ -537,6 +602,30 @@ func TestHelloGivesAnUnknownEnvironmentAndAnotherCATheSameRefusal(t *testing.T) 
 	}
 	if strings.Contains(a.Detail, c.EnvID) {
 		t.Errorf("the refusal names the environment: %q", a.Detail)
+	}
+}
+
+func TestHelloGivesEveryForgedCertificateTheSameRefusalForARealAndAnUnknownEnvironment(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	m := r.enrolMember(t, c)
+
+	for name, made := range map[string]time.Time{
+		"an expired forgery":     fixedNow.Add(-60 * 24 * time.Hour),
+		"a current forgery":      fixedNow,
+		"a future-dated forgery": fixedNow.Add(60 * 24 * time.Hour),
+	} {
+		real := tunneltest.ForeignCert(t, c.EnvID, m.id, m.pub, made)
+		unknown := tunneltest.ForeignCert(t, "0197b8a0-0000-7000-8000-000000000000", m.id, m.pub, made)
+		_, e1 := r.svc.Hello(r.ctx, m.hello(real, m.priv))
+		_, e2 := r.svc.Hello(r.ctx, m.hello(unknown, m.priv))
+		a, b := refusal(t, e1), refusal(t, e2)
+		if a.Code != wire.ReasonAuthRejected || a.Code != b.Code || a.Detail != b.Detail {
+			t.Errorf("%s: a real environment gets %+v, an unknown one gets %+v; they must be identical auth_rejected", name, a, b)
+		}
+		if strings.Contains(a.Detail, c.EnvID) {
+			t.Errorf("%s: the refusal names the environment: %q", name, a.Detail)
+		}
 	}
 }
 
