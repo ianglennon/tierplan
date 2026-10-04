@@ -776,6 +776,10 @@ func newAgentFix(t *testing.T) *agentFix {
 	})
 	svc.WithAgents(srv.Hub)
 	f.agentSvc, f.liveAgents = srv.Svc, srv.Hub
+	// The server is v0.2.1 and the agents tunneltest connects are v0.2.0.
+	f.serverVersion = "v0.2.1"
+	f.updater = agents.NewUpdater(srv.Svc, agents.HubSource(srv.Hub), nil, f.serverVersion, tclk.Now)
+	t.Cleanup(f.updater.Close)
 	ctx, stopBroker := context.WithCancel(context.Background())
 	t.Cleanup(stopBroker)
 	go f.brk.Run(ctx)
@@ -790,7 +794,7 @@ func newAgentFix(t *testing.T) *agentFix {
 type agentConn struct {
 	conn    *tunneltest.Conn
 	fake    *dockertest.Fake
-	control io.Writer
+	control io.ReadWriter
 	id      string
 }
 

@@ -108,6 +108,9 @@ type authFixture struct {
 	liveAgents api.AgentSessions
 	// agentCluster says which agent leads a swarm, for the role in the node list.
 	agentCluster api.AgentCluster
+	// updater and serverVersion are what the agent update routes use, when set.
+	updater       *agents.Updater
+	serverVersion string
 	// settingsAgents, when set, is what the settings routes count agents with and
 	// push new addresses through (plan 02-26).
 	settingsAgents api.SettingsAgents
@@ -167,14 +170,15 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{
 		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,
-		TLSPin: func() string { return f.tlsPin }, Checker: checker, Log: log,
+		TLSPin: func() string { return f.tlsPin }, Checker: checker, Updater: f.updater, Log: log,
 	})
 	agentSvc := f.agentSvc
 	if agentSvc == nil {
 		agentSvc = agents.NewService(f.st, f.v, f.aud, f.clk.now)
 	}
 	api.RegisterAgents(r, api.AgentsDeps{
-		Agents: agentSvc, Live: f.liveAgents, Cluster: f.agentCluster, Instance: f.inst, TLSPin: func() string { return f.tlsPin }, Log: log,
+		Agents: agentSvc, Live: f.liveAgents, Cluster: f.agentCluster, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
+		Updater: f.updater, ServerVersion: f.serverVersion, Log: log,
 	})
 	if f.envSvc != nil && f.agg != nil {
 		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})

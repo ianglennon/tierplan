@@ -90,6 +90,9 @@ type Environment struct {
 	// re-initialised, while that change waits for an admin to adopt it (D-14).
 	// Empty when no change is recorded.
 	PendingClusterID string
+	// AutoUpdate is whether Bayplan updates the environment's agents itself. It is
+	// meaningful for an agent environment only.
+	AutoUpdate bool
 }
 
 // DefaultReconnectGrace is how long after the server starts an environment with
@@ -384,11 +387,12 @@ func (s *Service) environment(ctx context.Context, row sqlc.Environment) (Enviro
 	}
 	e := Environment{
 		ID: row.ID, Kind: row.Kind, Name: name, SocketPath: row.SocketPath,
-		Enabled:   row.Enabled != 0,
-		CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
-		Status:    status,
-		Health:    Rollup(in),
-		Overview:  overview(in, status, s.health.ServerVersion),
+		Enabled:    row.Enabled != 0,
+		CreatedAt:  time.Unix(0, row.CreatedAt).UTC(),
+		Status:     status,
+		Health:     Rollup(in),
+		Overview:   overview(in, status, s.health.ServerVersion),
+		AutoUpdate: row.AutoUpdate != 0,
 	}
 	if row.ClusterChangedAt.Valid {
 		e.PendingClusterID = row.PendingClusterID.String

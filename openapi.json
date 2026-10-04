@@ -22,6 +22,10 @@
               }
             ]
           },
+          "autoUpdate": {
+            "description": "Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent",
+            "type": "boolean"
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -235,6 +239,10 @@
             "format": "date-time",
             "type": "string"
           },
+          "manualUpdateCommand": {
+            "description": "The one-line command that updates this agent by hand, present when the agent is behind and Bayplan cannot update it: it is outside the server's version window, it is too old to update itself, or its host owner turned self-update off",
+            "type": "string"
+          },
           "node": {
             "description": "The hostname the agent reported when it enrolled",
             "type": "string"
@@ -277,6 +285,10 @@
               "revoked"
             ],
             "type": "string"
+          },
+          "updateState": {
+            "$ref": "#/components/schemas/UpdateStateBody",
+            "description": "How the agent's update is going. Held in memory, so it is idle again after the server restarts"
           }
         },
         "required": [
@@ -292,7 +304,8 @@
           "renewalFailing",
           "clockOffsetSeconds",
           "readOnly",
-          "selfUpdate"
+          "selfUpdate",
+          "updateState"
         ],
         "type": "object"
       },
@@ -718,6 +731,10 @@
                 "type": "null"
               }
             ]
+          },
+          "autoUpdate": {
+            "description": "Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent",
+            "type": "boolean"
           },
           "createdAt": {
             "format": "date-time",
@@ -1876,20 +1893,6 @@
         ],
         "type": "object"
       },
-      "RenameEnvironmentInputBody": {
-        "additionalProperties": false,
-        "properties": {
-          "name": {
-            "description": "The new name, 1 to 64 characters",
-            "maxLength": 1024,
-            "type": "string"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "type": "object"
-      },
       "RevokeAgentBody": {
         "additionalProperties": false,
         "properties": {
@@ -2179,6 +2182,35 @@
         ],
         "type": "object"
       },
+      "UpdateAgentsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "started": {
+            "description": "How many updates were sent: one for a swarm, whose agent service rolls every node, otherwise one per agent that was behind. 0 when none was needed, or one was already running",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "started"
+        ],
+        "type": "object"
+      },
+      "UpdateEnvironmentInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "autoUpdate": {
+            "description": "Switch automatic agent updates on or off for an agent environment",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The new name, 1 to 64 characters",
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "UpdateSettingsInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -2195,6 +2227,28 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "UpdateStateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed",
+            "type": "string"
+          },
+          "state": {
+            "description": "idle: nothing is running. updating: an update was sent and the agent has not yet come back on the new version. failed: the last update did not finish, and reason says why, until the agent runs the server's version or another update is started",
+            "enum": [
+              "idle",
+              "updating",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
         "type": "object"
       },
       "UserBody": {
@@ -3455,8 +3509,8 @@
         ]
       },
       "patch": {
-        "description": "Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.",
-        "operationId": "renameEnvironment",
+        "description": "Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the environment's connected agents at once.",
+        "operationId": "updateEnvironment",
         "parameters": [
           {
             "description": "The environment ID",
@@ -3473,7 +3527,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RenameEnvironmentInputBody"
+                "$ref": "#/components/schemas/UpdateEnvironmentInputBody"
               }
             }
           },
@@ -3508,7 +3562,7 @@
             "description": "Error"
           }
         },
-        "summary": "Rename an environment",
+        "summary": "Rename an environment or switch its automatic agent updates",
         "tags": [
           "environments"
         ]
@@ -3668,6 +3722,53 @@
         ]
       }
     },
+    "/api/environments/{envId}/agents/{agentId}/update": {
+      "post": {
+        "description": "Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled (the host owner refused), agent_up_to_date or update_in_progress. Needs environments.manage. Audited as agent.updated, or agent.update_failed with its reason when the update does not finish.",
+        "operationId": "updateEnvironmentAgent",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Update an agent to this server's version",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/environments/{envId}/token": {
       "delete": {
         "description": "The current join token enrols nobody from now on. Agents that are already enrolled keep working. Rotating the token makes a new one and enables enrolment again. Disabling a disabled token changes nothing. 404 environment_not_found. Needs environments.token. Audited as environment.token_disabled.",
@@ -3798,6 +3899,57 @@
           }
         },
         "summary": "Rotate an environment's join token",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/update-agents": {
+      "post": {
+        "description": "Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.manage. Audited like an update of one agent.",
+        "operationId": "updateEnvironmentAgents",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateAgentsBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Update every agent of an environment that is behind",
         "tags": [
           "environments"
         ]

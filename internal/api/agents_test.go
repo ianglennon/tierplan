@@ -4,8 +4,10 @@
 package api_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -297,9 +299,14 @@ type agentItem struct {
 	LastSeen           string `json:"lastSeen"`
 	ReadOnly           bool   `json:"readOnly"`
 	SelfUpdate         bool   `json:"selfUpdate"`
-	RevokedAt          string `json:"revokedAt"`
-	RevokeReason       string `json:"revokeReason"`
-	LastDenial         *struct {
+	UpdateState        struct {
+		State  string `json:"state"`
+		Reason string `json:"reason"`
+	} `json:"updateState"`
+	ManualUpdateCommand string `json:"manualUpdateCommand"`
+	RevokedAt           string `json:"revokedAt"`
+	RevokeReason        string `json:"revokeReason"`
+	LastDenial          *struct {
 		Endpoint string `json:"endpoint"`
 		At       string `json:"at"`
 	} `json:"lastDenial"`
@@ -600,6 +607,7 @@ func TestUnblockLiftsTheBlocksOfARevokedAgentAndIsNotBlockedOtherwise(t *testing
 type pendingView struct {
 	ID               string  `json:"id"`
 	PendingClusterID *string `json:"pendingClusterId"`
+	AutoUpdate       *bool   `json:"autoUpdate"`
 	Status           struct {
 		State string `json:"state"`
 	} `json:"status"`
@@ -793,5 +801,232 @@ func TestAgentListSaysRenewalIsFailingWhenLessThanSevenDaysOfCertificateAreLeft(
 	}
 	if f.node(t, env.ID, fresh.Identity.AgentID).RenewalFailing {
 		t.Error("renewalFailing is set for a revoked agent")
+	}
+}
+
+// Agent updates (plan 02-28, D-13, D-24, D-25, D-28): the per-environment switch, the
+// two update endpoints and what the node list says of an update.
+
+// selfUpdating gives an agent's facts a host that lets it update itself.
+func selfUpdating(name string) *wire.Facts {
+	return &wire.Facts{
+		EngineID: "ENG:" + name, Hostname: name, EngineReachable: true, EngineVersion: "29.1.0",
+		Policy: wire.PolicyFacts{SelfUpdate: true},
+	}
+}
+
+// swarmFacts is a swarm node's facts, with the host's self-update choice.
+func swarmFacts(name string, control, selfUpdate bool) *wire.Facts {
+	f := swarmNode(name, control)
+	f.Policy = wire.PolicyFacts{SelfUpdate: selfUpdate}
+	return f
+}
+
+// controlLine reads the next line the server wrote to an agent's control stream.
+func controlLine(t *testing.T, control io.Reader) wire.Update {
+	t.Helper()
+	got := make(chan wire.Update, 1)
+	go func() {
+		sc := bufio.NewScanner(control)
+		if sc.Scan() {
+			var u wire.Update
+			_ = json.Unmarshal(sc.Bytes(), &u)
+			got <- u
+		}
+	}()
+	select {
+	case u := <-got:
+		return u
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server wrote nothing to the agent's control stream")
+		return wire.Update{}
+	}
+}
+
+func (f *agentFix) asUser(t *testing.T, name string, method, path, body string, perms ...string) *envRec {
+	t.Helper()
+	f.addUserWithGlobalPerms(t, name, perms...)
+	cookie, csrf := f.signIn(t, name, false)
+	rec := f.call(t, authReq{method: method, path: path, body: body, cookie: cookie, csrf: csrf})
+	ptyp := ""
+	if rec.Code >= 400 {
+		ptyp = problemType(t, rec)
+	}
+	return &envRec{rec.Code, rec.Body.Bytes(), ptyp}
+}
+
+func TestSwitchingAutoUpdateNeedsEnvironmentsManageStoresItAndIsAudited(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Production")
+	path := "/api/environments/" + env.ID
+
+	if got := f.environmentView(t, env.ID); got.AutoUpdate == nil || !*got.AutoUpdate {
+		t.Fatalf("a new agent environment has autoUpdate %v, want on by default", got.AutoUpdate)
+	}
+	rec := f.asUser(t, "reader", http.MethodPatch, path, `{"autoUpdate":false}`, "environments.read", "environments.token")
+	if rec.code != http.StatusForbidden {
+		t.Fatalf("PATCH autoUpdate without environments.manage: %d %s, want 403", rec.code, rec.body)
+	}
+	if got := f.environmentView(t, env.ID); got.AutoUpdate == nil || !*got.AutoUpdate {
+		t.Fatal("a refused PATCH changed the setting")
+	}
+
+	rec = f.req(t, http.MethodPatch, path, `{"autoUpdate":false}`)
+	if rec.code != http.StatusOK {
+		t.Fatalf("PATCH autoUpdate: %d %s", rec.code, rec.body)
+	}
+	if got := f.environmentView(t, env.ID); got.AutoUpdate == nil || *got.AutoUpdate {
+		t.Fatalf("autoUpdate after switching off = %v", got.AutoUpdate)
+	}
+	entries := f.audits(t, audit.ActionEnvironmentAutoUpdateChanged)
+	if len(entries) != 1 || entries[0].ActorID != "id-admin" || entries[0].TargetID != env.ID {
+		t.Fatalf("environment.auto_update_changed = %+v", entries)
+	}
+	if got := f.audits(t, audit.ActionEnvironmentRenamed); len(got) != 0 {
+		t.Fatalf("switching auto-update renamed the environment: %+v", got)
+	}
+
+	// Name and autoUpdate may be sent together; neither is required alone, but one is.
+	rec = f.req(t, http.MethodPatch, path, `{"name":"Lab","autoUpdate":true}`)
+	if rec.code != http.StatusOK || len(f.audits(t, audit.ActionEnvironmentRenamed)) != 1 || len(f.audits(t, audit.ActionEnvironmentAutoUpdateChanged)) != 2 {
+		t.Fatalf("PATCH both: %d %s", rec.code, rec.body)
+	}
+	if rec := f.req(t, http.MethodPatch, path, `{}`); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "nothing_to_change" {
+		t.Fatalf("PATCH with nothing to change: %d type %q %s", rec.code, rec.ptyp, rec.body)
+	}
+}
+
+func TestAnAdminUpdatesOneAgentThroughTheTunnelAndItIsAuditedUnderTheirName(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Production")
+	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, selfUpdating("alpha"))
+	f.srv.Events.WaitLen(t, 1)
+	path := "/api/environments/" + env.ID + "/agents/" + a.id + "/update"
+
+	rec := f.asUser(t, "reader", http.MethodPost, path, ``, "environments.read", "environments.revoke", "environments.token")
+	if rec.code != http.StatusForbidden {
+		t.Fatalf("update without environments.manage: %d %s, want 403", rec.code, rec.body)
+	}
+	if n := f.node(t, env.ID, a.id); n.UpdateState.State != "idle" {
+		t.Fatalf("a refused update changed the state: %+v", n.UpdateState)
+	}
+
+	rec = f.req(t, http.MethodPost, path, ``)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("update: %d %s, want 202", rec.code, rec.body)
+	}
+	u := controlLine(t, a.control)
+	if u.T != wire.TypeUpdate || u.Image != "ghcr.io/ianglennon/bayplan-agent:0.2.1" || u.ID == "" {
+		t.Fatalf("the agent was sent %+v", u)
+	}
+	if n := f.node(t, env.ID, a.id); n.UpdateState.State != "updating" {
+		t.Fatalf("state after the update = %+v, want updating", n.UpdateState)
+	}
+	entries := f.audits(t, audit.ActionAgentUpdated)
+	if len(entries) != 1 || entries[0].ActorID != "id-admin" || entries[0].TargetID != a.id || entries[0].IP == "" {
+		t.Fatalf("agent.updated = %+v", entries)
+	}
+
+	// The agent answers that it cannot: the list says why.
+	f.updater.HandleResult(a.id, wire.UpdateResult{T: wire.TypeUpdateResult, ID: u.ID, OK: false, Error: wire.UpdateErrImageNotOwnRepository})
+	n := f.node(t, env.ID, a.id)
+	if n.UpdateState.State != "failed" || n.UpdateState.Reason != "image_not_own_repository" {
+		t.Fatalf("state after a refusal = %+v", n.UpdateState)
+	}
+	if got := f.audits(t, audit.ActionAgentUpdateFailed); len(got) != 1 || got[0].Reason != "image_not_own_repository" {
+		t.Fatalf("agent.update_failed = %+v", got)
+	}
+}
+
+func TestUpdatingAnAgentThatIsOfflineUnknownUpToDateOrRefusingIsAProblem(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Production")
+	base := "/api/environments/" + env.ID + "/agents/"
+
+	if rec := f.req(t, http.MethodPost, base+"nobody/update", ``); rec.code != http.StatusNotFound || rec.ptyp != "agent_not_found" {
+		t.Errorf("an unknown agent: %d type %q", rec.code, rec.ptyp)
+	}
+	if rec := f.req(t, http.MethodPost, "/api/environments/nope/agents/x/update", ``); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Errorf("an unknown environment: %d type %q", rec.code, rec.ptyp)
+	}
+
+	off := f.connect(t, env, dockertest.FakeConfig{Hostname: "off"}, selfUpdating("off"))
+	f.srv.Events.WaitLen(t, 1)
+	base = "/api/environments/" + env.ID + "/agents/"
+	s := f.srv.Hub.Session(off.id)
+	_ = off.conn.WS.CloseNow()
+	waitFor(t, "the session to end", func() bool { return isClosed(s) })
+	if rec := f.req(t, http.MethodPost, base+off.id+"/update", ``); rec.code != http.StatusConflict || rec.ptyp != "agent_offline" {
+		t.Errorf("an offline agent: %d type %q %s, want 409 agent_offline", rec.code, rec.ptyp, rec.body)
+	}
+
+	env2 := f.srv.NewEnvironment(t, "Refusing")
+	refusing := f.connect(t, env2, dockertest.FakeConfig{Hostname: "refusing"}, &wire.Facts{
+		EngineID: "ENG:refusing", Hostname: "refusing", EngineReachable: true, Policy: wire.PolicyFacts{SelfUpdate: false}})
+	f.srv.Events.WaitLen(t, 3)
+	if rec := f.req(t, http.MethodPost, "/api/environments/"+env2.ID+"/agents/"+refusing.id+"/update", ``); rec.code != http.StatusConflict || rec.ptyp != "self_update_disabled" {
+		t.Errorf("a host that refuses: %d type %q %s, want 409 self_update_disabled", rec.code, rec.ptyp, rec.body)
+	}
+	if got := f.audits(t, audit.ActionAgentUpdated); len(got) != 0 {
+		t.Errorf("a refused update was audited as done: %+v", got)
+	}
+}
+
+func TestUpdatingAllAgentsAnswers202WithHowManyWereStartedAndNeedsManage(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Production")
+	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, selfUpdating("alpha"))
+	f.srv.Events.WaitLen(t, 1)
+	path := "/api/environments/" + env.ID + "/update-agents"
+
+	if rec := f.asUser(t, "reader", http.MethodPost, path, ``, "environments.read", "environments.revoke"); rec.code != http.StatusForbidden {
+		t.Fatalf("update-agents without environments.manage: %d", rec.code)
+	}
+	rec := f.req(t, http.MethodPost, path, ``)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("update-agents: %d %s, want 202", rec.code, rec.body)
+	}
+	var got struct {
+		Started int `json:"started"`
+	}
+	if err := json.Unmarshal(rec.body, &got); err != nil || got.Started != 1 {
+		t.Fatalf("answer %s (%v), want started 1", rec.body, err)
+	}
+	if u := controlLine(t, a.control); u.T != wire.TypeUpdate {
+		t.Fatalf("the agent was sent %+v", u)
+	}
+	// A second request while the first runs starts nothing.
+	rec = f.req(t, http.MethodPost, path, ``)
+	if err := json.Unmarshal(rec.body, &got); rec.code != http.StatusAccepted || err != nil || got.Started != 0 {
+		t.Fatalf("a repeated update-agents: %d %s, want started 0", rec.code, rec.body)
+	}
+}
+
+func TestUpdatingAllAgentsOfAnEnvironmentWithNoneConnectedIsAgentOffline(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Production")
+	f.insertAgent(t, env.ID, "a-offline", "standalone", "active")
+	rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/update-agents", ``)
+	if rec.code != http.StatusConflict || rec.ptyp != "agent_offline" {
+		t.Fatalf("update-agents with nothing connected: %d type %q %s", rec.code, rec.ptyp, rec.body)
+	}
+}
+
+func TestTheNodeListGivesTheManualUpdateCommandWhenTheHostRefusesSelfUpdate(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Production")
+	refusing := f.connect(t, env, dockertest.FakeConfig{Hostname: "refusing", SwarmState: "active"}, swarmFacts("refusing", true, false))
+	letting := f.connect(t, env, dockertest.FakeConfig{Hostname: "letting", SwarmState: "active"}, swarmFacts("letting", false, true))
+	f.srv.Events.WaitLen(t, 2)
+
+	n := f.node(t, env.ID, refusing.id)
+	if !strings.Contains(n.ManualUpdateCommand, "docker service update --image ghcr.io/ianglennon/bayplan-agent:0.2.1") {
+		t.Errorf("an agent behind on a host that refuses: manualUpdateCommand = %q", n.ManualUpdateCommand)
+	}
+	if n := f.node(t, env.ID, letting.id); n.ManualUpdateCommand != "" {
+		t.Errorf("an agent that can update itself was given the manual command %q", n.ManualUpdateCommand)
+	}
+	if n := f.node(t, env.ID, letting.id); n.UpdateState.State != "idle" {
+		t.Errorf("update state = %+v, want idle", n.UpdateState)
 	}
 }

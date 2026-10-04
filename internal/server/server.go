@@ -95,9 +95,10 @@ type Server struct {
 	broker *envs.Broker
 	// tunnel holds the live agent connections; agents creates agent
 	// environments and enrols agents.
-	tunnel *tunnel.Hub
-	agents *agents.Service
-	router *httpx.Router
+	tunnel  *tunnel.Hub
+	agents  *agents.Service
+	updater *agents.Updater
+	router  *httpx.Router
 	// tlsConfig is nil when the server speaks plain HTTP (D-12).
 	tlsConfig *tls.Config
 
@@ -374,6 +375,15 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Grace: cfg.FailingServiceGrace, Log: log,
 	})
 	envSvc.WithClusters(clusters)
+	// After a server upgrade the updater brings agents of an older release up to date
+	// through the tunnel, one message per swarm through its leading manager, one per
+	// standalone host, unless the environment or the host switched it off (D-24, D-28).
+	// It hears of each agent's control stream and each update_result from the hub.
+	updater := agents.NewUpdater(agentSvc, agents.HubSource(tunnelHub), func(envID string) (string, bool) {
+		id := clusters.LeaderAgent(envID)
+		return id, id != ""
+	}, buildinfo.Get().Version, nil).WithLogger(log)
+	tunnelHub.WithUpdateObserver(updater)
 	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
@@ -430,8 +440,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
 		Log:     log,
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Log: log},
-		api.AgentsDeps{Agents: agentSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, Log: log},
+		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Updater: updater, Log: log},
+		api.AgentsDeps{Agents: agentSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, Updater: updater, Log: log},
 		api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
 		api.EventsDeps{Aggregator: aggregator, Log: log},
 		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
@@ -466,6 +476,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		broker:     broker,
 		tunnel:     tunnelHub,
 		agents:     agentSvc,
+		updater:    updater,
 		router:     router,
 		tlsConfig:  tlsCfg,
 	}
@@ -571,6 +582,7 @@ func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
 	s.broker.Close()
+	s.updater.Close()
 	s.tunnel.Close()
 	s.aggregator.Close()
 	s.hub.Close()

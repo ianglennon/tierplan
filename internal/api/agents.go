@@ -49,6 +49,12 @@ type AgentsDeps struct {
 	// TLSPin returns the SPKI pin of the self-signed certificate Bayplan serves, or
 	// "" when it serves none. Nil means none.
 	TLSPin func() string
+	// Updater updates agents and says how each update is going. Nil means the node
+	// list shows every agent idle and the update routes answer 409 agents_unavailable.
+	Updater *agents.Updater
+	// ServerVersion is what the node list measures an agent's version against to
+	// offer the manual update command. Empty means this build's own version.
+	ServerVersion string
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -132,26 +138,59 @@ type DenialBody struct {
 	At       string `json:"at" format:"date-time" doc:"When it refused"`
 }
 
+// UpdateStateBody is how an agent's update is going.
+type UpdateStateBody struct {
+	State  string `json:"state" enum:"idle,updating,failed" doc:"idle: nothing is running. updating: an update was sent and the agent has not yet come back on the new version. failed: the last update did not finish, and reason says why, until the agent runs the server's version or another update is started"`
+	Reason string `json:"reason,omitempty" doc:"Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed"`
+}
+
+// UpdateAgentsBody is the answer to updating every agent of an environment.
+type UpdateAgentsBody struct {
+	Started int `json:"started" doc:"How many updates were sent: one for a swarm, whose agent service rolls every node, otherwise one per agent that was behind. 0 when none was needed, or one was already running"`
+}
+
+// UpdateAgentsOutput wraps UpdateAgentsBody for huma.
+type UpdateAgentsOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         UpdateAgentsBody
+}
+
+// UpdateAgentInput is an update of one agent.
+type UpdateAgentInput struct {
+	AgentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// UpdateAgentsInput is an update of every agent of an environment.
+type UpdateAgentsInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
 // AgentBody is one node's agent.
 type AgentBody struct {
-	ID                 string      `json:"id" doc:"The agent ID"`
-	Node               string      `json:"node" doc:"The hostname the agent reported when it enrolled"`
-	Role               string      `json:"role" enum:"leader,manager,worker,standalone" doc:"What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager"`
-	Status             string      `json:"status" enum:"active,revoked" doc:"revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back"`
-	Blocked            bool        `json:"blocked" doc:"True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them"`
-	Connected          bool        `json:"connected" doc:"Whether the agent has a live connection now"`
-	AgentVersion       string      `json:"agentVersion" doc:"The agent's version when it last connected or enrolled"`
-	EngineVersion      string      `json:"engineVersion,omitempty" doc:"The Docker Engine version the agent reported. Present only while it is connected"`
-	CertFingerprint    string      `json:"certFingerprint" doc:"The full SHA-256 of the agent's certificate, in hex"`
-	CertNotAfter       string      `json:"certNotAfter" format:"date-time" doc:"When the agent's certificate expires"`
-	RenewalFailing     bool        `json:"renewalFailing" doc:"True when the certificate has less than 7 days left, which means it should have renewed already and has not, or has expired. Never set for a revoked agent"`
-	ClockOffsetSeconds int         `json:"clockOffsetSeconds" doc:"How far the agent's clock is ahead of the server's, in seconds, measured when it last connected; negative is behind, 0 when it has not connected since the server started"`
-	LastSeen           string      `json:"lastSeen,omitempty" format:"date-time" doc:"When the agent was last heard from. Absent if it never has been"`
-	ReadOnly           bool        `json:"readOnly" doc:"The host owner set the agent to read-only. Reported only while it is connected"`
-	SelfUpdate         bool        `json:"selfUpdate" doc:"The host owner allowed the agent to update itself. Reported only while it is connected"`
-	LastDenial         *DenialBody `json:"lastDenial,omitempty" doc:"The last request the agent refused by its own policy, while it is connected. Absent if it has refused none"`
-	RevokedAt          string      `json:"revokedAt,omitempty" format:"date-time" doc:"When the agent was revoked"`
-	RevokeReason       string      `json:"revokeReason,omitempty" doc:"The reason given when it was revoked"`
+	ID                  string          `json:"id" doc:"The agent ID"`
+	Node                string          `json:"node" doc:"The hostname the agent reported when it enrolled"`
+	Role                string          `json:"role" enum:"leader,manager,worker,standalone" doc:"What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager"`
+	Status              string          `json:"status" enum:"active,revoked" doc:"revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back"`
+	Blocked             bool            `json:"blocked" doc:"True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them"`
+	Connected           bool            `json:"connected" doc:"Whether the agent has a live connection now"`
+	AgentVersion        string          `json:"agentVersion" doc:"The agent's version when it last connected or enrolled"`
+	EngineVersion       string          `json:"engineVersion,omitempty" doc:"The Docker Engine version the agent reported. Present only while it is connected"`
+	CertFingerprint     string          `json:"certFingerprint" doc:"The full SHA-256 of the agent's certificate, in hex"`
+	CertNotAfter        string          `json:"certNotAfter" format:"date-time" doc:"When the agent's certificate expires"`
+	RenewalFailing      bool            `json:"renewalFailing" doc:"True when the certificate has less than 7 days left, which means it should have renewed already and has not, or has expired. Never set for a revoked agent"`
+	ClockOffsetSeconds  int             `json:"clockOffsetSeconds" doc:"How far the agent's clock is ahead of the server's, in seconds, measured when it last connected; negative is behind, 0 when it has not connected since the server started"`
+	LastSeen            string          `json:"lastSeen,omitempty" format:"date-time" doc:"When the agent was last heard from. Absent if it never has been"`
+	ReadOnly            bool            `json:"readOnly" doc:"The host owner set the agent to read-only. Reported only while it is connected"`
+	SelfUpdate          bool            `json:"selfUpdate" doc:"The host owner allowed the agent to update itself. Reported only while it is connected"`
+	LastDenial          *DenialBody     `json:"lastDenial,omitempty" doc:"The last request the agent refused by its own policy, while it is connected. Absent if it has refused none"`
+	UpdateState         UpdateStateBody `json:"updateState" doc:"How the agent's update is going. Held in memory, so it is idle again after the server restarts"`
+	ManualUpdateCommand string          `json:"manualUpdateCommand,omitempty" doc:"The one-line command that updates this agent by hand, present when the agent is behind and Bayplan cannot update it: it is outside the server's version window, it is too old to update itself, or its host owner turned self-update off"`
+	RevokedAt           string          `json:"revokedAt,omitempty" format:"date-time" doc:"When the agent was revoked"`
+	RevokeReason        string          `json:"revokeReason,omitempty" doc:"The reason given when it was revoked"`
 }
 
 // AgentListBody is every agent of an environment.
@@ -167,7 +206,7 @@ type AgentListOutput struct {
 
 // agentBodies merges the database's view of an environment's agents with the
 // live one: connected, what the agent reported and when it was last heard from.
-func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string, now time.Time) []AgentBody {
+func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string, now time.Time, u updateView) []AgentBody {
 	views := map[string]tunnel.AgentLive{}
 	if live != nil {
 		for _, v := range live.Views(envID) {
@@ -211,6 +250,16 @@ func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string
 			}
 		}
 		b.LastSeen = rfc3339(lastSeen)
+		if u.state != nil {
+			st := u.state(n.ID)
+			b.UpdateState = UpdateStateBody{State: st.State, Reason: st.Reason}
+		}
+		if b.UpdateState.State == "" {
+			b.UpdateState.State = agents.UpdateIdle
+		}
+		if n.Status == "active" && agents.ManualUpdateNeeded(u.serverVersion, b.AgentVersion, b.Connected, b.SelfUpdate) {
+			b.ManualUpdateCommand = u.command(b.Role)
+		}
 		items = append(items, b)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -227,6 +276,38 @@ func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string
 		return a.ID < b.ID
 	})
 	return items
+}
+
+// updateView is what the node list needs to report updates: how each is going, the
+// server's version, and the command that updates an agent of a role by hand.
+type updateView struct {
+	state         func(agentID string) agents.UpdateState
+	serverVersion string
+	command       func(role string) string
+}
+
+// updates builds the view the node list uses from the route's dependencies.
+func (d AgentsDeps) updates() updateView {
+	version := cmpOr(d.ServerVersion, buildinfo.Get().Version)
+	v := updateView{serverVersion: version, command: func(role string) string {
+		endpoint := ""
+		if d.Instance != nil {
+			endpoint = d.Instance.AgentEndpoint()
+		}
+		pin := ""
+		if d.TLSPin != nil {
+			pin = d.TLSPin()
+		}
+		envType := agents.EnvTypeStandalone
+		if role == "leader" || role == "manager" || role == "worker" {
+			envType = agents.EnvTypeSwarm
+		}
+		return agents.ManualUpdateCommand(envType, agents.AgentImage(version), agents.InstallParams{Endpoint: endpoint, Pin: pin, ServerVersion: version})
+	}}
+	if d.Updater != nil {
+		v.state = d.Updater.State
+	}
+	return v
 }
 
 // cmpOr is v unless it is empty, then fallback.
@@ -273,6 +354,16 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 			return httpx.Problem(http.StatusConflict, problemNotBlocked, "That node's host is not blocked.")
 		case errors.Is(err, agents.ErrNoClusterChange):
 			return httpx.Problem(http.StatusConflict, problemNoClusterChange, "This environment has no new cluster to adopt. It may have been adopted a moment ago.")
+		case errors.Is(err, agents.ErrAgentOffline):
+			return httpx.Problem(http.StatusConflict, problemAgentOffline, "That agent is not connected, so it cannot be told to update. Update it by hand, or wait until it is back.")
+		case errors.Is(err, agents.ErrNoManager):
+			return httpx.Problem(http.StatusConflict, problemNoManager, "No manager of this swarm is connected, and a swarm's agents are updated through a manager.")
+		case errors.Is(err, agents.ErrSelfUpdateOff):
+			return httpx.Problem(http.StatusConflict, problemSelfUpdateDisabled, "The owner of that host turned agent self-update off (BAYPLAN_AGENT_SELF_UPDATE=false). Update it by hand.")
+		case errors.Is(err, agents.ErrAgentUpToDate):
+			return httpx.Problem(http.StatusConflict, problemAgentUpToDate, "That agent already runs this server's version.")
+		case errors.Is(err, agents.ErrUpdateInProgress):
+			return httpx.Problem(http.StatusConflict, problemUpdateInProgress, "An update of that agent is already running.")
 		case errors.Is(err, agents.ErrClusterInUse):
 			return httpx.Problem(http.StatusConflict, problemClusterInUse, "Another environment already manages that cluster, so this one cannot adopt it.")
 		}
@@ -406,7 +497,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		if err != nil {
 			return nil, fail("list agents", err)
 		}
-		return &AgentListOutput{CacheControl: "no-store", Body: AgentListBody{Items: agentBodies(nodes, d.Live, in.EnvID, leaderAgent(d, in.EnvID), time.Now())}}, nil
+		return &AgentListOutput{CacheControl: "no-store", Body: AgentListBody{Items: agentBodies(nodes, d.Live, in.EnvID, leaderAgent(d, in.EnvID), time.Now(), d.updates())}}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -487,5 +578,58 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 			return nil, fail("adopt cluster", err)
 		}
 		return &AdoptClusterOutput{CacheControl: "no-store", Body: AdoptClusterBody{ClusterID: got.To, PreviousClusterID: got.From}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "updateEnvironmentAgent",
+		Method:        http.MethodPost,
+		Path:          "/api/environments/{envId}/agents/{agentId}/update",
+		Summary:       "Update an agent to this server's version",
+		DefaultStatus: http.StatusAccepted,
+		Description: "Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is " +
+			"started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates " +
+			"its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever " +
+			"the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled " +
+			"(the host owner refused), agent_up_to_date or update_in_progress. Needs environments.manage. Audited as agent.updated, or agent.update_failed with " +
+			"its reason when the update does not finish.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateAgentInput) (*struct{}, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Updater == nil {
+			return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot update agents.")
+		}
+		if err := d.Updater.UpdateAgent(ctx, p.AuditActor(), in.EnvID, in.AgentID, httpx.ClientIP(ctx), in.UserAgent); err != nil {
+			return nil, fail("update agent", err)
+		}
+		return nil, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "updateEnvironmentAgents",
+		Method:        http.MethodPost,
+		Path:          "/api/environments/{envId}/update-agents",
+		Summary:       "Update every agent of an environment that is behind",
+		DefaultStatus: http.StatusAccepted,
+		Description: "Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose " +
+			"host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; " +
+			"409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. " +
+			"Needs environments.manage. Audited like an update of one agent.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateAgentsInput) (*UpdateAgentsOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Updater == nil {
+			return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot update agents.")
+		}
+		n, err := d.Updater.UpdateAll(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent)
+		if err != nil {
+			return nil, fail("update agents", err)
+		}
+		return &UpdateAgentsOutput{CacheControl: "no-store", Body: UpdateAgentsBody{Started: n}}, nil
 	})
 }

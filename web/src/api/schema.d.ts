@@ -306,10 +306,10 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Rename an environment
-         * @description Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.
+         * Rename an environment or switch its automatic agent updates
+         * @description Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the environment's connected agents at once.
          */
-        patch: operations["renameEnvironment"];
+        patch: operations["updateEnvironment"];
         trace?: never;
     };
     "/api/environments/{envId}/adopt-cluster": {
@@ -372,6 +372,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/environments/{envId}/agents/{agentId}/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update an agent to this server's version
+         * @description Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled (the host owner refused), agent_up_to_date or update_in_progress. Needs environments.manage. Audited as agent.updated, or agent.update_failed with its reason when the update does not finish.
+         */
+        post: operations["updateEnvironmentAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments/{envId}/token": {
         parameters: {
             query?: never;
@@ -395,6 +415,26 @@ export interface paths {
          * @description The current join token enrols nobody from now on. Agents that are already enrolled keep working. Rotating the token makes a new one and enables enrolment again. Disabling a disabled token changes nothing. 404 environment_not_found. Needs environments.token. Audited as environment.token_disabled.
          */
         delete: operations["disableEnvironmentToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}/update-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update every agent of an environment that is behind
+         * @description Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.manage. Audited like an update of one agent.
+         */
+        post: operations["updateEnvironmentAgents"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -641,6 +681,8 @@ export interface components {
             agentVersion: string | null;
             /** @description Connected and expected agents; null except on a swarm */
             agents: components["schemas"]["EnvironmentAgentsBody"] | null;
+            /** @description Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent */
+            autoUpdate?: boolean;
             /** Format: date-time */
             createdAt: string;
             enabled: boolean;
@@ -734,6 +776,8 @@ export interface components {
              * @description When the agent was last heard from. Absent if it never has been
              */
             lastSeen?: string;
+            /** @description The one-line command that updates this agent by hand, present when the agent is behind and Bayplan cannot update it: it is outside the server's version window, it is too old to update itself, or its host owner turned self-update off */
+            manualUpdateCommand?: string;
             /** @description The hostname the agent reported when it enrolled */
             node: string;
             /** @description The host owner set the agent to read-only. Reported only while it is connected */
@@ -759,6 +803,8 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "revoked";
+            /** @description How the agent's update is going. Held in memory, so it is idle again after the server restarts */
+            updateState: components["schemas"]["UpdateStateBody"];
         };
         AgentListBody: {
             /** @description One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent */
@@ -907,6 +953,8 @@ export interface components {
             agentVersion: string | null;
             /** @description Connected and expected agents; null except on a swarm */
             agents: components["schemas"]["EnvironmentAgentsBody"] | null;
+            /** @description Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent */
+            autoUpdate?: boolean;
             /** Format: date-time */
             createdAt: string;
             enabled: boolean;
@@ -1366,10 +1414,6 @@ export interface components {
             /** @description Up to 3 environment IDs, most recently used first */
             environmentIds: string[] | null;
         };
-        RenameEnvironmentInputBody: {
-            /** @description The new name, 1 to 64 characters */
-            name: string;
-        };
         RevokeAgentBody: {
             /** @description Why the node is revoked, for the audit log and the node table. Optional */
             reason?: string;
@@ -1510,6 +1554,19 @@ export interface components {
              */
             generation: number;
         };
+        UpdateAgentsBody: {
+            /**
+             * Format: int64
+             * @description How many updates were sent: one for a swarm, whose agent service rolls every node, otherwise one per agent that was behind. 0 when none was needed, or one was already running
+             */
+            started: number;
+        };
+        UpdateEnvironmentInputBody: {
+            /** @description Switch automatic agent updates on or off for an agent environment */
+            autoUpdate?: boolean;
+            /** @description The new name, 1 to 64 characters */
+            name?: string;
+        };
         UpdateSettingsInputBody: {
             /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while BAYPLAN_AGENT_URL is set */
             agentUrl?: string;
@@ -1517,6 +1574,15 @@ export interface components {
             instanceName?: string;
             /** @description New public URL, an absolute http or https URL. Refused with 409 public_url_locked while BAYPLAN_PUBLIC_URL is set */
             publicUrl?: string;
+        };
+        UpdateStateBody: {
+            /** @description Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed */
+            reason?: string;
+            /**
+             * @description idle: nothing is running. updating: an update was sent and the agent has not yet come back on the new version. failed: the last update did not finish, and reason says why, until the agent runs the server's version or another update is started
+             * @enum {string}
+             */
+            state: "idle" | "updating" | "failed";
         };
         UserBody: {
             /** @description The user's ID */
@@ -2236,7 +2302,7 @@ export interface operations {
             };
         };
     };
-    renameEnvironment: {
+    updateEnvironment: {
         parameters: {
             query?: never;
             header?: never;
@@ -2248,7 +2314,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RenameEnvironmentInputBody"];
+                "application/json": components["schemas"]["UpdateEnvironmentInputBody"];
             };
         };
         responses: {
@@ -2374,6 +2440,38 @@ export interface operations {
             };
         };
     };
+    updateEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getEnvironmentToken: {
         parameters: {
             query?: never;
@@ -2458,6 +2556,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateEnvironmentAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateAgentsBody"];
+                };
             };
             /** @description Error */
             default: {

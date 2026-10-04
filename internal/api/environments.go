@@ -36,6 +36,12 @@ const (
 	problemNotBlocked             = "not_blocked"
 	problemNoClusterChange        = "no_cluster_change"
 	problemClusterInUse           = "cluster_in_use"
+	problemAgentOffline           = "agent_offline"
+	problemNoManager              = "no_manager_connected"
+	problemSelfUpdateDisabled     = "self_update_disabled"
+	problemAgentUpToDate          = "agent_up_to_date"
+	problemUpdateInProgress       = "update_in_progress"
+	problemNothingToChange        = "nothing_to_change"
 )
 
 // EnvironmentsDeps are the dependencies of the environment routes.
@@ -54,6 +60,9 @@ type EnvironmentsDeps struct {
 	TLSPin func() string
 	// Checker filters the list to the environments the caller may read.
 	Checker *rbac.Checker
+	// Updater is asked to look at an environment's agents when automatic updates
+	// are switched on for it. Nil means nothing is, until an agent connects.
+	Updater *agents.Updater
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -135,6 +144,7 @@ type EnvironmentBody struct {
 	Agents           Nullable[EnvironmentAgentsBody]  `json:"agents" doc:"Connected and expected agents; null except on a swarm"`
 	AgentVersion     *string                          `json:"agentVersion" nullable:"true" doc:"The oldest agent version in the environment; null when it has no agent, and for the local socket"`
 	UpdateAvailable  bool                             `json:"updateAvailable" doc:"True when an agent is older than this server by a minor or a patch version"`
+	AutoUpdate       *bool                            `json:"autoUpdate,omitempty" doc:"Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent"`
 	EngineVersion    *string                          `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
 	LastSeen         *string                          `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
 	PendingClusterID string                           `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to"`
@@ -221,13 +231,15 @@ type EnvironmentPathInput struct {
 	EnvID string `path:"envId" doc:"The environment ID"`
 }
 
-// RenameEnvironmentInput renames an environment.
-type RenameEnvironmentInput struct {
+// UpdateEnvironmentInput changes an environment's name, its automatic agent
+// updates, or both.
+type UpdateEnvironmentInput struct {
 	EnvironmentPathInput
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      struct {
-		Name string `json:"name" maxLength:"1024" doc:"The new name, 1 to 64 characters"`
+		Name       *string `json:"name,omitempty" maxLength:"1024" doc:"The new name, 1 to 64 characters"`
+		AutoUpdate *bool   `json:"autoUpdate,omitempty" doc:"Switch automatic agent updates on or off for an agent environment"`
 	}
 }
 
@@ -259,6 +271,10 @@ func environmentBody(e envs.Environment) EnvironmentBody {
 			Name: p.EngineName, Version: p.EngineVersion, APIVersion: p.APIVersion, NegotiatedAPI: p.NegotiatedAPI,
 		},
 		EnvType: o.EnvType, IsLocalSocket: o.IsLocalSocket, UpdateAvailable: o.UpdateAvailable,
+	}
+	if e.Kind == agents.KindAgent {
+		auto := e.AutoUpdate
+		body.AutoUpdate = &auto
 	}
 	if o.Nodes != nil {
 		body.Nodes = Some(EnvironmentNodesBody{Ready: o.Nodes.Ready, Total: o.Nodes.Total})
@@ -311,7 +327,7 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			return httpx.Problem(http.StatusConflict, problemUnsupportedEngine, "Bayplan does not support the Docker engine on this host. Add it anyway to see it as unsupported.")
 		case errors.Is(err, envs.ErrInvalidName), errors.Is(err, agents.ErrInvalidName):
 			return httpx.Problem(http.StatusUnprocessableEntity, problemInvalidName, "The name must be 1 to 64 characters.")
-		case errors.Is(err, envs.ErrNotFound):
+		case errors.Is(err, envs.ErrNotFound), errors.Is(err, agents.ErrEnvironmentNotFound):
 			return httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
 		}
 		d.Log.Error("environment request failed", "step", what, "error", err)
@@ -381,20 +397,44 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 	})
 
 	httpx.Register(r, huma.Operation{
-		OperationID: "renameEnvironment",
+		OperationID: "updateEnvironment",
 		Method:      http.MethodPatch,
 		Path:        "/api/environments/{envId}",
-		Summary:     "Rename an environment",
-		Description: "Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.",
-		Tags:        []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RenameEnvironmentInput) (*EnvironmentOutput, error) {
+		Summary:     "Rename an environment or switch its automatic agent updates",
+		Description: "Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the " +
+			"name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed " +
+			"the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the " +
+			"environment's connected agents at once.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateEnvironmentInput) (*EnvironmentOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
-		e, err := d.Envs.Rename(ctx, p.AuditActor(), in.EnvID, in.Body.Name, httpx.ClientIP(ctx), in.UserAgent)
+		if in.Body.Name == nil && in.Body.AutoUpdate == nil {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemNothingToChange, "Send a name, autoUpdate or both.")
+		}
+		ip := httpx.ClientIP(ctx)
+		if in.Body.AutoUpdate != nil {
+			if d.Agents == nil {
+				return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot manage agent environments.")
+			}
+			// Checked first, so a name sent with it is not applied when the switch cannot be.
+			if err := d.Agents.SetAutoUpdate(ctx, p.AuditActor(), in.EnvID, *in.Body.AutoUpdate, ip, in.UserAgent); err != nil {
+				return nil, fail("set auto-update", err)
+			}
+			if *in.Body.AutoUpdate && d.Updater != nil {
+				go d.Updater.Sweep(in.EnvID)
+			}
+		}
+		if in.Body.Name != nil {
+			if _, err := d.Envs.Rename(ctx, p.AuditActor(), in.EnvID, *in.Body.Name, ip, in.UserAgent); err != nil {
+				return nil, fail("rename environment", err)
+			}
+		}
+		e, err := d.Envs.Get(ctx, in.EnvID)
 		if err != nil {
-			return nil, fail("rename environment", err)
+			return nil, fail("read the environment", err)
 		}
 		return one(e), nil
 	})
