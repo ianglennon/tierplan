@@ -72,6 +72,10 @@ const (
 // status is read from its targets (RESEARCH Pattern 5).
 func AgentTarget(agentID string) string { return "agent:" + agentID }
 
+// SocketTarget is the monitor key of the Docker socket of a host folded into a swarm
+// environment (D-48). It is keyed by the swarm environment, which owns it from the fold.
+func SocketTarget(envID string) string { return "socket:" + envID }
+
 // Environment is a managed environment with its live status.
 type Environment struct {
 	ID, Kind, Name, SocketPath string
@@ -93,6 +97,9 @@ type Environment struct {
 	// AutoUpdate is whether Bayplan updates the environment's agents itself. It is
 	// meaningful for an agent environment only.
 	AutoUpdate bool
+	// FoldOffered is true on the local environment and on the swarm environment when
+	// the local host manages the swarm and could be folded into it (D-48).
+	FoldOffered bool
 }
 
 // DefaultReconnectGrace is how long after the server starts an environment with
@@ -279,7 +286,16 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 		}
 	}
 	swarm := false
+	folded := ""
+	if row.LocalNodeID.Valid {
+		folded = row.LocalNodeID.String
+	}
 	for _, a := range rows {
+		if folded != "" && a.SwarmNodeID.String == folded {
+			// The host is folded in: its node is reached through the socket, whose target
+			// wins, so an agent that runs on it is not a second way to the same node.
+			continue
+		}
 		v := AgentView{
 			ID: a.ID, Node: a.Name, Role: a.Role, SwarmNodeID: a.SwarmNodeID.String, Revoked: a.Status == statusRevoked,
 			CertNotAfter: time.Unix(0, a.CertNotAfter).UTC(),
@@ -309,6 +325,11 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 		}
 		in.Agents = append(in.Agents, v)
 	}
+	if folded != "" {
+		in.Agents = append(in.Agents, s.socketView(row, now))
+		in.Expected++
+		swarm = true
+	}
 	switch {
 	case row.EnvType.Valid:
 		in.EnvType = row.EnvType.String
@@ -329,6 +350,26 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 		}
 	}
 	return in, nil
+}
+
+// socketView is the folded host as a node of the swarm environment: always connected,
+// with no certificate and no clock to report, and the monitor's status of its socket as
+// its target. It is a manager until the socket's own probe says it is not.
+func (s *Service) socketView(row sqlc.Environment, now time.Time) AgentView {
+	key := SocketTarget(row.ID)
+	st := s.mon.Status(key)
+	role := roleManager
+	if t := st.Probe.Type; t == dockerx.TypeSwarmWorker || t == dockerx.TypeStandalone {
+		role = roleWorker
+	}
+	node := cleanText(st.Probe.Hostname, maxNodeLen)
+	if node == "" {
+		node = "local"
+	}
+	return AgentView{
+		ID: key, Node: node, Role: role, SwarmNodeID: row.LocalNodeID.String, Socket: true,
+		Connected: true, ConnectedAt: firstSet(st.Since, now), LastSeen: now, EngineReachable: true, Target: st,
+	}
 }
 
 // Known reports whether an environment with this ID exists. A lookup that fails
@@ -361,11 +402,19 @@ func (s *Service) StartAll(ctx context.Context) error {
 	for _, row := range rows {
 		// An agent environment has no socket here: its agents connect after a
 		// start and become monitor targets then (Connected).
-		if row.Enabled == 0 || row.Kind != KindLocal {
+		if row.Enabled == 0 {
 			continue
 		}
-		if err := s.mon.Start(ctx, row.ID, engine.LocalSocketTransport{Path: row.SocketPath}); err != nil {
-			return err
+		switch {
+		case row.Kind == KindLocal:
+			if err := s.mon.Start(ctx, row.ID, engine.LocalSocketTransport{Path: row.SocketPath}); err != nil {
+				return err
+			}
+		case row.Kind == KindAgent && row.LocalNodeID.Valid && row.LocalSocketPath.String != "":
+			// A folded host has no agent: its socket is a target of the swarm environment.
+			if err := s.mon.Start(ctx, SocketTarget(row.ID), engine.LocalSocketTransport{Path: row.LocalSocketPath.String}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -429,6 +478,7 @@ func (s *Service) environment(ctx context.Context, row sqlc.Environment) (Enviro
 		Overview:   overview(in, status, s.health.ServerVersion),
 		AutoUpdate: row.AutoUpdate != 0,
 	}
+	e.FoldOffered = s.foldOfferedFor(ctx, row)
 	if row.ClusterChangedAt.Valid {
 		e.PendingClusterID = row.PendingClusterID.String
 	}
@@ -708,6 +758,7 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 		return fmt.Errorf("commit: %w", err)
 	}
 	s.mon.Stop(id)
+	s.mon.Stop(SocketTarget(id))
 	// The rows are gone, so a session that is still open would be talking for an
 	// environment that does not exist.
 	if s.agents != nil && row.Kind == KindAgent {

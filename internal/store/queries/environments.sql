@@ -22,3 +22,8 @@ DELETE FROM environments WHERE id = ?;
 
 -- name: SetEnvironmentAutoUpdate :execrows
 UPDATE environments SET auto_update = ?, updated_at = ? WHERE id = ?;
+
+-- name: FoldLocalHost :execrows
+UPDATE environments
+SET local_node_id = ?, local_socket_path = ?, updated_at = ?
+WHERE id = ? AND kind = 'agent' AND env_type = 'swarm' AND swarm_cluster_id = ? AND local_node_id IS NULL;

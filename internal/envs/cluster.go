@@ -208,6 +208,13 @@ func (c *Clusters) Forget(envID string) {
 	}
 }
 
+// notify asks for a recompute of an environment's health, when a publisher is set.
+func (c *Clusters) notify(envID string) {
+	if c.pub != nil {
+		c.pub.Notify(envID)
+	}
+}
+
 // Cached is the state as last read, with no I/O. It reports false for an
 // environment nothing was ever read for.
 func (c *Clusters) Cached(envID string) (ClusterState, bool) {
@@ -250,7 +257,7 @@ func (c *Clusters) candidates(in RollupInput, e *clusterEntry, needClient bool) 
 			continue
 		}
 		if needClient {
-			if _, _, err := c.svc.mon.Client(AgentTarget(a.ID)); err != nil {
+			if _, _, err := c.svc.mon.Client(a.TargetKey()); err != nil {
 				continue
 			}
 		}
@@ -358,7 +365,7 @@ func (c *Clusters) read(ctx context.Context, in RollupInput, fn func(*dockerx.Cl
 
 // run calls fn with the Docker client of one manager's tunnel.
 func (c *Clusters) run(a AgentView, fn func(*dockerx.Client) error) error {
-	cli, _, err := c.svc.mon.Client(AgentTarget(a.ID))
+	cli, _, err := c.svc.mon.Client(a.TargetKey())
 	if err != nil {
 		return fmt.Errorf("manager %s: %w", nodeName(a), err)
 	}
@@ -421,7 +428,7 @@ func (c *Clusters) failover(ctx context.Context, in RollupInput, e *clusterEntry
 		c.pub.Notify(in.EnvID)
 	}
 	if c.events != nil {
-		c.events.Inject(AgentTarget(to.ID), dockerx.EventRow{
+		c.events.Inject(to.TargetKey(), dockerx.EventRow{
 			ID:   fmt.Sprintf("bayplan-%d-%s-%s", now.UnixNano(), from.ID, to.ID),
 			Time: now.UTC(), TimeNano: now.UnixNano(),
 			Type: eventTypeBayplan, Action: "failover", ActorID: in.EnvID, Name: msg,
@@ -656,7 +663,7 @@ func (c *Clusters) Manager(in RollupInput) (string, bool) {
 	}
 	e, _ := c.lookup(in.EnvID)
 	if cands := c.candidates(in, e, false); len(cands) > 0 {
-		return AgentTarget(cands[0].ID), true
+		return cands[0].TargetKey(), true
 	}
 	return Primary(in)
 }

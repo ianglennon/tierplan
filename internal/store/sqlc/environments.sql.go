@@ -7,6 +7,7 @@ package sqlc
 
 import (
 	"context"
+	"database/sql"
 )
 
 const countEnvironmentsOfKind = `-- name: CountEnvironmentsOfKind :one
@@ -32,8 +33,36 @@ func (q *Queries) DeleteEnvironment(ctx context.Context, id string) (int64, erro
 	return result.RowsAffected()
 }
 
+const foldLocalHost = `-- name: FoldLocalHost :execrows
+UPDATE environments
+SET local_node_id = ?, local_socket_path = ?, updated_at = ?
+WHERE id = ? AND kind = 'agent' AND env_type = 'swarm' AND swarm_cluster_id = ? AND local_node_id IS NULL
+`
+
+type FoldLocalHostParams struct {
+	LocalNodeID     sql.NullString
+	LocalSocketPath sql.NullString
+	UpdatedAt       int64
+	ID              string
+	SwarmClusterID  sql.NullString
+}
+
+func (q *Queries) FoldLocalHost(ctx context.Context, arg FoldLocalHostParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, foldLocalHost,
+		arg.LocalNodeID,
+		arg.LocalSocketPath,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.SwarmClusterID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getEnvironment = `-- name: GetEnvironment :one
-SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto FROM environments WHERE id = ?
+SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto, local_node_id, local_socket_path FROM environments WHERE id = ?
 `
 
 func (q *Queries) GetEnvironment(ctx context.Context, id string) (Environment, error) {
@@ -54,6 +83,8 @@ func (q *Queries) GetEnvironment(ctx context.Context, id string) (Environment, e
 		&i.AutoUpdate,
 		&i.PendingClusterID,
 		&i.NameAuto,
+		&i.LocalNodeID,
+		&i.LocalSocketPath,
 	)
 	return i, err
 }
@@ -88,7 +119,7 @@ const listEnvironments = `-- name: ListEnvironments :many
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The Bayplan Authors */
 
-SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto FROM environments ORDER BY created_at, id
+SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto, local_node_id, local_socket_path FROM environments ORDER BY created_at, id
 `
 
 func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
@@ -115,6 +146,8 @@ func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
 			&i.AutoUpdate,
 			&i.PendingClusterID,
 			&i.NameAuto,
+			&i.LocalNodeID,
+			&i.LocalSocketPath,
 		); err != nil {
 			return nil, err
 		}

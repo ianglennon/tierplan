@@ -209,7 +209,7 @@ func (a *Aggregator) Snapshot(ctx context.Context, envID string) (Aggregate, Hea
 // reported, or for the local socket the engine's own.
 func nodeOf(in RollupInput, key string, st Status) NodeRef {
 	for _, a := range in.Agents {
-		if AgentTarget(a.ID) == key {
+		if a.TargetKey() == key {
 			return NodeRef{ID: a.ID, Name: nodeName(a), Role: a.Role}
 		}
 	}
@@ -326,7 +326,7 @@ func (a *Aggregator) swarm(ctx context.Context, in RollupInput, h Health) (Aggre
 		if r.agent.Role != roleManager {
 			continue
 		}
-		if AgentTarget(r.agent.ID) == inUse {
+		if r.agent.TargetKey() == inUse {
 			designated = i
 			break
 		}
@@ -387,7 +387,7 @@ func (a *Aggregator) fanOut(ctx context.Context, agents []AgentView) []nodeRead 
 		g.Go(func() error {
 			nctx, cancel := context.WithTimeout(ctx, a.nodeTimeout)
 			defer cancel()
-			snap, st, err := a.snaps.Get(nctx, AgentTarget(ag.ID))
+			snap, st, err := a.snaps.Get(nctx, ag.TargetKey())
 			reads[i] = nodeRead{agent: ag, snap: snap, st: st, err: err}
 			return nil
 		})
@@ -402,7 +402,7 @@ func agentKey(a AgentView) string {
 	if a.SwarmNodeID != "" {
 		return a.SwarmNodeID
 	}
-	return AgentTarget(a.ID)
+	return a.TargetKey()
 }
 
 type expectedNode struct{ key, name string }

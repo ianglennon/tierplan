@@ -97,6 +97,8 @@ type Environment struct {
 	AutoUpdate       int64
 	PendingClusterID sql.NullString
 	NameAuto         int64
+	LocalNodeID      sql.NullString
+	LocalSocketPath  sql.NullString
 }
 
 type Role struct {

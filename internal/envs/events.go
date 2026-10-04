@@ -677,7 +677,7 @@ func (f *mergedFeed) targets(in RollupInput) []feedTarget {
 	}
 	var out []feedTarget
 	for _, a := range connectedAgents(in) {
-		out = append(out, feedTarget{AgentTarget(a.ID), nodeName(a)})
+		out = append(out, feedTarget{a.TargetKey(), nodeName(a)})
 	}
 	return out
 }

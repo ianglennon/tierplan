@@ -15,7 +15,7 @@ func Targets(in RollupInput) []string {
 	}
 	var keys []string
 	for _, a := range connectedAgents(in) {
-		keys = append(keys, AgentTarget(a.ID))
+		keys = append(keys, a.TargetKey())
 	}
 	return keys
 }
@@ -33,11 +33,11 @@ func Primary(in RollupInput) (string, bool) {
 	connected := connectedAgents(in)
 	for _, a := range connected {
 		if a.Role == roleManager {
-			return AgentTarget(a.ID), true
+			return a.TargetKey(), true
 		}
 	}
 	if len(connected) > 0 {
-		return AgentTarget(connected[0].ID), true
+		return connected[0].TargetKey(), true
 	}
 	return "", false
 }

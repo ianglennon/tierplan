@@ -79,6 +79,18 @@ type AgentView struct {
 	// Version is the agent version: what it reported when it last connected this
 	// run, else what it reported when it enrolled.
 	Version string
+	// Socket marks the one view that is not an agent: the folded local host, reached
+	// through the Docker socket (D-48). Its ID is its target key.
+	Socket bool
+}
+
+// TargetKey is the monitor key of the view's Docker engine: the agent's target, or for
+// the folded local host its socket's.
+func (a AgentView) TargetKey() string {
+	if a.Socket {
+		return a.ID
+	}
+	return AgentTarget(a.ID)
 }
 
 // NodeSince names a node and when it started to have a problem.
