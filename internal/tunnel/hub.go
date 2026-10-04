@@ -200,6 +200,11 @@ type Session struct {
 	hbMu    sync.Mutex
 	status  SessionStatus
 
+	// order is the place of this connection among those the hub accepted: a later
+	// accept has a higher number. Of two handshakes of one agent that overlap, the
+	// one with the higher number is the one the agent is on.
+	order uint64
+
 	reasonMu sync.Mutex
 	reason   string
 	// reported makes the Observer's Disconnected run once for this session, from
@@ -331,6 +336,8 @@ type Hub struct {
 	// rollup (Views).
 	memory map[string]*agentMemory
 	closed bool
+	// accepted numbers the connections in the order they were accepted.
+	accepted atomic.Uint64
 }
 
 // NewHub returns a Hub. v is required. o may be nil. now defaults to time.Now.
@@ -473,6 +480,7 @@ func (h *Hub) isClosed() bool {
 var (
 	errHubClosed      = errors.New("tunnel: the hub is closed")
 	errNoLongerActive = errors.New("tunnel: the agent was revoked while it connected")
+	errSuperseded     = errors.New("tunnel: a newer connection of the agent has registered")
 )
 
 // register adds s, replacing any session of the same agent: a half-open stale
@@ -480,6 +488,12 @@ var (
 // reported Disconnected with the reason replaced before the new one is reported
 // Connected, all inside one critical section, so two simultaneous hellos for one
 // agent can never both remain. It reports errHubClosed when the hub is closed.
+//
+// A session whose connection was accepted before that of the agent's newest
+// session is turned away with errSuperseded instead: two handshakes of one agent
+// can overlap, the agent has moved on to the newer connection and dropped the
+// older, and an older handshake that finishes last must not replace the live
+// session with one nobody answers on.
 //
 // The agent's status is read again here, after the lifecycle lock is taken. A
 // revoke commits first and then calls Kick, and Kick takes the same lock, so
@@ -497,6 +511,10 @@ func (h *Hub) register(s *Session) error {
 	if h.closed {
 		h.mu.Unlock()
 		return errHubClosed
+	}
+	if m := h.memory[s.AgentID]; m != nil && s.order < m.order {
+		h.mu.Unlock()
+		return errSuperseded
 	}
 	old := h.sessions[s.AgentID]
 	h.sessions[s.AgentID] = s

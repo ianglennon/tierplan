@@ -363,6 +363,27 @@ type Conn struct {
 // certificate the welcome issued when the agent enrolled.
 func (s *Server) Dial(t testing.TB, a Agent) *Conn {
 	t.Helper()
+	return s.Begin(t, a).Finish()
+}
+
+// Pending is a connection the server has accepted and challenged, whose agent has
+// not answered yet. A test uses it to hold one handshake while another runs.
+type Pending struct {
+	s    *Server
+	t    testing.TB
+	a    Agent
+	ws   *websocket.Conn
+	resp *http.Response
+	ch   wire.Challenge
+	ctx  context.Context
+}
+
+// Begin dials, and returns once the server has accepted the connection and sent
+// its challenge. The server numbers the connections in the order it accepts them,
+// so a test that begins two handshakes one after the other has said which is the
+// older. Finish answers the challenge.
+func (s *Server) Begin(t testing.TB, a Agent) *Pending {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	t.Cleanup(cancel)
 
@@ -373,7 +394,6 @@ func (s *Server) Dial(t testing.TB, a Agent) *Conn {
 		t.Fatalf("tunneltest: dial: %v", err)
 	}
 	t.Cleanup(func() { _ = ws.CloseNow() })
-	c := &Conn{WS: ws, ctx: ctx}
 
 	_, data, err := ws.Read(ctx)
 	if err != nil {
@@ -383,6 +403,17 @@ func (s *Server) Dial(t testing.TB, a Agent) *Conn {
 	if err := json.Unmarshal(data, &ch); err != nil || ch.T != wire.TypeChallenge {
 		t.Fatalf("tunneltest: challenge = %s, %v", data, err)
 	}
+	return &Pending{s: s, t: t, a: a, ws: ws, resp: resp, ch: ch, ctx: ctx}
+}
+
+// Finish sends the agent's side of the handshake and returns after the welcome or
+// the refusal, as Dial does.
+func (p *Pending) Finish() *Conn {
+	s, t, a, ws, resp, ch, ctx := p.s, p.t, p.a, p.ws, p.resp, p.ch, p.ctx
+	t.Helper()
+	c := &Conn{WS: ws, ctx: ctx}
+	var data []byte
+	var err error
 
 	mode := a.Mode
 	if mode == "" {

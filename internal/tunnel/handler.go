@@ -52,6 +52,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		return // Accept has answered the client
 	}
 	defer func() { _ = c.CloseNow() }()
+	order := h.accepted.Add(1)
 	if limited != nil {
 		// The refusal is a message, not an HTTP status, so that an agent reads it
 		// the same way as every other refusal and waits as long as it says.
@@ -88,7 +89,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	s := &Session{
 		AgentID: acc.AgentID, EnvID: acc.EnvID, AgentVersion: acc.AgentVersion, Facts: acc.Facts,
-		IP: acc.IP, ConnectedAt: h.now(), ym: ym, ws: c, done: make(chan struct{}),
+		IP: acc.IP, ConnectedAt: h.now(), order: order, ym: ym, ws: c, done: make(chan struct{}),
 		streams: make(chan struct{}, MaxSessionStreams), maxResponse: h.maxResponse,
 		denyLimit: rate.NewLimiter(rate.Every(denyRefill), denyBurst),
 		status:    SessionStatus{ClockOffset: acc.ClockOffset, ClockWarning: abs(acc.ClockOffset) > ClockWarnOffset},
@@ -109,6 +110,13 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		h.log.Warn("an agent was revoked while it connected", "agent_id", s.AgentID, "environment_id", s.EnvID)
 		s.endWith(DisconnectRevoked)
 		s.kick(DisconnectRevoked)
+		return
+	case errors.Is(err, errSuperseded):
+		// Another handshake of this agent, begun after this one, registered first.
+		// The agent is on that connection; this one is turned away unreported.
+		h.log.Info("an older connection of an agent finished its handshake after a newer one and was dropped", "agent_id", s.AgentID, "environment_id", s.EnvID)
+		s.endWith(DisconnectReplaced)
+		s.close(websocket.StatusGoingAway, "a newer connection of this agent is in use")
 		return
 	case err != nil:
 		s.close(websocket.StatusGoingAway, "the server is stopping")

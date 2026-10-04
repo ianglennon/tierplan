@@ -201,6 +201,53 @@ func TestTwoHellosForTheSameAgentReplaceTheOldSessionWithTheNewOne(t *testing.T)
 	}
 }
 
+// The older of two overlapping handshakes of one agent may finish last. The agent
+// has moved on to the newer connection, so the older one must not replace it with a
+// session nobody is on the other end of (plan 02-11 hub race).
+func TestAnOlderHandshakeThatFinishesLastDoesNotReplaceTheNewerSession(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	env := srv.NewEnvironment(t, "Production")
+	id := enrolled(t, srv, env)
+	base := len(srv.Events.WaitLen(t, 2))
+
+	older := srv.Begin(t, tunneltest.Agent{Identity: &id})
+	newer := srv.Begin(t, tunneltest.Agent{Identity: &id})
+	winner := newer.Finish()
+	if winner.Welcome == nil {
+		t.Fatalf("the newer hello was refused: %+v", winner.Refuse)
+	}
+	srv.Events.WaitLen(t, base+1)
+	live := srv.Hub.Session(id.AgentID)
+	if live == nil {
+		t.Fatal("the newer hello did not register")
+	}
+
+	late := older.Finish()
+	if late.Welcome == nil {
+		t.Fatalf("the older hello was refused: %+v", late.Refuse)
+	}
+	// The server turns the older connection away after its welcome.
+	select {
+	case <-late.Mux.CloseChan():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the older connection was not closed")
+	}
+	if got := srv.Hub.Session(id.AgentID); got != live {
+		t.Fatalf("the hub holds %p after the older hello finished, want the newer session %p", got, live)
+	}
+	select {
+	case <-live.Done():
+		t.Fatal("the newer session ended")
+	default:
+	}
+	if winner.Mux.IsClosed() {
+		t.Error("the newer connection was closed")
+	}
+	if log := srv.Events.Log(); len(log) != base+1 {
+		t.Errorf("the turned-away connection was reported: %v", log)
+	}
+}
+
 func TestSimultaneousHellosForOneAgentLeaveExactlyOneSession(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{})
 	env := srv.NewEnvironment(t, "Production")
@@ -218,8 +265,49 @@ func TestSimultaneousHellosForOneAgentLeaveExactlyOneSession(t *testing.T) {
 			t.Fatalf("hello %d was refused: %+v", i, c.Refuse)
 		}
 	}
-	// 2 events from the enrolment, n connects and n-1 replacements.
-	log := srv.Events.WaitLen(t, 2+n+(n-1))
+	// Every hello ends up either replaced by a newer one or turned away because a
+	// newer one registered first; exactly one connection is left, and it is open.
+	// The agent end of each connection sees the other n-1 close.
+	waitFor := time.Now().Add(10 * time.Second)
+	var survivors []*tunneltest.Conn
+	for {
+		survivors = survivors[:0]
+		for _, c := range conns {
+			if !c.Mux.IsClosed() {
+				survivors = append(survivors, c)
+			}
+		}
+		if len(survivors) == 1 {
+			break
+		}
+		if time.Now().After(waitFor) {
+			t.Fatalf("%d connections are still open, want exactly one", len(survivors))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// A replaced session is closed a moment before it is reported, so the log may
+	// still be one event short of what the connections show.
+	var log []string
+	liveIn := func(log []string) int {
+		live := 0
+		for _, e := range log[2:] {
+			switch e {
+			case "connected:" + id.AgentID:
+				live++
+			case "disconnected:" + id.AgentID + ":replaced":
+				live--
+			}
+		}
+		return live
+	}
+	for end := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if log = srv.Events.Log(); len(log) >= 3 && liveIn(log) == 1 {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatalf("the lifecycle never settled on one session: %v", log)
+		}
+	}
 
 	// Per agent the lifecycle alternates: never a disconnect before its connect,
 	// never two live sessions at once.
@@ -236,9 +324,6 @@ func TestSimultaneousHellosForOneAgentLeaveExactlyOneSession(t *testing.T) {
 		if live < 0 || live > 1 {
 			t.Fatalf("%d live sessions after %q: %v", live, e, log)
 		}
-	}
-	if live != 1 {
-		t.Fatalf("%d sessions left, want exactly one: %v", live, log)
 	}
 	if got := srv.Hub.Sessions(); len(got) != 1 {
 		t.Fatalf("hub holds %d sessions", len(got))

@@ -41,6 +41,9 @@ type AgentLive struct {
 type agentMemory struct {
 	envID string
 	sess  *Session
+	// order is the accept order of the newest connection that registered, which an
+	// older connection finishing its handshake later must not replace.
+	order uint64
 
 	version         string
 	connectedAt     time.Time
@@ -62,6 +65,7 @@ func (h *Hub) noteConnected(s *Session) {
 		h.memory[s.AgentID] = m
 	}
 	m.envID, m.sess, m.connectedAt, m.version = s.EnvID, s, s.ConnectedAt, s.AgentVersion
+	m.order = s.order
 }
 
 // noteEnded records that s has ended and why. When s is still the agent's current
