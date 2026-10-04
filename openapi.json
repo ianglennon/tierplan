@@ -62,6 +62,10 @@
               }
             ]
           },
+          "foldOffered": {
+            "description": "True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice",
+            "type": "boolean"
+          },
           "id": {
             "description": "The environment ID, used in /api/env/{envId}/...",
             "type": "string"
@@ -205,11 +209,11 @@
             "type": "boolean"
           },
           "certFingerprint": {
-            "description": "The full SHA-256 of the agent's certificate, in hex",
+            "description": "The full SHA-256 of the agent's certificate, in hex. Absent for the local host",
             "type": "string"
           },
           "certNotAfter": {
-            "description": "When the agent's certificate expires",
+            "description": "When the agent's certificate expires. Absent for the local host",
             "format": "date-time",
             "type": "string"
           },
@@ -265,12 +269,13 @@
             "type": "string"
           },
           "role": {
-            "description": "What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager",
+            "description": "What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this Bayplan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it",
             "enum": [
               "leader",
               "manager",
               "worker",
-              "standalone"
+              "standalone",
+              "local"
             ],
             "type": "string"
           },
@@ -303,8 +308,6 @@
           "blocked",
           "connected",
           "agentVersion",
-          "certFingerprint",
-          "certNotAfter",
           "renewalFailing",
           "clockOffsetSeconds",
           "readOnly",
@@ -781,6 +784,10 @@
                 "type": "null"
               }
             ]
+          },
+          "foldOffered": {
+            "description": "True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice",
+            "type": "boolean"
           },
           "id": {
             "description": "The environment ID, used in /api/env/{envId}/...",
@@ -1825,6 +1832,9 @@
           "detail": {
             "type": "string"
           },
+          "engineId": {
+            "type": "string"
+          },
           "engineName": {
             "type": "string"
           },
@@ -1869,6 +1879,12 @@
           },
           "supported": {
             "type": "boolean"
+          },
+          "swarmClusterId": {
+            "type": "string"
+          },
+          "swarmNodeId": {
+            "type": "string"
           },
           "swarmNodeState": {
             "type": "string"
@@ -3785,6 +3801,57 @@
           }
         },
         "summary": "Update an agent to this server's version",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/fold-local": {
+      "post": {
+        "description": "Offered when the Docker host Bayplan runs on is a manager of a swarm that is enrolled through agents: the local socket's own /info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. 404 environment_not_found; 409 fold_not_offered when the host is not a manager of that swarm, or was folded already. Needs environments.manage. Audited as environment.local_folded.",
+        "operationId": "foldLocalHost",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Fold this Bayplan host into a swarm environment",
         "tags": [
           "environments"
         ]

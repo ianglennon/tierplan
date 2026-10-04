@@ -49,6 +49,9 @@ type AgentsDeps struct {
 	// TLSPin returns the SPKI pin of the self-signed certificate Bayplan serves, or
 	// "" when it serves none. Nil means none.
 	TLSPin func() string
+	// Local says which node of an environment is the folded local host, so the node
+	// list can show it beside the agents. Nil means none is (D-48).
+	Local FoldedNodes
 	// Updater updates agents and says how each update is going. Nil means the node
 	// list shows every agent idle and the update routes answer 409 agents_unavailable.
 	Updater *agents.Updater
@@ -57,6 +60,12 @@ type AgentsDeps struct {
 	ServerVersion string
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+}
+
+// FoldedNodes is what the node list asks about the local host folded into an environment.
+type FoldedNodes interface {
+	// FoldedNode is the folded local host of the environment, and false for one with none.
+	FoldedNode(ctx context.Context, envID string) (envs.FoldedNode, bool)
 }
 
 // RotateTokenBody is the answer to rotating a join token.
@@ -173,14 +182,14 @@ type UpdateAgentsInput struct {
 type AgentBody struct {
 	ID                  string          `json:"id" doc:"The agent ID"`
 	Node                string          `json:"node" doc:"The hostname the agent reported when it enrolled"`
-	Role                string          `json:"role" enum:"leader,manager,worker,standalone" doc:"What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager"`
+	Role                string          `json:"role" enum:"leader,manager,worker,standalone,local" doc:"What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this Bayplan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it"`
 	Status              string          `json:"status" enum:"active,revoked" doc:"revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back"`
 	Blocked             bool            `json:"blocked" doc:"True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them"`
 	Connected           bool            `json:"connected" doc:"Whether the agent has a live connection now"`
 	AgentVersion        string          `json:"agentVersion" doc:"The agent's version when it last connected or enrolled"`
 	EngineVersion       string          `json:"engineVersion,omitempty" doc:"The Docker Engine version the agent reported. Present only while it is connected"`
-	CertFingerprint     string          `json:"certFingerprint" doc:"The full SHA-256 of the agent's certificate, in hex"`
-	CertNotAfter        string          `json:"certNotAfter" format:"date-time" doc:"When the agent's certificate expires"`
+	CertFingerprint     string          `json:"certFingerprint,omitempty" doc:"The full SHA-256 of the agent's certificate, in hex. Absent for the local host"`
+	CertNotAfter        string          `json:"certNotAfter,omitempty" format:"date-time" doc:"When the agent's certificate expires. Absent for the local host"`
 	RenewalFailing      bool            `json:"renewalFailing" doc:"True when the certificate has less than 7 days left, which means it should have renewed already and has not, or has expired. Never set for a revoked agent"`
 	ClockOffsetSeconds  int             `json:"clockOffsetSeconds" doc:"How far the agent's clock is ahead of the server's, in seconds, measured when it last connected; negative is behind, 0 when it has not connected since the server started"`
 	LastSeen            string          `json:"lastSeen,omitempty" format:"date-time" doc:"When the agent was last heard from. Absent if it never has been"`
@@ -265,6 +274,13 @@ func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string
 		}
 		items = append(items, b)
 	}
+	sortAgentBodies(items)
+	return items
+}
+
+// sortAgentBodies puts the problems first: revoked agents, then those that are not
+// connected, then the rest by node name.
+func sortAgentBodies(items []AgentBody) {
 	sort.SliceStable(items, func(i, j int) bool {
 		a, b := items[i], items[j]
 		if ra, rb := a.Status == "revoked", b.Status == "revoked"; ra != rb {
@@ -278,7 +294,15 @@ func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string
 		}
 		return a.ID < b.ID
 	})
-	return items
+}
+
+// localBody is the folded local host as a row of the node list. It has no agent, so it
+// has no certificate, no clock offset, no version to update and no actions.
+func localBody(n envs.FoldedNode) AgentBody {
+	return AgentBody{
+		ID: n.ID, Node: n.Node, Role: "local", Status: "active", Connected: n.Online, EngineVersion: n.EngineVersion,
+		UpdateState: UpdateStateBody{State: agents.UpdateIdle},
+	}
 }
 
 // updateView is what the node list needs to report updates: how each is going, the
@@ -508,8 +532,15 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		case !errors.Is(err, agents.ErrEnvironmentNotFound):
 			return nil, fail("token status", err)
 		}
+		items := agentBodies(nodes, d.Live, in.EnvID, leaderAgent(d, in.EnvID), time.Now(), d.updates())
+		if d.Local != nil {
+			if n, ok := d.Local.FoldedNode(ctx, in.EnvID); ok {
+				items = append(items, localBody(n))
+				sortAgentBodies(items)
+			}
+		}
 		return &AgentListOutput{CacheControl: "no-store", Body: AgentListBody{
-			Items:         agentBodies(nodes, d.Live, in.EnvID, leaderAgent(d, in.EnvID), time.Now(), d.updates()),
+			Items:         items,
 			ManualCleanup: InstallCleanupBody{Swarm: swarm, Standalone: standalone},
 		}}, nil
 	})

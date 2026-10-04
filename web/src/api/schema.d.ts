@@ -392,6 +392,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/environments/{envId}/fold-local": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fold this Bayplan host into a swarm environment
+         * @description Offered when the Docker host Bayplan runs on is a manager of a swarm that is enrolled through agents: the local socket's own /info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. 404 environment_not_found; 409 fold_not_offered when the host is not a manager of that swarm, or was folded already. Needs environments.manage. Audited as environment.local_folded.
+         */
+        post: operations["foldLocalHost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments/{envId}/token": {
         parameters: {
             query?: never;
@@ -696,6 +716,8 @@ export interface components {
             envType?: "swarm" | "standalone";
             /** @description Failing and total services; null until service data is known */
             failingServices: components["schemas"]["EnvironmentFailingBody"] | null;
+            /** @description True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice */
+            foldOffered?: boolean;
             /** @description The environment ID, used in /api/env/{envId}/... */
             id: string;
             /** @description Present for an agent environment only: the join token, the address the agent dials, and the commands and files that install it */
@@ -751,13 +773,13 @@ export interface components {
             agentVersion: string;
             /** @description True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them */
             blocked: boolean;
-            /** @description The full SHA-256 of the agent's certificate, in hex */
-            certFingerprint: string;
+            /** @description The full SHA-256 of the agent's certificate, in hex. Absent for the local host */
+            certFingerprint?: string;
             /**
              * Format: date-time
-             * @description When the agent's certificate expires
+             * @description When the agent's certificate expires. Absent for the local host
              */
-            certNotAfter: string;
+            certNotAfter?: string;
             /**
              * Format: int64
              * @description How far the agent's clock is ahead of the server's, in seconds, measured when it last connected; negative is behind, 0 when it has not connected since the server started
@@ -792,10 +814,10 @@ export interface components {
              */
             revokedAt?: string;
             /**
-             * @description What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager
+             * @description What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this Bayplan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it
              * @enum {string}
              */
-            role: "leader" | "manager" | "worker" | "standalone";
+            role: "leader" | "manager" | "worker" | "standalone" | "local";
             /** @description The host owner allowed the agent to update itself. Reported only while it is connected */
             selfUpdate: boolean;
             /**
@@ -972,6 +994,8 @@ export interface components {
             envType?: "swarm" | "standalone";
             /** @description Failing and total services; null until service data is known */
             failingServices: components["schemas"]["EnvironmentFailingBody"] | null;
+            /** @description True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice */
+            foldOffered?: boolean;
             /** @description The environment ID, used in /api/env/{envId}/... */
             id: string;
             /** @description True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent */
@@ -1394,6 +1418,7 @@ export interface components {
             apiVersion?: string;
             arch?: string;
             detail?: string;
+            engineId?: string;
             engineName?: string;
             engineVersion?: string;
             hostname?: string;
@@ -1411,6 +1436,8 @@ export interface components {
             reason?: string;
             storageDriver?: string;
             supported: boolean;
+            swarmClusterId?: string;
+            swarmNodeId?: string;
             swarmNodeState?: string;
             type?: string;
         };
@@ -2467,6 +2494,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    foldLocalHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
             };
             /** @description Error */
             default: {

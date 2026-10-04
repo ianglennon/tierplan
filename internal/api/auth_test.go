@@ -176,8 +176,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	if agentSvc == nil {
 		agentSvc = agents.NewService(f.st, f.v, f.aud, f.clk.now)
 	}
+	var foldedNodes api.FoldedNodes
+	if f.envSvc != nil {
+		foldedNodes = f.envSvc
+	}
 	api.RegisterAgents(r, api.AgentsDeps{
-		Agents: agentSvc, Live: f.liveAgents, Cluster: f.agentCluster, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
+		Agents: agentSvc, Local: foldedNodes, Live: f.liveAgents, Cluster: f.agentCluster, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
 		Updater: f.updater, ServerVersion: f.serverVersion, Log: log,
 	})
 	if f.envSvc != nil && f.agg != nil {

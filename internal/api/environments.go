@@ -42,6 +42,7 @@ const (
 	problemAgentUpToDate          = "agent_up_to_date"
 	problemUpdateInProgress       = "update_in_progress"
 	problemNothingToChange        = "nothing_to_change"
+	problemFoldNotOffered         = "fold_not_offered"
 )
 
 // EnvironmentsDeps are the dependencies of the environment routes.
@@ -148,6 +149,7 @@ type EnvironmentBody struct {
 	EngineVersion    *string                          `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
 	LastSeen         *string                          `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
 	PendingClusterID string                           `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to"`
+	FoldOffered      bool                             `json:"foldOffered,omitempty" doc:"True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice"`
 }
 
 // InstallSwarmBody is the swarm install: one command for a manager, or a stack file.
@@ -251,6 +253,13 @@ type RemoveEnvironmentInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
+// FoldLocalInput folds this host into the swarm environment {envId}.
+type FoldLocalInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
 func rfc3339(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -287,6 +296,7 @@ func environmentBody(e envs.Environment) EnvironmentBody {
 		body.Agents = Some(EnvironmentAgentsBody{Connected: o.Agents.Connected, Expected: o.Agents.Expected})
 	}
 	body.PendingClusterID = e.PendingClusterID
+	body.FoldOffered = e.FoldOffered
 	if o.AgentVersion != "" {
 		body.AgentVersion = &o.AgentVersion
 	}
@@ -330,6 +340,8 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			return httpx.Problem(http.StatusUnprocessableEntity, problemInvalidName, "The name must be 1 to 64 characters.")
 		case errors.Is(err, envs.ErrNotFound), errors.Is(err, agents.ErrEnvironmentNotFound):
 			return httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
+		case errors.Is(err, envs.ErrFoldNotOffered):
+			return httpx.Problem(http.StatusConflict, problemFoldNotOffered, "This Bayplan host is not a manager of that swarm, or it was folded into it a moment ago.")
 		}
 		d.Log.Error("environment request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
@@ -462,6 +474,33 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			return nil, fail("remove environment", err)
 		}
 		return nil, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "foldLocalHost",
+		Method:      http.MethodPost,
+		Path:        "/api/environments/{envId}/fold-local",
+		Summary:     "Fold this Bayplan host into a swarm environment",
+		Description: "Offered when the Docker host Bayplan runs on is a manager of a swarm that is enrolled through agents: the local socket's own " +
+			"/info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment " +
+			"then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate " +
+			"local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. " +
+			"404 environment_not_found; 409 " + problemFoldNotOffered + " when the host is not a manager of that swarm, or was folded already. Needs " +
+			"environments.manage. Audited as environment.local_folded.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *FoldLocalInput) (*EnvironmentOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if err := d.Envs.FoldLocal(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent); err != nil {
+			return nil, fail("fold the local host", err)
+		}
+		e, err := d.Envs.Get(ctx, in.EnvID)
+		if err != nil {
+			return nil, fail("read the environment", err)
+		}
+		return one(e), nil
 	})
 
 	// Reconnect is deliberately not audited: it changes no Bayplan or Docker

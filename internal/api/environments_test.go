@@ -753,14 +753,18 @@ type agentFix struct {
 	tclk *tunneltest.Clock
 }
 
-func newAgentFix(t *testing.T) *agentFix {
+func newAgentFix(t *testing.T) *agentFix { return newAgentFixHost(t, "") }
+
+// newAgentFixHost is newAgentFix with a Docker host for the local socket, so a test can
+// opt the local host in beside its agent environments.
+func newAgentFixHost(t *testing.T, dockerHost string) *agentFix {
 	t.Helper()
 	f := newAuthFixture(t, config.Config{})
 	log := slog.New(slog.DiscardHandler)
 	tclk := tunneltest.NewClock(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC))
 	mon := envs.NewMonitor(log, tclk.Now, nil)
 	t.Cleanup(mon.StopAll)
-	svc := envs.NewService(f.st, f.aud, mon, "", "0123456789ab", tclk.Now)
+	svc := envs.NewService(f.st, f.aud, mon, dockerHost, "0123456789ab", tclk.Now)
 	f.envSvc = svc
 	f.snaps = envs.NewSnapshots(mon, 5*time.Second, tclk.Now)
 	f.hub = envs.NewHub(mon, f.snaps, log, tclk.Now)

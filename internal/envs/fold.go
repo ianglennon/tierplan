@@ -177,3 +177,31 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 	}
 	return nil
 }
+
+// FoldedNode is the local host as a node of the swarm environment it was folded into.
+type FoldedNode struct {
+	// ID is the node's target key (SocketTarget), the ID its row in a node list carries.
+	ID string
+	// Node is the host name its engine reports; NodeID its swarm node ID.
+	Node, NodeID string
+	// Role is manager or worker.
+	Role string
+	// Online is true while the socket's engine answers and is supported.
+	Online bool
+	// EngineVersion is what its last probe reported; empty before the first.
+	EngineVersion string
+}
+
+// FoldedNode is the folded local host of an agent environment, and false for an
+// environment that has none or does not exist.
+func (s *Service) FoldedNode(ctx context.Context, envID string) (FoldedNode, bool) {
+	row, err := s.st.RQ.GetEnvironment(ctx, envID)
+	if err != nil || row.Kind != KindAgent || !row.LocalNodeID.Valid {
+		return FoldedNode{}, false
+	}
+	v := s.socketView(row, s.now())
+	return FoldedNode{
+		ID: v.ID, Node: v.Node, NodeID: v.SwarmNodeID, Role: v.Role,
+		Online: v.Target.State == StateOnline, EngineVersion: v.Target.Probe.EngineVersion,
+	}, true
+}
