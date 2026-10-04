@@ -157,6 +157,58 @@ func TestHelloAnswersAnUnknownEnvironmentExactlyAsABadCertificate(t *testing.T) 
 	}
 }
 
+// T-02-21 (review WR-B-01). A hello whose certificate the environment's CA never
+// signed used to be answered by what the certificate's dates said: a forged leaf
+// that named a real environment and had a NotAfter in the past was told
+// cert_expired and "enrol the agent again", while the same leaf naming an unknown
+// environment was told auth_rejected. That was an environment-existence oracle for
+// anyone who could reach the server. Every certificate the CA did not sign must get
+// the same answer whatever its dates, and an agent the CA really issued for must
+// still be told it expired and be able to enrol again.
+func TestHelloAnswersAForgedExpiredCertificateExactlyAsAnUnknownEnvironment(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{})
+	env := srv.NewEnvironment(t, "Production")
+	id := enrolled(t, srv, env)
+
+	past := srv.Clock.Now().Add(-60 * 24 * time.Hour)
+	forgedExpiredReal := srv.Dial(t, tunneltest.Agent{Identity: &id, Cert: tunneltest.ForeignCert(t, env.ID, id.AgentID, id.Public(), past)})
+	forgedExpiredUnknown := srv.Dial(t, tunneltest.Agent{Identity: &id, Cert: tunneltest.ForeignCert(t, uuid.NewString(), id.AgentID, id.Public(), past)})
+	forgedCurrentReal := srv.Dial(t, tunneltest.Agent{Identity: &id, Cert: tunneltest.ForeignCert(t, env.ID, id.AgentID, id.Public(), srv.Clock.Now())})
+
+	for name, c := range map[string]*tunneltest.Conn{
+		"an expired forgery naming a real environment":     forgedExpiredReal,
+		"an expired forgery naming an unknown environment": forgedExpiredUnknown,
+		"a current forgery naming a real environment":      forgedCurrentReal,
+	} {
+		if c.Refuse == nil {
+			t.Fatalf("%s was not refused: welcome %+v", name, c.Welcome)
+		}
+		if c.Refuse.Code != wire.ReasonAuthRejected {
+			t.Errorf("%s: code = %q (%s), want %q", name, c.Refuse.Code, c.Refuse.Detail, wire.ReasonAuthRejected)
+		}
+		if strings.Contains(c.Refuse.Detail, env.ID) {
+			t.Errorf("%s: the refusal names the environment: %q", name, c.Refuse.Detail)
+		}
+	}
+	if *forgedExpiredReal.Refuse != *forgedExpiredUnknown.Refuse {
+		t.Fatalf("an expired forgery for a real environment is told %+v but for an unknown one %+v", *forgedExpiredReal.Refuse, *forgedExpiredUnknown.Refuse)
+	}
+	if *forgedExpiredReal.Refuse != *forgedCurrentReal.Refuse {
+		t.Fatalf("an expired forgery is told %+v but a current one %+v", *forgedExpiredReal.Refuse, *forgedCurrentReal.Refuse)
+	}
+
+	// The agent the CA really issued for is still told, and can recover.
+	srv.Clock.Advance(31 * 24 * time.Hour)
+	expired := srv.Hello(t, id)
+	if expired.Refuse == nil || expired.Refuse.Code != wire.ReasonCertExpired {
+		t.Fatalf("a genuine expired certificate: refuse %+v welcome %+v, want %q", expired.Refuse, expired.Welcome, wire.ReasonCertExpired)
+	}
+	renewed := srv.Enrol(t, env)
+	if renewed.Welcome == nil || len(renewed.Identity.Cert) == 0 {
+		t.Fatalf("the join token did not enrol the agent again: %+v", renewed.Welcome)
+	}
+}
+
 func TestTwoHellosForTheSameAgentReplaceTheOldSessionWithTheNewOne(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{})
 	env := srv.NewEnvironment(t, "Production")
