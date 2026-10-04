@@ -336,7 +336,7 @@ type hostRecorder struct {
 }
 
 func newHostRecorder(host string) *hostRecorder {
-	return &hostRecorder{host: host, next: http.DefaultTransport.(*http.Transport).Clone()}
+	return &hostRecorder{host: host, next: &http.Transport{}}
 }
 
 func (h *hostRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
