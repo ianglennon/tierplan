@@ -113,7 +113,7 @@ export interface paths {
         };
         /**
          * List the agents of an environment's nodes
-         * @description Every enrolled agent with its node name, role, status, whether its host is blocked, whether it is connected, versions, the full certificate fingerprint and expiry, clock offset, when it was last seen, the policy flags the host owner set and the last request it refused. Problems come first: revoked agents, then agents that are not connected, then the rest by node name. A local-socket environment has none. Never carries a key, a token or a serial. 404 environment_not_found when the environment does not exist or the caller may not read it. Needs environments.read on the environment.
+         * @description Every enrolled agent with its node name, role, status, whether its host is blocked, whether it is connected, versions, the full certificate fingerprint and expiry, clock offset, when it was last seen, the policy flags the host owner set and the last request it refused. Problems come first: revoked agents, then agents that are not connected, then the rest by node name. A local-socket environment has none, and an empty manualCleanup. Never carries a key, a token or a serial. 404 environment_not_found when the environment does not exist or the caller may not read it. Needs environments.read on the environment.
          */
         get: operations["listEnvironmentAgents"];
         put?: never;
@@ -300,7 +300,7 @@ export interface paths {
         post?: never;
         /**
          * Remove an environment
-         * @description Needs environments.delete. Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched (D-20). Audited as environment.removed.
+         * @description Needs environments.delete. Stops managing the host. Revokes every agent, disables the join token and deletes the environment, and changes nothing in Docker: its containers, networks and volumes are untouched (D-20, D-30). With uninstallAgents=true each online agent is first told to uninstall itself (a swarm's agents through one manager, which removes the agent service and its token secret; every agent removes its own container and state volume), and the request waits up to 30 seconds for their answers. Whatever they answer, or do not, the revoking and deletion follow, so hosts that were offline or refused keep their agent until the admin runs the manual cleanup command that GET /api/env/{envId}/agents gives. Audited as environment.removed, agent.revoked per agent, and agent.uninstalled per agent that confirmed.
          */
         delete: operations["removeEnvironment"];
         options?: never;
@@ -809,6 +809,8 @@ export interface components {
         AgentListBody: {
             /** @description One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent */
             items: components["schemas"]["AgentBody"][] | null;
+            /** @description The commands that take the agent off a host by hand, for the hosts Bayplan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token */
+            manualCleanup: components["schemas"]["InstallCleanupBody"];
         };
         AuditEntryDTO: {
             /** @description A stable action key such as auth.login */
@@ -2274,7 +2276,10 @@ export interface operations {
     };
     removeEnvironment: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also tell every online agent of the environment to remove itself from its host before the environment is removed */
+                uninstallAgents?: boolean;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */

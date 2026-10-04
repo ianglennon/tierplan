@@ -56,6 +56,7 @@ func TestFrozenMessagesMatchTheirGoldenFiles(t *testing.T) {
 	golden(t, "update", Update{T: TypeUpdate, ID: "req-1", Image: "ghcr.io/ianglennon/bayplan-agent:0.2.1"})
 	golden(t, "update_digest", Update{T: TypeUpdate, Image: "ghcr.io/ianglennon/bayplan-agent@sha256:" + strings.Repeat("a", 64)})
 	golden(t, "uninstall", Uninstall{T: TypeUninstall, ID: "req-2", RemoveData: true})
+	golden(t, "uninstall_service", Uninstall{T: TypeUninstall, ID: "req-3", RemoveData: true, Service: true})
 	golden(t, "update_result", UpdateResult{T: TypeUpdateResult, ID: "req-1", OK: true})
 	golden(t, "update_result_error", UpdateResult{T: TypeUpdateResult, OK: false, Error: UpdateErrImageNotOwnRepository})
 }
@@ -88,6 +89,15 @@ func TestFrozenMessagesIgnoreUnknownFieldsAndKeepTheKnownOnes(t *testing.T) {
 			t.Fatalf("an unknown field must not fail the parse: %v", err)
 		}
 		if m.T != TypeUninstall || m.ID != "req-2" || !m.RemoveData {
+			t.Fatalf("known fields lost: %+v", m)
+		}
+	})
+	t.Run("uninstall with service", func(t *testing.T) {
+		var m Uninstall
+		if err := json.Unmarshal(withExtra(t, golden(t, "uninstall_service", Uninstall{T: TypeUninstall, ID: "req-3", RemoveData: true, Service: true})), &m); err != nil {
+			t.Fatalf("an unknown field must not fail the parse: %v", err)
+		}
+		if m.T != TypeUninstall || m.ID != "req-3" || !m.RemoveData || !m.Service {
 			t.Fatalf("known fields lost: %+v", m)
 		}
 	})

@@ -43,6 +43,13 @@ type fakeEngine struct {
 	servicePosts []servicePost
 	serviceErr   int // when not zero, POST /services/{id}/update answers this status
 
+	// removals: what DELETE of a service, secret or volume was asked for, in order.
+	serviceDeletes, secretDeletes, volumeDeletes []string
+	// volumeBusy is how many DELETE /volumes/{name} answer 409 (in use) before one works.
+	volumeBusy int
+	// volumeErr, when not zero, makes DELETE /volumes/{name} answer this status always.
+	volumeErr int
+
 	containers map[string]*container.InspectResponse
 	nextID     int
 	creates    []createdContainer
@@ -207,6 +214,30 @@ func (f *fakeEngine) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, f.service)
+	case strings.HasPrefix(p, "/services/") && r.Method == http.MethodDelete:
+		id := strings.TrimPrefix(p, "/services/")
+		if f.service == "" || id != f.serviceID {
+			notFound(w, "service")
+			return
+		}
+		f.serviceDeletes = append(f.serviceDeletes, id)
+		f.service = ""
+		w.WriteHeader(http.StatusOK)
+	case strings.HasPrefix(p, "/secrets/") && r.Method == http.MethodDelete:
+		f.secretDeletes = append(f.secretDeletes, strings.TrimPrefix(p, "/secrets/"))
+		w.WriteHeader(http.StatusNoContent)
+	case strings.HasPrefix(p, "/volumes/") && r.Method == http.MethodDelete:
+		name := strings.TrimPrefix(p, "/volumes/")
+		switch {
+		case f.volumeErr != 0:
+			writeJSON(w, f.volumeErr, map[string]string{"message": "volume failure"})
+		case f.volumeBusy > 0:
+			f.volumeBusy--
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "remove " + name + ": volume is in use"})
+		default:
+			f.volumeDeletes = append(f.volumeDeletes, name)
+			w.WriteHeader(http.StatusNoContent)
+		}
 	case strings.HasPrefix(p, "/services/") && strings.HasSuffix(p, "/update") && r.Method == http.MethodPost:
 		id := strings.TrimSuffix(strings.TrimPrefix(p, "/services/"), "/update")
 		f.servicePosts = append(f.servicePosts, servicePost{ID: id, Version: r.URL.Query().Get("version"), Body: body})

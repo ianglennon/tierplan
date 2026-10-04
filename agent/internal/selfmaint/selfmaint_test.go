@@ -350,18 +350,6 @@ func TestTheEchoedIDIsCapped(t *testing.T) {
 	}
 }
 
-func TestUninstallIsNotYetImplementedWhenEnabled(t *testing.T) {
-	f := newFakeEngine(t)
-	m := newMaint(f, nil)
-	res := m.Uninstall(context.Background(), wire.Uninstall{T: wire.TypeUninstall, ID: "q"})
-	if res.OK || res.Error != wire.UpdateErrNotImplemented || res.ID != "q" {
-		t.Fatalf("want %s: %+v", wire.UpdateErrNotImplemented, res)
-	}
-	if c := f.callList(); len(c) != 0 {
-		t.Fatalf("Docker was called: %v", c)
-	}
-}
-
 func TestOwnContainerIDFromMountinfo(t *testing.T) {
 	const id = "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0"
 	info := strings.Join([]string{

@@ -42,10 +42,12 @@ type deps struct {
 	drop     func(privdrop.Options) (privdrop.Result, error)
 	connect  func(context.Context, connect.Config) error
 	recreate func(context.Context, selfmaint.RecreateOptions) error
-	getuid   func() int
-	getgid   func() int
-	stdout   io.Writer
-	stderr   io.Writer
+	// removeVolume is the removal helper of an uninstall.
+	removeVolume func(context.Context, selfmaint.RemoveVolumeOptions) error
+	getuid       func() int
+	getgid       func() int
+	stdout       io.Writer
+	stderr       io.Writer
 }
 
 func run(d deps) int {
@@ -131,8 +133,11 @@ func run(d deps) int {
 // the agent does. Exit 0 means the agent was replaced; 1 means it was not (the old
 // agent is back, or the error says what is left to do); 2 is a bad command line.
 func runHelper(d deps, log *slog.Logger) int {
+	if len(d.args) >= 2 && d.args[1] == "remove-volume" {
+		return runRemoveVolume(d, log)
+	}
 	if len(d.args) < 2 || d.args[1] != "recreate" {
-		_, _ = fmt.Fprintln(d.stderr, "usage: bayplan-agent helper recreate --target <container ID>")
+		_, _ = fmt.Fprintln(d.stderr, "usage: bayplan-agent helper recreate --target <container ID>\n       bayplan-agent helper remove-volume --wait <container ID> [--volume <name>] [--remove-container] [--keep-volume]")
 		return 2
 	}
 	flags := flag.NewFlagSet("helper recreate", flag.ContinueOnError)
@@ -163,6 +168,54 @@ func runHelper(d deps, log *slog.Logger) int {
 	})
 	if err != nil {
 		log.Error("the helper did not replace the agent", "error", err)
+		return 1
+	}
+	return 0
+}
+
+// runRemoveVolume is the helper of an uninstall (D-30):
+// `bayplan-agent helper remove-volume --wait <container ID> [--volume <name>]
+// [--remove-container] [--keep-volume]`. The agent started it from its own image with
+// the Docker socket and nothing else mounted. It waits until the agent's container no
+// longer exists, removing it itself with --remove-container (a standalone agent), and
+// then removes the named state volume. Exit 0 means it is done; 1 that something is left
+// that the admin's manual cleanup command removes; 2 is a bad command line.
+func runRemoveVolume(d deps, log *slog.Logger) int {
+	usage := "usage: bayplan-agent helper remove-volume --wait <container ID> [--volume <name>] [--remove-container] [--keep-volume]"
+	flags := flag.NewFlagSet("helper remove-volume", flag.ContinueOnError)
+	flags.SetOutput(d.stderr)
+	wait := flags.String("wait", "", "ID of the agent container to wait for")
+	volume := flags.String("volume", "", "name of the agent's state volume to remove once the container is gone")
+	removeContainer := flags.Bool("remove-container", false, "remove the agent container itself, after a moment for it to answer the server")
+	keepVolume := flags.Bool("keep-volume", false, "leave the volume")
+	if err := flags.Parse(d.args[2:]); err != nil {
+		return 2
+	}
+	if *wait == "" || flags.NArg() != 0 {
+		_, _ = fmt.Fprintln(d.stderr, usage)
+		return 2
+	}
+	cfg, err := config.LoadHelper(d.getenv)
+	if err != nil {
+		_, _ = fmt.Fprintln(d.stderr, "bayplan-agent:", err)
+		return 2
+	}
+	if _, err := d.drop(privdrop.Options{SocketPath: cfg.SocketPath, DockerGID: cfg.DockerGID}); err != nil {
+		log.Error("the helper could not drop its privileges, so it will not start", "error", err)
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	opts := selfmaint.RemoveVolumeOptions{
+		SocketPath: cfg.SocketPath, ContainerID: *wait, Volume: *volume, KeepVolume: *keepVolume,
+		RemoveContainer: *removeContainer, Timeout: selfmaint.RemoveTimeout, Log: log,
+	}
+	if *removeContainer {
+		opts.Grace = selfmaint.RemoveGrace
+	}
+	if err := d.removeVolume(ctx, opts); err != nil {
+		log.Error("the helper did not finish the removal", "error", err)
 		return 1
 	}
 	return 0
@@ -206,15 +259,16 @@ func touchState(dir string) error {
 
 func main() {
 	os.Exit(run(deps{
-		args:     os.Args[1:],
-		getenv:   os.Getenv,
-		readFile: os.ReadFile,
-		drop:     privdrop.Drop,
-		connect:  connect.Run,
-		recreate: selfmaint.RecreateAgent,
-		getuid:   os.Getuid,
-		getgid:   os.Getgid,
-		stdout:   os.Stdout,
-		stderr:   os.Stderr,
+		args:         os.Args[1:],
+		getenv:       os.Getenv,
+		readFile:     os.ReadFile,
+		drop:         privdrop.Drop,
+		connect:      connect.Run,
+		recreate:     selfmaint.RecreateAgent,
+		removeVolume: selfmaint.RemoveVolumeAfter,
+		getuid:       os.Getuid,
+		getgid:       os.Getgid,
+		stdout:       os.Stdout,
+		stderr:       os.Stderr,
 	}))
 }

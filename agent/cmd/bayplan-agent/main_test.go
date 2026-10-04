@@ -36,6 +36,9 @@ type harness struct {
 	// recreateErr is what the stubbed helper returns; gotRecreate what it was given.
 	recreateErr error
 	gotRecreate selfmaint.RecreateOptions
+	// removeErr is what the stubbed removal helper returns; gotRemove what it was given.
+	removeErr error
+	gotRemove selfmaint.RemoveVolumeOptions
 }
 
 func (h *harness) deps(env map[string]string, files map[string]string) deps {
@@ -65,6 +68,11 @@ func (h *harness) deps(env map[string]string, files map[string]string) deps {
 			h.events = append(h.events, "recreate")
 			h.gotRecreate = o
 			return h.recreateErr
+		},
+		removeVolume: func(_ context.Context, o selfmaint.RemoveVolumeOptions) error {
+			h.events = append(h.events, "remove-volume")
+			h.gotRemove = o
+			return h.removeErr
 		},
 		getuid: func() int { return 1000 },
 		getgid: func() int { return 1000 },
@@ -319,5 +327,68 @@ func TestTheHelperSubcommandRejectsABadDockerGID(t *testing.T) {
 	d.args = []string{"helper", "recreate", "--target", "x"}
 	if code := run(d); code != 2 || len(h.events) != 0 {
 		t.Fatalf("exit %d, events %v", code, h.events)
+	}
+}
+
+func TestTheRemoveVolumeHelperPassesItsFlagsAndDropsPrivilegesFirst(t *testing.T) {
+	h := &harness{}
+	d := h.deps(map[string]string{"BAYPLAN_AGENT_SOCKET": "/s/docker.sock", "BAYPLAN_AGENT_DOCKER_GID": "42"}, nil)
+	d.args = []string{"helper", "remove-volume", "--wait", "abc123", "--volume", "bayplan-agent", "--remove-container", "--keep-volume"}
+	if code := run(d); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
+	}
+	if want := []string{"drop", "remove-volume"}; !reflect.DeepEqual(h.events, want) {
+		t.Fatalf("events = %v, want %v: no connect loop, and the privileges are dropped first", h.events, want)
+	}
+	o := h.gotRemove
+	if o.ContainerID != "abc123" || o.Volume != "bayplan-agent" || o.SocketPath != "/s/docker.sock" || !o.RemoveContainer || !o.KeepVolume {
+		t.Fatalf("options = %+v", o)
+	}
+	if o.Grace <= 0 || o.Timeout != selfmaint.RemoveTimeout {
+		t.Fatalf("grace %v and timeout %v: a standalone helper gives the agent a moment to answer, and waits the stated time", o.Grace, o.Timeout)
+	}
+
+	h = &harness{}
+	d = h.deps(nil, nil)
+	d.args = []string{"helper", "remove-volume", "--wait", "abc123"}
+	if code := run(d); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
+	}
+	if o := h.gotRemove; o.RemoveContainer || o.KeepVolume || o.Volume != "" || o.Grace != 0 {
+		t.Fatalf("defaults = %+v: nothing is removed that was not asked for, and there is no grace without RemoveContainer", o)
+	}
+}
+
+func TestTheRemoveVolumeHelperExitCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		err     error
+		dropErr error
+		want    int
+		ran     bool
+	}{
+		{"success", []string{"helper", "remove-volume", "--wait", "x"}, nil, nil, 0, true},
+		{"failure", []string{"helper", "remove-volume", "--wait", "x"}, errors.New("boom"), nil, 1, true},
+		{"no wait", []string{"helper", "remove-volume"}, nil, nil, 2, false},
+		{"empty wait", []string{"helper", "remove-volume", "--wait", ""}, nil, nil, 2, false},
+		{"unknown flag", []string{"helper", "remove-volume", "--wait", "x", "--force"}, nil, nil, 2, false},
+		{"stray argument", []string{"helper", "remove-volume", "--wait", "x", "extra"}, nil, nil, 2, false},
+		{"failed drop", []string{"helper", "remove-volume", "--wait", "x"}, nil, errors.New("no"), 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &harness{removeErr: tc.err, dropErr: tc.dropErr}
+			d := h.deps(nil, nil)
+			d.args = tc.args
+			if code := run(d); code != tc.want {
+				t.Fatalf("exit %d, want %d; stderr: %s", code, tc.want, h.stderr.String())
+			}
+			if got := slices.Contains(h.events, "remove-volume"); got != tc.ran {
+				t.Fatalf("remove-volume ran = %v, want %v (events %v)", got, tc.ran, h.events)
+			}
+			if slices.Contains(h.events, "connect") {
+				t.Fatalf("the helper must not run the connect loop: %v", h.events)
+			}
+		})
 	}
 }

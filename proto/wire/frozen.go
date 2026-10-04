@@ -57,10 +57,19 @@ type Update struct {
 
 // Uninstall asks the agent to remove itself. RemoveData also removes its state
 // volume. ID is optional and opaque; the answer echoes it.
+//
+// Service is an optional field added after the first release of the message (D-30,
+// plan 02-29): on a swarm it asks a manager agent to remove the swarm service it
+// belongs to and the join-token secret that service names, which removes the agent
+// of every node. Only one agent of a swarm is asked that; every other agent is sent
+// the message without it, and starts removing its own state volume. It is absent from
+// the bytes when false, so a message without it is exactly what it always was, and an
+// agent that does not know it ignores it. It means nothing to a standalone agent.
 type Uninstall struct {
 	T          string `json:"t"`
 	ID         string `json:"id,omitempty"`
 	RemoveData bool   `json:"removeData"`
+	Service    bool   `json:"service,omitempty"`
 }
 
 // UpdateResult answers an Update or an Uninstall. ID echoes the request's id,

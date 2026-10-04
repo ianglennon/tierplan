@@ -14,9 +14,11 @@ import (
 	"strings"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/distribution/reference"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 )
@@ -410,4 +412,168 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+// RemoveTimeout is how long the removal helper waits for the agent's container to go
+// before it gives up. A swarm helper is started before the service is removed, so
+// this is also how long an admin has to remove the service by hand when no manager was
+// reachable to do it.
+const RemoveTimeout = 10 * time.Minute
+
+// RemoveGrace is how long a standalone removal helper waits before it removes the
+// agent's container, so the agent has answered the server first.
+const RemoveGrace = 3 * time.Second
+
+// RemoveVolumeOptions is what RemoveVolumeAfter needs.
+type RemoveVolumeOptions struct {
+	// SocketPath is the Docker socket. Empty means /var/run/docker.sock.
+	SocketPath string
+	// ContainerID is the agent container this waits for: the one that started the helper.
+	ContainerID string
+	// Volume is the agent's state volume, as the agent saw it in its own container's
+	// mounts. Empty means there is no volume to remove.
+	Volume string
+	// KeepVolume leaves the volume, so the helper only waits for, or removes, the container.
+	KeepVolume bool
+	// RemoveContainer makes the helper remove the agent's container itself, after Grace,
+	// instead of waiting for something else to (a standalone agent).
+	RemoveContainer bool
+	// Grace is the wait before RemoveContainer acts. Zero means none.
+	Grace time.Duration
+	// Timeout bounds the whole removal. Zero means RemoveTimeout.
+	Timeout time.Duration
+	// Poll is how often to look. Zero means one second.
+	Poll time.Duration
+	// Log receives one line per step. Nil means slog.Default().
+	Log *slog.Logger
+}
+
+// RemoveVolumeAfter is the removal helper of an uninstall (D-30). It runs in its own
+// short-lived container, which mounts nothing of the agent's: a volume in use cannot
+// be removed, and the helper must not be what keeps it in use. It waits until the
+// agent's container no longer exists, because a stopped container still holds its
+// volumes, and then removes the one named state volume.
+//
+// It touches only what the agent named: a target that is not labelled bayplan.agent=true,
+// or is a helper, is refused; the volume must be one the target mounts (checked while the
+// target still exists); nothing else is ever removed.
+func RemoveVolumeAfter(ctx context.Context, opts RemoveVolumeOptions) error {
+	if opts.SocketPath == "" {
+		opts.SocketPath = "/var/run/docker.sock"
+	}
+	if opts.Timeout <= 0 {
+		opts.Timeout = RemoveTimeout
+	}
+	if opts.Poll <= 0 {
+		opts.Poll = defaultPoll
+	}
+	log := opts.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	if opts.ContainerID == "" {
+		return errors.New("remove: no container to wait for")
+	}
+	cli, err := client.New(client.WithHost("unix://" + opts.SocketPath))
+	if err != nil {
+		return fmt.Errorf("remove: build the Docker client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
+
+	gone, err := checkRemoveTarget(ctx, cli, opts)
+	if err != nil {
+		return err
+	}
+	if !gone && opts.RemoveContainer {
+		if opts.Grace > 0 {
+			select {
+			case <-time.After(opts.Grace):
+			case <-ctx.Done():
+				return fmt.Errorf("remove: stopped before the agent's container was removed: %w", ctx.Err())
+			}
+		}
+		log.Info("remove: removing the agent's container", "id", opts.ContainerID)
+		if _, err := cli.ContainerRemove(ctx, opts.ContainerID, client.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+			return fmt.Errorf("remove: remove the agent's container: %w", err)
+		}
+	}
+
+	tick := time.NewTicker(opts.Poll)
+	defer tick.Stop()
+	for !gone {
+		_, err := cli.ContainerInspect(ctx, opts.ContainerID, client.ContainerInspectOptions{})
+		switch {
+		case err == nil:
+			// Still there, running or stopped: a stopped container holds its volume too.
+		case cerrdefs.IsNotFound(err):
+			gone = true
+			continue
+		case ctx.Err() == nil:
+			log.Warn("remove: cannot look at the agent's container", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("remove: the agent's container did not go away: %w", ctx.Err())
+		case <-tick.C:
+		}
+	}
+	log.Info("remove: the agent's container is gone")
+
+	if opts.KeepVolume || opts.Volume == "" {
+		return nil
+	}
+	var last error
+	for {
+		_, err := cli.VolumeRemove(ctx, opts.Volume, client.VolumeRemoveOptions{})
+		switch {
+		case err == nil:
+			log.Info("remove: the agent's volume was removed", "volume", opts.Volume)
+			return nil
+		case cerrdefs.IsNotFound(err):
+			return nil
+		case !cerrdefs.IsConflict(err):
+			if ctx.Err() != nil && last != nil {
+				// The time ran out inside this call, after the volume was seen in use.
+				return fmt.Errorf("remove: the volume %s stayed in use: %v", opts.Volume, last)
+			}
+			return fmt.Errorf("remove: remove the volume %s: %w", opts.Volume, err)
+		}
+		last = err
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("remove: the volume %s stayed in use: %v", opts.Volume, last)
+		case <-tick.C:
+		}
+	}
+}
+
+// checkRemoveTarget looks at the agent's container once, before anything is removed.
+// gone is true when it does not exist (anymore): then there is nothing to check it
+// against and the helper goes on to the volume the agent named.
+func checkRemoveTarget(ctx context.Context, cli *client.Client, opts RemoveVolumeOptions) (gone bool, err error) {
+	r, err := cli.ContainerInspect(ctx, opts.ContainerID, client.ContainerInspectOptions{})
+	if cerrdefs.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("remove: inspect the agent's container: %w", err)
+	}
+	c := r.Container
+	if c.Config == nil || c.Config.Labels[AgentLabel] != "true" {
+		return false, errors.New("remove: the container is not labelled bayplan.agent=true; refusing to touch it")
+	}
+	if c.Config.Labels[HelperLabel] == "true" {
+		return false, errors.New("remove: the container is a helper, not an agent; refusing to touch it")
+	}
+	if opts.Volume != "" && !opts.KeepVolume {
+		for _, mp := range c.Mounts {
+			if mp.Type == mount.TypeVolume && mp.Name == opts.Volume {
+				return false, nil
+			}
+		}
+		return false, fmt.Errorf("remove: the agent's container does not mount the volume %q; refusing to remove it", opts.Volume)
+	}
+	return false, nil
 }

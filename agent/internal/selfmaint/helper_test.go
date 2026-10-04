@@ -603,3 +603,196 @@ func TestFixtureContainerRoundTripsThroughJSON(t *testing.T) {
 		t.Fatalf("round trip: %v %+v", err, back)
 	}
 }
+
+// ---- the helper that removes the agent's volume ----
+
+// removeFixture is an agent container (the target) the helper waits for. The helper
+// polls every 2 ms and has no grace, so a test is quick.
+func removeFixture(t *testing.T, mut func(*RemoveVolumeOptions)) (*fakeEngine, RemoveVolumeOptions) {
+	t.Helper()
+	f := newFakeEngine(t)
+	oldAgent(f)
+	helperSelf(f)
+	opts := RemoveVolumeOptions{
+		SocketPath: f.sock, ContainerID: oldLong, Volume: "bayplan-agent",
+		Timeout: 5 * time.Second, Poll: 2 * time.Millisecond, Log: quietLog(),
+	}
+	if mut != nil {
+		mut(&opts)
+	}
+	return f, opts
+}
+
+// goneAfter removes the container from the fake engine after d, as swarm does when
+// it takes the task away.
+func goneAfter(f *fakeEngine, id string, d time.Duration) {
+	go func() {
+		time.Sleep(d)
+		f.mu.Lock()
+		delete(f.containers, id)
+		f.mu.Unlock()
+	}()
+}
+
+func TestRemoveVolumeWaitsForTheContainerToGoAndThenRemovesOnlyTheVolume(t *testing.T) {
+	f, opts := removeFixture(t, nil)
+	goneAfter(f, oldLong, 60*time.Millisecond)
+	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
+		t.Fatalf("the helper failed: %v", err)
+	}
+	if !reflect.DeepEqual(f.volumeDeletes, []string{"bayplan-agent"}) {
+		t.Fatalf("volumes removed: %v", f.volumeDeletes)
+	}
+	var removes []string
+	for _, w := range f.writes() {
+		removes = append(removes, w)
+	}
+	if len(removes) != 1 || !strings.HasPrefix(removes[0], "DELETE /volumes/bayplan-agent") {
+		t.Fatalf("the helper wrote %v, want only the volume removal (it did not touch the container: it waits for it to go)", removes)
+	}
+}
+
+func TestRemoveVolumeNeverRemovesTheVolumeWhileTheContainerStillExists(t *testing.T) {
+	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.Timeout = 80 * time.Millisecond })
+	err := RemoveVolumeAfter(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "did not go away") {
+		t.Fatalf("want a timeout error, got %v", err)
+	}
+	if len(f.volumeDeletes) != 0 {
+		t.Fatalf("the volume was removed while the container still existed: %v", f.volumeDeletes)
+	}
+}
+
+func TestRemoveVolumeWithRemoveContainerRemovesTheAgentThenTheVolume(t *testing.T) {
+	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.RemoveContainer = true })
+	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
+		t.Fatalf("the helper failed: %v", err)
+	}
+	w := f.writes()
+	iC, iV := indexOf(w, "DELETE /containers/"+oldLong, "force=1"), indexOf(w, "DELETE /volumes/bayplan-agent", "")
+	if iC < 0 || iV < 0 || iC > iV {
+		t.Fatalf("want a forced removal of the agent container and then of its volume, got %v", w)
+	}
+	if _, ok := f.containers[oldLong]; ok {
+		t.Fatal("the agent container is still there")
+	}
+	if _, ok := f.containers[helperID]; !ok {
+		t.Fatal("the helper's own container was removed")
+	}
+}
+
+func TestRemoveVolumeWithKeepVolumeRemovesNoVolume(t *testing.T) {
+	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.RemoveContainer, o.KeepVolume, o.Volume = true, true, "" })
+	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
+		t.Fatalf("the helper failed: %v", err)
+	}
+	if len(f.volumeDeletes) != 0 {
+		t.Fatalf("a volume was removed: %v", f.volumeDeletes)
+	}
+	if _, ok := f.containers[oldLong]; ok {
+		t.Fatal("the agent container is still there")
+	}
+}
+
+func TestRemoveVolumeWaitsForTheGraceBeforeRemovingTheContainer(t *testing.T) {
+	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.RemoveContainer, o.Grace = true, 150*time.Millisecond })
+	start := time.Now()
+	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
+		t.Fatalf("the helper failed: %v", err)
+	}
+	if took := time.Since(start); took < 150*time.Millisecond {
+		t.Fatalf("the container was removed after %v, before the grace the agent needs to answer", took)
+	}
+	_ = f
+}
+
+func TestRemoveVolumeRetriesWhileTheVolumeIsStillInUse(t *testing.T) {
+	f, opts := removeFixture(t, nil)
+	f.volumeBusy = 3
+	goneAfter(f, oldLong, 10*time.Millisecond)
+	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
+		t.Fatalf("the helper failed: %v", err)
+	}
+	if !reflect.DeepEqual(f.volumeDeletes, []string{"bayplan-agent"}) {
+		t.Fatalf("volumes removed: %v", f.volumeDeletes)
+	}
+}
+
+func TestRemoveVolumeGivesUpOnAVolumeThatStaysInUse(t *testing.T) {
+	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.Timeout = 100 * time.Millisecond })
+	f.volumeBusy = 1 << 20
+	goneAfter(f, oldLong, 5*time.Millisecond)
+	err := RemoveVolumeAfter(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Fatalf("want an in-use error, got %v", err)
+	}
+}
+
+func TestRemoveVolumeReportsAVolumeThatCannotBeRemoved(t *testing.T) {
+	f, opts := removeFixture(t, nil)
+	f.volumeErr = 500
+	goneAfter(f, oldLong, 5*time.Millisecond)
+	if err := RemoveVolumeAfter(context.Background(), opts); err == nil {
+		t.Fatal("a failed volume removal was reported as success")
+	}
+}
+
+func TestRemoveVolumeTreatsAVolumeThatIsAlreadyGoneAsDone(t *testing.T) {
+	f, opts := removeFixture(t, nil)
+	f.volumeErr = 404
+	goneAfter(f, oldLong, 5*time.Millisecond)
+	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
+		t.Fatalf("a volume that does not exist is already removed: %v", err)
+	}
+}
+
+func TestRemoveVolumeProceedsWhenTheContainerWasAlreadyGoneBeforeItStarted(t *testing.T) {
+	f, opts := removeFixture(t, nil)
+	delete(f.containers, oldLong)
+	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
+		t.Fatalf("the helper failed: %v", err)
+	}
+	if !reflect.DeepEqual(f.volumeDeletes, []string{"bayplan-agent"}) {
+		t.Fatalf("volumes removed: %v", f.volumeDeletes)
+	}
+}
+
+func TestRemoveVolumeRefusesATargetThatIsNotAnAgentOrIsAHelper(t *testing.T) {
+	for name, mut := range map[string]func(*container.InspectResponse){
+		"not labelled": func(c *container.InspectResponse) { c.Config.Labels = map[string]string{"owner": "ops"} },
+		"a helper":     func(c *container.InspectResponse) { c.Config.Labels["bayplan.agent.helper"] = "true" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.RemoveContainer = true })
+			mut(f.containers[oldLong])
+			if err := RemoveVolumeAfter(context.Background(), opts); err == nil {
+				t.Fatal("a target that is not an agent was accepted")
+			}
+			if w := f.writes(); len(w) != 0 {
+				t.Fatalf("the helper wrote %v", w)
+			}
+		})
+	}
+}
+
+func TestRemoveVolumeRefusesAVolumeTheTargetDoesNotMount(t *testing.T) {
+	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.Volume, o.RemoveContainer = "somebodys-data", true })
+	if err := RemoveVolumeAfter(context.Background(), opts); err == nil {
+		t.Fatal("a volume the agent does not mount was accepted")
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Fatalf("the helper wrote %v", w)
+	}
+}
+
+func TestRemoveVolumeStopsWhenItsContextEnds(t *testing.T) {
+	f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.Timeout = time.Hour })
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(30 * time.Millisecond); cancel() }()
+	if err := RemoveVolumeAfter(ctx, opts); err == nil {
+		t.Fatal("a cancelled helper reported success")
+	}
+	if len(f.volumeDeletes) != 0 {
+		t.Fatalf("volumes removed: %v", f.volumeDeletes)
+	}
+}

@@ -173,14 +173,14 @@ func TestAnUninstallMessageReachesSelfMaintenanceAndItsResultGoesBack(t *testing
 		return wire.UpdateResult{T: wire.TypeUpdateResult, ID: id, Error: wire.UpdateErrSelfUpdateDisabled}
 	}}
 	r := newMaintRig(t, svc)
-	r.send(`{"t":"uninstall","id":"u-1","removeData":true}`)
+	r.send(`{"t":"uninstall","id":"u-1","removeData":true,"service":true}`)
 	res := r.result()
 	if res.OK || res.ID != "u-1" || res.Error != wire.UpdateErrSelfUpdateDisabled {
 		t.Fatalf("result = %+v", res)
 	}
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
-	if len(svc.uninstall) != 1 || !svc.uninstall[0].RemoveData {
+	if len(svc.uninstall) != 1 || !svc.uninstall[0].RemoveData || !svc.uninstall[0].Service {
 		t.Fatalf("self-maintenance got %+v", svc.uninstall)
 	}
 }

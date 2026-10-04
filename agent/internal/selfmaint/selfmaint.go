@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 // Package selfmaint is the agent's own maintenance: updating itself to a new
-// image of its own repository and, in a later plan, removing itself. It is the one
+// image of its own repository and removing itself. It is the one
 // agent package that may hold a Docker client, and it is not the passthrough proxy:
 // the proxy forwards a read-only allowlist for the server, while this package does
 // a handful of writes the agent decides on itself, each scoped to the agent (D-26).
@@ -11,6 +11,8 @@
 //   - It may update only its own service (swarm).
 //   - It may create, start and remove only a helper container from its own image,
 //     and replace its own container (standalone).
+//   - It may remove its own service and the join-token secret that service names, and
+//     have a helper remove its own container and state volume (uninstall).
 //
 // "Its own" is the label bayplan.agent=true on the agent's own container, found by
 // the container's ID, plus the swarm service ID that container carries. Nothing is
@@ -192,17 +194,6 @@ func (m *Maint) Update(ctx context.Context, msg wire.Update) wire.UpdateResult {
 	}
 	res.OK = true
 	return res
-}
-
-// Uninstall removes the agent. Only the host owner's switch is implemented so
-// far; the removal itself arrives with plan 29.
-func (m *Maint) Uninstall(_ context.Context, msg wire.Uninstall) wire.UpdateResult {
-	res := result(msg.ID)
-	if !m.cfg.SelfUpdate {
-		m.log.Warn("the server asked this agent to uninstall, and BAYPLAN_AGENT_SELF_UPDATE=false refuses it")
-		return refuse(res, wire.UpdateErrSelfUpdateDisabled)
-	}
-	return refuse(res, wire.UpdateErrNotImplemented)
 }
 
 // parseImage accepts a full reference: a repository with a tag, a digest or both.
