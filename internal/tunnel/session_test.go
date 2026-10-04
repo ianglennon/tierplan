@@ -525,3 +525,119 @@ func TestARenewFromAnAgentWhoseVerifierFailsIsAnsweredInternalAndRetryable(t *te
 		t.Fatalf("answer = %+v, %v; want renew_refused internal_error", got, err)
 	}
 }
+
+// --- addresses and pins pushed to connected agents (D-19, D-06) ---
+
+const (
+	endpointOld = "wss://old.example.com/agent/connect"
+	endpointNew = "wss://new.example.com/bayplan/agent/connect"
+	testPin     = "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+)
+
+// withEndpoint starts a server whose hub tells agents to dial the endpoint in *cur,
+// which a test changes while agents are connected.
+func withEndpoint(t *testing.T, cur *atomic.Value) *tunneltest.Server {
+	t.Helper()
+	return tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub {
+		return h.WithTiming(10*time.Second, 1000*day).
+			WithEndpoint(func() string { return cur.Load().(string) }).
+			WithPins(func() []string { return []string{testPin} })
+	}})
+}
+
+func readURLUpdate(t *testing.T, lines *controlLines) wire.URLUpdate {
+	t.Helper()
+	var u wire.URLUpdate
+	if err := json.Unmarshal(lines.next(), &u); err != nil || u.T != wire.TypeURLs {
+		t.Fatalf("message = %+v, %v; want a urls message", u, err)
+	}
+	return u
+}
+
+func TestTheWelcomeCarriesTheEndpointAgentsAreToldToDial(t *testing.T) {
+	var cur atomic.Value
+	cur.Store(endpointOld)
+	srv := withEndpoint(t, &cur)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	if got := c.Welcome.URLs; len(got) != 1 || got[0] != endpointOld {
+		t.Fatalf("welcome URLs = %v, want [%s]", got, endpointOld)
+	}
+	if got := c.Welcome.Pins; len(got) != 1 || got[0] != testPin {
+		t.Errorf("welcome pins = %v, want [%s]", got, testPin)
+	}
+}
+
+func TestPushURLsWritesTheNewAddressFirstAndThePinsToEveryConnectedAgent(t *testing.T) {
+	var cur atomic.Value
+	cur.Store(endpointOld)
+	srv := withEndpoint(t, &cur)
+	var streams []*controlLines
+	for _, name := range []string{"A", "B", "C"} {
+		c := srv.Enrol(t, srv.NewEnvironment(t, name))
+		streams = append(streams, readControlLines(t, c.OpenControl(t)))
+	}
+	srv.Events.WaitLen(t, 3)
+	for _, s := range streams {
+		s.none("nothing is pushed until an address changes")
+	}
+
+	cur.Store(endpointNew)
+	if n := srv.Hub.PushURLs([]string{endpointNew}, srv.Hub.Pins()); n != 3 {
+		t.Fatalf("PushURLs wrote to %d sessions, want 3", n)
+	}
+	for i, s := range streams {
+		u := readURLUpdate(t, s)
+		if len(u.URLs) != 1 || u.URLs[0] != endpointNew || len(u.Pins) != 1 || u.Pins[0] != testPin {
+			t.Errorf("agent %d was sent %+v", i, u)
+		}
+	}
+}
+
+func TestPushURLsSkipsASessionWithNoControlStreamAndNeverFails(t *testing.T) {
+	var cur atomic.Value
+	cur.Store(endpointOld)
+	srv := withEndpoint(t, &cur)
+	srv.Enrol(t, srv.NewEnvironment(t, "NoControl"))
+	srv.Events.WaitLen(t, 1)
+	if n := srv.Hub.PushURLs([]string{endpointNew}, nil); n != 0 {
+		t.Fatalf("PushURLs wrote to %d sessions that never opened a control stream", n)
+	}
+}
+
+func TestPushURLsWithNoAddressesWritesNothing(t *testing.T) {
+	var cur atomic.Value
+	cur.Store(endpointOld)
+	srv := withEndpoint(t, &cur)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "A"))
+	lines := readControlLines(t, c.OpenControl(t))
+	srv.Events.WaitLen(t, 1)
+	if n := srv.Hub.PushURLs(nil, []string{testPin}); n != 0 {
+		t.Fatalf("PushURLs wrote to %d sessions with no address to give", n)
+	}
+	lines.none("an empty address list is not a message")
+}
+
+func TestAnAgentThatOpensItsControlStreamAfterTheAddressChangedIsToldAtOnce(t *testing.T) {
+	var cur atomic.Value
+	cur.Store(endpointOld)
+	srv := withEndpoint(t, &cur)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production")) // welcomed with the old address
+	srv.Events.WaitLen(t, 1)
+
+	cur.Store(endpointNew) // changed after the welcome, before the control stream
+	lines := readControlLines(t, c.OpenControl(t))
+	u := readURLUpdate(t, lines)
+	if len(u.URLs) != 1 || u.URLs[0] != endpointNew {
+		t.Fatalf("the late control stream was sent %+v, want the new address", u)
+	}
+}
+
+func TestAnAgentWelcomedWithTheCurrentAddressIsNotToldAgainWhenItOpensItsControlStream(t *testing.T) {
+	var cur atomic.Value
+	cur.Store(endpointOld)
+	srv := withEndpoint(t, &cur)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	srv.Events.WaitLen(t, 1)
+	lines := readControlLines(t, c.OpenControl(t))
+	lines.none("the welcome already carried the current address")
+}

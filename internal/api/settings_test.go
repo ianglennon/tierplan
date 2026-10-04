@@ -4,10 +4,12 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/auth"
@@ -23,6 +25,8 @@ type settingsResp struct {
 	AgentURL        string `json:"agentUrl"`
 	AgentURLLocked  bool   `json:"agentUrlLocked"`
 	AgentEndpoint   string `json:"agentEndpoint"`
+	EnrolledAgents  int    `json:"enrolledAgents"`
+	OfflineAgents   int    `json:"offlineAgents"`
 }
 
 func (f *authFixture) getSettings(t *testing.T, cookie string) (int, settingsResp) {
@@ -404,5 +408,171 @@ func TestAgentURLNeedsSettingsPermissions(t *testing.T) {
 	}
 	if f.inst.AgentURL() != "" {
 		t.Fatal("a refused PATCH changed the agent URL")
+	}
+}
+
+// Agents in the settings (plan 02-26, D-18, D-19): how many are enrolled and
+// offline, and a changed address pushed to the connected ones.
+
+// fakeSettingsAgents stands in for the hub and the agents service.
+type fakeSettingsAgents struct {
+	mu        sync.Mutex
+	enrolled  []string
+	connected map[string]bool
+	pins      []string
+	pushes    [][]string
+	pushPins  [][]string
+	err       error
+}
+
+func (f *fakeSettingsAgents) EnrolledAgentIDs(context.Context) ([]string, error) {
+	return f.enrolled, f.err
+}
+
+func (f *fakeSettingsAgents) Connected(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.connected[id]
+}
+
+func (f *fakeSettingsAgents) PushURLs(urls, pins []string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pushes = append(f.pushes, urls)
+	f.pushPins = append(f.pushPins, pins)
+	return len(f.connected)
+}
+
+func (f *fakeSettingsAgents) Pins() []string { return f.pins }
+
+func (f *fakeSettingsAgents) pushed() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]string(nil), f.pushes...)
+}
+
+func agentsFixture(t *testing.T, cfg config.Config, fake *fakeSettingsAgents) (*authFixture, string, string) {
+	t.Helper()
+	f := newAuthFixture(t, cfg)
+	f.settingsAgents = fake
+	f.h = f.build(t)
+	cookie, csrf := f.signIn(t, "admin", false)
+	return f, cookie, csrf
+}
+
+func TestGetSettingsCountsEnrolledAgentsAndTheOnesWithNoConnection(t *testing.T) {
+	fake := &fakeSettingsAgents{enrolled: []string{"a", "b", "c"}, connected: map[string]bool{"a": true, "c": true}}
+	f, cookie, _ := agentsFixture(t, config.Config{}, fake)
+	code, s := f.getSettings(t, cookie)
+	if code != http.StatusOK || s.EnrolledAgents != 3 || s.OfflineAgents != 1 {
+		t.Fatalf("got %d %+v, want 3 enrolled and 1 offline", code, s)
+	}
+	fake.connected = map[string]bool{}
+	if _, s := f.getSettings(t, cookie); s.OfflineAgents != 3 {
+		t.Errorf("offline = %d with nobody connected, want 3", s.OfflineAgents)
+	}
+}
+
+func TestGetSettingsWithNoAgentsOrNoAgentSourceCountsZero(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, _ := f.signIn(t, "admin", false)
+	if _, s := f.getSettings(t, cookie); s.EnrolledAgents != 0 || s.OfflineAgents != 0 {
+		t.Fatalf("no agent source: %+v", s)
+	}
+	f2, cookie2, _ := agentsFixture(t, config.Config{}, &fakeSettingsAgents{})
+	if _, s := f2.getSettings(t, cookie2); s.EnrolledAgents != 0 || s.OfflineAgents != 0 {
+		t.Fatalf("no agents: %+v", s)
+	}
+}
+
+func TestGetSettingsStillAnswersWhenTheAgentsCannotBeCounted(t *testing.T) {
+	fake := &fakeSettingsAgents{err: context.DeadlineExceeded}
+	f, cookie, _ := agentsFixture(t, config.Config{}, fake)
+	code, s := f.getSettings(t, cookie)
+	if code != http.StatusOK || s.EnrolledAgents != 0 || s.OfflineAgents != 0 {
+		t.Fatalf("got %d %+v: a failed count must not take the settings page down", code, s)
+	}
+}
+
+func TestSavingANewAgentURLPushesItFirstWithTheCurrentPinsToConnectedAgents(t *testing.T) {
+	fake := &fakeSettingsAgents{pins: []string{"sha256/x"}, connected: map[string]bool{"a": true}}
+	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
+	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://pub.example"})
+	base := len(fake.pushed())
+
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://bayplan.lan:7480"}); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	got := fake.pushed()
+	if len(got) != base+1 || len(got[base]) != 1 || got[base][0] != "wss://bayplan.lan:7480/agent/connect" {
+		t.Fatalf("pushes = %v, want one more with the new endpoint", got)
+	}
+	if pins := fake.pushPins[base]; len(pins) != 1 || pins[0] != "sha256/x" {
+		t.Errorf("pushed pins = %v, want the hub's current pins", pins)
+	}
+}
+
+func TestChangingThePublicURLPushesTheNewEndpointWhenItIsWhatAgentsDial(t *testing.T) {
+	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
+	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
+	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://old.example"})
+	base := len(fake.pushed())
+
+	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://new.example/bayplan"})
+	got := fake.pushed()
+	if len(got) != base+1 || got[base][0] != "wss://new.example/bayplan/agent/connect" {
+		t.Fatalf("pushes = %v, want the endpoint of the new public URL", got)
+	}
+}
+
+func TestClearingTheAgentURLPushesTheEndpointOfThePublicURL(t *testing.T) {
+	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
+	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
+	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://pub.example", "agentUrl": "https://lan.internal:7480"})
+	base := len(fake.pushed())
+
+	f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": ""})
+	got := fake.pushed()
+	if len(got) != base+1 || got[base][0] != "wss://pub.example/agent/connect" {
+		t.Fatalf("pushes = %v, want the public URL's endpoint after the agent URL is cleared", got)
+	}
+}
+
+func TestNothingIsPushedWhenTheEndpointAgentsDialDidNotChange(t *testing.T) {
+	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
+	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
+	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://pub.example", "agentUrl": "https://lan.internal:7480"})
+	base := len(fake.pushed())
+
+	// The public URL changes under an agent URL: agents keep dialing the agent URL.
+	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://other.example"})
+	// The name changes.
+	f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Renamed"})
+	// The same value again, and an invalid one.
+	f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://lan.internal:7480"})
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "ftp://nope"}); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid agent URL: %d", rec.Code)
+	}
+	if got := fake.pushed(); len(got) != base {
+		t.Fatalf("pushes = %v, want none after changes that left the endpoint alone", got[base:])
+	}
+}
+
+func TestARefusedChangeOfALockedAgentURLPushesNothing(t *testing.T) {
+	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
+	f, cookie, csrf := agentsFixture(t, config.Config{PublicURL: "https://pub.example", AgentURL: "https://agent.internal:7480"}, fake)
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://elsewhere.example"}); rec.Code != http.StatusConflict {
+		t.Fatalf("locked: %d", rec.Code)
+	}
+	if got := fake.pushed(); len(got) != 0 {
+		t.Fatalf("pushes = %v after a refused change", got)
+	}
+}
+
+func TestAChangeWithNoAgentSourceStillSaves(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://bayplan.lan:7480"}); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
 }

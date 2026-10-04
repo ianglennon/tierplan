@@ -77,7 +77,11 @@ type reply struct {
 	heartbeatMs int      // zero: 40 ms, so a test sees heartbeats quickly
 	drop        bool     // close the connection right after the welcome
 	pins        []string // the pins in the welcome
-	toAgent     []string
+	urls        []string // the addresses in the welcome
+	// hangup ends the connection a moment after the control stream has opened and
+	// toAgent has been written, so the agent reconnects.
+	hangup  bool
+	toAgent []string
 	// onRenew answers a renew message from the agent with the message it returns;
 	// nil answers nothing.
 	onRenew func() any
@@ -157,7 +161,7 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	if hb == 0 {
 		hb = 40
 	}
-	b, _ = json.Marshal(wire.Welcome{T: wire.TypeWelcome, AgentID: "agent-7", EnvID: "env-7", Cert: rep.cert, HeartbeatMs: hb, Pins: rep.pins, ServerTime: time.Now().UnixMilli()})
+	b, _ = json.Marshal(wire.Welcome{T: wire.TypeWelcome, AgentID: "agent-7", EnvID: "env-7", Cert: rep.cert, HeartbeatMs: hb, Pins: rep.pins, URLs: rep.urls, ServerTime: time.Now().UnixMilli()})
 	if c.Write(ctx, websocket.MessageText, b) != nil {
 		return
 	}
@@ -187,6 +191,10 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 	for _, line := range rep.toAgent {
 		_, _ = st.Write([]byte(line + "\n"))
+	}
+	if rep.hangup {
+		time.Sleep(150 * time.Millisecond)
+		return
 	}
 	for _, raw := range rep.dockerRequests {
 		go func() {

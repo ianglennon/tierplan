@@ -32,6 +32,8 @@ const (
 	ConnectedFile = "connected"
 	// PinsFile holds the server certificate pins the agent keeps (D-06).
 	PinsFile = "pins.json"
+	// URLsFile holds the addresses the agent dials, newest first (D-19).
+	URLsFile = "urls.json"
 
 	fileMode  = 0o600
 	tmpSuffix = ".tmp"
@@ -344,3 +346,53 @@ func SavePins(dir string, entries []PinEntry) error {
 	}
 	return nil
 }
+
+// URLOverlap is how long an address that the server stopped listing stays in the
+// dial list as a fallback (D-19).
+const URLOverlap = 30 * 24 * time.Hour
+
+// MaxURLs bounds the addresses kept. A server lists one; the cap keeps a
+// misbehaving one from growing the file.
+const MaxURLs = 8
+
+// MaxURLLen is the longest address the agent keeps.
+const MaxURLLen = 2048
+
+// URLEntry is one address the agent may dial. ExpiresAt is zero while the server
+// lists it, and is the end of its overlap window once it stopped.
+type URLEntry struct {
+	URL       string    `json:"url"`
+	ExpiresAt time.Time `json:"expiresAt,omitzero"`
+}
+
+// ValidURL reports whether s is an address the agent would dial: a ws or wss URL
+// with a host, no user name, query or fragment, no control characters and at most
+// MaxURLLen bytes.
+func ValidURL(s string) bool { return false }
+
+// live reports whether e still counts at now.
+func (e URLEntry) live(now time.Time) bool {
+	return e.ExpiresAt.IsZero() || now.Before(e.ExpiresAt)
+}
+
+// MergeURLs is the addresses to keep after the server listed fromServer, given the
+// current ones. Every valid address the server lists is kept in the server's order
+// with no expiry, so the newest is dialed first. A current address it no longer
+// lists stays after those for URLOverlap from the first time it was left out, and
+// is then dropped; hearing the same list again does not extend that. Invalid
+// entries are ignored and the result is capped at MaxURLs.
+func MergeURLs(current []URLEntry, fromServer []string, now time.Time) []URLEntry { return nil }
+
+// ActiveURLs is the addresses that count at now, in dial order.
+func ActiveURLs(entries []URLEntry, now time.Time) []string { return nil }
+
+// EqualURLs reports whether two lists hold the same addresses and deadlines in the
+// same order.
+func EqualURLs(a, b []URLEntry) bool { return false }
+
+// LoadURLs reads the addresses in dir. A directory with no urls.json has none, and
+// an entry that is not a valid address is dropped.
+func LoadURLs(dir string) ([]URLEntry, error) { return nil, nil }
+
+// SaveURLs replaces urls.json with entries, atomically and private to the agent.
+func SaveURLs(dir string, entries []URLEntry) error { return nil }

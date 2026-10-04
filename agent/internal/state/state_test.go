@@ -386,3 +386,166 @@ func TestAnInterruptedDiscardLeavesADirectoryThatReadsAsNotEnrolled(t *testing.T
 		t.Fatalf("Save over the leftovers: %v", err)
 	}
 }
+
+// --- the addresses the server pushed (D-19) ---
+
+const (
+	urlA = "wss://bayplan.example.com/agent/connect"
+	urlB = "wss://bayplan.internal:7480/agent/connect"
+	urlC = "wss://c.example.org/bayplan/agent/connect"
+)
+
+func urlsOf(es []URLEntry) []string {
+	var out []string
+	for _, e := range es {
+		out = append(out, e.URL)
+	}
+	return out
+}
+
+func TestMergeURLsStartsFromWhatTheServerSaysAndKeepsItsOrder(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	got := MergeURLs(nil, []string{urlB, urlC}, now)
+	if !slicesEqual(urlsOf(got), []string{urlB, urlC}) {
+		t.Fatalf("URLs = %v, want B then C in the server's order", urlsOf(got))
+	}
+	for _, e := range got {
+		if !e.ExpiresAt.IsZero() {
+			t.Errorf("%s expires %v, want never while the server lists it", e.URL, e.ExpiresAt)
+		}
+	}
+}
+
+func TestMergeURLsPutsTheNewURLFirstAndKeepsThePreviousOneAsAFallbackFor30Days(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	current := []URLEntry{{URL: urlA}}
+
+	got := MergeURLs(current, []string{urlB}, now)
+	if !slicesEqual(urlsOf(got), []string{urlB, urlA}) {
+		t.Fatalf("URLs = %v, want the new B first and the previous A after it", urlsOf(got))
+	}
+	if !got[0].ExpiresAt.IsZero() {
+		t.Errorf("the new URL expires %v, want never", got[0].ExpiresAt)
+	}
+	if want := now.Add(URLOverlap); !got[1].ExpiresAt.Equal(want) {
+		t.Errorf("the previous URL expires %v, want %v", got[1].ExpiresAt, want)
+	}
+	if URLOverlap != 30*24*time.Hour {
+		t.Errorf("URLOverlap = %v, want 30 days", URLOverlap)
+	}
+
+	// Hearing the same list again does not start the 30 days over.
+	again := MergeURLs(got, []string{urlB}, now.Add(10*24*time.Hour))
+	if !EqualURLs(again, got) {
+		t.Errorf("a repeated list changed the entries: %+v, was %+v", again, got)
+	}
+}
+
+func TestMergeURLsDropsThePreviousURLOnceItsThirtyDaysAreUp(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	got := MergeURLs([]URLEntry{{URL: urlA}}, []string{urlB}, now)
+
+	if got := MergeURLs(got, []string{urlB}, now.Add(URLOverlap-time.Second)); !slicesContain(urlsOf(got), urlA) {
+		t.Errorf("A dropped before its expiry: %+v", got)
+	}
+	if got := MergeURLs(got, []string{urlB}, now.Add(URLOverlap)); slicesContain(urlsOf(got), urlA) {
+		t.Errorf("A kept at its expiry: %+v", got)
+	}
+	if got := ActiveURLs(got, now.Add(URLOverlap)); !slicesEqual(got, []string{urlB}) {
+		t.Errorf("ActiveURLs after the expiry = %v, want only B", got)
+	}
+	if got := ActiveURLs(got, now); !slicesEqual(got, []string{urlB, urlA}) {
+		t.Errorf("ActiveURLs inside the overlap = %v, want B then A", got)
+	}
+}
+
+func TestActiveURLsSkipsTheExpiredAndKeepsTheOrder(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	es := []URLEntry{{URL: urlB}, {URL: urlA, ExpiresAt: now.Add(time.Hour)}, {URL: urlC, ExpiresAt: now}}
+	if got := ActiveURLs(es, now); !slicesEqual(got, []string{urlB, urlA}) {
+		t.Fatalf("ActiveURLs = %v, want B then A", got)
+	}
+}
+
+func TestMergeURLsBringsBackAURLTheServerListsAgain(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	current := []URLEntry{{URL: urlB}, {URL: urlA, ExpiresAt: now.Add(time.Hour)}}
+	got := MergeURLs(current, []string{urlA}, now)
+	if len(got) != 2 || got[0].URL != urlA || !got[0].ExpiresAt.IsZero() || got[1].URL != urlB {
+		t.Fatalf("URLs = %+v, want A first with no expiry, then B as the fallback", got)
+	}
+}
+
+func TestMergeURLsIgnoresWhatIsNotAnAddressTheAgentWouldDialAndCapsTheList(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	bad := []string{
+		"", "not a url", "https://bayplan.example.com/agent/connect", "ftp://x.example/agent/connect", "wss://",
+		"wss://user:pw@bayplan.example.com/agent/connect", "wss://bayplan.example.com/agent/connect#frag",
+		"wss://bayplan.example.com/agent/connect?token=x", "wss://bayplan.example.com\n/agent/connect",
+		"wss://bayplan.example.com/" + strings.Repeat("a", MaxURLLen),
+	}
+	got := MergeURLs(nil, append(bad, urlA, urlA), now)
+	if !slicesEqual(urlsOf(got), []string{urlA}) {
+		t.Fatalf("URLs = %v, want only the one well-formed address, once", urlsOf(got))
+	}
+	var many []string
+	for i := range 40 {
+		many = append(many, "wss://h"+string(rune('a'+i%26))+string(rune('a'+i/26))+".example.com/agent/connect")
+	}
+	if got := MergeURLs(nil, many, now); len(got) > MaxURLs {
+		t.Errorf("%d URLs kept, want at most %d", len(got), MaxURLs)
+	}
+}
+
+func TestAnAddressTheServerPlainWSAllowedIsAValidURLToo(t *testing.T) {
+	// ValidURL judges the shape; whether a plain ws:// address may be pushed over a
+	// verified session is the connection's decision, not the file's.
+	if !ValidURL("ws://127.0.0.1:7480/agent/connect") || !ValidURL(urlA) {
+		t.Fatal("ws:// and wss:// addresses are valid URLs")
+	}
+}
+
+func TestSaveAndLoadURLsRoundTripAndAreMode0600(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	want := []URLEntry{{URL: urlB}, {URL: urlA, ExpiresAt: now.Add(URLOverlap)}}
+	if err := SaveURLs(dir, want); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(dir, URLsFile))
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("urls.json: %v, %v; want mode 0600", fi, err)
+	}
+	got, err := LoadURLs(dir)
+	if err != nil || len(got) != 2 || got[0].URL != urlB || !got[0].ExpiresAt.IsZero() || got[1].URL != urlA || !got[1].ExpiresAt.Equal(want[1].ExpiresAt) {
+		t.Fatalf("LoadURLs = %+v, %v; want %+v", got, err, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, URLsFile+".tmp")); err == nil {
+		t.Error("a temporary urls file was left behind")
+	}
+}
+
+func TestLoadURLsOfAnEmptyDirectoryIsNoURLsAndADamagedFileIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	if got, err := LoadURLs(dir); err != nil || len(got) != 0 {
+		t.Fatalf("LoadURLs(empty) = %v, %v; want none", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, URLsFile), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadURLs(dir); err == nil || !strings.Contains(err.Error(), URLsFile) {
+		t.Fatalf("LoadURLs(damaged) = %v, want an error naming %s", err, URLsFile)
+	}
+}
+
+func TestLoadURLsDropsEntriesThatAreNotAddresses(t *testing.T) {
+	dir := t.TempDir()
+	raw := `[{"url":"https://nope.example/agent/connect"},{"url":"` + urlB + `"}]`
+	if err := os.WriteFile(filepath.Join(dir, URLsFile), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadURLs(dir)
+	if err != nil || !slicesEqual(urlsOf(got), []string{urlB}) {
+		t.Fatalf("LoadURLs = %+v, %v; want only B", got, err)
+	}
+}

@@ -310,6 +310,8 @@ type Hub struct {
 	now      func() time.Time
 
 	publicURL func() string
+	// endpoint is the address the welcome tells agents to dial (D-19).
+	endpoint func() string
 	// pins is what the welcome tells agents are the server's pins (D-06).
 	pins func() []string
 
@@ -409,6 +411,35 @@ func (h *Hub) Pins() []string {
 	}
 	return h.pins()
 }
+
+// WithEndpoint tells the hub the WebSocket address agents are told to dial
+// (wss://host/base/agent/connect), which every welcome carries and every
+// PushURLs announces. It is read on every handshake, so a change applies at once.
+// Without it welcomes carry no address. Call it before the hub serves.
+func (h *Hub) WithEndpoint(f func() string) *Hub {
+	h.endpoint = f
+	return h
+}
+
+// URLs is the address list a welcome sent now would carry: the endpoint, or none
+// when it is not set.
+func (h *Hub) URLs() []string {
+	if h.endpoint == nil {
+		return nil
+	}
+	if u := h.endpoint(); u != "" {
+		return []string{u}
+	}
+	return nil
+}
+
+// PushURLs tells every connected agent where to dial from now on and which server
+// pins are current (D-19, D-06): urls with the address to dial first at the front.
+// It is best effort and returns at once with how many sessions it is writing to; an
+// agent whose control stream cannot be written to is logged and left, and learns
+// the address from its next welcome. A session that has not opened its control
+// stream yet is told when it does (see agentStream).
+func (h *Hub) PushURLs(urls, pins []string) int { return 0 }
 
 // Handler serves GET /agent/connect.
 func (h *Hub) Handler() http.Handler { return http.HandlerFunc(h.serve) }

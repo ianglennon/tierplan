@@ -37,11 +37,30 @@ const codeInvalidAgentURL = "invalid_agent_url"
 // targetSettings is the audit target of a settings change.
 const targetSettings = "settings"
 
+// SettingsAgents is what the settings routes know of the agents: how many are
+// enrolled, which of them are connected, and a way to tell the connected ones a new
+// address when it changes (D-19). The tunnel hub and the agents service together
+// are one.
+type SettingsAgents interface {
+	// EnrolledAgentIDs is the IDs of the agents that may connect: those not revoked.
+	EnrolledAgentIDs(ctx context.Context) ([]string, error)
+	// Connected reports whether the agent has a live session now.
+	Connected(agentID string) bool
+	// PushURLs tells every connected agent to dial urls (the first one first) and
+	// to keep pins as the server's. It is best effort and returns at once.
+	PushURLs(urls, pins []string) int
+	// Pins is the server's certificate pins as a welcome carries them.
+	Pins() []string
+}
+
 // SettingsDeps are the dependencies of the settings routes.
 type SettingsDeps struct {
 	Instance *instance.Instance
 	Store    *store.Store
 	Audit    *audit.Writer
+	// Agents counts enrolled agents and tells connected ones a new address. Nil
+	// means none: the counts are 0 and nothing is pushed.
+	Agents SettingsAgents
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -54,6 +73,8 @@ type SettingsBody struct {
 	AgentURL        string `json:"agentUrl" doc:"The address agents dial when it differs from the public URL; empty means they dial the public URL"`
 	AgentURLLocked  bool   `json:"agentUrlLocked" doc:"True when the BAYPLAN_AGENT_URL environment variable fixes the agent URL"`
 	AgentEndpoint   string `json:"agentEndpoint" doc:"The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set"`
+	EnrolledAgents  int    `json:"enrolledAgents" doc:"How many agents are enrolled and not revoked, across all environments. A change of the public URL or the agent URL needs a confirmation while this is above 0"`
+	OfflineAgents   int    `json:"offlineAgents" doc:"How many of the enrolled agents have no connection now. They cannot be told a new address and learn it only when they next connect, if the old address still reaches Bayplan"`
 }
 
 // SettingsOutput wraps SettingsBody for huma.

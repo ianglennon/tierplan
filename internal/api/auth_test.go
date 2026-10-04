@@ -108,6 +108,9 @@ type authFixture struct {
 	liveAgents api.AgentSessions
 	// agentCluster says which agent leads a swarm, for the role in the node list.
 	agentCluster api.AgentCluster
+	// settingsAgents, when set, is what the settings routes count agents with and
+	// push new addresses through (plan 02-26).
+	settingsAgents api.SettingsAgents
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -160,7 +163,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
 		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
 	})
-	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Log: log})
+	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, Log: log})
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{
 		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,
