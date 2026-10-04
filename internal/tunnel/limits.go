@@ -46,6 +46,12 @@ const (
 	// needs, because a handshake takes milliseconds and an agent that is refused
 	// retries after busyRetryAfter, and it leaves 48 slots for everyone else.
 	maxHandshakesPerAddr = 16
+	// firstFrameTimeout is how long an agent has, from the challenge, to send its
+	// auth. That is the only message it sends before the welcome, and a real agent
+	// sends it as soon as it reads the challenge (it collects its facts before it
+	// dials), so a few seconds is generous. A client that stays silent gives its
+	// slot back after this, not after the whole handshake timeout (T-02-24).
+	firstFrameTimeout = 3 * time.Second
 	// DefaultConnectBurst is how many connection attempts one client address may
 	// make at once. A whole swarm behind one NAT reconnects together after a server
 	// restart, so it is sized for that and not for a person (Pitfall 7).
@@ -136,6 +142,16 @@ func (h *Hub) OnUpgradeFailure(f func(peer string)) *Hub {
 func (h *Hub) WithResponseLimit(n int64) *Hub {
 	if n > 0 {
 		h.maxResponse = n
+	}
+	return h
+}
+
+// WithFirstFrameTimeout sets how long an agent has, from the challenge, to send its
+// auth. A value below one keeps firstFrameTimeout. Tests change it; nothing else
+// should. Call it before the hub serves.
+func (h *Hub) WithFirstFrameTimeout(d time.Duration) *Hub {
+	if d > 0 {
+		h.firstFrame = d
 	}
 	return h
 }

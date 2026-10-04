@@ -82,7 +82,14 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 		return accepted{}, false
 	}
 
-	typ, data, err := c.Read(ctx)
+	// The read of the auth has a shorter limit than the handshake: a client that
+	// upgrades and stays silent would otherwise pin one of the handshake slots for
+	// the whole handshake timeout for the price of one connection attempt (T-02-24).
+	// Only this read is bounded. Verification, which can wait on the database, and
+	// the welcome stay under the caller's context.
+	rctx, rcancel := context.WithTimeout(ctx, h.firstFrame)
+	typ, data, err := c.Read(rctx)
+	rcancel()
 	recvAt := h.now()
 	if err != nil {
 		h.log.Info("agent handshake did not complete", "ip", ip, "error", err)

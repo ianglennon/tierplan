@@ -342,6 +342,8 @@ type Hub struct {
 	audit            auth.AuditRecorder
 	onUpgradeFailure func(peer string)
 	maxResponse      int64
+	// firstFrame is how long an agent has to answer the challenge.
+	firstFrame time.Duration
 
 	// serverVersion is what Compatible measures agents against, and updateHint
 	// the manual update command added to a refusal for a version outside the
@@ -386,6 +388,7 @@ func NewHub(v Verifier, o Observer, log *slog.Logger, now func() time.Time) *Hub
 		handshakes:  make(chan struct{}, maxHandshakes),
 		perAddr:     newAddrInflight(),
 		maxResponse: MaxResponseBytes,
+		firstFrame:  firstFrameTimeout,
 	}
 }
 
