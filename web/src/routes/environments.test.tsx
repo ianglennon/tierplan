@@ -12,9 +12,10 @@ import { queryClient } from "@/api/query-client";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { splitPermissions } from "@/test-permissions";
 
 function permissions(...perms: string[]) {
-  return { global: perms.filter((p) => p === "environments.create"), environments: { "*": perms } };
+  return splitPermissions(perms);
 }
 
 const ADMIN = {
@@ -385,10 +386,7 @@ describe("the fold notice (D-48, UI-SPEC Header bell additions: Fold offered)", 
   });
   const MANAGER = {
     ...ADMIN,
-    permissions: {
-      global: [],
-      environments: { "*": ["environments.read", "environments.manage"] },
-    },
+    permissions: splitPermissions(["environments.read", "environments.manage"]),
   };
 
   it("tells a manager that this host is part of the swarm and links to the fold card", async () => {

@@ -234,12 +234,12 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   const env = items.find((e) => e.id === envId);
   useDocumentTitle(env?.name);
 
-  const canManage = hasPermission(me, "environments.manage", envId);
-  const canToken = hasPermission(me, "environments.token", envId);
-  const canRevoke = hasPermission(me, "environments.revoke", envId);
+  const canManage = hasPermission(me, "environments.manage");
+  const canToken = hasPermission(me, "environments.token");
+  const canRevoke = hasPermission(me, "environments.revoke");
   const canRead = hasPermission(me, "environments.read", envId);
   const canSettings = hasPermission(me, "settings.read");
-  const canDelete = hasPermission(me, "environments.delete", envId);
+  const canDelete = hasPermission(me, "environments.delete");
 
   if (!(canManage || canToken || canRevoke || canSettings || canDelete)) return <NoPermission />;
 

@@ -23,6 +23,7 @@ import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { meQueryOptions } from "@/hooks/use-me";
 import { formatClock } from "@/lib/format";
 import "@/i18n";
+import { splitPermissions } from "@/test-permissions";
 
 // Whether the page counts as "plain HTTP from another host" is decided by
 // window.location, which jsdom does not let a test change.
@@ -38,10 +39,7 @@ const VIEWER = { ...ADMIN, permissions: { global: [], environments: {} } };
 // Reads every environment and may finish setting one up, but has no say over the instance.
 const OPERATOR = {
   ...ADMIN,
-  permissions: {
-    global: [],
-    environments: { "*": ["environments.read", "environments.token"] },
-  },
+  permissions: splitPermissions(["environments.read", "environments.token"]),
 };
 const ADMIN_AND_READER = {
   ...ADMIN,

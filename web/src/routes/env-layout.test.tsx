@@ -12,18 +12,19 @@ import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { retryTiming } from "@/routes/_app/env/$envId";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { splitPermissions } from "@/test-permissions";
 
 const ME = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: [], environments: {} },
+  permissions: splitPermissions([]),
 };
 
 let me: typeof ME = ME;
 
 // grant gives the signed-in user these permissions on every environment.
 function grant(...perms: string[]) {
-  me = { ...ME, permissions: { global: [], environments: { "*": perms } } };
+  me = { ...ME, permissions: splitPermissions(perms) };
 }
 
 const LAB = {

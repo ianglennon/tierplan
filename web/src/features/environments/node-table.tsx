@@ -509,8 +509,8 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const now = useNow();
-  const canRevoke = usePermission("environments.revoke", envId);
-  const canManage = usePermission("environments.manage", envId);
+  const canRevoke = usePermission("environments.revoke");
+  const canManage = usePermission("environments.manage");
   const environments = useQuery(environmentsQuery);
   const env = environments.data?.items?.find((e) => e.id === envId);
   const isLocal = env?.kind === "local";

@@ -16,6 +16,7 @@ import { setCsrfToken } from "@/api/client";
 import type { EnvironmentItem } from "@/api/environments";
 import { EnvDegradedBanner } from "@/features/environments/degraded-banner";
 import "@/i18n";
+import { splitPermissions } from "@/test-permissions";
 
 type Issue = { code: string; node?: string; since?: string };
 
@@ -144,10 +145,7 @@ describe("EnvDegradedBanner", () => {
   });
 
   it("links View nodes to the environment's settings for environments.manage", async () => {
-    permissions = {
-      global: [],
-      environments: { "*": ["environments.read", "environments.manage"] },
-    };
+    permissions = splitPermissions(["environments.read", "environments.manage"]);
     await mount(degraded(MIXED));
     const link = await screen.findByRole("link", { name: "View nodes" });
     expect(link.getAttribute("href")).toBe("/settings/environments/e1");

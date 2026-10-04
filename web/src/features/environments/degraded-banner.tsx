@@ -59,7 +59,7 @@ interface EnvDegradedBannerProps {
 // state. Node names and reason strings come from agents and are placed as text.
 export function EnvDegradedBanner({ environment }: EnvDegradedBannerProps) {
   const t = useT();
-  const canManage = usePermission("environments.manage", environment.id);
+  const canManage = usePermission("environments.manage");
   const canReadSettings = usePermission("settings.read");
   if (environment.status.state !== "degraded") return null;
   const [worst, ...rest] = issuesOf(environment);

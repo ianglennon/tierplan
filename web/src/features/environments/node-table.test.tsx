@@ -13,6 +13,7 @@ import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { NodeTable } from "@/features/environments/node-table";
 import "@/i18n";
+import { splitPermissions } from "@/test-permissions";
 
 const NOW = new Date("2026-10-03T12:00:00Z");
 const DAY = 86_400_000;
@@ -145,7 +146,7 @@ beforeEach(() => {
         return Response.json({
           user: { id: "u1", username: "admin", role: "admin" },
           csrfToken: "csrf-1",
-          permissions: { global: [], environments: { "*": perms } },
+          permissions: splitPermissions(perms),
         });
       }
       if (path === "/api/environments") return Response.json({ items: [env(kind)] });

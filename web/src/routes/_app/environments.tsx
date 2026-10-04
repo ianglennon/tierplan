@@ -83,7 +83,7 @@ function EnvironmentsPage() {
   // into it (D-48). Only someone who may do it is told; the swarm environment is the one
   // the fold happens in, and its settings page holds the card.
   const foldSwarm = items.find(
-    (e) => e.kind === "agent" && e.foldOffered && hasPermission(me, "environments.manage", e.id),
+    (e) => e.kind === "agent" && e.foldOffered && hasPermission(me, "environments.manage"),
   );
 
   // Whatever opened the dialog, so closing it puts focus back there.
@@ -196,7 +196,7 @@ function EnvironmentsPage() {
             // for the Back button.
             void navigate({ search: { sort: nextSort, dir: nextDir }, replace: true })
           }
-          canFinishSetup={(envId) => hasPermission(me, "environments.token", envId)}
+          canFinishSetup={() => hasPermission(me, "environments.token")}
           onFinishSetup={finishSetup}
         />
       ) : null}

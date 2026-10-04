@@ -11,6 +11,7 @@ import { queryClient } from "@/api/query-client";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { splitPermissions } from "@/test-permissions";
 
 const ALL = [
   "environments.read",
@@ -20,11 +21,13 @@ const ALL = [
   "environments.delete",
 ];
 
-function me(envPerms: string[], globalPerms: string[] = ["settings.read", "environments.manage"]) {
+// A permission named in either list lands where the server puts it (global scope
+// in `global`), so a test says what the caller holds without caring which list.
+function me(envPerms: string[], globalPerms: string[] = ["settings.read"]) {
   return {
     user: { id: "u1", username: "admin", role: "admin" },
     csrfToken: "csrf-1",
-    permissions: { global: globalPerms, environments: { "*": envPerms } },
+    permissions: splitPermissions(envPerms, globalPerms),
   };
 }
 

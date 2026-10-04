@@ -124,7 +124,7 @@ interface StateProps {
 // rotates); anyone else is told whom to ask.
 function PendingPage({ envId, name }: StateProps) {
   const t = useT();
-  const canToken = usePermission("environments.token", envId);
+  const canToken = usePermission("environments.token");
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const heading = t("fullpage.pending.heading");
@@ -262,8 +262,8 @@ function EnvironmentLayout() {
 
   const item = environments.data?.items?.find((e) => e.id === envId);
   const name = item?.name ?? t("dashboard.environmentFallback");
-  const canManage = usePermission("environments.manage", envId);
-  const canDelete = usePermission("environments.delete", envId);
+  const canManage = usePermission("environments.manage");
+  const canDelete = usePermission("environments.delete");
 
   const retry = useMutation({
     mutationFn: async () => {

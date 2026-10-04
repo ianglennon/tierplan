@@ -420,7 +420,7 @@ export function HealthBell() {
       setOpen(false);
       setInstall({ open: true, envId });
     },
-    canFinishSetup: (envId) => hasPermission(me, "environments.token", envId),
+    canFinishSetup: () => hasPermission(me, "environments.token"),
   };
 
   return (
