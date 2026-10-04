@@ -289,3 +289,31 @@ func TestTheAgentListGivesTheManualCleanupCommandsWithTheCurrentSecretName(t *te
 		t.Fatalf("after a rotation the swarm cleanup still names the old secret:\n%s", swarm)
 	}
 }
+
+// Removing an environment frees what it held: the host that was enrolled in it can be
+// enrolled in another environment at once (plan 02-19's engine, cluster and host bindings).
+func TestRemoveEnvironmentFreesTheHostToEnrolInAnotherEnvironmentAtOnce(t *testing.T) {
+	f := newAgentFix(t)
+	first := f.srv.NewEnvironment(t, "First")
+	facts := selfUpdating("alpha")
+	a := f.connect(t, first, dockertest.FakeConfig{Hostname: "alpha"}, facts)
+	f.srv.Events.WaitLen(t, 1)
+
+	// While the first environment holds the host, a second one cannot enrol it.
+	second := f.srv.NewEnvironment(t, "Second")
+	if c := f.srv.Dial(t, tunneltest.Agent{Token: second.Token, Facts: facts}); c.Refuse == nil {
+		t.Fatal("a host enrolled in one environment was enrolled in another as well")
+	}
+
+	done := f.removeAsync(t, "/api/environments/"+first.ID+"?uninstallAgents=true")
+	u := uninstallLine(t, a.control)
+	f.updater.HandleResult(a.id, wire.UpdateResult{T: wire.TypeUpdateResult, ID: u.ID, OK: true})
+	if rec := waitRemoval(t, done); rec.code != http.StatusNoContent {
+		t.Fatalf("remove: %d %s", rec.code, rec.body)
+	}
+
+	c := f.srv.Dial(t, tunneltest.Agent{Token: second.Token, Facts: facts})
+	if c.Welcome == nil {
+		t.Fatalf("the host could not enrol in another environment after its environment was removed: %+v", c.Refuse)
+	}
+}
