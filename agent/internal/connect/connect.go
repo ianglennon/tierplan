@@ -227,8 +227,10 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 	// Until the server says otherwise the address from the environment is the only
 	// one. Once it has pushed one, the stored list rules and the environment's
 	// address is just one more entry in it, kept for 30 days as an undo window in
-	// case the change is reverted: an operator who wants to move an agent changes
-	// the address in Bayplan.
+	// case the change is reverted. The exception is an operator who starts the agent
+	// with a BAYPLAN_AGENT_URL that differs from the one it last started with: they
+	// mean it, most often to bring home an agent that was offline while Bayplan's
+	// agent address changed, so it is dialed first (G-02-4b).
 	r := &runner{cfg: cfg, env: env, log: log, urls: []state.URLEntry{{URL: cfg.URL}}}
 	if cfg.StateDir != "" {
 		cur, ok, err := state.Load(cfg.StateDir)
@@ -242,11 +244,28 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 			log.Warn("the agent could not read its stored server pins; it will trust only the install pin and the system roots", "error", err)
 			r.pins = nil
 		}
+		last, known, err := state.LoadEnvURL(cfg.StateDir)
+		if err != nil {
+			log.Warn("the agent could not read the BAYPLAN_AGENT_URL it last started with; it treats BAYPLAN_AGENT_URL as unchanged", "error", err)
+			known = false
+		}
 		stored, err := state.LoadURLs(cfg.StateDir)
 		if err != nil {
 			log.Warn("the agent could not read the addresses the server gave it; it will dial BAYPLAN_AGENT_URL", "error", err)
-		} else if len(state.ActiveURLs(stored, env.now())) > 0 {
-			r.urls = stored
+		} else {
+			urls, changed := state.StartURLs(stored, cfg.URL, last, known, env.now())
+			r.urls = urls
+			if changed {
+				log.Info("BAYPLAN_AGENT_URL changed since the agent last started; it dials the new address first", "address", cfg.URL)
+				if err := state.SaveURLs(cfg.StateDir, urls); err != nil {
+					log.Warn("the agent could not save its new address list", "error", err)
+				}
+			}
+		}
+		if !known || last != cfg.URL {
+			if err := state.SaveEnvURL(cfg.StateDir, cfg.URL); err != nil {
+				log.Warn("the agent could not record the BAYPLAN_AGENT_URL it started with; a later change of it may not be noticed", "error", err)
+			}
 		}
 	}
 	if !r.have && cfg.JoinToken == "" {

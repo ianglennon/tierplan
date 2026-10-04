@@ -35,6 +35,9 @@ const (
 	PinsFile = "pins.json"
 	// URLsFile holds the addresses the agent dials, newest first (D-19).
 	URLsFile = "urls.json"
+	// EnvURLFile holds the BAYPLAN_AGENT_URL the agent last started with, so a
+	// different one on the next start is noticed (G-02-4b).
+	EnvURLFile = "env-url.json"
 
 	fileMode  = 0o600
 	tmpSuffix = ".tmp"
@@ -493,4 +496,90 @@ func SaveURLs(dir string, entries []URLEntry) error {
 		return fmt.Errorf("save %s: %w", URLsFile, err)
 	}
 	return nil
+}
+
+// envURLRecord is the content of env-url.json.
+type envURLRecord struct {
+	URL string `json:"url"`
+}
+
+// LoadEnvURL reads the BAYPLAN_AGENT_URL the agent last started with. A directory
+// with no env-url.json, or one holding something that is not a valid address,
+// has none: ok is false and the error nil. A file that cannot be read or parsed is
+// an error.
+func LoadEnvURL(dir string) (addr string, ok bool, err error) {
+	raw, err := os.ReadFile(filepath.Join(dir, EnvURLFile)) //nolint:gosec // the name is a constant joined to the agent's own state directory
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read %s: %w", EnvURLFile, err)
+	}
+	var rec envURLRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return "", false, fmt.Errorf("%s is damaged: %w", filepath.Join(dir, EnvURLFile), err)
+	}
+	if !ValidURL(rec.URL) {
+		return "", false, nil
+	}
+	return rec.URL, true, nil
+}
+
+// SaveEnvURL records the BAYPLAN_AGENT_URL the agent started with, atomically and
+// private to the agent.
+func SaveEnvURL(dir, addr string) error {
+	data, err := json.MarshalIndent(envURLRecord{URL: addr}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal the start address: %w", err)
+	}
+	tmp := filepath.Join(dir, EnvURLFile+tmpSuffix)
+	if err := writeFile(tmp, append(data, '\n')); err != nil {
+		return fmt.Errorf("save %s: %w", EnvURLFile, err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, EnvURLFile)); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("save %s: %w", EnvURLFile, err)
+	}
+	return nil
+}
+
+// StartURLs is the dial list an agent starts with, given the addresses it stored,
+// the BAYPLAN_AGENT_URL it starts with now (envURL), the one it last started with
+// (lastEnvURL) and whether it has a record of that (known). The bool is true when
+// the list differs from stored because the operator changed BAYPLAN_AGENT_URL.
+//
+// With no live stored address the agent has only envURL. When the record exists
+// and differs from envURL, the operator started the agent with a new address on
+// purpose, most often to bring home an agent that was offline while Bayplan's
+// agent address changed (G-02-4b), so envURL goes first with no expiry, and the
+// live stored addresses follow with their expiries unchanged: if the new address
+// cannot be reached at all, the old ones are still tried, and the next verified
+// welcome reorders the list as usual (MergeURLs). Otherwise stored stays in charge:
+// after Bayplan pushed an address the container still starts with its original
+// BAYPLAN_AGENT_URL, and putting that first would dial an address the server now
+// refuses (D-19). No record is read as unchanged, which keeps the behaviour of
+// state written before the record existed.
+func StartURLs(stored []URLEntry, envURL, lastEnvURL string, known bool, now time.Time) ([]URLEntry, bool) {
+	var live []URLEntry
+	for _, e := range stored {
+		if e.live(now) {
+			live = append(live, e)
+		}
+	}
+	if len(live) == 0 {
+		return []URLEntry{{URL: envURL}}, false
+	}
+	if !known || lastEnvURL == envURL {
+		return stored, false
+	}
+	out := []URLEntry{{URL: envURL}}
+	for _, e := range live {
+		if e.URL != envURL {
+			out = append(out, e)
+		}
+	}
+	if len(out) > MaxURLs {
+		out = out[:MaxURLs]
+	}
+	return out, true
 }
