@@ -1122,8 +1122,9 @@ func (s *Service) TouchLastSeen(ctx context.Context, agentID string) {
 // checks run cheapest and least revealing first, and everything that would let a
 // probe learn something (an unknown environment, a certificate from another CA,
 // an agent that does not exist, a key that differs, a bad signature) is the same
-// auth_rejected with the same text. Only an agent that holds a certificate the
-// environment really issued can learn that it expired or was revoked.
+// auth_rejected with the same text, whatever dates the certificate carries. Only an
+// agent that holds a certificate the environment really issued can learn that it
+// expired or was revoked.
 func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.HelloResult, error) {
 	reject := func(reason string) error {
 		return &tunnel.Refusal{
@@ -1148,7 +1149,8 @@ func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.He
 	}
 
 	// An environment that does not exist and a certificate from another
-	// environment's CA both end here with the same answer.
+	// environment's CA both end here with the same answer, and so does a forged
+	// certificate for a real environment whatever its dates.
 	caRow, err := s.st.RQ.GetCA(ctx, envID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -1156,15 +1158,20 @@ func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.He
 	case err != nil:
 		return tunnel.HelloResult{}, fmt.Errorf("load the CA: %w", err)
 	}
-	now := s.now()
-	if _, err := VerifyLeaf(caRow.CertPem, req.Cert, now); err != nil {
-		var invalid x509.CertificateInvalidError
-		if errors.As(err, &invalid) && invalid.Reason == x509.Expired && now.After(leaf.NotAfter) {
+	// VerifyLeaf proves the chain before it looks at the dates, so only a
+	// certificate this environment's CA signed can be told it expired. Whatever
+	// its dates, anything else is the same auth_rejected as an unknown
+	// environment (T-02-21).
+	if _, err := VerifyLeaf(caRow.CertPem, req.Cert, s.now()); err != nil {
+		switch {
+		case errors.Is(err, ErrLeafExpired):
 			return tunnel.HelloResult{}, &tunnel.Refusal{
 				Code:        wire.ReasonCertExpired,
 				Detail:      "the agent's certificate has expired; enrol the agent again with a join token",
 				AuditReason: wire.ReasonCertExpired,
 			}
+		case errors.Is(err, ErrLeafNotYetValid):
+			return tunnel.HelloResult{}, reject("not_yet_valid")
 		}
 		return tunnel.HelloResult{}, reject("bad_chain")
 	}

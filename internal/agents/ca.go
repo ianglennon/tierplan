@@ -158,10 +158,30 @@ func (c *ca) issue(agentID, envID string, pub ed25519.PublicKey, now time.Time) 
 	return Leaf{DER: der, Serial: hex.EncodeToString(serial.Bytes()), NotAfter: notAfter}, nil
 }
 
+// ErrLeafExpired is returned by VerifyLeaf for a certificate whose chain to the CA
+// was proven and whose NotAfter has passed. It is never returned for a certificate
+// the CA did not sign, so reporting it tells a caller nothing it did not already
+// hold (T-02-21).
+var ErrLeafExpired = errors.New("the agent certificate has expired")
+
+// ErrLeafNotYetValid is returned by VerifyLeaf for a certificate whose chain to the
+// CA was proven and whose NotBefore is still ahead of the caller's clock. Like
+// ErrLeafExpired it is only ever returned after the chain is proven.
+var ErrLeafNotYetValid = errors.New("the agent certificate is not valid yet")
+
 // VerifyLeaf checks that a DER certificate chains to the CA in caPEM, is valid at
 // now and is for client authentication. It is the check every connection of an
 // enrolled agent passes, and the reason an agent of environment A cannot act as
 // one of environment B (D-07).
+//
+// It proves the chain first, at a time inside the certificate's own validity, and
+// decides the validity period itself afterwards. Go checks a leaf's dates before it
+// looks at any chain, so verifying at the caller's time would report "expired" for
+// a forged certificate whose dates are in the past, and a caller could use that to
+// learn which environments exist (T-02-21). Here ErrLeafExpired and
+// ErrLeafNotYetValid are returned only for a certificate this CA signed, and every
+// other failure is a plain error. The skew allowance stays in the backdated
+// NotBefore of issue (D-45).
 func VerifyLeaf(caPEM string, der []byte, now time.Time) (*x509.Certificate, error) {
 	block, _ := pem.Decode([]byte(caPEM))
 	if block == nil {
@@ -175,12 +195,34 @@ func VerifyLeaf(caPEM string, der []byte, now time.Time) (*x509.Certificate, err
 	if err != nil {
 		return nil, fmt.Errorf("parse the agent certificate: %w", err)
 	}
+
+	// A genuine leaf is never valid from before its CA, so one second after the
+	// later of the two start dates is inside both windows. A window too short to
+	// hold that instant cannot be proven, which is the same refusal as a forgery.
+	proof := leaf.NotBefore
+	if caCert.NotBefore.After(proof) {
+		proof = caCert.NotBefore
+	}
+	proof = proof.Add(time.Second)
+	if proof.After(leaf.NotAfter) || proof.After(caCert.NotAfter) {
+		return nil, errors.New("verify the agent certificate: the chain cannot be proven in the certificate's validity window")
+	}
 	roots := x509.NewCertPool()
 	roots.AddCert(caCert)
 	if _, err := leaf.Verify(x509.VerifyOptions{
-		Roots: roots, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		Roots: roots, CurrentTime: proof, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}); err != nil {
 		return nil, fmt.Errorf("verify the agent certificate: %w", err)
+	}
+
+	// The chain is proven, so the dates may now be reported.
+	switch {
+	case now.After(leaf.NotAfter):
+		return nil, fmt.Errorf("verify the agent certificate: %w", ErrLeafExpired)
+	case now.Before(leaf.NotBefore):
+		return nil, fmt.Errorf("verify the agent certificate: %w", ErrLeafNotYetValid)
+	case now.After(caCert.NotAfter) || now.Before(caCert.NotBefore):
+		return nil, errors.New("verify the agent certificate: the CA certificate is not valid now")
 	}
 	return leaf, nil
 }
