@@ -21,11 +21,13 @@ import (
 
 // /agent/connect is the one endpoint that answers anyone, so everything that
 // bounds what an anonymous caller can cost lives here: who may reach it (no
-// browser, no plain HTTP), how many handshakes run at once, how often one
-// address may start one, and what a refused attempt costs the single SQLite
-// writer (RESEARCH Pattern 2, Pitfall 7, Pitfall 8). The same file holds the two
-// caps that stop an authenticated but untrusted agent from taking the server
-// down with it (Pattern 1).
+// browser, no plain HTTP), how many handshakes run at once overall and from one
+// address, how often one address may start one, and what a refused attempt costs
+// the single SQLite writer (RESEARCH Pattern 2, Pitfall 7, Pitfall 8, T-02-24).
+// A handshake is admitted only when all three bounds allow it, checked in this
+// order: the address's in-flight cap, its attempt budget, the global slots. The
+// same file holds the two caps that stop an authenticated but untrusted agent
+// from taking the server down with it (Pattern 1).
 
 const (
 	// MaxSessionStreams is how many server-opened streams one session carries at
@@ -37,6 +39,13 @@ const (
 
 	// maxHandshakes is how many unauthenticated handshakes may be in flight.
 	maxHandshakes = 64
+	// maxHandshakesPerAddr is how many of them one client address, or one IPv6 /64,
+	// may hold at once. A client that opens a handshake and never answers holds its
+	// slot, so without this one address could take all 64 and every other agent's
+	// reconnect would be refused (T-02-24). It is sized above what a NAT'd swarm
+	// needs, because a handshake takes milliseconds and an agent that is refused
+	// retries after busyRetryAfter, and it leaves 48 slots for everyone else.
+	maxHandshakesPerAddr = 16
 	// DefaultConnectBurst is how many connection attempts one client address may
 	// make at once. A whole swarm behind one NAT reconnects together after a server
 	// restart, so it is sized for that and not for a person (Pitfall 7).
@@ -176,25 +185,72 @@ func (h *Hub) preflight(r *http.Request, ip string) (aud string, ref *preflightR
 	return aud, nil
 }
 
-// admit decides whether one more handshake may start: the address must be within
-// its budget and fewer than maxHandshakes may be in flight. It returns release,
-// which gives the slot back and is safe to call more than once, or the refusal to
-// send.
+// addrInflight counts the handshakes in flight per client address, keyed like the
+// attempt budget (auth.AddrKey), so an IPv6 /64 is one address. An entry exists
+// only while its address has a handshake in flight, so the map cannot outgrow the
+// number of slots.
+type addrInflight struct {
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func newAddrInflight() *addrInflight { return &addrInflight{n: map[string]int{}} }
+
+// take counts one more handshake for key, or reports false when key already has
+// max in flight.
+func (a *addrInflight) take(key string, max int) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.n[key] >= max {
+		return false
+	}
+	a.n[key]++
+	return true
+}
+
+// give takes one back.
+func (a *addrInflight) give(key string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.n[key] <= 1 {
+		delete(a.n, key)
+		return
+	}
+	a.n[key]--
+}
+
+// admit decides whether one more handshake may start. Three bounds apply, in this
+// order: the address may have fewer than maxHandshakesPerAddr in flight (checked
+// first, so a refusal for concurrency does not spend its attempt budget), it must
+// be within its budget of attempts, and fewer than maxHandshakes may be in flight
+// in all. It returns release, which gives the slots back and is safe to call more
+// than once, or the refusal to send.
 func (h *Hub) admit(ip string) (release func(), refuse *wire.Refuse) {
 	limited := &wire.Refuse{
 		T: wire.TypeRefuse, Code: wire.RefuseRateLimited, RetryAfterMs: int(busyRetryAfter / time.Millisecond),
 		Detail: "too many connection attempts; the agent retries by itself",
 	}
+	key := auth.AddrKey(ip)
+	if !h.perAddr.take(key, maxHandshakesPerAddr) {
+		return nil, limited
+	}
 	if !h.connect.Allow(ip) {
+		h.perAddr.give(key)
 		return nil, limited
 	}
 	select {
 	case h.handshakes <- struct{}{}:
 	default:
+		h.perAddr.give(key)
 		return nil, limited
 	}
 	var once sync.Once
-	return func() { once.Do(func() { <-h.handshakes }) }, nil
+	return func() {
+		once.Do(func() {
+			<-h.handshakes
+			h.perAddr.give(key)
+		})
+	}, nil
 }
 
 // clientAddr is the address of the caller: the one the client-address middleware

@@ -329,13 +329,15 @@ type Hub struct {
 	lastSeen     LastSeenRecorder
 
 	// allowInsecure lets plain ws:// in. connect is the per-address budget of
-	// connection attempts and handshakes the semaphore of handshakes in flight.
+	// connection attempts, handshakes the semaphore of handshakes in flight and
+	// perAddr how many of those each client address holds (T-02-24).
 	// refusals records refused attempts, onUpgradeFailure hears of requests that
 	// were not an upgrade and maxResponse caps one Docker answer. All are set
 	// before the hub serves and read-only after.
 	allowInsecure    bool
 	connect          *auth.IPLimiter
 	handshakes       chan struct{}
+	perAddr          *addrInflight
 	refusals         auth.AuditRecorder
 	audit            auth.AuditRecorder
 	onUpgradeFailure func(peer string)
@@ -382,6 +384,7 @@ func NewHub(v Verifier, o Observer, log *slog.Logger, now func() time.Time) *Hub
 		heartbeat: wire.DefaultHeartbeatMs * time.Millisecond, offlineAfter: DefaultOfflineAfter,
 		connect:     auth.NewIPLimiter(connectRefill, DefaultConnectBurst, connectLimiterTTL, now),
 		handshakes:  make(chan struct{}, maxHandshakes),
+		perAddr:     newAddrInflight(),
 		maxResponse: MaxResponseBytes,
 	}
 }
