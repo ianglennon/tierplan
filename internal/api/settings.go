@@ -74,7 +74,7 @@ type SettingsBody struct {
 	AgentURLLocked  bool   `json:"agentUrlLocked" doc:"True when the BAYPLAN_AGENT_URL environment variable fixes the agent URL"`
 	AgentEndpoint   string `json:"agentEndpoint" doc:"The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set"`
 	EnrolledAgents  int    `json:"enrolledAgents" doc:"How many agents are enrolled and not revoked, across all environments. A change of the public URL or the agent URL needs a confirmation while this is above 0"`
-	OfflineAgents   int    `json:"offlineAgents" doc:"How many of the enrolled agents have no connection now. They cannot be told a new address and learn it only when they next connect, if the old address still reaches Bayplan"`
+	OfflineAgents   int    `json:"offlineAgents" doc:"How many of the enrolled agents have no connection now. They cannot be sent a new address, so after a change of the host or port agents dial they are refused until they are reinstalled with the new address or the change is reverted"`
 }
 
 // SettingsOutput wraps SettingsBody for huma.
@@ -163,8 +163,11 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			"BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set " +
 			"answers 409 " + problemAgentURLLocked + "; both change nothing. An empty agentUrl clears it. A change takes effect at once: " +
 			"the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents " +
-			"dial changes, every connected agent is told the new address and the server's pins over its tunnel and keeps the old " +
-			"address as a fallback for 30 days; agents with no connection learn it when they next connect. Each change is " +
+			"dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its " +
+			"tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on " +
+			"the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was " +
+			"offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the " +
+			"change is reverted. Each change is " +
 			"audited as settings.updated with the old and new value of every changed field.",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateSettingsInput) (*SettingsOutput, error) {
@@ -284,11 +287,13 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		d.Instance.Apply(name, url)
 		d.Instance.ApplyAgentURL(agentURL)
 		after := current()
-		// What agents dial changed, by either URL: every connected agent is told the
-		// new address and the server's current pins now, and keeps the old address as
-		// a fallback (D-19). Offline agents learn it from their next welcome. A change
-		// that leaves the endpoint where it was (the public URL under an agent URL, a
-		// name) tells nobody anything.
+		// What agents dial changed, by either URL: every agent connected over a
+		// TLS-verified session is sent the new address and the server's current pins
+		// now and dials the new address from its next connection (D-19). The hub
+		// accepts only the new host and port from now on, so agents that are offline
+		// or on plain ws:// are refused until reinstalled or until the change is
+		// reverted (option B, UAT G-02-4). A change that leaves the endpoint where it
+		// was (the public URL under an agent URL, a name) tells nobody anything.
 		if d.Agents != nil && after.AgentEndpoint != "" && after.AgentEndpoint != before.AgentEndpoint {
 			n := d.Agents.PushURLs([]string{after.AgentEndpoint}, d.Agents.Pins())
 			d.Log.Info("told the connected agents the new server address", "agents", n)

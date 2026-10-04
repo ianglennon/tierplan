@@ -613,7 +613,7 @@ export interface paths {
         head?: never;
         /**
          * Change the instance name, the public URL or the agent URL
-         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every connected agent is told the new address and the server's pins over its tunnel and keeps the old address as a fallback for 30 days; agents with no connection learn it when they next connect. Each change is audited as settings.updated with the old and new value of every changed field.
+         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
          */
         patch: operations["updateSettings"];
         trace?: never;
@@ -1547,7 +1547,7 @@ export interface components {
             instanceName: string;
             /**
              * Format: int64
-             * @description How many of the enrolled agents have no connection now. They cannot be told a new address and learn it only when they next connect, if the old address still reaches Bayplan
+             * @description How many of the enrolled agents have no connection now. They cannot be sent a new address, so after a change of the host or port agents dial they are refused until they are reinstalled with the new address or the change is reverted
              */
             offlineAgents: number;
             /** @description The URL users reach Bayplan at; drives the Origin check and the cookie Secure flag */

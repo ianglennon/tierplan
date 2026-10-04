@@ -32,9 +32,9 @@
         "confirm": "Change public URL",
         "agentTitle": "Change the agent URL?",
         "agentConfirm": "Change agent URL",
-        "agentsTold": "Connected agents are told the new address now and keep the old one as a fallback for a while.",
-        "offline_one": "{{count}} agent is offline and won't learn the new URL.",
-        "offline_other": "{{count}} agents are offline and won't learn the new URL."
+        "agentsTold": "Agents connected over wss:// are sent the new address now and switch to it on their next connection, if it's also a wss:// address. Agents on plain ws:// aren't told. From now on Bayplan refuses agents that dial a different host or port: there's no fallback period.",
+        "offline_one": "{{count}} agent is offline. It can't learn the new address, and Bayplan will refuse it until you reinstall it with the new address or change the URL back.",
+        "offline_other": "{{count}} agents are offline. They can't learn the new address, and Bayplan will refuse them until you reinstall them with the new address or change the URL back."
       }
     },
     "environments": {
