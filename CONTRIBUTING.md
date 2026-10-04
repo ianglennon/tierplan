@@ -47,6 +47,7 @@ No tool is added to `go.mod` for development: golangci-lint, sqlc, goreleaser, a
 | `make licences` | Checks dependency licences against the allowlist (below). |
 | `make dco` | Checks every commit in a range is signed off. |
 | `make e2e` | Playwright against the built image behind Caddy at a subpath, with a `docker:29-dind` sidecar it manages and a second one that hosts a real agent. Needs Docker with buildx and Compose. See below. |
+| `make e2e-copy` | The copy button's legacy fallback in a real Chromium on an insecure origin (`http://bayplan.test`), inside a Dialog and an AlertDialog. Needs no Docker. See below. |
 | `make proxy-smoke` | The built image behind Caddy, nginx and Traefik with the files in `docs/proxy`, plus three deliberately broken nginx setups. Needs Docker, curl and jq. |
 | `make release-check` | Validates `.goreleaser.yaml` and builds this machine's binary the way a release does. |
 | `make smoke` | Starts `bin/bayplan` and checks its basic contract. |
@@ -65,6 +66,7 @@ CI runs thin wrappers over these same targets, so you can reproduce a CI failure
 - Every spec's address carries the `/bayplan` prefix: open pages with `page.goto(at("/audit"))`, not a bare path, because Playwright would drop a base path held in `baseURL`.
 - The agent reaches Caddy by its fixed address on the compose network, 172.30.0.10, because a nested Docker cannot resolve compose names, and trusts the harness certificate through `BAYPLAN_AGENT_PIN`, the documented setting for a proxy with its own certificate.
 - The HTML report is written to `.devdata/playwright-report`. The agent spec keeps its trace and screenshots even when it passes.
+- `make e2e-copy` is a separate, Docker-free suite (`e2e/playwright.copy.config.ts`, specs in `e2e/copy`). It serves a test page, `web/harness/copy`, with Vite and opens it as `http://bayplan.test`, a name Chromium maps to 127.0.0.1. That is an insecure context, where `navigator.clipboard` does not exist, which is how a self-hosted Bayplan is usually opened and the only case in which Copy uses the legacy fallback; jsdom cannot show the bugs there. It uses its own config and does not import `tests/helpers`. `BAYPLAN_COPY_HARNESS_PORT` (default 5179) moves the dev server. CI runs it in the `e2e` job.
 - A new spec file must be added to `order` in `e2e/playwright.config.ts` and must import `test` from `./helpers`, which fails the test on any CSP violation or any request to another origin.
 
 ## The development loop

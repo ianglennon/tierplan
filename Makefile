@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image proxy-smoke
+.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -282,6 +282,16 @@ e2e-image: web
 # line per check; any FAIL fails the target.
 proxy-smoke: e2e-image
 	scripts/proxy-smoke.sh
+
+# The clipboard fallback in a real Chromium on an insecure origin (http://bayplan.test
+# mapped to 127.0.0.1, so there is no navigator.clipboard), against the real
+# CopyableCode plain, inside a Dialog and inside an AlertDialog (G-02-1a). jsdom
+# cannot show that bug. Needs no Docker.
+e2e-copy:
+	pnpm -C web install --frozen-lockfile
+	pnpm -C e2e install --frozen-lockfile
+	pnpm -C e2e exec playwright install $(E2E_BROWSER_ARGS)
+	pnpm -C e2e exec playwright test -c playwright.copy.config.ts
 
 # The certificate the proxy serves is generated here (7 days, SANs 127.0.0.1,
 # localhost and the proxy's address on the compose network) with its SPKI pin,
