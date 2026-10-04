@@ -99,6 +99,7 @@ func run(d deps) int {
 		"install_pins", len(cfg.Pins),
 		"read_only", cfg.ReadOnly,
 		"self_update", cfg.SelfUpdate,
+		"allow_insecure", cfg.AllowInsecure,
 		"dropped_privileges", res.Dropped,
 		"uid", d.getuid(),
 		"gid", d.getgid(),
