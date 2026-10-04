@@ -7,7 +7,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
-import { containersQuery, LIST_REFETCH_MS } from "@/api/resources";
+import { containersQuery, LIST_REFETCH_MS, listKey } from "@/api/resources";
+import { nodeRowKey } from "@/features/resources/swarm-lists";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 
@@ -190,6 +191,19 @@ function cellsOf(row: HTMLElement): string[] {
   return within(row)
     .getAllByRole("cell")
     .map((c) => c.textContent ?? "");
+}
+
+// sameKeyWarnings installs a pass-through spy on console.error, so other errors
+// still print, and returns it. Read the duplicate-key warnings with
+// sameKeyWarningsOf(spy). Restore the spy with mockRestore in a finally block, as
+// the file's afterEach only unstubs globals and a leaked spy would capture later
+// tests' output (CR-D-01).
+function sameKeyWarnings() {
+  return vi.spyOn(console, "error");
+}
+
+function sameKeyWarningsOf(spy: ReturnType<typeof sameKeyWarnings>): string[] {
+  return spy.mock.calls.map((c) => String(c[0])).filter((m) => m.includes("same key"));
 }
 
 beforeEach(() => {
@@ -692,6 +706,43 @@ describe("swarm lists", () => {
     ]);
   });
 
+  it("renders the same image on two nodes as two rows with no duplicate-key warning (CR-D-01)", async () => {
+    const agentImage = (node: string) => ({
+      id: "sha256:a9e1c0de",
+      shortId: "a9e1c0de",
+      node,
+      repoTags: ["ghcr.io/ianglennon/bayplan-agent:0.1.0"],
+      size: 1024,
+      created: ago(60_000),
+    });
+    const imagesOn = (nodes: string[]) => () =>
+      Response.json({
+        items: nodes.map(agentImage),
+        total: nodes.length,
+        truncated: false,
+        nodes,
+        notReporting: [],
+      });
+    answers["/api/env/e1/images"] = imagesOn(["n1", "n2"]);
+    const spy = sameKeyWarnings();
+    try {
+      renderAt("/env/e1/images");
+      await screen.findAllByText("ghcr.io/ianglennon/bayplan-agent:0.1.0");
+      let rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+
+      answers["/api/env/e1/images"] = imagesOn(["n2", "n3"]);
+      await queryClient.invalidateQueries({ queryKey: listKey("e1", "images") });
+      await waitFor(() => {
+        rows = screen.getAllByRole("row").slice(1);
+        expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n2", "n3"]);
+      });
+      expect(sameKeyWarningsOf(spy)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("shows the banner on every list when a node is missing", async () => {
     for (const resource of ["images", "volumes", "networks"] as const) {
       answers[`/api/env/e1/${resource}`] = () =>
@@ -737,5 +788,23 @@ describe("swarm lists", () => {
     expect(screen.queryByRole("columnheader", { name: "Node" })).toBeNull();
     expect(screen.queryByText(/isn't reporting/)).toBeNull();
     expect(screen.getByText("3 containers")).toBeTruthy();
+  });
+});
+
+describe("nodeRowKey", () => {
+  it("joins the node and the id with a separator", () => {
+    expect(nodeRowKey("n1", "x")).toBe("n1|x");
+  });
+
+  it("differs for the same id on two nodes", () => {
+    expect(nodeRowKey("n2", "x")).not.toBe(nodeRowKey("n1", "x"));
+  });
+
+  it("keys a row with no node as '|<id>'", () => {
+    expect(nodeRowKey(undefined, "x")).toBe("|x");
+  });
+
+  it("keys a row with an empty node as '|<id>'", () => {
+    expect(nodeRowKey("", "x")).toBe("|x");
   });
 });
