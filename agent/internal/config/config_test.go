@@ -76,8 +76,20 @@ func TestLoadUsesTheEnvironmentTokenWhenThereIsNoFile(t *testing.T) {
 	}
 }
 
-func TestLoadWithoutATokenOrAnEnrolledStateNamesBothVariables(t *testing.T) {
-	_, err := Load(env(map[string]string{"BAYPLAN_AGENT_URL": goodURL}), files(nil))
+// load runs Load and fails the test on an error: the helper of the CheckEnrolled
+// tests, which care about what happens after the configuration is read.
+func load(t *testing.T, m map[string]string) Config {
+	t.Helper()
+	cfg, err := Load(env(m), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func TestCheckEnrolledWithoutATokenOrAnIdentityNamesBothVariables(t *testing.T) {
+	cfg := load(t, map[string]string{"BAYPLAN_AGENT_URL": goodURL})
+	err := cfg.CheckEnrolled(files(nil))
 	if err == nil {
 		t.Fatal("want an error when there is no token and no enrolled state")
 	}
@@ -86,14 +98,14 @@ func TestLoadWithoutATokenOrAnEnrolledStateNamesBothVariables(t *testing.T) {
 			t.Errorf("the error %q does not name %s", err, name)
 		}
 	}
+	if cfg.Enrolled {
+		t.Error("Enrolled = true after a refusal")
+	}
 }
 
-func TestLoadAcceptsAnEnrolledStateWithoutAToken(t *testing.T) {
-	cfg, err := Load(
-		env(map[string]string{"BAYPLAN_AGENT_URL": goodURL}),
-		files(map[string]string{"/var/lib/bayplan-agent/identity.json": "{}"}),
-	)
-	if err != nil {
+func TestCheckEnrolledAcceptsAnIdentityWithoutAToken(t *testing.T) {
+	cfg := load(t, map[string]string{"BAYPLAN_AGENT_URL": goodURL})
+	if err := cfg.CheckEnrolled(files(map[string]string{"/var/lib/bayplan-agent/identity.json": "{}"})); err != nil {
 		t.Fatal(err)
 	}
 	if !cfg.Enrolled {
@@ -104,12 +116,9 @@ func TestLoadAcceptsAnEnrolledStateWithoutAToken(t *testing.T) {
 	}
 }
 
-func TestLoadFindsTheEnrolledStateInACustomStateDirectory(t *testing.T) {
-	cfg, err := Load(
-		env(map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_STATE_DIR": "/state"}),
-		files(map[string]string{"/state/identity.json": "{}"}),
-	)
-	if err != nil {
+func TestCheckEnrolledFindsTheIdentityInACustomStateDirectory(t *testing.T) {
+	cfg := load(t, map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_STATE_DIR": "/state"})
+	if err := cfg.CheckEnrolled(files(map[string]string{"/state/identity.json": "{}"})); err != nil {
 		t.Fatal(err)
 	}
 	if !cfg.Enrolled || cfg.StateDir != "/state" {

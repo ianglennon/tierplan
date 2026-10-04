@@ -6,8 +6,12 @@
 // Docker calls from the server to the local socket.
 //
 // It starts as root, in this order: read the configuration (which includes the
-// join token, often a root-only Docker secret), drop to UID and GID 1000 in the
-// Docker socket's group with no-new-privileges, then connect (D-21, D-22).
+// join token, often a root-only Docker secret, and nothing in the state
+// directory), drop to UID and GID 1000 in the Docker socket's group with
+// no-new-privileges, check as UID 1000 that there is a join token or an identity on
+// the state volume, then connect (D-21, D-22). The check waits for the drop because
+// root, with every capability but SETUID and SETGID dropped, cannot open the state
+// directory (G-02-5).
 package main
 
 import (
@@ -65,7 +69,8 @@ func run(d deps) int {
 	}
 
 	// The configuration is read first, while the process can still read a
-	// root-only token file.
+	// root-only token file. Nothing in the state directory is read yet: root
+	// without capabilities cannot open it (G-02-5).
 	cfg, err := config.Load(d.getenv, d.readFile)
 	if err != nil {
 		_, _ = fmt.Fprintln(d.stderr, "bayplan-agent:", err)
@@ -76,6 +81,13 @@ func run(d deps) int {
 	if err != nil {
 		log.Error("the agent could not drop its privileges, so it will not start", "error", err)
 		return 1
+	}
+
+	// As UID 1000 now, the agent can read its own state: a token-less start needs
+	// an identity there (D-03).
+	if err := cfg.CheckEnrolled(d.readFile); err != nil {
+		_, _ = fmt.Fprintln(d.stderr, "bayplan-agent:", err)
+		return 2
 	}
 
 	log.Info("starting bayplan-agent",

@@ -5,7 +5,11 @@
 //
 // Load runs while the process is still root (before privdrop.Drop), because a
 // Docker secret is mounted root-owned with mode 0400 and the dropped user could
-// not read it (D-03, D-22, Pitfall 9). Later plans add their keys here.
+// not read it (D-03, D-22, Pitfall 9). It reads that token and nothing in the
+// state directory: the install commands drop every capability but SETUID and
+// SETGID, so root there has no CAP_DAC_OVERRIDE and cannot open the 0700
+// directory that belongs to UID 1000. CheckEnrolled does that part, after the
+// drop (G-02-5). Later plans add their keys here.
 package config
 
 import (
@@ -45,10 +49,6 @@ const (
 	// a private proxy works too (D-06). Without it the server must present a
 	// certificate the system trusts.
 	envPin = "BAYPLAN_AGENT_PIN"
-
-	// identityFile is written into the state directory when the agent enrols.
-	// Its presence means a join token is no longer needed.
-	identityFile = "identity.json"
 )
 
 // Config is what the agent needs to start.
@@ -65,8 +65,8 @@ type Config struct {
 	DockerGID *int
 	// BackoffMin and BackoffMax bound the reconnect delay (D-41).
 	BackoffMin, BackoffMax time.Duration
-	// Enrolled is true when the state directory already holds an identity, so
-	// a join token is not required.
+	// Enrolled is set by CheckEnrolled when the state directory already holds an
+	// identity, so a join token is not required.
 	Enrolled bool
 	// ReadOnly refuses every Docker call that is not a read, and SelfUpdate says
 	// whether the agent may update itself (D-28).
@@ -78,6 +78,10 @@ type Config struct {
 // Load reads the configuration. env looks up an environment variable and
 // readFile reads a file; both are injected so tests need neither. Error text
 // names variables and paths, never the token's value.
+//
+// Load reads the join token file and nothing under the state directory; whether
+// an agent with no token has an identity is decided by CheckEnrolled once the
+// process has dropped its privileges.
 //
 //	BAYPLAN_AGENT_URL              required, ws:// or wss://
 //	BAYPLAN_AGENT_JOIN_TOKEN_FILE  path of a Docker secret holding the token; wins over the variable
@@ -136,16 +140,31 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 	}
 	cfg.JoinToken = token
 
-	if cfg.JoinToken == "" {
-		if _, err := readFile(filepath.Join(cfg.StateDir, identityFile)); err != nil {
-			if !errors.Is(err, fs.ErrNotExist) {
-				return Config{}, fmt.Errorf("read the enrolled state in %s: %w", cfg.StateDir, err)
-			}
-			return Config{}, errors.New("no join token: set BAYPLAN_AGENT_JOIN_TOKEN_FILE (a Docker secret) or BAYPLAN_AGENT_JOIN_TOKEN; copy the install command from Bayplan's Add environment screen")
-		}
-		cfg.Enrolled = true
-	}
 	return cfg, nil
+}
+
+// CheckEnrolled decides whether an agent without a join token may start: it may
+// when its state directory holds an identity, which sets Enrolled. With a token it
+// reads nothing. With neither it returns the "no join token" error, and an
+// identity file that cannot be read returns an error naming the directory.
+//
+// It must run after privdrop.Drop. The install commands drop every capability but
+// SETUID and SETGID (D-22), so before the drop the process is root without
+// CAP_DAC_OVERRIDE or CAP_DAC_READ_SEARCH and cannot open the 0700 state
+// directory or the 0600 identity file of UID 1000. Reading them there made every
+// token-less restart of an enrolled agent exit 2 (G-02-5, D-03).
+func (c *Config) CheckEnrolled(readFile func(string) ([]byte, error)) error {
+	if c.JoinToken != "" {
+		return nil
+	}
+	if _, err := readFile(filepath.Join(c.StateDir, state.IdentityFile)); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("read the enrolled state in %s: %w", c.StateDir, err)
+		}
+		return errors.New("no join token: set BAYPLAN_AGENT_JOIN_TOKEN_FILE (a Docker secret) or BAYPLAN_AGENT_JOIN_TOKEN; copy the install command from Bayplan's Add environment screen")
+	}
+	c.Enrolled = true
+	return nil
 }
 
 // LoadHelper reads what the helper subcommand needs (D-24): the Docker socket, the
