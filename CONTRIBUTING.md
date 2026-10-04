@@ -61,6 +61,7 @@ CI runs thin wrappers over these same targets, so you can reproduce a CI failure
 
 - It runs `playwright install --with-deps chromium`, which installs OS libraries and may use `sudo`. On a machine that already has them, run `make e2e E2E_BROWSER_ARGS=chromium`.
 - `BAYPLAN_E2E_HTTPS_PORT` moves the published port off 8443. It is the only published port and binds 127.0.0.1.
+- `BAYPLAN_E2E_AGENTHOST_IMAGE` runs the remote host on another Engine, for example `make e2e BAYPLAN_E2E_AGENTHOST_IMAGE=docker:24-dind`; the agent spec checks the Engine version on the dashboard against `docker version` on that host.
 - Every spec's address carries the `/bayplan` prefix: open pages with `page.goto(at("/audit"))`, not a bare path, because Playwright would drop a base path held in `baseURL`.
 - The agent reaches Caddy by its fixed address on the compose network, 172.30.0.10, because a nested Docker cannot resolve compose names, and trusts the harness certificate through `BAYPLAN_AGENT_PIN`, the documented setting for a proxy with its own certificate.
 - The HTML report is written to `.devdata/playwright-report`. The agent spec keeps its trace and screenshots even when it passes.

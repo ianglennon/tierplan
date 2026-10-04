@@ -36,6 +36,17 @@ identity, so no join token is needed.
 A standalone self-update pulls the new image anonymously, so an agent image in a private
 registry has to be pulled by hand first.
 
+## A swarm update that paused
+
+A swarm rolls with Docker's own rolling update, and Docker's default when a task fails to start is to pause the update. With a broken agent image the first node's agent stops, the update pauses, and the other nodes keep the old agent. The node list shows the first node as disconnected, and after fifteen minutes the agent that was asked to start the update shows "the agent never came back on the new version". On a manager:
+
+```sh
+docker service ps bayplan-agent --no-trunc      # the failed task says why
+docker service rollback bayplan-agent           # puts the service back on the previous image
+```
+
+(`<stack>_bayplan-agent` for an install from the stack file.) The agent on the failed node returns within a minute.
+
 ## Recovering an interrupted standalone update
 
 A standalone update renames the running agent to `bayplan-agent-old`, stops it, creates the

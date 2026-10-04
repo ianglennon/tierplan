@@ -1,6 +1,6 @@
-# Bayplan threat model (Phase 1)
+# Bayplan threat model (Phases 1 and 2)
 
-This describes what Bayplan protects against in its first build (install, sign-in and a read-only view of the local Docker host), what it does not, and the risks that remain. Threat IDs (T-01-nn) refer to the plans in which each mitigation was designed and tested.
+This describes what Bayplan protects against in its first two builds (install, sign-in and a read-only view of the local Docker host in Phase 1; remote hosts and swarms through agents in Phase 2), what it does not, and the risks that remain. Threat IDs (T-01-nn, T-02-nn) refer to the plans in which each mitigation was designed and tested.
 
 ## The headline
 
@@ -14,7 +14,7 @@ Three consequences follow, and the README repeats them before the install comman
 - Every admin account is a root account on the managed hosts. Treat admin passwords, sessions and the machine that runs the browser accordingly.
 - The strength of Bayplan's defences matters less than its exposure. Do not publish port 7480 to the internet. Put it behind TLS and, if you can, behind a network boundary or VPN.
 
-Later phases add remote hosts through agents, which widens the same statement to "every host with an agent".
+Phase 2 adds remote hosts through agents, which widens the same statement to **every host with an agent**: Bayplan can only read from an agent today (see below), but a Bayplan that is compromised can read everything the agents forward, and a later phase that lets Bayplan change things on a host makes the headline literal again.
 
 ## Trust boundaries
 
@@ -25,7 +25,9 @@ Later phases add remote hosts through agents, which widens the same statement to
 | Bayplan to the Docker socket | Every Docker API call | Read-only typed facade, `unix://` only, privilege drop to UID 1000 |
 | The `/data` volume | The database, the master key, the setup token file, the TLS key | File modes 0600, ownership by UID 1000, key never logged, backups documented |
 | Reverse proxy to Bayplan | Client addresses, scheme | Forwarded headers believed only from `BAYPLAN_TRUSTED_PROXIES` |
-| The build pipeline | Source, dependencies, the image | Pinned actions, licence gate, minimum release age, digest-pinned base, signatures and SBOM |
+| Agent to Bayplan, `/agent/connect` | The join token (once), the agent's signed challenge, every Docker answer, update and uninstall messages | Verified TLS, per-environment CA and key-based authentication inside the tunnel, handshake limits, throttled audit of refusals |
+| Bayplan to an agent's Docker socket | Docker requests Bayplan sends over the agent's tunnel | The agent's own allowlist and read-only flag, enforced on the host |
+| The build pipeline | Source, dependencies, the two images (`bayplan` and `bayplan-agent`) | Pinned actions, licence gate, minimum release age, digest-pinned base, signatures and SBOM on both images |
 
 ## What Phase 1 builds in
 
@@ -55,6 +57,26 @@ Later phases add remote hosts through agents, which widens the same statement to
 
 **Supply chain (T-01-08, T-01-11, T-01-12, T-01-13, T-01-14, T-01-111).** Packages younger than 24 hours are refused by pnpm; the lockfile is committed and installs are frozen. A licence allowlist (Go on both architectures, and production npm packages) fails the build on anything else, and exceptions need a written reason. CI actions are pinned to full commit SHAs with read-only tokens and no secrets. Commits need a DCO sign-off. Release images use a digest-pinned base, keyless cosign signatures and an SPDX SBOM, and there is no `:latest` tag (T-01-76).
 
+## What Phase 2 adds
+
+**The agent connection is a new trust boundary, `/agent/connect`.** It is a WebSocket that anyone who can reach Bayplan can open, so it is hardened before any authentication: only `wss://` is accepted unless the development switch is set, the `Origin` header must be absent (a browser sends one), at most 64 handshakes run at once and each address has a budget, and a busy server answers `rate_limited` inside the protocol so a well-behaved agent waits. The refusals from a flood go through an audit throttle of their own (20 rows per address, then one per six seconds, then a counted summary), so a flood cannot starve the single database writer and still leaves a count. Only a peer in `BAYPLAN_TRUSTED_PROXIES` can make a connection count as `https` by sending `X-Forwarded-Proto`; the end-to-end run proves both sides: through a trusted proxy the agent connects, and without it Bayplan refuses with "did not arrive over TLS".
+
+**Each environment has its own certificate authority, and agents authenticate with a key, not a shared secret.** The join token enrols a host once. The agent generates a key pair, proves possession of it by signing a challenge that is bound to the TLS session where the proxy allows it, and receives a certificate from its environment's CA, valid for 30 days and renewed over the live connection two thirds of the way through. After that the token is not used. Rotating or disabling the token never disconnects an enrolled agent, and revoking one agent never affects another. A compromised agent key gives access to that one environment's connection and nothing else; the CA key of an environment is stored sealed under the master key and opens only for its own environment.
+
+**The agent verifies Bayplan, and never skips the check (T-02-31 to T-02-34).** It trusts a certificate from the system's public CAs, or the pin of Bayplan's own self-signed key, or the pin of a certificate or certificate authority that the operator names with `BAYPLAN_AGENT_PIN` for a proxy with a private certificate. A pin only adds trust, a pinned authority counts only when the certificate presented chains to it for the address dialled, and there is no setting that turns verification off. Pins and new addresses that Bayplan pushes to an agent are accepted only on a session whose TLS was verified.
+
+**The agent allowlist and the read-only flag are host-side defences (the policy tests and fuzz target in `agent/internal/proxy`).** The agent runs a reverse proxy in front of the Docker socket that forwards only `GET` and `HEAD` for ping, version, info, the four resource lists, events, the swarm lists and the inspect of one container, with a clean path, no body and no upgrade. `GET /swarm` is deliberately refused because its answer carries the swarm join tokens. Everything else is answered with a typed refusal, which the host's audit trail and Bayplan's audit log both record. The host owner can also set `BAYPLAN_AGENT_READ_ONLY` to refuse every non-read call whatever a later release adds. A compromised Bayplan therefore cannot, through an agent, start a container or read a container's files or logs in this release; it can read what the allowlist forwards (see residual risk 10 for what that includes).
+
+**Self-maintenance is the agent's only write, and it is narrow (T-02-88, T-02-90 to T-02-92).** Bayplan can ask an agent to update or uninstall itself. The agent accepts only an image from its own repository, only on a session whose TLS was verified (otherwise `insecure_session`), and only when the host owner has not set `BAYPLAN_AGENT_SELF_UPDATE=false`. A swarm update is Docker's rolling update of the agent's own service; a standalone update runs a short-lived helper container that recreates the agent with the same configuration and rolls back if the new container does not start. Automatic updates stay inside the compatibility window and a failed automatic update is not repeated for the same image. Every update and uninstall is audited under the admin or `system:agent-update`.
+
+**Join tokens and CA keys at rest.** A join token is stored as a hash, never in the clear; a raw-byte search of the whole data directory after a real enrolment and rotation finds no join token, no secret part and no CA key (with a negative control that plants them). The token is shown once, in the install command, whose values are checked before they are quoted into a shell line or a YAML file (T-02-36) and which starts with a space so shells that skip space-prefixed lines keep it out of history. On a swarm it is held in a Docker secret. On a standalone host it is an environment variable of the agent container and so visible in `docker inspect` until the token is rotated.
+
+**The session cookie is scoped to the base path (T-02-11).** Behind a subpath over `https` the cookie is `__Secure-bayplan_session` with `Path=/bayplan`, so another application on the same host does not receive it, and the end-to-end suite checks the name, path, `Secure`, `HttpOnly` and `SameSite` through a real proxy. The base path, host and origin come from the public URL only: `X-Forwarded-Host` and `X-Forwarded-Prefix` are never read.
+
+**Proxy mistakes are noticed, not ignored (T-02-80 to T-02-82).** Bayplan records forwarded headers from an untrusted peer, requests whose host or scheme is not the public URL's, and agent upgrades that fail, and shows each as a bell item to admins who can read settings. It holds the sightings for an hour and at most 256.
+
+**The end-to-end harness is built to be safe (T-02-100, T-02-101).** Its two privileged Docker-in-Docker containers and its throwaway admin are published on `127.0.0.1` only, with a seven-day certificate under `.devdata`. `docs/agent.md` labels `BAYPLAN_AGENT_ALLOW_INSECURE` as development only and never suggests turning verification off.
+
 ## Residual risks
 
 These are known, accepted for Phase 1, and not hidden.
@@ -68,6 +90,12 @@ These are known, accepted for Phase 1, and not hidden.
 7. **Inline styles are allowed by the CSP (T-01-63).** A style-injection bug would be easier to exploit than under a fully strict policy. Script injection stays blocked.
 8. **Audit growth from scanners (T-01-35) and large exports (T-01-100)** are accepted: every denied read is audited, retention bounds the size, and exports stream from a read connection in batches. Repeated anonymous refusals from one address (denied routes, setup attempts after setup, rate-limited sign-ins) are written individually up to a per-address budget, 20 at once and then 10 a minute, and the rest as one summary entry per minute with a count, so a flood cannot starve the single database writer and every refusal is still recorded. Failed sign-ins that reach the account checks and wrong setup tokens are always written one row each.
 9. **The CI end-to-end job runs a privileged Docker-in-Docker container (T-01-115)** on an ephemeral hosted runner with no secrets.
+10. **A compromised Bayplan can read everything an agent's allowlist forwards.** That is the container, image, volume and network lists, the swarm's nodes, services and tasks, the events stream, and the **inspect of any single container, which includes that container's environment variables**, so a secret passed to a container as an environment variable can be read through an agent. (Bayplan itself reads the inspect only for the restart policy; the agent forwards the whole answer.) It cannot read container logs or files or the swarm join tokens through an agent in this release, and it can ask an agent to update or uninstall itself, with the limits above. Treat the Bayplan server as holding the inventory of every host, and prefer Docker secrets to environment variables for what you run.
+11. **The standalone join token stays in `docker inspect` until it is rotated.** Once the agent has enrolled the token is not needed again; rotating it in Bayplan and recreating the container with the new command removes the exposure. A swarm keeps the token in a Docker secret instead.
+12. **A broken agent image can leave one node's agent down.** A swarm rolls with Docker's own rolling update, whose default on failure is to pause: a bad image stops the first node's agent and leaves the rest on the old one until an operator runs `docker service rollback`. Bayplan shows the node as disconnected and, after fifteen minutes, the failed update. Releases are signed and pass the end-to-end run first (see the release checklist), which keeps the chance low, not zero.
+13. **The agent's address can change only by reinstalling or by pushing a new address while the old one still works.** The server accepts one audience for agents, so an agent that falls back to an address that is no longer the configured one is refused. Accepting the previous address for a while would help moving an environment, and is security-relevant; it is left open for the hardening phase.
+14. **A leaked agent key is valid until its certificate lapses or an admin revokes the node.** Revoking is immediate, and an admin revoke also blocks the node from enrolling again, but there is no revocation list for a certificate that Bayplan itself has not seen used.
+15. **Agents can be cloned.** A virtual machine copied from another shares its Docker engine ID, so Bayplan refuses it as a duplicate until the engine gets a new identity (see `docs/agent.md`). A node that is not refused for that reason, but shares an agent state volume with another, would share its key; keep the `bayplan-agent` volume per host.
 
 ## Reporting a problem
 

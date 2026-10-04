@@ -53,7 +53,10 @@ services:
   # The remote host: a Docker daemon of its own that the golden path installs the
   # agent on by running the command Bayplan shows, as a person would on a server.
   agenthost:
-    image: docker:29-dind
+    # BAYPLAN_E2E_AGENTHOST_IMAGE runs the golden path against another Engine,
+    # for example docker:24-dind: the remote host is the one the agent supports
+    # across Engines 24 to 29.
+    image: ${BAYPLAN_E2E_AGENTHOST_IMAGE:-docker:29-dind}
     privileged: true
     environment:
       DOCKER_TLS_CERTDIR: ""

@@ -134,6 +134,13 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
     await expect(tileValue(page, "Containers")).toHaveText(containers);
     await expect(tileValue(page, "Images")).toHaveText(images);
 
+    // The engine card shows the remote Engine's own version, so the run says which
+    // Engine it proved (BAYPLAN_E2E_AGENTHOST_IMAGE picks another, 24 to 29).
+    const engine = dockerExec("agenthost", "docker version -f '{{.Server.Version}}'");
+    expect(engine).toMatch(/^\d+\.\d+\.\d+/);
+    await expect(page.getByText(engine, { exact: true }).first()).toBeVisible();
+    test.info().annotations.push({ type: "remote engine", description: engine });
+
     // A container started on the remote host shows without a reload: the event
     // stream is read through the tunnel and the proxy as well.
     dockerExec(

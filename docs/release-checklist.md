@@ -11,10 +11,24 @@ Work through this in order for every release. No release has been cut yet; the f
 
 ## Every release
 
-- [ ] The branch to release from is `main`, and CI is **green**, including `make lint`, `make test`, `make gen-check`, `make licences`, `make spdx`, `make dco`, the Docker engine matrix (`make test-int`), `make release-check` and the end-to-end job (`make e2e`).
+- [ ] The branch to release from is `main`, and CI is **green**, including `make lint`, `make test`, `make gen-check`, `make licences`, `make spdx`, `make dco`, the Docker engine matrix (`make test-int`), `make release-check` and the end-to-end job (`make e2e`) and the proxy job (`make proxy-smoke`).
 - [ ] `docs/` and the README still match the code: every `BAYPLAN_*` setting in `internal/config/config.go` is in the README table, and the README's `docker run` command matches `web/src/features/environments/docker-run-snippet.ts`.
 - [ ] Dependencies changed? Run `make gen` and commit `web/public/third-party-notices.json`, and look at `make licences` output for new licences.
 - [ ] The distroless base image digest in `Dockerfile` was bumped deliberately if you want newer base-image fixes (bump the digest, never the tag), and `make image image-smoke` passes with it.
+- [ ] **Both images are built and released together.** The release workflow publishes `ghcr.io/ianglennon/bayplan` and `ghcr.io/ianglennon/bayplan-agent` from the same tag, each as `X.Y.Z` and `X.Y` for `linux/amd64` and `linux/arm64`, with no `:latest`. The agent image is the second signed image: verify it the way the server image is verified, with the same identity and issuer, and check its SBOM too:
+
+  ```sh
+  cosign verify ghcr.io/ianglennon/bayplan-agent:X.Y.Z \
+    --certificate-identity-regexp '^https://github.com/ianglennon/bayplan/\.github/workflows/release\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  docker buildx imagetools inspect ghcr.io/ianglennon/bayplan-agent:X.Y.Z --format '{{ json .SBOM }}'
+  docker buildx imagetools inspect ghcr.io/ianglennon/bayplan-agent:latest   # must fail
+  ```
+
+  Install commands and automatic updates name the agent image by the server's own version, `ghcr.io/ianglennon/bayplan-agent:X.Y.Z`, so an unpublished or unsigned agent image breaks every new install and every update at once.
+- [ ] **Agent and server versions match.** `ghcr.io/ianglennon/bayplan-agent:X.Y.Z` reports `vX.Y.Z` (start it once and read `starting bayplan-agent version=vX.Y.Z` in its log), the server reports the same in `/api/version`, and the compatibility window in `internal/tunnel/versionwindow.go` still accepts the previous minor: an agent of the previous release connects to this server and is offered the update.
+- [ ] **The agent protocol is unchanged, or the change is deliberate.** The update and uninstall messages are frozen for all of 0.x so that any older agent that can connect can be updated out of its version. The golden files under `proto/wire/testdata` (`update`, `update_digest`, `update_result`, `update_result_error`, `uninstall` and `uninstall_service`) must be **unchanged** by the release (`git diff vPREVIOUS -- proto/wire/testdata` prints nothing); a diff there needs a decision recorded in the release notes, not a regenerated file.
+- [ ] **The end-to-end run through a proxy passed on the release commit**, including the agent project: `make e2e` brings up Bayplan behind Caddy at `/bayplan`, runs the install command on a second Docker host, switches to it and revokes it. Look at the agent spec's trace in `.devdata/playwright-report` once: the waiting panel moves to "is online" without a reload, and the revoked page says "This environment was revoked". `make proxy-smoke` passed too.
 - [ ] Tag `vX.Y.Z` (for example `v0.1.0`) on the release commit and push the tag. Only a `v*` tag runs the release workflow.
 - [ ] The release workflow finished: archives for `linux/amd64` and `linux/arm64`, `checksums.txt`, the image, and the signatures and SBOMs below.
 - [ ] **Verify the signatures.** The workflow signs with keyless cosign, so the identity is the release workflow of this repository. Look at what `cosign verify` prints and confirm the identity and issuer are what you expect:

@@ -146,6 +146,14 @@ Set `BAYPLAN_PUBLIC_URL` to the address people type, and list the proxy in `BAYP
 
 [docs/reverse-proxy.md](docs/reverse-proxy.md) has working Caddy, nginx and Traefik configurations at the root of a host and at a subpath, says which forwarded headers Bayplan believes and which it ignores, and explains the proxy warnings that appear in the bell. `make proxy-smoke` tests all three.
 
+## Add a remote host or swarm
+
+Bayplan reaches a remote Docker host or swarm through a small agent that you install there with one command. The agent dials out to Bayplan, so the host opens no inbound port and exposes no Docker socket on the network. In **Environments**, choose **Add environment**, copy the swarm or standalone command it shows, and run it on a swarm manager or on the host. The page watches for the agent and opens the environment when it connects.
+
+Bayplan needs to be reachable from the host over `wss://` with a certificate the agent can check: a certificate from a public CA, Bayplan's own self-signed certificate (the command carries its pin), or a proxy's private certificate (give the agent `BAYPLAN_AGENT_PIN`). Behind a reverse proxy the proxy must pass WebSocket upgrades on `/agent/connect` and be listed in `BAYPLAN_TRUSTED_PROXIES`; see [docs/reverse-proxy.md](docs/reverse-proxy.md).
+
+[docs/agent.md](docs/agent.md) is the operator's guide: the swarm and standalone installs and what each flag does, rotating the join token, the read-only and self-update settings, private-CA proxies, what every connection problem means and how to fix it, cloned machines, revoking a node, and removing the agent again.
+
 ## Data and backups
 
 - Mount `/data` as a **named volume or a bind mount**. Data written to an unmounted `/data` is lost when the container is removed. Bayplan warns in the log and to admins in the app when `/data` is not a mount point or sits on tmpfs. It cannot tell an anonymous volume from a named one, so it gives **no warning for an anonymous volume**. An anonymous volume is easy to lose: a replacement container gets a new, empty one, and `docker run --rm` or `docker rm -v` deletes it.
@@ -183,5 +191,7 @@ The source code, version and commit are linked from **Settings > About**, as the
 - [SECURITY.md](SECURITY.md): reporting a vulnerability, privately.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and sending changes.
 - [docs/reverse-proxy.md](docs/reverse-proxy.md): running Bayplan behind Caddy, nginx or Traefik, at the root or a subpath.
+- [docs/agent.md](docs/agent.md): installing, securing, troubleshooting and removing the agent on a remote host or swarm.
+- [docs/agent-updates.md](docs/agent-updates.md): updating and removing agents by hand.
 - [docs/threat-model.md](docs/threat-model.md): what Bayplan protects, what it does not, and the risks that remain.
 - [docs/release-checklist.md](docs/release-checklist.md): how a release is cut.
