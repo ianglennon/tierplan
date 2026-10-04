@@ -32,14 +32,14 @@ const (
 // lines. It returns when ctx ends (nil) or the stream breaks. A line of a type
 // the agent does not know, or that is not JSON, is ignored so that later plans
 // can add server messages without breaking agents already in the field.
-func runControl(ctx context.Context, st net.Conn, socketPath string, every time.Duration, now func() time.Time, log *slog.Logger, den *denials) error {
+func runControl(ctx context.Context, st net.Conn, socketPath string, every time.Duration, now func() time.Time, log *slog.Logger, den *denials, hooks controlHooks) error {
 	defer func() { _ = st.Close() }()
 	if err := write(st, []byte{wire.StreamKindControl}); err != nil {
 		return fmt.Errorf("open the control stream: %w", err)
 	}
 
 	readErr := make(chan error, 1)
-	go func() { readErr <- readControl(st, log) }()
+	go func() { readErr <- readControl(st, log, hooks) }()
 
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -55,6 +55,14 @@ func runControl(ctx context.Context, st net.Conn, socketPath string, every time.
 			}
 			return fmt.Errorf("send a heartbeat: %w", err)
 		}
+		if hooks.renew != nil && hooks.renew.poll() {
+			if err := write(st, renewLine); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return fmt.Errorf("ask for a new certificate: %w", err)
+			}
+		}
 		if err := waitOrReport(ctx, st, t.C, readErr, den, log); err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -63,6 +71,16 @@ func runControl(ctx context.Context, st net.Conn, socketPath string, every time.
 		}
 	}
 }
+
+// controlHooks are what the control stream hands the server's messages to. A nil
+// part means the agent ignores that kind of message.
+type controlHooks struct {
+	// renew schedules the agent's certificate renewal and takes the server's answer.
+	renew *renewer
+}
+
+// renewLine is the renew message, ready to write.
+var renewLine = []byte(`{"t":"` + wire.TypeRenew + `"}` + "\n")
 
 // waitOrReport waits for the next heartbeat tick, and writes a denied message to
 // the control stream for every refusal that arrives meanwhile. It returns nil when
@@ -99,7 +117,7 @@ func write(st net.Conn, b []byte) error {
 
 // readControl reads the server's lines until the stream ends. It always returns
 // an error, because a control stream the server closed means the session is over.
-func readControl(st net.Conn, log *slog.Logger) error {
+func readControl(st net.Conn, log *slog.Logger, hooks controlHooks) error {
 	sc := bufio.NewScanner(st)
 	sc.Buffer(make([]byte, 0, 4096), wire.MaxControlLine)
 	for sc.Scan() {
@@ -109,8 +127,14 @@ func readControl(st net.Conn, log *slog.Logger) error {
 		if err := json.Unmarshal(sc.Bytes(), &head); err != nil {
 			continue
 		}
-		// No server-to-agent message exists yet.
-		log.Debug("ignored a control message of an unknown type", "type", head.T)
+		switch head.T {
+		case wire.TypeRenewed, wire.TypeRenewRefused:
+			if hooks.renew != nil {
+				hooks.renew.handle(head.T, sc.Bytes())
+			}
+		default:
+			log.Debug("ignored a control message of an unknown type", "type", head.T)
+		}
 	}
 	if err := sc.Err(); err != nil {
 		return fmt.Errorf("read the control stream: %w", err)

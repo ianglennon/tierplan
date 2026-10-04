@@ -4,7 +4,12 @@
 package tunnel_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -322,5 +327,200 @@ func TestTheWelcomeCarriesTheConfiguredHeartbeatInterval(t *testing.T) {
 	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
 	if c.Welcome == nil || c.Welcome.HeartbeatMs != 4000 {
 		t.Fatalf("welcome = %+v, want heartbeatMs 4000", c.Welcome)
+	}
+}
+
+// --- renewal over the control stream (D-04) ---
+
+const day = 24 * time.Hour
+
+// quiet starts a server whose sessions are never closed for silence however far the
+// test moves the clock, so a test can jump to day 20 and ask for a renewal.
+func quiet(t *testing.T) *tunneltest.Server {
+	t.Helper()
+	return tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub {
+		return h.WithTiming(10*time.Second, 1000*day)
+	}})
+}
+
+// controlLines reads the lines the server writes back on the agent's control stream.
+type controlLines struct {
+	t     *testing.T
+	lines chan []byte
+}
+
+func readControlLines(t *testing.T, control io.Reader) *controlLines {
+	t.Helper()
+	c := &controlLines{t: t, lines: make(chan []byte, 64)}
+	go func() {
+		sc := bufio.NewScanner(control)
+		sc.Buffer(make([]byte, 0, 4096), wire.MaxControlLine)
+		for sc.Scan() {
+			c.lines <- append([]byte(nil), sc.Bytes()...)
+		}
+		close(c.lines)
+	}()
+	return c
+}
+
+// next returns the next line, or fails the test when none arrives.
+func (c *controlLines) next() []byte {
+	c.t.Helper()
+	select {
+	case l, ok := <-c.lines:
+		if !ok {
+			c.t.Fatal("the control stream ended before the server answered")
+		}
+		return l
+	case <-time.After(5 * time.Second):
+		c.t.Fatal("the server wrote nothing on the control stream")
+		return nil
+	}
+}
+
+// none asserts that nothing arrives for a while.
+func (c *controlLines) none(why string) {
+	c.t.Helper()
+	select {
+	case l := <-c.lines:
+		c.t.Fatalf("the server wrote %s on the control stream: %s", l, why)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func askToRenew(t *testing.T, control io.Writer) {
+	t.Helper()
+	if _, err := io.WriteString(control, `{"t":"renew"}`+"\n"); err != nil {
+		t.Fatalf("send renew: %v", err)
+	}
+}
+
+func TestARenewOnTheControlStreamIsAnsweredWithAFreshCertificateForTheSameKey(t *testing.T) {
+	srv := quiet(t)
+	env := srv.NewEnvironment(t, "Production")
+	c := srv.Enrol(t, env)
+	srv.Events.WaitLen(t, 1)
+	control := c.OpenControl(t)
+	answers := readControlLines(t, control)
+	var oldSerial string
+	if err := srv.Store.Read.QueryRow(`SELECT cert_serial FROM agents WHERE id = ?`, c.Identity.AgentID).Scan(&oldSerial); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.Clock.Advance(20 * day)
+	askToRenew(t, control)
+	var got wire.Renewed
+	if err := json.Unmarshal(answers.next(), &got); err != nil || got.T != wire.TypeRenewed {
+		t.Fatalf("answer = %+v, %v; want a renewed message", got, err)
+	}
+	leaf, err := x509.ParseCertificate(got.Cert)
+	if err != nil {
+		t.Fatalf("the renewed certificate: %v", err)
+	}
+	if pub, ok := leaf.PublicKey.(ed25519.PublicKey); !ok || !bytes.Equal(pub, c.Identity.Public()) {
+		t.Fatal("the renewed certificate is for another key")
+	}
+	if want := srv.Clock.Now().Add(30 * day); !leaf.NotAfter.Equal(want) {
+		t.Errorf("NotAfter = %v, want 30 days from now (%v)", leaf.NotAfter, want)
+	}
+	var serial string
+	var notAfter int64
+	if err := srv.Store.Read.QueryRow(`SELECT cert_serial, cert_not_after FROM agents WHERE id = ?`, c.Identity.AgentID).Scan(&serial, &notAfter); err != nil {
+		t.Fatal(err)
+	}
+	if serial == oldSerial || notAfter != leaf.NotAfter.UnixNano() {
+		t.Errorf("the agent row says serial %s expiring %d; the certificate is new and expires %d", serial, notAfter, leaf.NotAfter.UnixNano())
+	}
+	stays(t, srv.Hub.Session(c.Identity.AgentID), "a renewal keeps the session")
+}
+
+func TestARenewFromAnAgentThatIsNotDueIsRefusedAndTheSessionStays(t *testing.T) {
+	srv := quiet(t)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	srv.Events.WaitLen(t, 1)
+	control := c.OpenControl(t)
+	answers := readControlLines(t, control)
+
+	askToRenew(t, control)
+	var got wire.RenewRefused
+	if err := json.Unmarshal(answers.next(), &got); err != nil || got.T != wire.TypeRenewRefused || got.Code != wire.RenewNotDue {
+		t.Fatalf("answer = %+v, %v; want renew_refused not_due", got, err)
+	}
+	stays(t, srv.Hub.Session(c.Identity.AgentID), "an early renew is refused, not punished")
+}
+
+func TestARenewFromAnAgentRevokedMeanwhileIsRefusedAndTheSessionClosed(t *testing.T) {
+	srv := quiet(t)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	srv.Events.WaitLen(t, 1)
+	s := srv.Hub.Session(c.Identity.AgentID)
+	control := c.OpenControl(t)
+	answers := readControlLines(t, control)
+
+	// The revoke has committed and its kick has not reached the session yet.
+	srv.Exec(t, `UPDATE agents SET status = 'revoked' WHERE id = ?`, c.Identity.AgentID)
+	srv.Clock.Advance(20 * day)
+	askToRenew(t, control)
+	// The refusal may or may not outrun the close: what matters is that it is not a renewal.
+	select {
+	case line, ok := <-answers.lines:
+		if ok {
+			var got wire.RenewRefused
+			if err := json.Unmarshal(line, &got); err != nil || got.T != wire.TypeRenewRefused || got.Code != wire.ReasonRevoked {
+				t.Fatalf("answer = %s, want renew_refused revoked", line)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server neither answered nor closed the session")
+	}
+	waitFor(t, "the session to be closed", func() bool { return isDone(s) })
+	if got := s.Reason(); got != tunnel.DisconnectRevoked {
+		t.Errorf("the session ended with %q, want %q", got, tunnel.DisconnectRevoked)
+	}
+	var n int
+	if err := srv.Store.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'agent.cert_renewed'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("%d agent.cert_renewed rows for a revoked agent (%v)", n, err)
+	}
+}
+
+func TestABurstOfRenewsMakesOneCertificateAndOneAuditRow(t *testing.T) {
+	srv := quiet(t)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	srv.Events.WaitLen(t, 1)
+	control := c.OpenControl(t)
+	answers := readControlLines(t, control)
+
+	srv.Clock.Advance(20 * day)
+	for range 20 {
+		askToRenew(t, control)
+	}
+	waitFor(t, "an answer", func() bool { return len(answers.lines) > 0 })
+	time.Sleep(200 * time.Millisecond)
+	var n int
+	if err := srv.Store.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'agent.cert_renewed'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%d agent.cert_renewed rows after twenty renews, want 1 (%v)", n, err)
+	}
+}
+
+func TestARenewFromAnAgentWhoseVerifierFailsIsAnsweredInternalAndRetryable(t *testing.T) {
+	f := newFixture(t, true, func(addr string) string { return "https://" + addr })
+	f.v.renewErr = errors.New("the database is busy")
+	c := f.dial(t, hs{})
+	if c.welcome == nil {
+		t.Fatalf("no welcome: %+v", c)
+	}
+	waitFor(t, "the session", func() bool { return len(f.hub.Sessions()) == 1 })
+	st, err := c.mux.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Write([]byte{wire.StreamKindControl}); err != nil {
+		t.Fatal(err)
+	}
+	answers := readControlLines(t, st)
+	askToRenew(t, st)
+	var got wire.RenewRefused
+	if err := json.Unmarshal(answers.next(), &got); err != nil || got.T != wire.TypeRenewRefused || got.Code != wire.RenewInternal {
+		t.Fatalf("answer = %+v, %v; want renew_refused internal_error", got, err)
 	}
 }

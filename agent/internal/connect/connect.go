@@ -422,8 +422,12 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	}
 	// A server cannot make the agent spin: the floor is far below any real setting.
 	every = max(every, minHeartbeat)
-	return true, serve(ctx, c, r.cfg.SocketPath, every, r.env.now, r.log, proxy.Policy{ReadOnly: r.cfg.ReadOnly})
+	return true, serve(ctx, c, r.cfg.SocketPath, every, r.env.now, r.log, proxy.Policy{ReadOnly: r.cfg.ReadOnly}, r.hooks())
 }
+
+// hooks is what the control stream of the next session hands the server's messages
+// to.
+func (r *runner) hooks() controlHooks { return controlHooks{} }
 
 // minHeartbeat is the shortest interval the agent accepts from a server.
 const minHeartbeat = 10 * time.Millisecond
@@ -625,7 +629,7 @@ func refusal(raw []byte) error {
 // server's Docker streams until the session ends. It ends when the multiplexer
 // does, and when the control stream breaks, so a server that stopped reading
 // heartbeats is not served as if all were well.
-func serve(ctx context.Context, c *websocket.Conn, socketPath string, every time.Duration, now func() time.Time, log *slog.Logger, policy proxy.Policy) error {
+func serve(ctx context.Context, c *websocket.Conn, socketPath string, every time.Duration, now func() time.Time, log *slog.Logger, policy proxy.Policy, hooks controlHooks) error {
 	conn := websocket.NetConn(ctx, c, websocket.MessageBinary)
 	sess, err := yamux.Server(conn, muxConfig())
 	if err != nil {
@@ -648,7 +652,7 @@ func serve(ctx context.Context, c *websocket.Conn, socketPath string, every time
 	}
 	controlErr := make(chan error, 1)
 	go func() {
-		err := runControl(ctx, ctl, socketPath, every, now, log, den)
+		err := runControl(ctx, ctl, socketPath, every, now, log, den, hooks)
 		controlErr <- err
 		_ = sess.Close() // ends Accept below
 	}()

@@ -292,6 +292,7 @@ type agentItem struct {
 	EngineVersion      string `json:"engineVersion"`
 	CertFingerprint    string `json:"certFingerprint"`
 	CertNotAfter       string `json:"certNotAfter"`
+	RenewalFailing     bool   `json:"renewalFailing"`
 	ClockOffsetSeconds int    `json:"clockOffsetSeconds"`
 	LastSeen           string `json:"lastSeen"`
 	ReadOnly           bool   `json:"readOnly"`
@@ -759,5 +760,38 @@ func TestAgentListCallsTheLeadersAgentLeaderAndTheOthersManagerOrWorker(t *testi
 	f.h = f.build(t)
 	if got := f.node(t, env.ID, charlie.id).Role; got != "worker" {
 		t.Errorf("a worker named as leader is listed as %q, want worker", got)
+	}
+}
+
+func TestAgentListSaysRenewalIsFailingWhenLessThanSevenDaysOfCertificateAreLeft(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Edge")
+	fresh := f.srv.Enrol(t, env)
+	f.srv.Events.WaitLen(t, 1)
+
+	set := func(id string, left time.Duration) {
+		f.srv.Exec(t, `UPDATE agents SET cert_not_after = ? WHERE id = ?`, time.Now().Add(left).UnixNano(), id)
+	}
+	set(fresh.Identity.AgentID, 8*24*time.Hour)
+	if f.node(t, env.ID, fresh.Identity.AgentID).RenewalFailing {
+		t.Error("renewalFailing is set with 8 days left")
+	}
+	set(fresh.Identity.AgentID, 6*24*time.Hour)
+	if !f.node(t, env.ID, fresh.Identity.AgentID).RenewalFailing {
+		t.Error("renewalFailing is not set with 6 days left")
+	}
+	// An expired certificate is the worst case of the same state.
+	set(fresh.Identity.AgentID, -time.Hour)
+	if !f.node(t, env.ID, fresh.Identity.AgentID).RenewalFailing {
+		t.Error("renewalFailing is not set for an expired certificate")
+	}
+
+	// A revoked agent is not trying to renew, so it is not failing to.
+	set(fresh.Identity.AgentID, 2*24*time.Hour)
+	if err := f.srv.Svc.Revoke(context.Background(), audit.SystemCLI, env.ID, fresh.Identity.AgentID, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if f.node(t, env.ID, fresh.Identity.AgentID).RenewalFailing {
+		t.Error("renewalFailing is set for a revoked agent")
 	}
 }

@@ -62,6 +62,36 @@ const (
 	TypeHeartbeat = "heartbeat"
 	// TypeDenied is sent by the agent for every request its policy refused.
 	TypeDenied = "denied"
+	// TypeRenew is sent by the agent when its certificate is due for renewal
+	// (D-04). The server answers TypeRenewed or TypeRenewRefused.
+	TypeRenew = "renew"
+	// TypeRenewed is the server's answer to TypeRenew: the new certificate.
+	TypeRenewed = "renewed"
+	// TypeRenewRefused is the server's answer when it will not renew.
+	TypeRenewRefused = "renew_refused"
+	// TypeURLs is sent by the server to a connected agent when the address agents
+	// dial, or the server's pins, changed (D-19, D-06).
+	TypeURLs = "urls"
+)
+
+// Why the server did not renew a certificate, the code of a RenewRefused message.
+// A revoked agent is told ReasonRevoked, and the server closes its session.
+const (
+	// RenewNotDue means the certificate still has more than half of its life left.
+	// The agent asks at two thirds of the life, so a request earlier than half is
+	// a fault or a flood, and every renewal is a write on the single database
+	// writer.
+	RenewNotDue = "not_due"
+	// RenewInternal means the server failed while renewing. The agent retries.
+	RenewInternal = "internal_error"
+)
+
+// Limits on a URLUpdate, which the agent applies to what a server sends.
+const (
+	// MaxPushedURLs is how many addresses one URLUpdate may list.
+	MaxPushedURLs = 8
+	// MaxURLLen is the longest address an agent keeps.
+	MaxURLLen = 2048
 )
 
 // Why the agent refused a request, the reason of a Denied message.
@@ -191,6 +221,36 @@ type Denied struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
 	Reason string `json:"reason"`
+}
+
+// Renew is the agent asking for a new certificate for the key it already holds.
+// It carries nothing: the server knows the agent from the session.
+type Renew struct {
+	T string `json:"t"`
+}
+
+// Renewed is the server's answer to a Renew: a DER certificate for the same key,
+// with a new serial and a fresh lifetime.
+type Renewed struct {
+	T    string `json:"t"`
+	Cert []byte `json:"cert"`
+}
+
+// RenewRefused is the server saying it did not renew. Code is one of the Renew
+// codes above or ReasonRevoked.
+type RenewRefused struct {
+	T    string `json:"t"`
+	Code string `json:"code"`
+}
+
+// URLUpdate is the server telling a connected agent where to dial from now on and
+// which server pins are current. URLs lists the endpoints, the one to dial first
+// at the front. The agent keeps the one it had before as a fallback for a while
+// (D-19). Pins are what a welcome carries: the server's own certificate pins.
+type URLUpdate struct {
+	T    string   `json:"t"`
+	URLs []string `json:"urls"`
+	Pins []string `json:"pins,omitempty"`
 }
 
 // Reasons are the connection failure codes of D-40. They are what the UI and

@@ -143,6 +143,7 @@ type AgentBody struct {
 	EngineVersion      string      `json:"engineVersion,omitempty" doc:"The Docker Engine version the agent reported. Present only while it is connected"`
 	CertFingerprint    string      `json:"certFingerprint" doc:"The full SHA-256 of the agent's certificate, in hex"`
 	CertNotAfter       string      `json:"certNotAfter" format:"date-time" doc:"When the agent's certificate expires"`
+	RenewalFailing     bool        `json:"renewalFailing" doc:"True when the certificate has less than 7 days left, which means it should have renewed already and has not, or has expired. Never set for a revoked agent"`
 	ClockOffsetSeconds int         `json:"clockOffsetSeconds" doc:"How far the agent's clock is ahead of the server's, in seconds, measured when it last connected; negative is behind, 0 when it has not connected since the server started"`
 	LastSeen           string      `json:"lastSeen,omitempty" format:"date-time" doc:"When the agent was last heard from. Absent if it never has been"`
 	ReadOnly           bool        `json:"readOnly" doc:"The host owner set the agent to read-only. Reported only while it is connected"`

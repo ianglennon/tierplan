@@ -150,3 +150,45 @@ func TestValidIdentityAcceptsDockerIDsAndNothingElse(t *testing.T) {
 		}
 	}
 }
+
+func TestRenewalMessagesHaveTheShapeBothEndsRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   any
+		want string
+	}{
+		{"renew", Renew{T: TypeRenew}, `{"t":"renew"}`},
+		{"renewed", Renewed{T: TypeRenewed, Cert: []byte{1, 2, 3}}, `{"t":"renewed","cert":"AQID"}`},
+		{"renew_refused", RenewRefused{T: TypeRenewRefused, Code: RenewNotDue}, `{"t":"renew_refused","code":"not_due"}`},
+	} {
+		b, err := json.Marshal(tc.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(b) != tc.want {
+			t.Errorf("%s = %s, want %s", tc.name, b, tc.want)
+		}
+	}
+	if TypeRenew != "renew" || TypeRenewed != "renewed" || TypeRenewRefused != "renew_refused" || RenewNotDue != "not_due" {
+		t.Fatalf("renewal names changed: %q %q %q %q", TypeRenew, TypeRenewed, TypeRenewRefused, RenewNotDue)
+	}
+}
+
+func TestAURLUpdateHasTheShapeBothEndsRead(t *testing.T) {
+	in := URLUpdate{T: TypeURLs, URLs: []string{"wss://b.example/agent/connect"}, Pins: []string{"sha256/x"}}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"t":"urls","urls":["wss://b.example/agent/connect"],"pins":["sha256/x"]}`
+	if string(b) != want {
+		t.Fatalf("urls = %s, want %s", b, want)
+	}
+	var out URLUpdate
+	if err := json.Unmarshal(b, &out); err != nil || out.URLs[0] != in.URLs[0] || out.Pins[0] != in.Pins[0] {
+		t.Fatalf("round trip = %+v (%v)", out, err)
+	}
+	if TypeURLs != "urls" {
+		t.Fatalf("TypeURLs = %q", TypeURLs)
+	}
+}

@@ -129,6 +129,18 @@ type Verifier interface {
 	// and before the registration is still honoured. It answers false when it
 	// cannot tell, so a failure closes a session the agent can simply reopen.
 	StillActive(agentID string) bool
+	// Renew issues a new certificate for the same key to the agent whose session
+	// asked for one (D-04). ip is the session's client address, for the audit entry.
+	// It returns a *Refusal when it will not: revoked, or not yet due.
+	Renew(ctx context.Context, agentID, ip string) (RenewResult, error)
+}
+
+// RenewResult is what a successful renewal hands back.
+type RenewResult struct {
+	// Cert is the DER certificate issued to the agent.
+	Cert []byte
+	// NotAfter is when it expires.
+	NotAfter time.Time
 }
 
 // Why a session ended, the code Observer.Disconnected receives. The first reason

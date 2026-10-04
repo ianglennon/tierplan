@@ -897,6 +897,12 @@ func (s *Service) ListNodes(ctx context.Context, envID string) ([]Node, error) {
 	return out, nil
 }
 
+// Renew issues a new certificate for the same key to an agent that asked for one
+// over its live session (D-04). It implements tunnel.Verifier.
+func (s *Service) Renew(ctx context.Context, agentID, ip string) (tunnel.RenewResult, error) {
+	return tunnel.RenewResult{}, errors.New("agents: renewal is not implemented")
+}
+
 // StillActive reports whether the agent exists and has not been revoked. The hub
 // asks it when it registers a session. It implements tunnel.Verifier.
 func (s *Service) StillActive(agentID string) bool {

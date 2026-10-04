@@ -33,6 +33,9 @@ type fakeVerifier struct {
 	agentID string
 	last    tunnel.EnrolRequest
 	calls   int
+	// renewErr is what Renew returns when set, and renews the agents it was asked for.
+	renewErr error
+	renews   []string
 }
 
 func (f *fakeVerifier) Enrol(_ context.Context, req tunnel.EnrolRequest) (tunnel.EnrolResult, error) {
@@ -52,6 +55,17 @@ func (f *fakeVerifier) Enrol(_ context.Context, req tunnel.EnrolRequest) (tunnel
 
 func (f *fakeVerifier) Hello(context.Context, tunnel.HelloRequest) (tunnel.HelloResult, error) {
 	return tunnel.HelloResult{}, &tunnel.Refusal{Code: wire.ReasonAuthRejected, Detail: "the fake verifier does not say hello"}
+}
+
+// Renew answers a renewal with a fixed certificate, or with the verifier's error.
+func (f *fakeVerifier) Renew(_ context.Context, agentID, _ string) (tunnel.RenewResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.renews = append(f.renews, agentID)
+	if f.renewErr != nil {
+		return tunnel.RenewResult{}, f.renewErr
+	}
+	return tunnel.RenewResult{Cert: []byte("renewed-cert-der"), NotAfter: time.Unix(1_900_000_000, 0).UTC()}, nil
 }
 
 // StillActive says every agent is still active: the fake never revokes.

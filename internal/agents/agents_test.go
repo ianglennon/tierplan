@@ -1242,3 +1242,167 @@ func TestStillActiveIsTrueOnlyForAnActiveAgent(t *testing.T) {
 		t.Error("a revoked agent is active")
 	}
 }
+
+// --- renewal (D-04, RESEARCH Pattern 3) ---
+
+func agentCertRow(t *testing.T, st *store.Store, id string) (serial, fingerprint string, notAfter int64) {
+	t.Helper()
+	if err := st.Read.QueryRow(`SELECT cert_serial, cert_fingerprint, cert_not_after FROM agents WHERE id = ?`, id).Scan(&serial, &fingerprint, &notAfter); err != nil {
+		t.Fatal(err)
+	}
+	return serial, fingerprint, notAfter
+}
+
+func TestRenewIssuesACertificateForTheSameKeyWithANewSerialAndAFreshLifetime(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	m := r.enrolMember(t, c)
+	oldSerial, oldFP, _ := agentCertRow(t, r.st, m.id)
+
+	r.clock = fixedNow.Add(20 * 24 * time.Hour)
+	res, err := r.svc.Renew(r.ctx, m.id, "198.51.100.7")
+	if err != nil {
+		t.Fatalf("Renew: %v", err)
+	}
+	var caPEM string
+	if err := r.st.Read.QueryRow(`SELECT cert_pem FROM env_cas WHERE env_id = ?`, c.EnvID).Scan(&caPEM); err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := agents.VerifyLeaf(caPEM, res.Cert, r.clock)
+	if err != nil {
+		t.Fatalf("the renewed certificate does not chain to the environment's CA: %v", err)
+	}
+	if pub, ok := leaf.PublicKey.(ed25519.PublicKey); !ok || !bytes.Equal(pub, m.pub) {
+		t.Fatal("the renewed certificate is for another key: a renewal never rotates the key")
+	}
+	if leaf.Subject.CommonName != m.id || len(leaf.Subject.OrganizationalUnit) != 1 || leaf.Subject.OrganizationalUnit[0] != c.EnvID {
+		t.Errorf("subject = %v", leaf.Subject)
+	}
+	if want := r.clock.Add(30 * 24 * time.Hour); !leaf.NotAfter.Equal(want) || !res.NotAfter.Equal(want) {
+		t.Errorf("NotAfter = %v (result %v), want 30 days from now (%v)", leaf.NotAfter, res.NotAfter, want)
+	}
+
+	serial, fp, notAfter := agentCertRow(t, r.st, m.id)
+	if serial == oldSerial || fp == oldFP {
+		t.Errorf("serial %s and fingerprint %s are the old ones", serial, fp)
+	}
+	if want := hex.EncodeToString(sha256Sum(res.Cert)); fp != want {
+		t.Errorf("fingerprint %s, want the SHA-256 of the new certificate %s", fp, want)
+	}
+	if notAfter != res.NotAfter.UnixNano() {
+		t.Errorf("cert_not_after = %d, want %d", notAfter, res.NotAfter.UnixNano())
+	}
+
+	rows, _, err := audit.Query(r.ctx, r.st, audit.Filter{Actions: []string{audit.ActionAgentCertRenewed}}, 0, 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("agent.cert_renewed audit = %+v, %v; want exactly one", rows, err)
+	}
+	a := rows[0]
+	if a.ActorName != "system:agent-enrol" || a.ActorType != "system" || a.TargetID != m.id || a.EnvID != c.EnvID || a.IP != "198.51.100.7" {
+		t.Errorf("audit entry = %+v", a)
+	}
+	if a.Details["fingerprint"] != fp || a.Details["serial"] != serial || a.Details["node"] != "node-1" {
+		t.Errorf("audit details = %v", a.Details)
+	}
+}
+
+func TestAnAgentThatNeverSavedItsRenewedCertificateStillSaysHelloWithTheOldOneUntilItExpires(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	m := r.enrolMember(t, c)
+
+	r.clock = fixedNow.Add(20 * 24 * time.Hour)
+	renewed, err := r.svc.Renew(r.ctx, m.id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Authentication is by key: the old certificate, which the agent kept when it
+	// crashed before saving the new one, and the new one are both accepted.
+	if _, err := r.svc.Hello(r.ctx, m.hello(m.cert, m.priv)); err != nil {
+		t.Errorf("the old certificate after a renewal: %v", err)
+	}
+	if _, err := r.svc.Hello(r.ctx, m.hello(renewed.Cert, m.priv)); err != nil {
+		t.Errorf("the renewed certificate: %v", err)
+	}
+	// The old one expires on day 30, the renewed one on day 50.
+	r.clock = fixedNow.Add(31 * 24 * time.Hour)
+	if re := refusal(t, func() error { _, err := r.svc.Hello(r.ctx, m.hello(m.cert, m.priv)); return err }()); re.Code != wire.ReasonCertExpired {
+		t.Errorf("the old certificate on day 31: %+v, want cert_expired", re)
+	}
+	if _, err := r.svc.Hello(r.ctx, m.hello(renewed.Cert, m.priv)); err != nil {
+		t.Errorf("the renewed certificate on day 31: %v", err)
+	}
+}
+
+func TestRenewOfARevokedAgentIsRefusedRevokedAndChangesNothing(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	m := r.enrolMember(t, c)
+	oldSerial, oldFP, oldNotAfter := agentCertRow(t, r.st, m.id)
+	if err := r.svc.Revoke(r.ctx, audit.SystemCLI, c.EnvID, m.id, "gone", "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	r.clock = fixedNow.Add(20 * 24 * time.Hour)
+	_, err := r.svc.Renew(r.ctx, m.id, "")
+	if re := refusal(t, err); re.Code != wire.ReasonRevoked {
+		t.Fatalf("a revoked agent's renewal: %+v, want revoked", re)
+	}
+	if serial, fp, notAfter := agentCertRow(t, r.st, m.id); serial != oldSerial || fp != oldFP || notAfter != oldNotAfter {
+		t.Error("a refused renewal changed the agent's certificate record")
+	}
+	if n := count(t, r.st, `SELECT COUNT(*) FROM audit_log WHERE action = ?`, audit.ActionAgentCertRenewed); n != 0 {
+		t.Errorf("%d agent.cert_renewed rows for a refused renewal", n)
+	}
+}
+
+func TestRenewBeforeHalfTheLifeIsGoneIsRefusedNotDueAndChangesNothing(t *testing.T) {
+	r := newRig(t)
+	c := r.create(t, "Production")
+	m := r.enrolMember(t, c)
+	oldSerial, _, _ := agentCertRow(t, r.st, m.id)
+
+	r.clock = fixedNow.Add(10 * 24 * time.Hour) // 20 days left, an agent asks with about 10
+	_, err := r.svc.Renew(r.ctx, m.id, "")
+	if re := refusal(t, err); re.Code != wire.RenewNotDue {
+		t.Fatalf("an early renewal: %+v, want not_due", re)
+	}
+	if serial, _, _ := agentCertRow(t, r.st, m.id); serial != oldSerial {
+		t.Error("a refused renewal changed the certificate record")
+	}
+	if n := count(t, r.st, `SELECT COUNT(*) FROM audit_log WHERE action = ?`, audit.ActionAgentCertRenewed); n != 0 {
+		t.Errorf("%d agent.cert_renewed rows for a refused renewal", n)
+	}
+
+	// A renewal that just succeeded leaves 30 days, so asking again at once is early too.
+	r.clock = fixedNow.Add(20 * 24 * time.Hour)
+	if _, err := r.svc.Renew(r.ctx, m.id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.svc.Renew(r.ctx, m.id, ""); refusal(t, err).Code != wire.RenewNotDue {
+		t.Error("a second renewal straight after the first was not refused not_due")
+	}
+	if n := count(t, r.st, `SELECT COUNT(*) FROM audit_log WHERE action = ?`, audit.ActionAgentCertRenewed); n != 1 {
+		t.Errorf("%d agent.cert_renewed rows, want 1", n)
+	}
+}
+
+func TestRenewStillWorksOverALiveSessionAfterTheCertificateExpired(t *testing.T) {
+	// An agent whose renewals kept failing is connected when its certificate
+	// expires: the session was authenticated at its handshake, so the renewal that
+	// finally gets through is honoured. A new connection would be refused cert_expired.
+	r := newRig(t)
+	c := r.create(t, "Production")
+	m := r.enrolMember(t, c)
+	r.clock = fixedNow.Add(31 * 24 * time.Hour)
+	if _, err := r.svc.Renew(r.ctx, m.id, ""); err != nil {
+		t.Fatalf("Renew: %v", err)
+	}
+}
+
+func TestRenewOfAnUnknownAgentIsRefused(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.svc.Renew(r.ctx, "no-such-agent", ""); refusal(t, err).Code != wire.ReasonAuthRejected {
+		t.Error("an unknown agent's renewal was not refused auth_rejected")
+	}
+}

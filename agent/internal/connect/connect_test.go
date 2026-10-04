@@ -78,6 +78,9 @@ type reply struct {
 	drop        bool     // close the connection right after the welcome
 	pins        []string // the pins in the welcome
 	toAgent     []string
+	// onRenew answers a renew message from the agent with the message it returns;
+	// nil answers nothing.
+	onRenew func() any
 	// dockerRequests are raw HTTP requests the server sends on streams it opens
 	// after the welcome, the way its Docker client would.
 	dockerRequests []string
