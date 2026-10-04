@@ -203,7 +203,7 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 	}
 	agentID := func() string {
 		t.Helper()
-		raw, err := os.ReadFile(filepath.Join(stateDir, "identity.json"))
+		raw, err := os.ReadFile(filepath.Join(stateDir, "identity.json")) //nolint:gosec // the test's own temporary directory
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -226,7 +226,7 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 	setAgentURL("https://" + tsB.Listener.Addr().String())
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		raw, _ := os.ReadFile(filepath.Join(stateDir, "urls.json"))
+		raw, _ := os.ReadFile(filepath.Join(stateDir, "urls.json")) //nolint:gosec // the test's own temporary directory
 		var entries []struct {
 			URL string `json:"url"`
 		}
