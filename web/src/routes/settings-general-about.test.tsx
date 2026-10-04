@@ -423,7 +423,7 @@ describe("General tab", () => {
 describe("General tab: agent URL", () => {
   const CHANGE_AGENT = "Change the agent URL?";
   const TOLD =
-    "Connected agents are told the new address now and keep the old one as a fallback for a while.";
+    "Agents connected over wss:// are sent the new address now and switch to it on their next connection, if it's also a wss:// address. Agents on plain ws:// aren't told. From now on Bayplan refuses agents that dial a different host or port: there's no fallback period.";
 
   it("shows the Agent URL field, mono, with its helper and placeholder, empty when none is set", async () => {
     await openGeneral();
@@ -515,7 +515,9 @@ describe("General tab: agent URL", () => {
     const dialog = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
     expect(within(dialog).getByText(TOLD)).toBeTruthy();
     expect(
-      within(dialog).getByText("1 agent is offline and won't learn the new URL."),
+      within(dialog).getByText(
+        "1 agent is offline. It can't learn the new address, and Bayplan will refuse it until you reinstall it with the new address or change the URL back.",
+      ),
     ).toBeTruthy();
     // The sign-out warning is about the address a browser uses, not the agents'.
     expect(within(dialog).queryByText(/You're using Bayplan at/)).toBeNull();
@@ -541,7 +543,9 @@ describe("General tab: agent URL", () => {
     fireEvent.click(saveButton());
     const dialog = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
     expect(
-      within(dialog).getByText("2 agents are offline and won't learn the new URL."),
+      within(dialog).getByText(
+        "2 agents are offline. They can't learn the new address, and Bayplan will refuse them until you reinstall them with the new address or change the URL back.",
+      ),
     ).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -554,7 +558,7 @@ describe("General tab: agent URL", () => {
     fireEvent.click(saveButton());
     const calm = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
     expect(within(calm).getByText(TOLD)).toBeTruthy();
-    expect(within(calm).queryByText(/offline and won't learn/)).toBeNull();
+    expect(within(calm).queryByText(/can't learn the new address/)).toBeNull();
   });
 
   it("asks before changing the public URL when agents are enrolled, even to the address in use, with the same paragraphs", async () => {
@@ -571,7 +575,9 @@ describe("General tab: agent URL", () => {
     expect(within(dialog).getByText(new RegExp(`You're using Bayplan at ${ORIGIN}`))).toBeTruthy();
     expect(within(dialog).getByText(TOLD)).toBeTruthy();
     expect(
-      within(dialog).getByText("1 agent is offline and won't learn the new URL."),
+      within(dialog).getByText(
+        "1 agent is offline. It can't learn the new address, and Bayplan will refuse it until you reinstall it with the new address or change the URL back.",
+      ),
     ).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Change public URL" }));
     expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
@@ -623,7 +629,7 @@ describe("General tab: agent URL", () => {
     const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
     expect(within(dialog).getByText(new RegExp(`You're using Bayplan at ${ORIGIN}`))).toBeTruthy();
     expect(within(dialog).queryByText(TOLD)).toBeNull();
-    expect(within(dialog).queryByText(/offline and won't learn/)).toBeNull();
+    expect(within(dialog).queryByText(/can't learn the new address/)).toBeNull();
   });
 
   it("clearing the agent URL while agents are enrolled asks and says the public URL is where they go", async () => {
