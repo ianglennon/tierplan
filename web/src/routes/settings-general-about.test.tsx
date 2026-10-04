@@ -59,20 +59,48 @@ const NOTICES = [
 
 let me: typeof ADMIN;
 let calls: Call[];
-let settings: { instanceName: string; publicUrl: string; publicUrlLocked: boolean };
+interface SettingsState {
+  instanceName: string;
+  publicUrl: string;
+  publicUrlLocked: boolean;
+  agentUrl: string;
+  agentUrlLocked: boolean;
+  agentEndpoint: string;
+  enrolledAgents: number;
+  offlineAgents: number;
+}
+
+// settingsState is what GET /api/settings answers, with the agent fields of plan
+// 02-26 at "no agent URL and no agents enrolled" unless a test sets them.
+function settingsState(over: Partial<SettingsState> = {}): SettingsState {
+  return {
+    instanceName: "Lab",
+    publicUrl: ORIGIN,
+    publicUrlLocked: false,
+    agentUrl: "",
+    agentUrlLocked: false,
+    agentEndpoint: "",
+    enrolledAgents: 0,
+    offlineAgents: 0,
+    ...over,
+  };
+}
+
+let settings: SettingsState;
 let patchAnswer: (body: Record<string, unknown>) => Response | Promise<Response>;
 let noticesAnswer: () => Response;
 
 function applyPatch(body: Record<string, unknown>) {
   if (typeof body.instanceName === "string") settings.instanceName = body.instanceName;
   if (typeof body.publicUrl === "string") settings.publicUrl = body.publicUrl;
+  if (typeof body.agentUrl === "string") settings.agentUrl = body.agentUrl;
   return Response.json(settings);
 }
 
 beforeEach(() => {
   calls = [];
   me = ADMIN;
-  settings = { instanceName: "Lab", publicUrl: ORIGIN, publicUrlLocked: false };
+  settings = settingsState();
   patchAnswer = applyPatch;
   noticesAnswer = () => Response.json(NOTICES);
   setCsrfToken(null);
@@ -144,6 +172,7 @@ const patches = () => calls.filter((c) => c.method === "PATCH" && c.path === "/a
 const main = () => within(document.getElementById("main") as HTMLElement);
 const nameField = () => screen.getByLabelText("Instance name") as HTMLInputElement;
 const urlField = () => screen.getByLabelText("Public URL") as HTMLInputElement;
+const agentField = () => screen.getByLabelText("Agent URL") as HTMLInputElement;
 const saveButton = () => screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement;
 
 async function openGeneral() {
@@ -271,7 +300,7 @@ describe("General tab", () => {
   });
 
   it("shows the URL read-only with a lock and the environment variable's name, and never sends it", async () => {
-    settings = { instanceName: "Lab", publicUrl: "https://fixed.example", publicUrlLocked: true };
+    settings = settingsState({ publicUrl: "https://fixed.example", publicUrlLocked: true });
     await openGeneral();
     expect(urlField().readOnly).toBe(true);
     expect(urlField().value).toBe("https://fixed.example");
@@ -384,6 +413,267 @@ describe("General tab", () => {
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(nameField().value).toBe("Lab"));
+  });
+});
+
+// The agent URL and the agents a URL change concerns (plan 02-26, D-18, D-19,
+// UI-SPEC "Settings > General additions").
+describe("General tab: agent URL", () => {
+  const CHANGE_AGENT = "Change the agent URL?";
+  const TOLD =
+    "Connected agents are told the new address now and keep the old one as a fallback for a while.";
+
+  it("shows the Agent URL field, mono, with its helper and placeholder, empty when none is set", async () => {
+    await openGeneral();
+    expect(agentField().value).toBe("");
+    expect(agentField().placeholder).toBe("https://bayplan.internal:7480");
+    expect(agentField().className).toContain("font-mono");
+    expect(
+      screen.getByText(
+        "Leave empty to use the public URL. Set it if your hosts reach Bayplan at a different address, such as an internal hostname.",
+      ),
+    ).toBeTruthy();
+    expect(agentField().readOnly).toBe(false);
+    expect(agentField().getAttribute("aria-describedby")).toContain("settings-agent-url-helper");
+  });
+
+  it("shows the updated public URL helper that mentions a path", async () => {
+    await openGeneral();
+    expect(
+      screen.getByText(
+        "The address people use to reach Bayplan. If Bayplan runs under a path, include it, for example https://example.com/bayplan. It controls cookies and request origin checks.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("keeps a long agent URL in the field to scroll sideways instead of wrapping it", async () => {
+    const long = `https://${"a".repeat(80)}.internal.example.com:7480/${"path/".repeat(20)}`;
+    settings = settingsState({ agentUrl: long });
+    await openGeneral();
+    expect(agentField().value).toBe(long);
+    expect(agentField().tagName).toBe("INPUT");
+    expect(agentField().className).not.toContain("truncate");
+  });
+
+  it("shows the URL read-only with a lock and the environment variable's name when it is locked, and never sends it", async () => {
+    settings = settingsState({ agentUrl: "https://agent.internal:7480", agentUrlLocked: true });
+    await openGeneral();
+    expect(agentField().readOnly).toBe(true);
+    expect(agentField().value).toBe("https://agent.internal:7480");
+    expect(
+      within(agentField().closest('[data-slot="input-group"]') as HTMLElement).getByRole("img", {
+        name: "Locked",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByText("Set by the BAYPLAN_AGENT_URL environment variable.")).toBeTruthy();
+
+    fireEvent.change(nameField(), { target: { value: "Renamed" } });
+    fireEvent.click(saveButton());
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(patches()[0]?.body).toEqual({ instanceName: "Renamed" });
+  });
+
+  it("shows the full-address error for an invalid agent URL and sends nothing", async () => {
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "bayplan.internal" } });
+    fireEvent.click(saveButton());
+    expect(
+      await screen.findByText("Enter a full address such as https://bayplan.example.com."),
+    ).toBeTruthy();
+    expect(agentField().getAttribute("aria-invalid")).toBe("true");
+    expect(patches()).toHaveLength(0);
+  });
+
+  it("saves a blank agent URL as an empty string, which clears it", async () => {
+    settings = settingsState({ agentUrl: "https://old.internal:7480" });
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "   " } });
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    fireEvent.click(saveButton());
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(patches()[0]?.body).toEqual({ agentUrl: "" });
+    await waitFor(() => expect(agentField().value).toBe(""));
+  });
+
+  it("sends only the agent URL, trimmed, and asks nothing when no agent is enrolled", async () => {
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "  https://bayplan.lan:7480  " } });
+    fireEvent.click(saveButton());
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(patches()[0]?.body).toEqual({ agentUrl: "https://bayplan.lan:7480" });
+  });
+
+  it("asks before changing the agent URL when agents are enrolled, says they are told and warns about the offline one", async () => {
+    settings = settingsState({ enrolledAgents: 3, offlineAgents: 1 });
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.click(saveButton());
+
+    const dialog = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
+    expect(within(dialog).getByText(TOLD)).toBeTruthy();
+    expect(
+      within(dialog).getByText("1 agent is offline and won't learn the new URL."),
+    ).toBeTruthy();
+    // The sign-out warning is about the address a browser uses, not the agents'.
+    expect(within(dialog).queryByText(/You're using Bayplan at/)).toBeNull();
+    expect(patches()).toHaveLength(0);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(patches()).toHaveLength(0);
+    expect(agentField().value).toBe("https://bayplan.lan:7480");
+
+    fireEvent.click(saveButton());
+    const again = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
+    fireEvent.click(within(again).getByRole("button", { name: "Change agent URL" }));
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(patches()).toHaveLength(1);
+    expect(patches()[0]?.body).toEqual({ agentUrl: "https://bayplan.lan:7480" });
+  });
+
+  it("counts the offline agents in the plural and shows no warning when none is offline", async () => {
+    settings = settingsState({ enrolledAgents: 5, offlineAgents: 2 });
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.click(saveButton());
+    const dialog = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
+    expect(
+      within(dialog).getByText("2 agents are offline and won't learn the new URL."),
+    ).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    cleanup();
+    queryClient.clear();
+
+    settings = settingsState({ enrolledAgents: 5, offlineAgents: 0 });
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.click(saveButton());
+    const calm = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
+    expect(within(calm).getByText(TOLD)).toBeTruthy();
+    expect(within(calm).queryByText(/offline and won't learn/)).toBeNull();
+  });
+
+  it("asks before changing the public URL when agents are enrolled, even to the address in use, with the same paragraphs", async () => {
+    settings = settingsState({
+      publicUrl: "https://old.example",
+      enrolledAgents: 2,
+      offlineAgents: 1,
+    });
+    await openGeneral();
+    fireEvent.change(urlField(), { target: { value: `${ORIGIN}/bayplan` } });
+    fireEvent.click(saveButton());
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
+    expect(within(dialog).getByText(new RegExp(`You're using Bayplan at ${ORIGIN}`))).toBeTruthy();
+    expect(within(dialog).getByText(TOLD)).toBeTruthy();
+    expect(
+      within(dialog).getByText("1 agent is offline and won't learn the new URL."),
+    ).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Change public URL" }));
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(patches()[0]?.body).toEqual({ publicUrl: `${ORIGIN}/bayplan` });
+  });
+
+  it("uses the public URL title when both URLs change", async () => {
+    settings = settingsState({ publicUrl: "https://old.example", enrolledAgents: 1 });
+    await openGeneral();
+    fireEvent.change(urlField(), { target: { value: "https://new.example" } });
+    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.click(saveButton());
+    const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
+    expect(within(dialog).getByText(TOLD)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Change public URL" }));
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(patches()[0]?.body).toEqual({
+      publicUrl: "https://new.example",
+      agentUrl: "https://bayplan.lan:7480",
+    });
+  });
+
+  it("does not claim agents are told when the public URL changes under an agent URL: they keep dialing the agent URL", async () => {
+    settings = settingsState({
+      publicUrl: "https://old.example",
+      agentUrl: "https://bayplan.lan:7480",
+      enrolledAgents: 2,
+      offlineAgents: 1,
+    });
+    await openGeneral();
+    // To the address in use: nothing to ask, nothing agents need to hear.
+    fireEvent.change(urlField(), { target: { value: `${ORIGIN}/bayplan` } });
+    fireEvent.click(saveButton());
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(patches()[0]?.body).toEqual({ publicUrl: `${ORIGIN}/bayplan` });
+  });
+
+  it("keeps the browser warning but not the agent paragraphs for a public URL change under an agent URL to another origin", async () => {
+    settings = settingsState({
+      publicUrl: ORIGIN,
+      agentUrl: "https://bayplan.lan:7480",
+      enrolledAgents: 2,
+      offlineAgents: 1,
+    });
+    await openGeneral();
+    fireEvent.change(urlField(), { target: { value: "https://elsewhere.example" } });
+    fireEvent.click(saveButton());
+    const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
+    expect(within(dialog).getByText(new RegExp(`You're using Bayplan at ${ORIGIN}`))).toBeTruthy();
+    expect(within(dialog).queryByText(TOLD)).toBeNull();
+    expect(within(dialog).queryByText(/offline and won't learn/)).toBeNull();
+  });
+
+  it("clearing the agent URL while agents are enrolled asks and says the public URL is where they go", async () => {
+    settings = settingsState({ agentUrl: "https://old.internal:7480", enrolledAgents: 2 });
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "" } });
+    fireEvent.click(saveButton());
+    const dialog = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
+    expect(within(dialog).getByText(TOLD)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Change agent URL" }));
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(patches()[0]?.body).toEqual({ agentUrl: "" });
+  });
+
+  it("maps the server's invalid_agent_url to the same inline error", async () => {
+    patchAnswer = () =>
+      Response.json(
+        {
+          type: "validation_failed",
+          status: 422,
+          errors: [{ location: "body.agentUrl", message: "invalid_agent_url" }],
+        },
+        { status: 422, headers: { "Content-Type": "application/problem+json" } },
+      );
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.click(saveButton());
+    expect(
+      await screen.findByText("Enter a full address such as https://bayplan.example.com."),
+    ).toBeTruthy();
+    expect(agentField().getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("shows the lock as a field error when the server says the agent URL is now fixed", async () => {
+    patchAnswer = () =>
+      Response.json(
+        { type: "agent_url_locked", status: 409 },
+        { status: 409, headers: { "Content-Type": "application/problem+json" } },
+      );
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.click(saveButton());
+    expect(
+      await screen.findByText("Set by the BAYPLAN_AGENT_URL environment variable."),
+    ).toBeTruthy();
+  });
+
+  it("is read-only without settings.write: the agent URL too", async () => {
+    me = READER;
+    await openGeneral();
+    expect(agentField().readOnly).toBe(true);
+    expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
   });
 });
 
