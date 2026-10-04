@@ -60,3 +60,31 @@ for (const kind of ["plain", "dialog", "alertdialog"] as const) {
     await expect.poll(() => clip.read()).toBe(COMMAND);
   });
 }
+
+test("reports a failure when execCommand claims success but nothing was copied", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const clip = await clipboardReader(context, baseURL as string);
+  await clip.write(SENTINEL);
+  // Chromium answers true from execCommand("copy") even with nothing selected;
+  // this stand-in answers true and fires no copy event.
+  await page.addInitScript(() => {
+    Document.prototype.execCommand = () => true;
+  });
+
+  await page.goto("/?case=dialog");
+  await page.bringToFront();
+  await page.getByRole("button", { name: COPY }).click();
+
+  // The modal marks the toast region aria-hidden, so find the toast by its text.
+  await expect(
+    page.getByText("Copy failed. Select the text and copy it manually."),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: COPY })).toBeVisible();
+  await expect(page.getByRole("button", { name: COPIED })).toHaveCount(0);
+  // The token is revealed and the command selected for a manual copy.
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe(COMMAND);
+  expect(await clip.read()).toBe(SENTINEL);
+});

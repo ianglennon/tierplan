@@ -5,6 +5,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CopyableCode } from "@/components/copyable-code";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { dockerRunSnippet } from "@/features/environments/docker-run-snippet";
 import "@/i18n";
 
@@ -26,16 +33,44 @@ function stubClipboard(writeText: ((text: string) => Promise<void>) | undefined)
 }
 
 // jsdom has no execCommand. The stand-in records what the hidden textarea held
-// at the moment of the call, because the textarea is gone again afterwards.
-let execCalls: { command: string; text: string }[];
-function stubExecCommand(result: boolean | "throw") {
+// and where it sat at the moment of the call, because the textarea is gone again
+// afterwards. Like a browser it dispatches a "copy" event on the document (unless
+// copyEvent is false) whose clipboardData records what a listener writes.
+interface ExecCall {
+  command: string;
+  text: string;
+  setData: [string, string][];
+  prevented: boolean;
+  inDialog: boolean;
+  inAlertDialog: boolean;
+  inSection: boolean;
+}
+let execCalls: ExecCall[];
+function stubExecCommand(result: boolean | "throw", { copyEvent = true } = {}) {
   execCalls = [];
   Object.defineProperty(document, "execCommand", {
     configurable: true,
     value: (command: string) => {
       const area = document.querySelector("textarea");
-      execCalls.push({ command, text: area?.value ?? "" });
+      const call: ExecCall = {
+        command,
+        text: area?.value ?? "",
+        setData: [],
+        prevented: false,
+        inDialog: area?.closest('[role="dialog"]') != null,
+        inAlertDialog: area?.closest('[role="alertdialog"]') != null,
+        inSection: area?.closest("section") != null,
+      };
+      execCalls.push(call);
       if (result === "throw") throw new Error("not allowed");
+      if (copyEvent) {
+        const event = new Event("copy", { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "clipboardData", {
+          value: { setData: (type: string, data: string) => call.setData.push([type, data]) },
+        });
+        document.dispatchEvent(event);
+        call.prevented = event.defaultPrevented;
+      }
       return result;
     },
   });
@@ -87,7 +122,11 @@ describe("CopyableCode", () => {
     fireEvent.click(screen.getByRole("button", { name: COPY_NAME }));
 
     await screen.findByRole("button", { name: "Copied the docker run command" });
-    expect(execCalls).toEqual([{ command: "copy", text: CODE }]);
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]?.command).toBe("copy");
+    expect(execCalls[0]?.text).toBe(CODE);
+    expect(execCalls[0]?.setData).toEqual([["text/plain", CODE]]);
+    expect(execCalls[0]?.prevented).toBe(true);
     // The helper textarea never stays in the page.
     expect(document.querySelector("textarea")).toBeNull();
     expect(toastError).not.toHaveBeenCalled();
@@ -133,6 +172,35 @@ describe("CopyableCode", () => {
     await waitFor(() => expect(toastError).toHaveBeenCalledWith(FAILED));
   });
 
+  it("does not say Copied when execCommand answers true but no copy event wrote the text", async () => {
+    stubClipboard(undefined);
+    stubExecCommand(true, { copyEvent: false });
+    render(<CopyableCode code={CODE} label="the docker run command" />);
+
+    fireEvent.click(screen.getByRole("button", { name: COPY_NAME }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(FAILED));
+    expect(screen.getByRole("button", { name: COPY_NAME })).toBeTruthy();
+    expect(window.getSelection()?.toString()).toBe(CODE);
+  });
+
+  it("leaves no copy listener behind that rewrites a later copy", async () => {
+    stubClipboard(undefined);
+    stubExecCommand(true);
+    render(<CopyableCode code={CODE} label="the docker run command" />);
+    fireEvent.click(screen.getByRole("button", { name: COPY_NAME }));
+    await screen.findByRole("button", { name: "Copied the docker run command" });
+
+    const later: [string, string][] = [];
+    const event = new Event("copy", { cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: { setData: (t: string, d: string) => later.push([t, d]) },
+    });
+    document.dispatchEvent(event);
+    expect(later).toEqual([]);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("shows the code as read-only text and goes back to Copy after a moment", async () => {
     vi.useFakeTimers();
     stubClipboard(async () => {});
@@ -148,6 +216,50 @@ describe("CopyableCode", () => {
       vi.advanceTimersByTime(2500);
     });
     expect(screen.getByRole("button", { name: COPY_NAME })).toBeTruthy();
+  });
+});
+
+describe("CopyableCode inside a modal dialog (G-02-1a)", () => {
+  it("puts the helper textarea inside the Dialog and the component, not on the body", async () => {
+    stubClipboard(undefined);
+    stubExecCommand(true);
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Install the agent</DialogTitle>
+          <DialogDescription>Run this on the host.</DialogDescription>
+          <CopyableCode code={CODE} label="the docker run command" />
+        </DialogContent>
+      </Dialog>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: COPY_NAME }));
+
+    await screen.findByRole("button", { name: "Copied the docker run command" });
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]?.inDialog).toBe(true);
+    expect(execCalls[0]?.inSection).toBe(true);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("puts the helper textarea inside the AlertDialog and the component", async () => {
+    stubClipboard(undefined);
+    stubExecCommand(true);
+    render(
+      <AlertDialog open>
+        <AlertDialogContent>
+          <AlertDialogTitle>Remove environment</AlertDialogTitle>
+          <AlertDialogDescription>Clean up by hand.</AlertDialogDescription>
+          <CopyableCode code={CODE} label="the docker run command" />
+        </AlertDialogContent>
+      </AlertDialog>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: COPY_NAME }));
+
+    await screen.findByRole("button", { name: "Copied the docker run command" });
+    expect(execCalls[0]?.inAlertDialog).toBe(true);
+    expect(execCalls[0]?.inSection).toBe(true);
   });
 });
 
