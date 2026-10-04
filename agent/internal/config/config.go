@@ -148,6 +148,25 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 	return cfg, nil
 }
 
+// LoadHelper reads what the helper subcommand needs (D-24): the Docker socket, the
+// state directory and the group override. A helper dials no server, so it needs
+// neither the URL nor a join token, and Load's checks for them do not apply.
+func LoadHelper(env func(string) string) (Config, error) {
+	cfg := Config{SocketPath: env("BAYPLAN_AGENT_SOCKET"), StateDir: env("BAYPLAN_AGENT_STATE_DIR")}
+	if cfg.SocketPath == "" {
+		cfg.SocketPath = DefaultSocket
+	}
+	if cfg.StateDir == "" {
+		cfg.StateDir = DefaultStateDir
+	}
+	gid, err := parseGID(env("BAYPLAN_AGENT_DOCKER_GID"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DockerGID = gid
+	return cfg, nil
+}
+
 // checkURL requires a ws:// or wss:// address with a host. The URL itself can
 // hold no secret: the token travels in the handshake, never in a URL (D-20).
 func checkURL(raw string) error {

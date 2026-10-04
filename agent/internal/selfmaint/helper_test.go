@@ -93,6 +93,29 @@ func helperSelf(f *fakeEngine) {
 	})
 }
 
+// capNames strips the CAP_ prefix that the Docker client adds on create and sorts,
+// so two lists of capabilities compare by meaning.
+func capNames(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		out = append(out, strings.TrimPrefix(c, "CAP_"))
+	}
+	slices.Sort(out)
+	return out
+}
+
+// normalisedHostConfig is the JSON of a HostConfig with capability names normalised.
+func normalisedHostConfig(t *testing.T, hc *container.HostConfig) string {
+	t.Helper()
+	cp := *hc
+	cp.CapAdd, cp.CapDrop = capNames(cp.CapAdd), capNames(cp.CapDrop)
+	b, err := json.Marshal(&cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 type markerClock struct {
 	mu sync.Mutex
 	at time.Time
@@ -129,7 +152,7 @@ func recreateFixture(t *testing.T, connect bool, timeout time.Duration) (*fakeEn
 
 func TestRecreateReplacesTheAgentWithTheSameConfigurationAndTheNewImage(t *testing.T) {
 	f, r, _ := recreateFixture(t, true, 5*time.Second)
-	wantHC, _ := json.Marshal(f.containers[oldLong].HostConfig)
+	wantHC := normalisedHostConfig(t, f.containers[oldLong].HostConfig)
 	if err := r.run(context.Background()); err != nil {
 		t.Fatalf("recreate failed: %v", err)
 	}
@@ -140,37 +163,37 @@ func TestRecreateReplacesTheAgentWithTheSameConfigurationAndTheNewImage(t *testi
 	if cr.Name != "bayplan-agent" {
 		t.Fatalf("the new container is named %q, want the old one's name", cr.Name)
 	}
-	if cr.Req.Config.Image != newImage {
-		t.Fatalf("the new container runs %q, want the helper's own image %q", cr.Req.Config.Image, newImage)
+	if cr.Req.Image != newImage {
+		t.Fatalf("the new container runs %q, want the helper's own image %q", cr.Req.Image, newImage)
 	}
 	// The operator's configuration is carried over.
 	for _, want := range []string{"BAYPLAN_AGENT_URL=wss://bayplan.example/agent/connect", "BAYPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/t"} {
-		if !slices.Contains(cr.Req.Config.Env, want) {
-			t.Errorf("env %q was not carried over: %v", want, cr.Req.Config.Env)
+		if !slices.Contains(cr.Req.Env, want) {
+			t.Errorf("env %q was not carried over: %v", want, cr.Req.Env)
 		}
 	}
-	if cr.Req.Config.Labels["bayplan.agent"] != "true" || cr.Req.Config.Labels["owner"] != "ops" {
-		t.Errorf("the operator's labels were not carried over: %v", cr.Req.Config.Labels)
+	if cr.Req.Labels["bayplan.agent"] != "true" || cr.Req.Labels["owner"] != "ops" {
+		t.Errorf("the operator's labels were not carried over: %v", cr.Req.Labels)
 	}
-	if gotHC, _ := json.Marshal(cr.Req.HostConfig); string(gotHC) != string(wantHC) {
+	if gotHC := normalisedHostConfig(t, cr.Req.HostConfig); gotHC != wantHC {
 		t.Errorf("HostConfig changed:\n got: %s\nwant: %s", gotHC, wantHC)
 	}
 	// What the old image or the engine had put in is not: it would pin the old image's
 	// labels and environment, and the old container's ID as the hostname, on the new one.
-	if cr.Req.Config.Hostname != "" {
-		t.Errorf("the old container's ID was copied as the hostname: %q", cr.Req.Config.Hostname)
+	if cr.Req.Hostname != "" {
+		t.Errorf("the old container's ID was copied as the hostname: %q", cr.Req.Hostname)
 	}
-	if v, ok := cr.Req.Config.Labels["org.opencontainers.image.version"]; ok {
+	if v, ok := cr.Req.Labels["org.opencontainers.image.version"]; ok {
 		t.Errorf("the old image's version label was pinned onto the new container: %q", v)
 	}
-	if slices.Contains(cr.Req.Config.Env, "PATH=/usr/local/bin:/usr/bin") {
-		t.Errorf("the old image's environment was pinned onto the new container: %v", cr.Req.Config.Env)
+	if slices.Contains(cr.Req.Env, "PATH=/usr/local/bin:/usr/bin") {
+		t.Errorf("the old image's environment was pinned onto the new container: %v", cr.Req.Env)
 	}
-	if len(cr.Req.Config.Entrypoint) != 0 {
-		t.Errorf("the old image's entrypoint was pinned: %v", cr.Req.Config.Entrypoint)
+	if len(cr.Req.Entrypoint) != 0 {
+		t.Errorf("the old image's entrypoint was pinned: %v", cr.Req.Entrypoint)
 	}
-	if _, ok := cr.Req.Config.Volumes[stateDir]; ok {
-		t.Errorf("the old image's volume declaration was pinned: %v", cr.Req.Config.Volumes)
+	if _, ok := cr.Req.Volumes[stateDir]; ok {
+		t.Errorf("the old image's volume declaration was pinned: %v", cr.Req.Volumes)
 	}
 
 	// The network endpoint comes over as configuration, not as the old container's address.
@@ -389,7 +412,7 @@ func TestRecreateKeepsEveryLabelWhenTheOldImageIsGone(t *testing.T) {
 	if err := r.run(context.Background()); err != nil {
 		t.Fatalf("recreate failed: %v", err)
 	}
-	l := f.creates[0].Req.Config.Labels
+	l := f.creates[0].Req.Labels
 	if l["bayplan.agent"] != "true" || l["owner"] != "ops" {
 		t.Errorf("labels = %v", l)
 	}
@@ -406,7 +429,9 @@ func standaloneFixture(t *testing.T, mut func(*Config)) (*fakeEngine, *Maint) {
 	t.Helper()
 	f := newFakeEngine(t)
 	old := oldAgent(f)
-	_ = old
+	// The agent dials the socket at the path in its own mount namespace; in this test
+	// that is the fake's socket, so the container's mount says so.
+	old.Mounts[0].Destination = f.sock
 	f.images[newImage] = image.InspectResponse{ID: "sha256:new", Config: oldImageConfig()}
 	return f, newMaint(f, func(c *Config) {
 		c.SelfID = oldShort
@@ -430,21 +455,21 @@ func TestStandaloneUpdatePullsTheImageAndStartsAHelperThatRecreatesTheAgent(t *t
 		t.Fatalf("want one helper, got %d creates", len(f.creates))
 	}
 	h := f.creates[0].Req
-	if h.Config.Image != newImage {
-		t.Errorf("the helper runs %q, want %q", h.Config.Image, newImage)
+	if h.Image != newImage {
+		t.Errorf("the helper runs %q, want %q", h.Image, newImage)
 	}
-	if h.Config.Labels["bayplan.agent"] != "true" || h.Config.Labels["bayplan.agent.helper"] != "true" {
-		t.Errorf("helper labels = %v", h.Config.Labels)
+	if h.Labels["bayplan.agent"] != "true" || h.Labels["bayplan.agent.helper"] != "true" {
+		t.Errorf("helper labels = %v", h.Labels)
 	}
-	if want := []string{"helper", "recreate", "--target", oldLong}; !reflect.DeepEqual([]string(h.Config.Cmd), want) {
-		t.Errorf("helper command = %v, want %v (the full ID of the agent's own container)", h.Config.Cmd, want)
+	if want := []string{"helper", "recreate", "--target", oldLong}; !reflect.DeepEqual([]string(h.Cmd), want) {
+		t.Errorf("helper command = %v, want %v (the full ID of the agent's own container)", h.Cmd, want)
 	}
-	if !slices.Contains(h.Config.Env, "BAYPLAN_AGENT_SOCKET="+sockPath) || !slices.Contains(h.Config.Env, "BAYPLAN_AGENT_STATE_DIR="+stateDir) {
-		t.Errorf("helper env = %v", h.Config.Env)
+	if !slices.Contains(h.Env, "BAYPLAN_AGENT_SOCKET="+f.sock) || !slices.Contains(h.Env, "BAYPLAN_AGENT_STATE_DIR="+stateDir) {
+		t.Errorf("helper env = %v", h.Env)
 	}
 	hc := h.HostConfig
-	if hc == nil || !hc.AutoRemove || !hc.ReadonlyRootfs || !slices.Equal(hc.CapDrop, []string{"ALL"}) ||
-		!slices.Equal(hc.CapAdd, []string{"SETUID", "SETGID"}) || !slices.Contains(hc.SecurityOpt, "no-new-privileges") {
+	if hc == nil || !hc.AutoRemove || !hc.ReadonlyRootfs || !slices.Equal(capNames(hc.CapDrop), []string{"ALL"}) ||
+		!slices.Equal(capNames(hc.CapAdd), []string{"SETGID", "SETUID"}) || !slices.Contains(hc.SecurityOpt, "no-new-privileges") {
 		t.Errorf("the helper does not have the agent's hardening and AutoRemove: %+v", hc)
 	}
 	if hc != nil && hc.NetworkMode != "none" {
@@ -456,7 +481,7 @@ func TestStandaloneUpdatePullsTheImageAndStartsAHelperThatRecreatesTheAgent(t *t
 	var sock, state *mount.Mount
 	for i := range hc.Mounts {
 		switch hc.Mounts[i].Target {
-		case sockPath:
+		case f.sock:
 			sock = &hc.Mounts[i]
 		case stateDir:
 			state = &hc.Mounts[i]

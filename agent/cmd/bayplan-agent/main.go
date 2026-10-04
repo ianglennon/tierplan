@@ -13,8 +13,10 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
@@ -27,6 +29,7 @@ import (
 	"github.com/ianglennon/bayplan/agent/internal/connect"
 	"github.com/ianglennon/bayplan/agent/internal/privdrop"
 	"github.com/ianglennon/bayplan/agent/internal/selfmaint"
+	"github.com/ianglennon/bayplan/agent/internal/state"
 	"github.com/ianglennon/bayplan/agent/internal/version"
 )
 
@@ -38,6 +41,7 @@ type deps struct {
 	readFile func(string) ([]byte, error)
 	drop     func(privdrop.Options) (privdrop.Result, error)
 	connect  func(context.Context, connect.Config) error
+	recreate func(context.Context, selfmaint.RecreateOptions) error
 	getuid   func() int
 	getgid   func() int
 	stdout   io.Writer
@@ -53,6 +57,10 @@ func run(d deps) int {
 	}
 
 	log := slog.New(slog.NewTextHandler(d.stderr, nil))
+
+	if len(d.args) > 0 && d.args[0] == "helper" {
+		return runHelper(d, log)
+	}
 
 	// The configuration is read first, while the process can still read a
 	// root-only token file.
@@ -116,6 +124,68 @@ func run(d deps) int {
 	return 1
 }
 
+// runHelper is the short-lived helper of a standalone self-update (D-24):
+// `bayplan-agent helper recreate --target <container ID>`. The agent started it
+// from the new image with the Docker socket and its state volume. It dials no
+// server, so it reads no URL and no token, but it drops its privileges the same way
+// the agent does. Exit 0 means the agent was replaced; 1 means it was not (the old
+// agent is back, or the error says what is left to do); 2 is a bad command line.
+func runHelper(d deps, log *slog.Logger) int {
+	if len(d.args) < 2 || d.args[1] != "recreate" {
+		_, _ = fmt.Fprintln(d.stderr, "usage: bayplan-agent helper recreate --target <container ID>")
+		return 2
+	}
+	flags := flag.NewFlagSet("helper recreate", flag.ContinueOnError)
+	flags.SetOutput(d.stderr)
+	target := flags.String("target", "", "ID of the agent container to replace")
+	if err := flags.Parse(d.args[2:]); err != nil {
+		return 2
+	}
+	if *target == "" || flags.NArg() != 0 {
+		_, _ = fmt.Fprintln(d.stderr, "usage: bayplan-agent helper recreate --target <container ID>")
+		return 2
+	}
+	cfg, err := config.LoadHelper(d.getenv)
+	if err != nil {
+		_, _ = fmt.Fprintln(d.stderr, "bayplan-agent:", err)
+		return 2
+	}
+	if _, err := d.drop(privdrop.Options{SocketPath: cfg.SocketPath, DockerGID: cfg.DockerGID}); err != nil {
+		log.Error("the helper could not drop its privileges, so it will not start", "error", err)
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err = d.recreate(ctx, selfmaint.RecreateOptions{
+		SocketPath: cfg.SocketPath, TargetID: *target, Marker: connectedMarker(cfg.StateDir),
+		Timeout: selfmaint.ConnectTimeout, Log: log,
+	})
+	if err != nil {
+		log.Error("the helper did not replace the agent", "error", err)
+		return 1
+	}
+	return 0
+}
+
+// connectedMarker reads when the agent last connected: the modification time of the
+// connected file in the state directory, which the agent writes by rename after each
+// completed handshake. A missing file is the zero time, not an error: the agent has
+// not connected yet.
+func connectedMarker(dir string) func() (time.Time, error) {
+	path := filepath.Join(dir, state.ConnectedFile)
+	return func() (time.Time, error) {
+		fi, err := os.Stat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return time.Time{}, nil
+		}
+		if err != nil {
+			return time.Time{}, err
+		}
+		return fi.ModTime(), nil
+	}
+}
+
 // hostOf is the host part of the server URL, for the log. The URL carries no
 // secret (the token travels in the handshake), but a log line needs only the host.
 func hostOf(raw string) string {
@@ -141,6 +211,7 @@ func main() {
 		readFile: os.ReadFile,
 		drop:     privdrop.Drop,
 		connect:  connect.Run,
+		recreate: selfmaint.RecreateAgent,
 		getuid:   os.Getuid,
 		getgid:   os.Getgid,
 		stdout:   os.Stdout,
