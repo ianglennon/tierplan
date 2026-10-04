@@ -756,6 +756,19 @@ describe("NodeTable agent updates", () => {
     ).toBeTruthy();
   });
 
+  it("words the refusal of an agent whose session is not TLS-verified", async () => {
+    agents = [
+      agent("a1", "mgr-1", { role: "manager" }),
+      { ...BEHIND, updateState: { state: "failed", reason: "insecure_session" } },
+    ];
+    await mountLoaded();
+    expect(
+      within(cells(rowFor("old-1"))[3] as HTMLElement).getByText(
+        "Update failed: the agent's connection isn't TLS-verified, so it won't update itself",
+      ),
+    ).toBeTruthy();
+  });
+
   it("shows a neutral Update badge beside the version of an agent that is behind", async () => {
     await mountLoaded();
     expect(within(cells(rowFor("old-1"))[3] as HTMLElement).getByText("Update")).toBeTruthy();

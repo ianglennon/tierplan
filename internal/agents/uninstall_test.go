@@ -262,3 +262,27 @@ func TestUninstallAllCanBeCancelled(t *testing.T) {
 		t.Fatalf("confirmed %v after %v", got, time.Since(start))
 	}
 }
+
+func TestUninstallAllTreatsAnInsecureSessionRefusalAsNotUninstalledSoTheManualCleanupStaysTheWay(t *testing.T) {
+	for name, set := range map[string]func(r *updRig){
+		"standalone": func(r *updRig) {
+			r.hub.set(r.env, r.standalone("a1", "0.2.1", true), r.standalone("a2", "0.2.1", true))
+		},
+		"swarm": func(r *updRig) {
+			r.hub.set(r.env, r.manager("m1", "0.2.1"), r.worker("w1", "0.2.1"))
+			r.leader("m1")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newUpdRig(t, "v0.2.1")
+			set(r)
+			r.answerWith(func(string, wire.Uninstall) (bool, string) { return false, wire.UpdateErrInsecureSession })
+			if got := r.uninstall(500 * time.Millisecond); len(got) != 0 {
+				t.Fatalf("confirmed %v: an agent that refused on an insecure session did not uninstall", got)
+			}
+			if rows := r.auditRows(t, audit.ActionAgentUninstalled); len(rows) != 0 {
+				t.Fatalf("audited %v as uninstalled", rows)
+			}
+		})
+	}
+}

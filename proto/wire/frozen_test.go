@@ -61,6 +61,12 @@ func TestFrozenMessagesMatchTheirGoldenFiles(t *testing.T) {
 	golden(t, "update_result_error", UpdateResult{T: TypeUpdateResult, OK: false, Error: UpdateErrImageNotOwnRepository})
 }
 
+func TestTheInsecureSessionRefusalCodeIsTheStringTheServerAndTheUIKnow(t *testing.T) {
+	if UpdateErrInsecureSession != "insecure_session" {
+		t.Fatalf("UpdateErrInsecureSession = %q", UpdateErrInsecureSession)
+	}
+}
+
 func TestFrozenMessageTypeNamesDoNotChange(t *testing.T) {
 	for got, want := range map[string]string{
 		TypeUpdate:       "update",

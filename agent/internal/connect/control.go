@@ -93,8 +93,35 @@ type controlHooks struct {
 	// urls takes the addresses and pins the server pushed (D-19).
 	urls func(wire.URLUpdate)
 	// maint answers the server's update and uninstall messages (D-24, D-26). Nil
-	// means the agent has no self-maintenance, and answers self_update_disabled.
+	// means the agent has no self-maintenance, and answers self_update_disabled. On a
+	// session that was not verified it is an insecureMaint, whatever the agent has.
 	maint selfmaint.Service
+}
+
+// insecureMaint answers every update and uninstall with insecure_session and does
+// nothing else: it stands in for self-maintenance on a session whose server was not
+// verified, because an update or an uninstall names an image the agent will run with
+// the Docker socket, or removes the agent, and a spoofed server must not be able to
+// ask for either (D-24, D-26; the same rule that stops such a server pushing addresses
+// and pins). It makes no Docker call.
+type insecureMaint struct {
+	log    *slog.Logger
+	warned atomic.Bool
+}
+
+func (m *insecureMaint) refuse(what string) wire.UpdateResult {
+	if m.warned.CompareAndSwap(false, true) {
+		m.log.Warn("the server asked the agent to " + what + " over a connection that was not verified; the agent refused. Remote update and uninstall need a TLS-verified session")
+	}
+	return wire.UpdateResult{Error: wire.UpdateErrInsecureSession}
+}
+
+func (m *insecureMaint) Update(context.Context, wire.Update) wire.UpdateResult {
+	return m.refuse("update itself")
+}
+
+func (m *insecureMaint) Uninstall(context.Context, wire.Uninstall) wire.UpdateResult {
+	return m.refuse("uninstall itself")
 }
 
 // renewLine is the renew message, ready to write.

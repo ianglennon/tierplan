@@ -1580,7 +1580,7 @@ export interface components {
             publicUrl?: string;
         };
         UpdateStateBody: {
-            /** @description Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed */
+            /** @description Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, insecure_session, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed */
             reason?: string;
             /**
              * @description idle: nothing is running. updating: an update was sent and the agent has not yet come back on the new version. failed: the last update did not finish, and reason says why, until the agent runs the server's version or another update is started

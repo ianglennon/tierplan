@@ -521,14 +521,20 @@ func (r *runner) attempt(ctx context.Context, tg target, reported wire.Facts, cr
 // to: the renewal of the certificate the agent holds now, and the addresses and pins
 // the server pushes. verified says the session ran over TLS that was verified: what a
 // server pushes over any other session is not taken, so a spoofed server cannot send
-// the agent, and its join token, somewhere else (T-02-84).
+// the agent, and its join token, somewhere else (T-02-84). For the same reason an
+// update or an uninstall over any other session is refused with insecure_session
+// and runs nothing.
 func (r *runner) hooks(verified bool) controlHooks {
 	r.mu.Lock()
 	cur := r.cur
 	r.mu.Unlock()
 	warned := false
+	maint := r.cfg.Maint
+	if !verified {
+		maint = &insecureMaint{log: r.log}
+	}
 	return controlHooks{
-		maint: r.cfg.Maint,
+		maint: maint,
 		renew: newRenewer(cur.Cert, cur.AgentID, cur.Key, r.env.now, r.env.rnd, r.log, r.saveCert),
 		urls: func(u wire.URLUpdate) {
 			if !verified {

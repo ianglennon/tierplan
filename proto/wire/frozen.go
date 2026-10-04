@@ -104,6 +104,10 @@ const (
 	UpdateErrFailed = "update_failed"
 	// UpdateErrNotImplemented means this agent does not implement the request.
 	UpdateErrNotImplemented = "not_implemented"
+	// UpdateErrInsecureSession means the agent's session is not TLS-verified (plain
+	// ws:// under BAYPLAN_AGENT_ALLOW_INSECURE), so it refused to update or uninstall
+	// itself on the word of a server it could not verify. It made no Docker call.
+	UpdateErrInsecureSession = "insecure_session"
 )
 
 // CapID cuts an id to MaxMessageIDLen bytes without splitting a character.

@@ -163,6 +163,7 @@
       "own_container_unknown": "the agent couldn't identify its own container",
       "update_failed": "Docker refused the update (see the agent's log)",
       "not_implemented": "this agent is too old to update itself",
+      "insecure_session": "the agent's connection isn't TLS-verified, so it won't update itself",
       "no_answer": "the agent didn't answer, so it can't update itself",
       "no_new_version": "the agent never came back on the new version",
       "rolled_back": "the new version didn't connect, so the old one was put back"

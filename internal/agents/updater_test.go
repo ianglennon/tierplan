@@ -412,6 +412,21 @@ func TestUpdaterAFailedUpdateIsRecordedWithItsReasonAndNotRetriedAutomatically(t
 	}
 }
 
+func TestUpdaterAnInsecureSessionRefusalIsAFailedUpdateWithThatReasonAndIsAudited(t *testing.T) {
+	r := newUpdRig(t, "v0.2.1")
+	r.connect(r.standalone("a1", "0.2.0", true))
+	id := r.hub.last(t).Msg.ID
+
+	r.upd.HandleResult("a1", wire.UpdateResult{T: wire.TypeUpdateResult, ID: id, OK: false, Error: wire.UpdateErrInsecureSession})
+	if s := r.state("a1"); s != "failed:insecure_session" {
+		t.Fatalf("state = %q, want failed with insecure_session", s)
+	}
+	rows := r.auditRows(t, audit.ActionAgentUpdateFailed)
+	if len(rows) != 1 || rows[0]["reason"] != "insecure_session" {
+		t.Fatalf("agent.update_failed rows = %v", rows)
+	}
+}
+
 func TestUpdaterAResultWithAnotherIDOrFromAnotherAgentIsIgnored(t *testing.T) {
 	r := newUpdRig(t, "v0.2.1")
 	r.connect(r.standalone("a1", "0.2.0", true))

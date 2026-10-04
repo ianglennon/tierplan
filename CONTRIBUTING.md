@@ -79,8 +79,9 @@ Open <http://localhost:5173/>. Vite serves the SPA there and proxies `/api` to t
 
 `make dev-swarm-down` removes those four containers, their volumes and the network, by name, and only if they carry the label `bayplan.dev-swarm=true`. It never runs a prune command, so nothing else on your Docker host is touched. `DEV_SWARM_ENGINE` (default 29) and `DEV_SWARM_SUBNET` (default `172.31.250.0/24`) change the engine version and the network.
 
-Two things to know:
+Three things to know:
 
+- Remote update and uninstall need a TLS-verified session. An agent refuses an `update` or an `uninstall` from the server over a session that is not TLS-verified, which is what the plain `ws://` connection of this swarm is, and answers `insecure_session`. So on the dev swarm "Update agent" shows "Update failed: the agent's connection isn't TLS-verified, so it won't update itself", and removing an environment with "Also uninstall the agent from the hosts" falls back to the manual cleanup command. To exercise either end to end, use a server with a certificate the agents verify (for the real-engine tests, `servertest` does this with its self-signed certificate and the pins in the install command).
 - The agents dial the server over plain `ws://`, because there is no certificate for a bare address. `make dev-go` sets `BAYPLAN_AGENT_URL` and `BAYPLAN_AGENT_ALLOW_INSECURE=true` for this, and the server logs a warning at start while the second is on. That is for development only and is set nowhere else. `DEV_LISTEN=0.0.0.0` also makes the dev server reachable from your network; the setup-token gate still applies, but do not do this on a network you do not trust.
 - If your shell predates your `docker` group membership, run the targets through `sg docker -c 'make dev-swarm'`. Both `make test-swarm` and `make dev-swarm` need Docker to run privileged containers, which is root-equivalent on that machine.
 

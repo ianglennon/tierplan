@@ -173,6 +173,7 @@ const KNOWN_UPDATE_REASONS = new Set([
   "own_container_unknown",
   "update_failed",
   "not_implemented",
+  "insecure_session",
   "no_answer",
   "no_new_version",
   "rolled_back",

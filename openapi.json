@@ -2243,7 +2243,7 @@
         "additionalProperties": false,
         "properties": {
           "reason": {
-            "description": "Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed",
+            "description": "Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, insecure_session, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed",
             "type": "string"
           },
           "state": {
