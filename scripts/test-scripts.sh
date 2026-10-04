@@ -13,7 +13,15 @@ cd "$ROOT"
 failures=0
 scratch="$(mktemp -d)"
 ui_probe="web/src/components/ui/zz-spdx-probe.tsx"
-trap 'rm -rf "${scratch}" "${ui_probe}"' EXIT
+vite_pid=""
+stop_vite() {
+  if [ -n "${vite_pid}" ]; then
+    kill "${vite_pid}" 2>/dev/null
+    wait "${vite_pid}" 2>/dev/null
+    vite_pid=""
+  fi
+}
+trap 'stop_vite; rm -rf "${scratch}" "${ui_probe}"' EXIT
 
 # expect <fail|pass> <name> <command...>
 expect() {
@@ -137,6 +145,68 @@ expect pass "tls-gate-skips-dependencies" scripts/insecure-tls-check.sh "${tlsfi
 printf 'package server\n// mentions %s\n' "${tls_setting}" >"${tlsfix}/internal/server/x_test.go"
 expect fail "tls-gate-test-file-comment" scripts/insecure-tls-check.sh "${tlsfix}"
 expect pass "tls-gate-repository" scripts/insecure-tls-check.sh
+
+# --- Dev loop (G-02-1b): make dev takes a public URL and a Vite host ---
+# MAKEFLAGS and MAKELEVEL are removed so an outer `make test-scripts` cannot leak
+# variables or the -n flag state into the make under test.
+mk() { env -u MAKEFLAGS -u MAKELEVEL make -n "$@"; }
+expect pass "dev-go-default-public-url" mk dev-go
+expect_out "dev-go-default-public-url" "BAYPLAN_PUBLIC_URL='http://localhost:5173'"
+expect pass "dev-go-custom-public-url" mk dev-go DEV_PUBLIC_URL=http://dev.example.test:5173
+expect_out "dev-go-custom-public-url" "BAYPLAN_PUBLIC_URL='http://dev.example.test:5173'"
+expect pass "dev-go-empty-public-url" mk dev-go DEV_PUBLIC_URL=
+expect_out "dev-go-empty-public-url (unset, so not locked)" "BAYPLAN_PUBLIC_URL=''"
+expect pass "dev-web-default" mk dev-web
+expect_out "dev-web-default passes the public URL to Vite" "BAYPLAN_DEV_PUBLIC_URL='http://localhost:5173'"
+if grep -qF -- "--host" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: dev-web-default must not pass --host (Vite stays on loopback)"
+  failures=$((failures + 1))
+fi
+expect pass "dev-web-host" mk dev-web DEV_WEB_HOST=0.0.0.0
+expect_out "dev-web-host passes --host" "--host 0.0.0.0"
+
+# Vite's own host check: a Host header it does not know is answered 403 unless the
+# public URL's host name was passed in BAYPLAN_DEV_PUBLIC_URL.
+# vite_status <public-url-or-empty> <host-header>: prints the HTTP status.
+vite_status() {
+  local public_url="$1" host_header="$2" port="${DEV_LOOP_TEST_PORT:-5198}" i code=""
+  if [ ! -x web/node_modules/.bin/vite ]; then
+    echo "run pnpm -C web install (web/node_modules/.bin/vite is missing)" >&2
+    return 1
+  fi
+  (
+    cd web &&
+      if [ -n "${public_url}" ]; then export BAYPLAN_DEV_PUBLIC_URL="${public_url}"; else unset BAYPLAN_DEV_PUBLIC_URL; fi &&
+      exec node_modules/.bin/vite --host 127.0.0.1 --port "${port}" --strictPort
+  ) >"${scratch}/vite.log" 2>&1 &
+  vite_pid=$!
+  for ((i = 0; i < 30; i++)); do
+    if curl -s -o /dev/null "http://127.0.0.1:${port}/"; then
+      code="$(curl -s -o "${scratch}/vite.body" -w '%{http_code}' -H "Host: ${host_header}" "http://127.0.0.1:${port}/")"
+      break
+    fi
+    kill -0 "${vite_pid}" 2>/dev/null || break
+    sleep 1
+  done
+  stop_vite
+  if [ -z "${code}" ]; then
+    echo "vite did not answer within 30s:" >&2
+    sed 's/^/    /' "${scratch}/vite.log" >&2
+    return 1
+  fi
+  echo "${code}"
+}
+dev_port="${DEV_LOOP_TEST_PORT:-5198}"
+expect pass "vite-allows-public-url-host" vite_status "http://dev.example.test:${dev_port}" "dev.example.test:${dev_port}"
+if [ "${LAST_OUT##*$'\n'}" != "200" ]; then
+  echo "SCRIPT TEST FAIL: vite-allows-public-url-host (want 200, got: ${LAST_OUT##*$'\n'})"
+  failures=$((failures + 1))
+fi
+expect pass "vite-blocks-unknown-host" vite_status "" "dev.example.test:${dev_port}"
+if [ "${LAST_OUT##*$'\n'}" != "403" ]; then
+  echo "SCRIPT TEST FAIL: vite-blocks-unknown-host (want 403, got: ${LAST_OUT##*$'\n'})"
+  failures=$((failures + 1))
+fi
 
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"
