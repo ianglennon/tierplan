@@ -9,6 +9,7 @@
 #
 #   scripts/dev-swarm.sh up      create the swarm and load the agent image
 #   scripts/dev-swarm.sh down    remove what `up` created
+#   scripts/dev-swarm.sh dns     print the DNS servers `up` would give the nodes
 #
 # `down` removes only the four containers named bayplan-dev-m1..m3 and
 # bayplan-dev-w1 (and only when they carry the label this script put on them),
@@ -20,6 +21,23 @@
 #   DEV_SWARM_SUBNET   subnet of the swarm's network, default 172.31.250.0/24.
 #                      The first address is the gateway, which is this machine as
 #                      the nodes see it; the nodes are .11 to .14.
+#   DEV_SWARM_DNS      DNS server IP addresses for every node's inner Docker daemon,
+#                      separated by commas or spaces. Default: the host's
+#                      non-loopback IPv4 nameservers from /etc/resolv.conf, or from
+#                      /run/systemd/resolve/resolv.conf when /etc/resolv.conf lists
+#                      only loopback ones such as systemd-resolved's 127.0.0.53.
+#                      Why: the nodes sit on a user-defined network, so the inner
+#                      daemon sees only Docker's embedded resolver 127.0.0.11,
+#                      strips it as loopback and falls back to 8.8.8.8 and 8.8.4.4
+#                      for the agents on its default bridge, which cannot resolve
+#                      LAN names. Entries must be IP addresses (IPv4 or IPv6) and
+#                      not loopback; anything else is refused before anything is
+#                      created. Set it when the host has no usable resolver or only
+#                      an IPv6 one.
+#   DEV_SWARM_RESOLV_CONF, DEV_SWARM_SYSTEMD_RESOLV_CONF
+#                      the two files the default is read from; test hooks for
+#                      scripts/test-scripts.sh, defaults /etc/resolv.conf and
+#                      /run/systemd/resolve/resolv.conf.
 #
 # Needs Docker (with buildx, for the agent image) and make. Run it through
 # `sg docker -c '...'` when your shell predates your docker group membership.
@@ -74,6 +92,62 @@ poll() {
   return 1
 }
 
+# IPv4 dotted quad, every part 0-255.
+is_ipv4() {
+  local re='^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$' i
+  [[ "$1" =~ ${re} ]] || return 1
+  for i in 1 2 3 4; do
+    ((10#${BASH_REMATCH[i]} <= 255)) || return 1
+  done
+}
+
+is_loopback_v4() { [[ "$1" == 127.* ]]; }
+
+# IPv6 literal: hex digits and colons with at least one colon, no zone index. The
+# unspecified address and the loopback address (in any written form) do not count.
+is_ipv6() {
+  [[ "$1" == *:* && "$1" =~ ^[0-9A-Fa-f:]+$ && ! "$1" =~ ^[0:]*:0{0,3}1$ && ! "$1" =~ ^[0:]+$ ]]
+}
+
+# nameservers FILE: the nameserver addresses of a resolv.conf; a missing file is empty.
+nameservers() {
+  [[ -r "$1" ]] || return 0
+  awk '$1 == "nameserver" { print $2 }' "$1"
+}
+
+# upstream_dns: prints the DNS servers for the nodes' inner daemons, one per line.
+# Prints a warning to stderr, and nothing, when there are none.
+upstream_dns() {
+  local -a parts=() found=()
+  local entry file
+  if [[ -n "${DEV_SWARM_DNS:-}" ]]; then
+    read -ra parts <<<"${DEV_SWARM_DNS//,/ }"
+  fi
+  if ((${#parts[@]} > 0)); then
+    for entry in "${parts[@]}"; do
+      if { is_ipv4 "${entry}" && ! is_loopback_v4 "${entry}"; } || is_ipv6 "${entry}"; then
+        printf '%s\n' "${entry}"
+      else
+        echo "dev-swarm: DEV_SWARM_DNS entry '${entry}' is not a non-loopback IP address (use IPv4 or IPv6 literals such as 192.168.1.1)" >&2
+        exit 2
+      fi
+    done
+    return 0
+  fi
+  for file in "${DEV_SWARM_RESOLV_CONF:-/etc/resolv.conf}" "${DEV_SWARM_SYSTEMD_RESOLV_CONF:-/run/systemd/resolve/resolv.conf}"; do
+    while IFS= read -r entry; do
+      if is_ipv4 "${entry}" && ! is_loopback_v4 "${entry}"; then
+        found+=("${entry}")
+      fi
+    done < <(nameservers "${file}")
+    if ((${#found[@]} > 0)); then
+      printf '%s\n' "${found[@]}"
+      return 0
+    fi
+  done
+  echo "dev-swarm: no non-loopback DNS server found on this host, so agents on the dev swarm will use Docker's fallback 8.8.8.8 and 8.8.4.4, which cannot resolve LAN names; set DEV_SWARM_DNS to your DNS server's address" >&2
+}
+
 exists() { docker container inspect "$1" >/dev/null 2>&1; }
 
 all_nodes_ready() {
@@ -83,7 +157,17 @@ all_nodes_ready() {
 }
 
 up() {
-  local n
+  local n dns_list
+  # Resolved first, so a refused DEV_SWARM_DNS stops the script before anything is
+  # created (the command substitution carries the exit status under set -e).
+  dns_list="$(upstream_dns)"
+  local -a dns_servers=() dind_args=()
+  if [[ -n "${dns_list}" ]]; then
+    mapfile -t dns_servers <<<"${dns_list}"
+  fi
+  for n in "${dns_servers[@]+"${dns_servers[@]}"}"; do
+    dind_args+=(--dns "${n}")
+  done
   for n in "${NODES[@]}"; do
     if exists "${n}"; then
       echo "dev-swarm: container ${n} already exists; run 'make dev-swarm-down' first" >&2
@@ -104,12 +188,14 @@ up() {
   for n in "${NODES[@]}"; do
     # ghcr.io resolves to the node itself, so the release image name the install
     # command uses is satisfied by the image loaded below and no registry is ever
-    # contacted (the tests do the same).
+    # contacted (the tests do the same). The arguments after the image name reach the
+    # inner dockerd: the dind entrypoint prepends dockerd when the first one starts
+    # with a dash.
     docker run -d --privileged --name "${n}" --hostname "${n}" \
       --network "${NETWORK}" --ip "$(node_ip "${n}")" \
       --add-host ghcr.io:127.0.0.1 \
       --label "${LABEL}" -e DOCKER_TLS_CERTDIR= \
-      "docker:${ENGINE}-dind" >/dev/null
+      "docker:${ENGINE}-dind" "${dind_args[@]}" >/dev/null
   done
   for n in "${NODES[@]}"; do
     poll 90 "the engine in ${n}" docker exec "${n}" docker info
@@ -141,6 +227,7 @@ up() {
 
 The dev swarm is up: ${#MANAGERS[@]} managers and ${#WORKERS[@]} worker on network ${NETWORK} (${SUBNET}), docker:${ENGINE}-dind.
 The agent built from this tree is loaded on every node as ${AGENT_EDGE}.
+$(if ((${#dns_servers[@]} > 0)); then echo "The nodes' Docker daemons use DNS server(s): ${dns_servers[*]}"; else echo "No DNS server was found for the nodes: agents there use Docker's fallback 8.8.8.8, which cannot resolve LAN names (set DEV_SWARM_DNS)."; fi)
 
 Next:
   1. Start Bayplan so the nodes can reach it. The nodes see this machine as ${GATEWAY}:
@@ -182,8 +269,9 @@ down() {
 case "${1:-}" in
   up) up ;;
   down) down ;;
+  dns) upstream_dns ;;
   *)
-    echo "usage: $0 up|down" >&2
+    echo "usage: $0 up|down|dns" >&2
     exit 2
     ;;
 esac
