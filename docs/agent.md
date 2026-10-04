@@ -129,6 +129,31 @@ The swarm agents restart one at a time and reconnect.
 
 A standalone agent keeps the token in its container's environment. To remove it from `docker inspect`, rotate the token in Bayplan and recreate the container with the new command (the `bayplan-agent` volume keeps the agent's identity, so the environment keeps its history).
 
+### Run enrolled agents without the join token
+
+Once the agents have enrolled (the node list shows them connected) the join token can come off the host. An enrolled agent proves who it is with its own key, so it keeps running, restarting and updating as the same agent without it.
+
+On a swarm, on a manager, take the secret and the variable that points to it off the service, then delete the secret. `<N>` is the generation in the secret's name; `docker service inspect bayplan-agent` shows it:
+
+```sh
+ docker service update --secret-rm bayplan-agent-token-g<N> --env-rm BAYPLAN_AGENT_JOIN_TOKEN_FILE bayplan-agent
+ docker secret rm bayplan-agent-token-g<N>
+```
+
+On a standalone host, recreate the container with the same flags and the same `bayplan-agent` volume, but without the `BAYPLAN_AGENT_JOIN_TOKEN` line. The manual update command the node list shows is exactly that: see [Updating and removing agents by hand](agent-updates.md).
+
+What an agent without the token cannot do:
+
+- A node that joins the swarm later cannot enrol. Its agent stops with "no join token".
+- An agent that was revoked and then unblocked, or whose certificate expired, cannot enrol again by itself.
+
+To put the token back on a swarm, take a new token from **Show install command** and add it to the service. Do not use the rotate command for this: it reads the current secret from the service and fails when there is none.
+
+```sh
+ printf %s '<join token>' | docker secret create bayplan-agent-token-g<N> - \
+   && docker service update --secret-add source=bayplan-agent-token-g<N>,target=bayplan-agent-token,mode=0400 --env-add BAYPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/bayplan-agent-token bayplan-agent
+```
+
 ## Settings on the host: read-only and self-update
 
 These two are set by whoever owns the host, in the agent's environment (`-e` on a standalone host, `--env` on a swarm service). Bayplan cannot change them.
@@ -195,9 +220,12 @@ To get a refused agent back, either change the address back in Settings (the age
 ```sh
 # swarm, on a manager
 docker service update --env-add 'BAYPLAN_AGENT_URL=wss://<new address>/agent/connect' bayplan-agent
-# standalone: this keeps the volume; then run the command from Show install command, which carries the new address
+# standalone: remove the container, then run it again with the same flags and the same bayplan-agent volume,
+# the new BAYPLAN_AGENT_URL and no join token (see "Run enrolled agents without the join token")
 docker rm -f bayplan-agent
 ```
+
+Show install command also works, but it makes a new join token and stops the old command, because it is a rotation. See [Run enrolled agents without the join token](#run-enrolled-agents-without-the-join-token) for how an enrolled agent starts without one.
 
 The agent notices that `BAYPLAN_AGENT_URL` differs from the one it last started with and dials the new address first, also when it followed an earlier address change and was offline for a later one. An agent that last ran a version before this one notices from its first start on this version.
 
