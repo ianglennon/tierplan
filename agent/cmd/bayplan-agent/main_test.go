@@ -6,15 +6,22 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"github.com/ianglennon/bayplan/agent/internal/connect"
 	"github.com/ianglennon/bayplan/agent/internal/privdrop"
@@ -505,4 +512,148 @@ func TestTheRemoveVolumeHelperExitCodes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// nonLoopbackIPv4 is an IPv4 address of an up interface of this machine that is
+// neither loopback nor link-local, or "" when there is none.
+func nonLoopbackIPv4(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, a := range addrs {
+		ipn, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip := ipn.IP.To4()
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		return ip.String()
+	}
+	return ""
+}
+
+// refusingServer answers every upgrade with the agent subprotocol and a refusal of
+// the join token, and counts the upgrades. It listens on host.
+type refusingServer struct {
+	ts       *httptest.Server
+	upgrades atomic.Int32
+}
+
+func newRefusingServer(t *testing.T, host string) *refusingServer {
+	t.Helper()
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &refusingServer{}
+	s.ts = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.upgrades.Add(1)
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{wire.Subprotocol}})
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.CloseNow() }()
+		b, _ := json.Marshal(wire.Refuse{T: wire.TypeRefuse, Code: wire.ReasonAuthRejected, Detail: "refused by the test"})
+		_ = c.Write(r.Context(), websocket.MessageText, b)
+		_ = c.Close(websocket.StatusPolicyViolation, wire.ReasonAuthRejected)
+	}))
+	s.ts.Listener = ln
+	s.ts.Start()
+	t.Cleanup(s.ts.Close)
+	return s
+}
+
+func (s *refusingServer) url() string {
+	return "ws" + strings.TrimPrefix(s.ts.URL, "http") + "/agent/connect"
+}
+
+// TestAnAgentDialsPlainWSToAnotherHostOnlyWithTheSwitch starts the agent through
+// run with the real configuration and the real connection code. A plain ws://
+// BAYPLAN_AGENT_URL for a host that is not loopback sends the join token and the
+// proof to a peer the agent never authenticated, so the agent refuses it, before
+// dropping privileges and without a dial, unless BAYPLAN_AGENT_ALLOW_INSECURE=true
+// is set on the agent itself; loopback needs no switch (T-02-31, WR-A05).
+func TestAnAgentDialsPlainWSToAnotherHostOnlyWithTheSwitch(t *testing.T) {
+	start := func(t *testing.T, raw string, extra map[string]string) (*harness, int) {
+		t.Helper()
+		sockDir := t.TempDir()
+		env := map[string]string{
+			"BAYPLAN_AGENT_URL":        raw,
+			"BAYPLAN_AGENT_JOIN_TOKEN": secret,
+			"BAYPLAN_AGENT_STATE_DIR":  t.TempDir(),
+			"BAYPLAN_AGENT_SOCKET":     filepath.Join(sockDir, "missing.sock"),
+		}
+		for k, v := range extra {
+			env[k] = v
+		}
+		h := &harness{}
+		d := h.deps(env, nil)
+		d.connect = connect.Run
+		return h, run(d)
+	}
+
+	t.Run("without the switch the agent refuses to start and never dials", func(t *testing.T) {
+		ip := nonLoopbackIPv4(t)
+		if ip == "" {
+			t.Skip("this machine has no non-loopback IPv4 address")
+		}
+		srv := newRefusingServer(t, ip)
+		h, code := start(t, srv.url(), nil)
+		if code != 2 {
+			t.Fatalf("exit %d, want 2; stderr: %s", code, h.stderr.String())
+		}
+		for _, want := range []string{"BAYPLAN_AGENT_ALLOW_INSECURE", "wss://"} {
+			if !strings.Contains(h.stderr.String(), want) {
+				t.Errorf("stderr does not mention %s: %s", want, h.stderr.String())
+			}
+		}
+		if n := srv.upgrades.Load(); n != 0 {
+			t.Errorf("the server saw %d upgrades, want none", n)
+		}
+		if slices.Contains(h.events, "drop") {
+			t.Errorf("the agent dropped privileges before refusing the address: %v", h.events)
+		}
+		if strings.Contains(h.stderr.String(), secret) {
+			t.Fatalf("the token reached the output: %s", h.stderr.String())
+		}
+	})
+
+	t.Run("with the switch the agent dials and warns", func(t *testing.T) {
+		ip := nonLoopbackIPv4(t)
+		if ip == "" {
+			t.Skip("this machine has no non-loopback IPv4 address")
+		}
+		srv := newRefusingServer(t, ip)
+		h, code := start(t, srv.url(), map[string]string{"BAYPLAN_AGENT_ALLOW_INSECURE": "true"})
+		if code != 1 {
+			t.Fatalf("exit %d, want 1 (the server refused the first enrolment); stderr: %s", code, h.stderr.String())
+		}
+		if n := srv.upgrades.Load(); n != 1 {
+			t.Errorf("the server saw %d upgrades, want 1", n)
+		}
+		if !strings.Contains(h.stderr.String(), "plain ws://") {
+			t.Errorf("stderr has no plain ws:// warning: %s", h.stderr.String())
+		}
+		if strings.Contains(h.stderr.String(), secret) {
+			t.Fatalf("the token reached the output: %s", h.stderr.String())
+		}
+	})
+
+	t.Run("loopback needs no switch", func(t *testing.T) {
+		srv := newRefusingServer(t, "127.0.0.1")
+		h, code := start(t, srv.url(), nil)
+		if code != 1 {
+			t.Fatalf("exit %d, want 1; stderr: %s", code, h.stderr.String())
+		}
+		if n := srv.upgrades.Load(); n != 1 {
+			t.Errorf("the server saw %d upgrades, want 1", n)
+		}
+		if strings.Contains(h.stderr.String(), secret) {
+			t.Fatalf("the token reached the output: %s", h.stderr.String())
+		}
+	})
 }
