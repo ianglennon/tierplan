@@ -38,8 +38,12 @@ import (
 // Go checks a self-signed certificate through VerifyConnection only when the
 // built-in verification is off, so the pinned configuration turns it off and puts
 // VerifyConnection, which is mandatory here and accepts only the three cases
-// above, in its place. There is no other way to a verified-by-pin connection and
-// no setting, variable or error path that leaves a connection unverified.
+// above, in its place. For wss:// there is no other way to a verified-by-pin
+// connection and no setting, variable or error path that leaves a connection
+// unverified. Plain ws:// is not TLS at all: it is dialed only to a loopback host,
+// or to another host when BAYPLAN_AGENT_ALLOW_INSECURE is set on the agent, which
+// is for development (T-02-31). Nothing learned over such a session is kept
+// (pushes are taken only over a verified wss:// session).
 
 const (
 	// untrustedCode is the code an operator searches the agent's log for.

@@ -35,6 +35,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -262,6 +263,9 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 			log.Warn("the agent could not read its stored server pins; it will trust only the install pin and the system roots", "error", err)
 			r.pins = nil
 		}
+		// env-url.json is only compared with BAYPLAN_AGENT_URL, to see whether the
+		// operator changed it. It is never dialed, so a plain address recorded there
+		// under other settings cannot make the agent dial anything.
 		last, known, err := state.LoadEnvURL(cfg.StateDir)
 		if err != nil {
 			log.Warn("the agent could not read the BAYPLAN_AGENT_URL it last started with; it treats BAYPLAN_AGENT_URL as unchanged", "error", err)
@@ -271,6 +275,15 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 		if err != nil {
 			log.Warn("the agent could not read the addresses the server gave it; it will dial BAYPLAN_AGENT_URL", "error", err)
 		} else {
+			// A stored plain ws:// address for another host was learned or written
+			// under other settings. Without the switch it is not dialed (T-02-31, D-18).
+			if kept := slices.DeleteFunc(slices.Clone(stored), func(e state.URLEntry) bool {
+				return !state.DialableURL(e.URL, cfg.AllowInsecure)
+			}); len(kept) != len(stored) {
+				log.Warn("the agent ignored stored addresses for plain ws:// on another host; BAYPLAN_AGENT_ALLOW_INSECURE=true is needed to dial them",
+					"count", len(stored)-len(kept))
+				stored = kept
+			}
 			urls, changed := state.StartURLs(stored, cfg.URL, last, known, env.now())
 			r.urls = urls
 			if changed {
@@ -592,7 +605,8 @@ func (r *runner) hooks(verified bool) controlHooks {
 
 // pushable reports whether the agent will take an address from the server: one it
 // could dial, over wss. A verified session is TLS, so a plain ws:// address could
-// only be a downgrade.
+// only be a downgrade. BAYPLAN_AGENT_ALLOW_INSECURE does not change this: it lets
+// the operator point the agent at a plain address, never the server.
 func pushable(raw string) bool {
 	if !state.ValidURL(raw) {
 		return false
