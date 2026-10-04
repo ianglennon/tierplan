@@ -158,6 +158,92 @@ describe("HealthBell", () => {
   });
 });
 
+describe("HealthBell reverse proxy items", () => {
+  const DOCS = "https://github.com/ianglennon/bayplan/blob/main/docs/reverse-proxy.md";
+
+  it("lists untrusted forwarded headers with the address and a docs link that opens in a new tab", async () => {
+    items = [{ id: "proxy_untrusted_forwarded", ip: "10.0.0.5" }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Forwarded headers from an untrusted address")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Bayplan got X-Forwarded headers from 10.0.0.5, which isn't in BAYPLAN_TRUSTED_PROXIES. They were ignored.",
+      ),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Reverse proxy docs" });
+    expect(link.getAttribute("href")).toBe(DOCS);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("lists a URL mismatch with the host, the scheme and the public URL", async () => {
+    items = [
+      {
+        id: "proxy_url_mismatch",
+        host: "bayplan:7480",
+        scheme: "http",
+        url: "https://bayplan.example.com",
+      },
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Requests don't match the public URL")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Requests arrive for bayplan:7480 over http, but the public URL is https://bayplan.example.com. Sign-in and agent connections may fail.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Reverse proxy docs" }).getAttribute("href")).toBe(
+      DOCS,
+    );
+  });
+
+  it("lists failing WebSocket connections", async () => {
+    items = [{ id: "proxy_websocket_failing", ip: "203.0.113.9" }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("WebSocket connections are failing")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Agents or terminals can't connect through your proxy. Check that it passes the Upgrade headers.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("counts every proxy item with the others and lists them all", async () => {
+    plainHttp = true;
+    items = [
+      { id: "key_backup", keyPath: "/data/bayplan.key" },
+      { id: "proxy_untrusted_forwarded", ip: "10.0.0.5" },
+      { id: "proxy_websocket_failing", ip: "203.0.113.9" },
+    ];
+    renderWarnings();
+    await openBell("Warnings, 4 items");
+    expect(screen.getAllByRole("link", { name: "Reverse proxy docs" })).toHaveLength(2);
+  });
+
+  it("never shows a proxy item to a user without settings.read", async () => {
+    me = VIEWER;
+    items = [{ id: "proxy_websocket_failing", ip: "203.0.113.9" }];
+    renderWarnings();
+    await openBell("Warnings");
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+    expect(screen.queryByText("WebSocket connections are failing")).toBeNull();
+  });
+
+  it("drops the item when the server stops listing it", async () => {
+    items = [{ id: "proxy_websocket_failing", ip: "203.0.113.9" }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("WebSocket connections are failing")).toBeTruthy();
+    items = [];
+    await queryClient.invalidateQueries({ queryKey: ["warnings"] });
+    await waitFor(() => expect(screen.queryByText("WebSocket connections are failing")).toBeNull());
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+  });
+});
+
 describe("DataNotPersistedBanner", () => {
   it("shows the UI-SPEC copy when the data directory is not persisted, with no way to dismiss it", async () => {
     items = [{ id: "data_not_persisted", reason: "not a mount point" }];

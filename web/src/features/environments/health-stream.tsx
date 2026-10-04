@@ -14,6 +14,7 @@ import {
 } from "react";
 
 import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
+import { WARNINGS_KEY } from "@/api/warnings";
 import type { EventSourceLike } from "@/features/dashboard/events";
 import { apiUrl } from "@/lib/base-path";
 
@@ -25,6 +26,8 @@ import { apiUrl } from "@/lib/base-path";
 //   agent.connected     agentId, node, type (manager, worker or standalone), version
 //   agent.disconnected  agentId, node, reason (closed, timeout, replaced or shutdown)
 //   agent.refused       code, mode (enrol or hello), node, ip
+//   proxy.warning       kind (untrusted_forwarded, url_mismatch or websocket_failing);
+//                       envId is empty, and only a caller with settings.read gets it
 //
 // Every one carries envId and at. The event's id is the SSE id field, which a
 // browser exposes as MessageEvent.lastEventId, so it is not in the body.
@@ -40,13 +43,15 @@ export interface EnvStreamFrame {
   code?: string;
   mode?: string;
   ip?: string;
+  kind?: string;
 }
 
 export type EnvEventName =
   | "env.status"
   | "agent.connected"
   | "agent.disconnected"
-  | "agent.refused";
+  | "agent.refused"
+  | "proxy.warning";
 
 export interface EnvHealthEvent {
   name: EnvEventName;
@@ -66,6 +71,7 @@ const EVENTS: readonly EnvEventName[] = [
   "agent.connected",
   "agent.disconnected",
   "agent.refused",
+  "proxy.warning",
 ];
 
 const EVENT_SOURCE_CLOSED = 2;
@@ -218,6 +224,12 @@ export function EnvHealthStreamProvider({ children, createSource }: ProviderProp
         if (typeof data.envId !== "string" || typeof data.at !== "string") return;
         if (isRepeat(message.lastEventId, data.at)) return;
         const frame = data as unknown as EnvStreamFrame;
+        if (name === "proxy.warning") {
+          // A reverse proxy problem has appeared: the bell reads the warnings
+          // again. It belongs to no environment, so nobody subscribed for it.
+          void queryClient.invalidateQueries({ queryKey: WARNINGS_KEY });
+          return;
+        }
         if (name === "env.status") applyStatus(frame.environment);
         // The counts and last-seen times are not part of env.status, so an
         // agent coming or going reads the list again.

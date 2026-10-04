@@ -87,6 +87,23 @@ afterEach(() => {
 });
 
 describe("EnvHealthStreamProvider", () => {
+  it("reads the warnings again on a proxy.warning frame, which belongs to no environment", async () => {
+    client.setQueryData(["warnings"], [{ id: "key_backup" }]);
+    const heard: EnvHealthEvent[] = [];
+    mount(<Listener envId="" got={heard} />);
+    await act(async () => {
+      first().open();
+      first().sendFrame(
+        "proxy.warning",
+        { envId: "", at: "2026-10-03T10:00:00Z", kind: "url_mismatch" },
+        "12",
+      );
+    });
+    expect(client.getQueryState(["warnings"])?.isInvalidated).toBe(true);
+    expect(fetched).toEqual([]);
+    expect(heard).toEqual([]);
+  });
+
   it("opens one EventSource to the environments stream for the whole app", () => {
     mount(
       <>

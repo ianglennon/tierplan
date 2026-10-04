@@ -7,6 +7,7 @@ import { useState } from "react";
 
 import { api } from "@/api/client";
 import type { components } from "@/api/schema";
+import { WARNINGS_KEY } from "@/api/warnings";
 import { isPlainHttpRemote } from "@/components/auth-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,7 +30,19 @@ declare const __BAYPLAN_SOURCE_URL__: string;
 
 export type Warning = components["schemas"]["WarningBody"];
 
-const WARNINGS_KEY = ["warnings"] as const;
+// The reverse proxy warnings (D-53) and where their copy lives in the bell
+// namespace. The page they point to ships with the source, so the link is built
+// from the same source URL the footer uses.
+const PROXY_COPY = {
+  proxy_untrusted_forwarded: "untrustedForwarded",
+  proxy_url_mismatch: "urlMismatch",
+  proxy_websocket_failing: "webSocketFailing",
+} as const;
+const PROXY_DOCS_PATH = "/blob/main/docs/reverse-proxy.md";
+
+function proxyCopy(id: Warning["id"]): (typeof PROXY_COPY)[keyof typeof PROXY_COPY] | undefined {
+  return id in PROXY_COPY ? PROXY_COPY[id as keyof typeof PROXY_COPY] : undefined;
+}
 const REFETCH_MS = 60_000;
 
 // useWarnings reads the instance warnings the server knows about: the data
@@ -66,7 +79,8 @@ export function HealthBell() {
 
   const plainHttp = isPlainHttpRemote();
   const keyBackup = items.some((w) => w.id === "key_backup");
-  const count = (plainHttp ? 1 : 0) + (keyBackup ? 1 : 0);
+  const proxyItems = items.filter((w) => proxyCopy(w.id) !== undefined);
+  const count = (plainHttp ? 1 : 0) + (keyBackup ? 1 : 0) + proxyItems.length;
 
   async function acknowledge() {
     setAcknowledging(true);
@@ -129,6 +143,33 @@ export function HealthBell() {
                 </ItemContent>
               </Item>
             ) : null}
+            {proxyItems.map((w) => {
+              const key = proxyCopy(w.id);
+              if (!key) return null;
+              return (
+                <Item key={w.id} variant="outline" size="sm" role="listitem" data-warning={w.id}>
+                  <ItemContent>
+                    <ItemTitle>{t(`bell.proxy.${key}.title`)}</ItemTitle>
+                    <ItemDescription className="line-clamp-none wrap-anywhere">
+                      {t(`bell.proxy.${key}.body`, {
+                        ip: w.ip ?? "",
+                        host: w.host ?? "",
+                        scheme: w.scheme ?? "",
+                        url: w.url ?? "",
+                      })}
+                    </ItemDescription>
+                    <a
+                      href={`${__BAYPLAN_SOURCE_URL__}${PROXY_DOCS_PATH}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${linkClass} text-sm`}
+                    >
+                      {t("bell.proxy.docs")}
+                    </a>
+                  </ItemContent>
+                </Item>
+              );
+            })}
             {keyBackup ? (
               <Item variant="outline" size="sm" role="listitem" data-warning="key_backup">
                 <ItemContent>

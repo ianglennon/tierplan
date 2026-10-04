@@ -1,0 +1,19 @@
+{
+  "bell": {
+    "proxy": {
+      "docs": "Reverse proxy docs",
+      "untrustedForwarded": {
+        "title": "Forwarded headers from an untrusted address",
+        "body": "Bayplan got X-Forwarded headers from {{ip}}, which isn't in BAYPLAN_TRUSTED_PROXIES. They were ignored."
+      },
+      "urlMismatch": {
+        "title": "Requests don't match the public URL",
+        "body": "Requests arrive for {{host}} over {{scheme}}, but the public URL is {{url}}. Sign-in and agent connections may fail."
+      },
+      "webSocketFailing": {
+        "title": "WebSocket connections are failing",
+        "body": "Agents or terminals can't connect through your proxy. Check that it passes the Upgrade headers."
+      }
+    }
+  }
+}
