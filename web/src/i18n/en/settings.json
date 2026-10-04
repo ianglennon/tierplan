@@ -16,11 +16,25 @@
       "readOnly": "You can view these settings but not change them.",
       "submit": "Save settings",
       "pending": "Saving…",
+      "publicUrl": {
+        "helper": "The address people use to reach Bayplan. If Bayplan runs under a path, include it, for example https://example.com/bayplan. It controls cookies and request origin checks."
+      },
+      "agentUrl": {
+        "label": "Agent URL",
+        "helper": "Leave empty to use the public URL. Set it if your hosts reach Bayplan at a different address, such as an internal hostname.",
+        "placeholder": "https://bayplan.internal:7480",
+        "locked": "Set by the BAYPLAN_AGENT_URL environment variable."
+      },
       "confirm": {
         "title": "Change the public URL?",
         "body": "You're using Bayplan at {{origin}}. If the new address doesn't match how you reach Bayplan, you may be signed out and requests can be blocked.",
         "cancel": "Cancel",
-        "confirm": "Change public URL"
+        "confirm": "Change public URL",
+        "agentTitle": "Change the agent URL?",
+        "agentConfirm": "Change agent URL",
+        "agentsTold": "Connected agents are told the new address now and keep the old one as a fallback for a while.",
+        "offline_one": "{{count}} agent is offline and won't learn the new URL.",
+        "offline_other": "{{count}} agents are offline and won't learn the new URL."
       }
     },
     "environments": {
