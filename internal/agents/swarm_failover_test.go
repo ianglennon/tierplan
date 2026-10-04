@@ -391,22 +391,10 @@ func TestSwarmQuorumLoss(t *testing.T) {
 	}
 }
 
-// removeAgentContainers removes every agent container of a node and then the
-// agent's state volume, retrying while swarm restarts the task, so the next agent
-// starts with nothing on disk, as after a clean re-install.
-func removeAgentContainers(t *testing.T, n *dockertest.Node) {
-	t.Helper()
-	dockertest.Wait(t, 90*time.Second, "the agent state volume of "+n.Hostname+" to be removed", func() (bool, string) {
-		_, _ = n.Sh(execCtx(t, time.Minute), "docker rm -f $(docker ps -aq --filter label=bayplan.agent=true) 2>&1")
-		out, err := n.Sh(execCtx(t, time.Minute), "docker volume rm "+agentName+" 2>&1")
-		return err == nil, out
-	})
-}
-
 // TestSwarmRevokeBlocksReenrol revokes the worker's agent. The session closes at
-// once; a restarted task is refused revoked; with its state wiped it enrols with
-// the token, which is still valid, and is refused blocked; after the unblock the
-// host enrols again as a new agent (ENV-05, D-08, D-09).
+// once; the agent is refused revoked, drops its identity and enrols again with the
+// token, which is still valid, and is refused blocked and waits; after the unblock
+// the host enrols again by itself as a new agent (ENV-05, D-08, D-09, D-10).
 func TestSwarmRevokeBlocksReenrol(t *testing.T) {
 	f := startSwarmFix(t, 3, 1)
 	worker := f.sw.Workers[0]
@@ -447,32 +435,39 @@ func TestSwarmRevokeBlocksReenrol(t *testing.T) {
 	}
 	t.Logf("the agent's own log after being revoked:\n%s", agentContainerLog(t, worker))
 
-	// Swarm restarts the task: the agent hellos with its old certificate and is refused.
-	sh(t, worker, "docker rm -f $(docker ps -aq --filter label=bayplan.agent=true)")
+	// The kicked agent reconnects at once and says hello with its old certificate:
+	// refused revoked. It has its join token (a Docker secret of the service), so it
+	// drops that identity and enrols again, and the block on its host refuses that
+	// with blocked (D-08, D-10).
 	f.waitRefusal(t, "revoked", 90*time.Second)
+	f.waitRefusal(t, "blocked", 120*time.Second)
+	f.srv.WaitFor("the agent to say it was refused revoked and then blocked", 60*time.Second, func() (bool, string) {
+		log := agentContainerLog(t, worker)
+		return strings.Contains(log, "code=revoked") && strings.Contains(log, "code=blocked"), log
+	})
+	if a, _ := f.agentOn(worker); a.ID != old.ID || a.Status != "revoked" || a.Connected {
+		t.Errorf("after the refused enrolment the row = %+v, want the same agent, still revoked and not connected", a)
+	}
+	if n := len(f.srv.Agents(f.env.ID)); n != 4 {
+		t.Errorf("agent rows = %d, want 4 (a refused hello and a refused enrolment make no row)", n)
+	}
+
+	// A restarted task has no identity on its volume any more. It enrols with the
+	// token, is refused blocked again and stays up waiting: no exit, so no restart
+	// loop (and no tight loop of enrolments either).
+	sh(t, worker, "docker rm -f $(docker ps -aq --filter label=bayplan.agent=true)")
 	f.srv.WaitFor("swarm to start the agent task again", 90*time.Second, func() (bool, string) {
 		out, _ := worker.Sh(execCtx(t, time.Minute), "docker ps -q --filter label=bayplan.agent=true")
 		return strings.TrimSpace(out) != "", out
 	})
-	f.srv.WaitFor("the restarted agent to say it was refused revoked", 60*time.Second, func() (bool, string) {
-		log := agentContainerLog(t, worker)
-		return strings.Contains(log, "code=revoked"), log
+	f.srv.WaitFor("the restarted agent to say it was refused blocked", 60*time.Second, func() (bool, string) {
+		out, _ := worker.Sh(execCtx(t, time.Minute), "for c in $(docker ps -q --filter label=bayplan.agent=true); do docker logs $c 2>&1; done")
+		return strings.Contains(out, "code=blocked"), out
 	})
-	if a, _ := f.agentOn(worker); a.ID != old.ID || a.Status != "revoked" || a.Connected {
-		t.Errorf("after the refused hello the row = %+v, want the same agent, still revoked and not connected", a)
+	time.Sleep(10 * time.Second)
+	if out, _ := worker.Sh(execCtx(t, time.Minute), "docker ps -q --filter label=bayplan.agent=true"); strings.TrimSpace(out) == "" {
+		t.Errorf("the blocked agent's container is not running; it must wait, not exit:\n%s", agentContainerLog(t, worker))
 	}
-	if n := len(f.srv.Agents(f.env.ID)); n != 4 {
-		t.Errorf("agent rows = %d, want 4 (a refused hello makes no row)", n)
-	}
-
-	// Wipe its state: the next agent has no identity, so it enrols with the token,
-	// which is still valid, and the block on its host refuses it.
-	removeAgentContainers(t, worker)
-	f.waitRefusal(t, "blocked", 120*time.Second)
-	f.srv.WaitFor("the new agent to say it was refused blocked", 60*time.Second, func() (bool, string) {
-		log := agentContainerLog(t, worker)
-		return strings.Contains(log, "code=blocked"), log
-	})
 	if n := len(f.srv.Agents(f.env.ID)); n != 4 {
 		t.Errorf("agent rows after a blocked enrolment = %d, want 4", n)
 	}
@@ -480,7 +475,8 @@ func TestSwarmRevokeBlocksReenrol(t *testing.T) {
 		t.Errorf("the worker's row = %+v, want the old revoked agent and nothing connected", a)
 	}
 
-	// Unblock: the host enrols again, as a new agent. The old row stays revoked.
+	// Unblock: the waiting agent enrols again at its next try (at most a minute),
+	// as a new agent. The old row stays revoked.
 	if code, body := f.srv.Do(http.MethodPost, revokePath+"/unblock", nil); code != http.StatusNoContent {
 		t.Fatalf("POST unblock = %d %s", code, body)
 	}
@@ -563,29 +559,14 @@ func TestSwarmNodeRemovalAutoRevokes(t *testing.T) {
 	// The host rejoins with a fresh join token and the global service puts an agent on
 	// it. That agent finds the identity of the one that was revoked on its state
 	// volume, which is on the host and which leaving the swarm does not touch. It says
-	// hello with it and is refused revoked, and keeps waiting at its backoff limit:
-	// an agent that is revoked never enrols again by itself (agent/internal/connect,
-	// TestARevokedOrBlockedAgentWaitsTheMaximumLogsTheCodeOnceAndKeepsItsIdentity).
-	// D-10 says a rejoined host "enrols again with the join token"; this is the
-	// finding recorded in deferred-items.md. The test pins what really happens, so a
-	// change to it is a visible decision.
+	// hello with it and is refused revoked; the agent has its join token (a Docker
+	// secret of the service), so it drops that identity and enrols again as a new
+	// agent, with nothing removed from the host by hand (D-10).
+	if out, err := worker.Sh(execCtx(t, time.Minute), "docker volume inspect "+agentName+" 2>&1"); err != nil {
+		t.Fatalf("the agent state volume is gone from the worker before the rejoin: %v\n%s", err, out)
+	}
 	token := strings.TrimSpace(sh(t, mgr, "docker swarm join-token -q worker"))
 	sh(t, worker, "docker swarm join --token "+token+" --advertise-addr "+worker.IP+" "+mgr.IP+":2377")
-	f.srv.WaitFor("the rejoined host's agent to be refused with its old identity", recoverWait, func() (bool, string) {
-		log := agentContainerLog(t, worker)
-		return strings.Contains(log, "code=revoked"), log
-	})
-	if a, _ := f.agentOn(worker); a.ID != old.ID || a.Status != "revoked" || a.Connected {
-		t.Errorf("the worker's row after the rejoin = %+v, want the old agent, still revoked and not connected", a)
-	}
-	if n := len(f.srv.Agents(f.env.ID)); n != 4 {
-		t.Errorf("agent rows after the rejoin = %d, want 4 (a refused hello makes no row)", n)
-	}
-
-	// With the old state removed, which is what "remove the agent from the host" means,
-	// the next task enrols with the token, still valid and not blocked (the reaper
-	// blocks nothing), as a new agent.
-	removeAgentContainers(t, worker)
 	var fresh servertest.Agent
 	f.srv.WaitFor("a new active agent row for the rejoined worker", recoverWait, func() (bool, string) {
 		for _, a := range f.srv.Agents(f.env.ID) {
@@ -605,5 +586,17 @@ func TestSwarmNodeRemovalAutoRevokes(t *testing.T) {
 	}
 	if blocks := f.audit(t, "agent.blocked"); len(blocks) != 0 {
 		t.Errorf("agent.blocked entries after the rejoin = %+v, want none", blocks)
+	}
+	if oldNow := f.srv.AgentRow(old.ID); oldNow.Status != "revoked" {
+		t.Errorf("the old agent is %q after the rejoin, want it to stay revoked", oldNow.Status)
+	}
+	// It got there by itself: the old agent's hello was refused revoked, the agent
+	// says it dropped the identity, and its state volume was never removed.
+	log := agentContainerLog(t, worker)
+	if !strings.Contains(log, "code=revoked") || !strings.Contains(log, "will enrol again with its join token") {
+		t.Errorf("the worker's agent log does not show the refusal and the new enrolment:\n%s", log)
+	}
+	if out, err := worker.Sh(execCtx(t, time.Minute), "docker volume inspect "+agentName+" 2>&1"); err != nil {
+		t.Errorf("the agent state volume is gone from the worker: %v\n%s", err, out)
 	}
 }
