@@ -146,3 +146,21 @@ func (q *Queries) RenameEnvironment(ctx context.Context, arg RenameEnvironmentPa
 	}
 	return result.RowsAffected()
 }
+
+const setEnvironmentAutoUpdate = `-- name: SetEnvironmentAutoUpdate :execrows
+UPDATE environments SET auto_update = ?, updated_at = ? WHERE id = ?
+`
+
+type SetEnvironmentAutoUpdateParams struct {
+	AutoUpdate int64
+	UpdatedAt  int64
+	ID         string
+}
+
+func (q *Queries) SetEnvironmentAutoUpdate(ctx context.Context, arg SetEnvironmentAutoUpdateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setEnvironmentAutoUpdate, arg.AutoUpdate, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

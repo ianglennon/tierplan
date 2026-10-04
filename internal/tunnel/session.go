@@ -232,6 +232,9 @@ func (h *Hub) agentStream(s *Session, st *yamux.Stream) {
 			h.log.Warn("could not tell an agent the new server address", "agent_id", s.AgentID, "error", err)
 		}
 	}
+	if h.updates != nil {
+		h.updates.ControlOpened(s)
+	}
 	h.readControl(s, st)
 }
 
@@ -263,6 +266,11 @@ func (h *Hub) readControl(s *Session, st io.Reader) {
 			}
 		case wire.TypeRenew:
 			h.renew(s)
+		case wire.TypeUpdateResult:
+			var res wire.UpdateResult
+			if json.Unmarshal(sc.Bytes(), &res) == nil {
+				h.updateResult(s, res)
+			}
 		}
 	}
 	if errors.Is(sc.Err(), bufio.ErrTooLong) {

@@ -19,3 +19,6 @@ UPDATE environments SET name = ?, name_auto = 0, updated_at = ? WHERE id = ?;
 
 -- name: DeleteEnvironment :execrows
 DELETE FROM environments WHERE id = ?;
+
+-- name: SetEnvironmentAutoUpdate :execrows
+UPDATE environments SET auto_update = ?, updated_at = ? WHERE id = ?;

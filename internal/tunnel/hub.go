@@ -347,6 +347,10 @@ type Hub struct {
 	serverVersion string
 	updateHint    func(tooOld bool, envType string) string
 
+	// updates hears of opened control streams and update results; set before the
+	// hub serves.
+	updates UpdateObserver
+
 	// life serializes session lifecycle transitions together with the Observer
 	// calls they cause, so for one agent the Observer hears Connected, then
 	// Disconnected, then Connected again, in that order, never a Disconnected
