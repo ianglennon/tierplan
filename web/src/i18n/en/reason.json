@@ -45,7 +45,7 @@
       "revoked": {
         "text": "An admin revoked {{node}}.",
         "textGeneric": "An admin revoked the agent.",
-        "hint": "Remove the agent from the host. To let it back in, unblock the node in Settings, then enrol it again."
+        "hint": "Remove the agent from the host. To let it back in, unblock the node in Settings. Its agent enrols again by itself if it still has its join token."
       },
       "blocked": {
         "text": "{{node}} is blocked from enrolling.",

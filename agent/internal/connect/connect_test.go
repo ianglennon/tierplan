@@ -567,7 +567,7 @@ func TestARevokedAgentWithNoJoinTokenWaitsTheMaximumAndSaysOnceThatItNeedsAToken
 	if n := strings.Count(logs.String(), "code=revoked"); n != 1 {
 		t.Errorf("the code revoked was logged %d times, want once:\n%s", n, logs.String())
 	}
-	if n := strings.Count(logs.String(), "join token"); n != 1 || strings.Contains(logs.String(), "discard") {
+	if n := strings.Count(logs.String(), "no join token to enrol again with"); n != 1 || strings.Contains(logs.String(), "drops the revoked identity") {
 		t.Errorf("want one hint that a join token is needed to enrol again, and no talk of discarding:\n%s", logs.String())
 	}
 	got, ok, err := state.Load(dir)

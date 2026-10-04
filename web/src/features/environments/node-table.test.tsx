@@ -587,6 +587,7 @@ describe("NodeTable unblock", () => {
     const dialog = await openUnblock();
     expect(within(dialog).getByRole("heading", { name: "Unblock wrk-3?" })).toBeTruthy();
     expect(dialog.textContent).toContain("wrk-3 can enrol again with the join token.");
+    expect(dialog.textContent).toContain("enrols again by itself within a minute");
     expect(dialog.textContent).toContain("install the agent on the host again");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(

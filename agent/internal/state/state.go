@@ -147,6 +147,45 @@ func Save(dir string, s State) error {
 	return nil
 }
 
+// Discard removes the agent's identity from dir: identity.json, the key, the
+// certificate and the connected marker, and any temporary leftover of a save.
+// Nothing else in the directory is touched, and no path is built from anything
+// but the constant names above, so a directory that holds other files (the pins,
+// an operator's own) keeps them.
+//
+// identity.json goes first and on its own: it is the marker Load looks for, so
+// a crash or a failure after it leaves a directory that reads as "not enrolled"
+// (a key or certificate without it is ignored and replaced by the next Save),
+// never the half-identity that Load refuses. If the marker cannot be removed
+// nothing has changed and the error says so. A failure on one of the remaining
+// files is reported after the others were tried; the identity is gone by then.
+func Discard(dir string) error {
+	if err := os.Remove(filepath.Join(dir, IdentityFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("discard the agent identity: %w", err)
+	}
+	var first error
+	for _, name := range []string{
+		CertFile, KeyFile, ConnectedFile,
+		IdentityFile + tmpSuffix, CertFile + tmpSuffix, KeyFile + tmpSuffix, ConnectedFile + tmpSuffix,
+	} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) && first == nil {
+			first = fmt.Errorf("discard %s: %w", name, err)
+		}
+	}
+	syncDir(dir) // best effort: the removals are as durable as the platform makes them
+	return first
+}
+
+// syncDir flushes the directory entry changes of dir to disk, ignoring failures.
+func syncDir(dir string) {
+	d, err := os.Open(dir) //nolint:gosec // the agent's own state directory
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
+}
+
 // MarkConnected records that the agent completed a handshake just now. The
 // self-update helper reads it to learn that a new version came up healthy.
 func MarkConnected(dir string) error {

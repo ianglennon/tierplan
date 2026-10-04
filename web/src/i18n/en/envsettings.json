@@ -115,7 +115,7 @@
     },
     "unblock": {
       "title": "Unblock {{node}}?",
-      "body": "{{node}} can enrol again with the join token. The agent that was revoked isn't revived, so install the agent on the host again.",
+      "body": "{{node}} can enrol again with the join token. The agent that was revoked isn't revived. If the host's agent still has its join token, it enrols again by itself within a minute. If not, install the agent on the host again.",
       "cancel": "Cancel",
       "confirm": "Unblock node",
       "pending": "Unblocking…",

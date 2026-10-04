@@ -363,7 +363,7 @@ export interface paths {
         put?: never;
         /**
          * Let a revoked node's host enrol again
-         * @description Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. The host's own agent retries on its own at its backoff limit and is refused until it is installed or enrolled again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. Audited as agent.unblocked.
+         * @description Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. An agent that still has its join token drops its revoked identity and enrols again by itself at its next try, within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. Audited as agent.unblocked.
          */
         post: operations["unblockEnvironmentAgent"];
         delete?: never;

@@ -305,3 +305,84 @@ func slicesEqual(a, b []string) bool {
 	}
 	return true
 }
+
+func TestDiscardRemovesTheIdentityAndOnlyTheIdentity(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, sample(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkConnected(dir); err != nil {
+		t.Fatal(err)
+	}
+	// Leftovers of an interrupted save go with the identity; other files stay.
+	keep := map[string]string{PinsFile: "[]\n", "operator-notes.txt": "mine", "identity.json.bak": "backup"}
+	for name, body := range keep {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, KeyFile+tmpSuffix), []byte("half"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Discard(dir); err != nil {
+		t.Fatalf("Discard: %v", err)
+	}
+	if _, ok, err := Load(dir); ok || err != nil {
+		t.Fatalf("Load after Discard = %v, %v; want no identity and no error", ok, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for _, e := range entries {
+		left = append(left, e.Name())
+	}
+	if len(left) != len(keep) {
+		t.Errorf("files left = %v, want exactly %v", left, keep)
+	}
+	for name, body := range keep {
+		got, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // a fixed name in a test directory
+		if err != nil || string(got) != body {
+			t.Errorf("%s = %q, %v; Discard must leave files that are not the identity", name, got, err)
+		}
+	}
+}
+
+func TestDiscardOfAnEmptyDirectoryIsNotAnErrorAndAllowsANewSave(t *testing.T) {
+	dir := t.TempDir()
+	if err := Discard(dir); err != nil {
+		t.Fatalf("Discard of an empty directory: %v", err)
+	}
+	if err := Save(dir, sample(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := Discard(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(dir, sample(t)); err != nil {
+		t.Fatalf("Save after Discard: %v", err)
+	}
+	if _, ok, err := Load(dir); !ok || err != nil {
+		t.Fatalf("Load = %v, %v", ok, err)
+	}
+}
+
+// A crash between the marker's removal and the rest leaves a key and a certificate
+// without identity.json. That must read as "not enrolled", never as the damaged
+// identity that Load refuses.
+func TestAnInterruptedDiscardLeavesADirectoryThatReadsAsNotEnrolled(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, sample(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, IdentityFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := Load(dir); ok || err != nil {
+		t.Fatalf("Load = %v, %v; want not enrolled", ok, err)
+	}
+	if err := Save(dir, sample(t)); err != nil {
+		t.Fatalf("Save over the leftovers: %v", err)
+	}
+}

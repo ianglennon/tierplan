@@ -35,8 +35,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 
-	"github.com/ianglennon/bayplan/agent/internal/proxy"
 	"github.com/ianglennon/bayplan/agent/internal/facts"
+	"github.com/ianglennon/bayplan/agent/internal/proxy"
 	"github.com/ianglennon/bayplan/agent/internal/state"
 	"github.com/ianglennon/bayplan/proto/authn"
 	"github.com/ianglennon/bayplan/proto/wire"
@@ -120,10 +120,12 @@ func muxConfig() *yamux.Config {
 }
 
 // Run connects and serves until ctx ends. It returns nil only when ctx ended: a
-// dropped connection or a refusal is retried with backoff, so a revoked agent
-// that an administrator later unblocks comes back by itself. It returns an error
-// for a configuration the agent cannot work with, and for a refusal of the very
-// first enrolment (a *RefusedError), because a wrong token does not fix itself.
+// dropped connection or a refusal is retried with backoff. An agent that is
+// refused revoked and has a join token drops its identity and enrols again as a
+// new agent (D-10); a blocked host waits at the maximum backoff until an
+// administrator unblocks it. It returns an error for a configuration the agent
+// cannot work with, and for a refusal of the very first enrolment (a
+// *RefusedError) other than blocked, because a wrong token does not fix itself.
 func Run(ctx context.Context, cfg Config) error {
 	return runWith(ctx, cfg, runEnv{})
 }
@@ -149,6 +151,10 @@ type runner struct {
 	// forceEnrol makes the next attempt enrol although an identity exists: the
 	// certificate expired and a join token is at hand.
 	forceEnrol bool
+	// rejoinedAt is when the agent last dropped a revoked identity to enrol again.
+	// It keeps an agent that is revoked again at once from enrolling a new agent
+	// every few seconds.
+	rejoinedAt time.Time
 	// lastCode is the refusal code last logged, so a refusal that repeats every
 	// minute is said once.
 	lastCode string
@@ -224,11 +230,14 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 		var wait time.Duration
 		var refused *RefusedError
 		if errors.As(err, &refused) {
-			if !r.have && !transient(refused.Code) {
+			if !r.have && !transient(refused.Code) && refused.Code != wire.ReasonBlocked {
 				// The very first enrolment was refused for a reason that will not
 				// pass by itself, most often a wrong or disabled join token. Say so
 				// and stop, so the operator sees the failure where they installed
-				// the agent. An enrolled agent never stops for a refusal.
+				// the agent. An enrolled agent never stops for a refusal. Nor does
+				// a blocked host, which is also what a revoked agent meets when it
+				// enrols again: an administrator can lift the block, and exiting
+				// would only make the restart policy retry faster than the backoff.
 				return refused
 			}
 			wait = r.refused(refused, &failures)
@@ -256,18 +265,21 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 
 // refused decides how long to wait after a refusal, and says why once.
 //
-// A revoked or blocked agent waits the maximum: nothing the agent can do changes
-// the answer, but an administrator may. It keeps its identity so that an
-// unblock needs no new enrolment. An expired certificate with a join token at
-// hand enrols again at once; without one only an administrator can help, so it
-// waits the maximum too. Anything else backs off as an ordinary failure.
+// A revoked agent with a join token drops its identity and enrols again at once,
+// as a new agent (see rejoin). Without a token, and for a blocked host, nothing
+// the agent can do changes the answer, so it keeps its identity and waits the
+// maximum; only an administrator, or an operator who adds a token, can help. An
+// expired certificate with a join token at hand enrols again at once; without
+// one it waits the maximum too. Anything else backs off as an ordinary failure.
 func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 	if re.Code != r.lastCode {
 		r.lastCode = re.Code
-		r.log.Warn("the server refused this agent", "code", re.Code, "detail", re.Detail, "hint", hint(re.Code))
+		r.log.Warn("the server refused this agent", "code", re.Code, "detail", re.Detail, "hint", r.hint(re.Code))
 	}
 	switch re.Code {
-	case wire.ReasonRevoked, wire.ReasonBlocked:
+	case wire.ReasonRevoked:
+		return r.rejoin()
+	case wire.ReasonBlocked:
 		return r.cfg.BackoffMax
 	case wire.ReasonCertExpired:
 		if r.cfg.JoinToken == "" {
@@ -281,6 +293,42 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 	return max(wait, min(re.RetryAfter, maxRetryAfter))
 }
 
+// rejoin handles a hello that was refused revoked (D-10). The server keeps a
+// revoked agent revoked for good, also after an unblock, so the identity can
+// never work again. With a join token the agent deletes it and enrols again with
+// a fresh key: a host that left its swarm and rejoined then comes back by itself,
+// while a host an administrator blocked is refused blocked at that enrolment and
+// waits. It returns how long to wait before the next attempt: none when it
+// enrols again now, the maximum when it cannot or should not.
+//
+// An agent that rejoined less than the maximum backoff ago and is revoked again
+// waits the maximum before it does so a second time, so at most one new agent
+// per minute is ever enrolled.
+func (r *runner) rejoin() time.Duration {
+	if !r.have || r.cfg.JoinToken == "" {
+		return r.cfg.BackoffMax
+	}
+	now := r.env.now()
+	if !r.rejoinedAt.IsZero() && now.Sub(r.rejoinedAt) < r.cfg.BackoffMax {
+		return r.cfg.BackoffMax
+	}
+	if r.cfg.StateDir != "" {
+		if err := state.Discard(r.cfg.StateDir); err != nil {
+			if _, still, _ := state.Load(r.cfg.StateDir); still {
+				// Nothing was removed: keep the identity and the old behaviour.
+				r.log.Error("the agent could not remove its revoked identity, so it will not enrol again; fix the permissions of its state directory", "dir", r.cfg.StateDir, "error", err)
+				return r.cfg.BackoffMax
+			}
+			// The identity is gone and only leftovers remain; the next save replaces them.
+			r.log.Warn("the agent removed its revoked identity but could not remove every file of it", "dir", r.cfg.StateDir, "error", err)
+		}
+	}
+	r.cur, r.have, r.forceEnrol = state.State{}, false, false
+	r.rejoinedAt = now
+	r.log.Info("the agent's identity was revoked; it dropped it and will enrol again with its join token")
+	return 0
+}
+
 // transient reports whether a refusal is the server's trouble rather than the
 // agent's: it will pass, so the agent retries instead of ending.
 func transient(code string) bool {
@@ -288,10 +336,13 @@ func transient(code string) bool {
 }
 
 // hint is what an operator should do about a refusal code.
-func hint(code string) string {
+func (r *runner) hint(code string) string {
 	switch code {
 	case wire.ReasonRevoked:
-		return "an administrator revoked this agent in Bayplan; remove it or unblock it there, and enrol again with a join token if it was removed"
+		if r.cfg.JoinToken == "" {
+			return "this agent was revoked in Bayplan, or its node left the swarm, and it has no join token to enrol again with: start it with BAYPLAN_AGENT_JOIN_TOKEN_FILE or BAYPLAN_AGENT_JOIN_TOKEN set"
+		}
+		return "this agent was revoked in Bayplan, or its node left the swarm; it drops the revoked identity and enrols again as a new agent, unless an administrator blocked this host"
 	case wire.ReasonBlocked:
 		return "this host is on Bayplan's block list; an administrator can unblock it in the environment's settings"
 	case wire.ReasonCertExpired:
