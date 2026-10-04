@@ -538,3 +538,91 @@ func TestLoadURLsDropsEntriesThatAreNotAddresses(t *testing.T) {
 		t.Fatalf("LoadURLs = %+v, %v; want only B", got, err)
 	}
 }
+
+// --- the BAYPLAN_AGENT_URL the agent last started with (G-02-4b) ---
+
+func TestEnvURLRoundTripsIsPrivateAndLeavesNoTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveEnvURL(dir, urlA); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(dir, EnvURLFile))
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("env-url.json: %v, %v; want mode 0600", fi, err)
+	}
+	if got, ok, err := LoadEnvURL(dir); err != nil || !ok || got != urlA {
+		t.Fatalf("LoadEnvURL = %q, %v, %v; want %q", got, ok, err, urlA)
+	}
+	if _, err := os.Stat(filepath.Join(dir, EnvURLFile+".tmp")); err == nil {
+		t.Error("a temporary env-url file was left behind")
+	}
+}
+
+func TestLoadEnvURLOfAnEmptyDirectoryIsNoRecordAndADamagedFileIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	if got, ok, err := LoadEnvURL(dir); err != nil || ok || got != "" {
+		t.Fatalf("LoadEnvURL(empty) = %q, %v, %v; want no record", got, ok, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, EnvURLFile), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadEnvURL(dir); err == nil || !strings.Contains(err.Error(), EnvURLFile) {
+		t.Fatalf("LoadEnvURL(damaged) = %v, want an error naming %s", err, EnvURLFile)
+	}
+}
+
+func TestLoadEnvURLIgnoresARecordThatIsNotAnAddress(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, EnvURLFile), []byte(`{"url":"https://nope.example/agent/connect"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := LoadEnvURL(dir); err != nil || ok || got != "" {
+		t.Fatalf("LoadEnvURL = %q, %v, %v; want no record for an address the agent would not dial", got, ok, err)
+	}
+}
+
+func TestStartURLsDecidesWhichAddressAnAgentStartsWith(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	soon := now.Add(24 * time.Hour)
+	gone := now.Add(-time.Minute)
+	stored := []URLEntry{{URL: urlB}, {URL: urlA, ExpiresAt: soon}, {URL: urlC, ExpiresAt: gone}}
+	const fresh = "wss://new.example.net/agent/connect"
+	for name, tc := range map[string]struct {
+		stored      []URLEntry
+		env, last   string
+		known       bool
+		want        []URLEntry
+		wantChanged bool
+	}{
+		"nothing stored": {nil, fresh, urlA, true, []URLEntry{{URL: fresh}}, false},
+		"only expired entries stored": {
+			[]URLEntry{{URL: urlC, ExpiresAt: gone}}, fresh, urlA, true, []URLEntry{{URL: fresh}}, false},
+		"no record of the last start":   {stored, fresh, "", false, stored, false},
+		"the same address as last time": {stored, urlA, urlA, true, stored, false},
+		"a different address": {
+			stored, fresh, urlA, true,
+			[]URLEntry{{URL: fresh}, {URL: urlB}, {URL: urlA, ExpiresAt: soon}}, true},
+		"a different address that is already stored with an expiry": {
+			stored, urlA, urlB, true,
+			[]URLEntry{{URL: urlA}, {URL: urlB}}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, changed := StartURLs(tc.stored, tc.env, tc.last, tc.known, now)
+			if changed != tc.wantChanged || !EqualURLs(got, tc.want) {
+				t.Fatalf("StartURLs = %+v, %v; want %+v, %v", got, changed, tc.want, tc.wantChanged)
+			}
+		})
+	}
+}
+
+func TestStartURLsCapsTheListAtMaxURLs(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	var stored []URLEntry
+	for i := range MaxURLs {
+		stored = append(stored, URLEntry{URL: "wss://h" + string(rune('a'+i)) + ".example.com/agent/connect"})
+	}
+	got, changed := StartURLs(stored, urlA, "wss://old.example.com/agent/connect", true, now)
+	if !changed || len(got) != MaxURLs || got[0].URL != urlA {
+		t.Fatalf("StartURLs kept %d addresses (changed %v) starting with %s, want %d starting with the new one", len(got), changed, got[0].URL, MaxURLs)
+	}
+}

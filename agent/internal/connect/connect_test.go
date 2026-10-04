@@ -610,6 +610,28 @@ func TestARevokedAgentWithNoJoinTokenWaitsTheMaximumAndSaysOnceThatItNeedsAToken
 	}
 }
 
+// An enrolled agent that Bayplan refuses auth_rejected is most often one whose
+// address changed while it was away; the hint says how it is brought back with
+// its identity (G-02-4b).
+func TestAnEnrolledAgentRefusedAuthRejectedIsToldToStartWithTheNewAddressAndKeepItsIdentity(t *testing.T) {
+	dir := t.TempDir()
+	enrolledState(t, dir)
+	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonAuthRejected} })
+	var logs bytes.Buffer
+	if _, err := runUntilSleeps(t, Config{
+		URL: srv.url(), StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)), SocketPath: filepath.Join(dir, "none.sock"),
+		BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+	}, 2); err != nil {
+		t.Fatalf("Run = %v; a refusal never ends an enrolled agent", err)
+	}
+	if n := strings.Count(logs.String(), "code=auth_rejected"); n != 1 {
+		t.Fatalf("the code auth_rejected was logged %d times, want once:\n%s", n, logs.String())
+	}
+	if !strings.Contains(logs.String(), "BAYPLAN_AGENT_URL") || !strings.Contains(logs.String(), "keeps its identity") {
+		t.Errorf("the hint should name BAYPLAN_AGENT_URL and say the agent keeps its identity:\n%s", logs.String())
+	}
+}
+
 // A blocked host is on an administrator's list: its identity is still good and a
 // join token does not help, so the agent keeps both and waits.
 func TestABlockedAgentWaitsTheMaximumLogsTheCodeOnceAndKeepsItsIdentity(t *testing.T) {
