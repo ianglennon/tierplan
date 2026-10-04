@@ -643,10 +643,7 @@ func TestRemoveVolumeWaitsForTheContainerToGoAndThenRemovesOnlyTheVolume(t *test
 	if !reflect.DeepEqual(f.volumeDeletes, []string{"bayplan-agent"}) {
 		t.Fatalf("volumes removed: %v", f.volumeDeletes)
 	}
-	var removes []string
-	for _, w := range f.writes() {
-		removes = append(removes, w)
-	}
+	removes := f.writes()
 	if len(removes) != 1 || !strings.HasPrefix(removes[0], "DELETE /volumes/bayplan-agent") {
 		t.Fatalf("the helper wrote %v, want only the volume removal (it did not touch the container: it waits for it to go)", removes)
 	}

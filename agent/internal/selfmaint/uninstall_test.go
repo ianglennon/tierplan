@@ -79,7 +79,7 @@ func TestASwarmManagerToldToRemoveTheServiceRemovesOnlyItsOwnServiceAndTokenSecr
 	// very process.
 	writes := f.writes()
 	iStart, iService, iSecret := indexOf(writes, "POST /containers/", "/start"), indexOf(writes, "DELETE /services/svc1", ""), indexOf(writes, "DELETE /secrets/sec-token", "")
-	if iStart < 0 || iService < 0 || iSecret < 0 || !(iStart < iService && iService < iSecret) {
+	if iStart < 0 || iService < 0 || iSecret < 0 || iStart >= iService || iService >= iSecret {
 		t.Fatalf("want helper start, then service removal, then secret removal; writes: %v", writes)
 	}
 	if len(f.creates) != 1 {
