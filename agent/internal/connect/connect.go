@@ -410,7 +410,7 @@ func (r *runner) hint(code string) string {
 	case wire.ReasonCertExpired:
 		return "the agent's certificate expired; start the agent with a join token (BAYPLAN_AGENT_JOIN_TOKEN_FILE or BAYPLAN_AGENT_JOIN_TOKEN) to enrol again"
 	case wire.ReasonAuthRejected:
-		return "Bayplan did not accept the agent's credentials; check the join token and BAYPLAN_AGENT_URL"
+		return "Bayplan did not accept the agent's credentials; check the join token and BAYPLAN_AGENT_URL. If Bayplan's agent address changed while this agent was offline, start it again with the new address in BAYPLAN_AGENT_URL on the same volume, and it keeps its identity"
 	case wire.ReasonVersionIncompatible:
 		return "upgrade the agent to the version Bayplan runs"
 	case wire.ReasonClockSkew:
