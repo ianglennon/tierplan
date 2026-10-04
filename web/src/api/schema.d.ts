@@ -738,6 +738,8 @@ export interface components {
             node: string;
             /** @description The host owner set the agent to read-only. Reported only while it is connected */
             readOnly: boolean;
+            /** @description True when the certificate has less than 7 days left, which means it should have renewed already and has not, or has expired. Never set for a revoked agent */
+            renewalFailing: boolean;
             /** @description The reason given when it was revoked */
             revokeReason?: string;
             /**

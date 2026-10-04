@@ -111,6 +111,14 @@ SELECT * FROM agents WHERE env_id = ? ORDER BY created_at, id;
 -- name: TouchAgentLastSeen :exec
 UPDATE agents SET last_seen_at = ? WHERE id = ?;
 
+-- A renewal keeps the key and changes only the certificate's record. The status
+-- test is what makes a revoke that commits first win: no row is changed, so the
+-- renewal is refused (T-02-83).
+-- name: RenewAgentCert :execrows
+UPDATE agents
+SET cert_serial = ?, cert_fingerprint = ?, cert_not_after = ?
+WHERE id = ? AND status = 'active';
+
 -- name: RevokeAgent :execrows
 UPDATE agents
 SET status = 'revoked', revoked_at = ?, revoked_by = ?, revoke_reason = ?

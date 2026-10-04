@@ -243,6 +243,10 @@
             "description": "The host owner set the agent to read-only. Reported only while it is connected",
             "type": "boolean"
           },
+          "renewalFailing": {
+            "description": "True when the certificate has less than 7 days left, which means it should have renewed already and has not, or has expired. Never set for a revoked agent",
+            "type": "boolean"
+          },
           "revokeReason": {
             "description": "The reason given when it was revoked",
             "type": "string"
@@ -285,6 +289,7 @@
           "agentVersion",
           "certFingerprint",
           "certNotAfter",
+          "renewalFailing",
           "clockOffsetSeconds",
           "readOnly",
           "selfUpdate"

@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/buildinfo"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -166,7 +167,7 @@ type AgentListOutput struct {
 
 // agentBodies merges the database's view of an environment's agents with the
 // live one: connected, what the agent reported and when it was last heard from.
-func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string) []AgentBody {
+func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string, now time.Time) []AgentBody {
 	views := map[string]tunnel.AgentLive{}
 	if live != nil {
 		for _, v := range live.Views(envID) {
@@ -183,6 +184,11 @@ func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string
 			ID: n.ID, Node: n.Name, Role: role, Status: n.Status, Blocked: n.Blocked,
 			AgentVersion: n.AgentVersion, CertFingerprint: n.CertFingerprint, CertNotAfter: rfc3339(n.CertNotAfter),
 			RevokedAt: rfc3339(n.RevokedAt), RevokeReason: n.RevokeReason,
+			// The same threshold as the environment's health (envs.CertWarnBefore): a
+			// certificate this close to its end should have renewed at a third of
+			// its life left, so something is stopping it. A revoked agent is not
+			// trying.
+			RenewalFailing: n.Status == "active" && n.CertNotAfter.Sub(now) < envs.CertWarnBefore,
 		}
 		lastSeen := n.LastSeen
 		if v, ok := views[n.ID]; ok {
@@ -400,7 +406,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		if err != nil {
 			return nil, fail("list agents", err)
 		}
-		return &AgentListOutput{CacheControl: "no-store", Body: AgentListBody{Items: agentBodies(nodes, d.Live, in.EnvID, leaderAgent(d, in.EnvID))}}, nil
+		return &AgentListOutput{CacheControl: "no-store", Body: AgentListBody{Items: agentBodies(nodes, d.Live, in.EnvID, leaderAgent(d, in.EnvID), time.Now())}}, nil
 	})
 
 	httpx.Register(r, huma.Operation{

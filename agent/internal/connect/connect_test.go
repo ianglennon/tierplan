@@ -208,6 +208,13 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			default:
 			}
 		}
+		var rn wire.Renew
+		if json.Unmarshal(sc.Bytes(), &rn) == nil && rn.T == wire.TypeRenew && rep.onRenew != nil {
+			if v := rep.onRenew(); v != nil {
+				b, _ := json.Marshal(v)
+				_, _ = st.Write(append(b, '\n'))
+			}
+		}
 		var d wire.Denied
 		if json.Unmarshal(sc.Bytes(), &d) == nil && d.T == wire.TypeDenied {
 			select {

@@ -420,7 +420,8 @@ func TestARenewOnTheControlStreamIsAnsweredWithAFreshCertificateForTheSameKey(t 
 	if pub, ok := leaf.PublicKey.(ed25519.PublicKey); !ok || !bytes.Equal(pub, c.Identity.Public()) {
 		t.Fatal("the renewed certificate is for another key")
 	}
-	if want := srv.Clock.Now().Add(30 * day); !leaf.NotAfter.Equal(want) {
+	// A certificate keeps whole seconds; the clock of the test has more.
+	if want := srv.Clock.Now().Add(30 * day).Truncate(time.Second); !leaf.NotAfter.Equal(want) {
 		t.Errorf("NotAfter = %v, want 30 days from now (%v)", leaf.NotAfter, want)
 	}
 	var serial string
@@ -428,7 +429,7 @@ func TestARenewOnTheControlStreamIsAnsweredWithAFreshCertificateForTheSameKey(t 
 	if err := srv.Store.Read.QueryRow(`SELECT cert_serial, cert_not_after FROM agents WHERE id = ?`, c.Identity.AgentID).Scan(&serial, &notAfter); err != nil {
 		t.Fatal(err)
 	}
-	if serial == oldSerial || notAfter != leaf.NotAfter.UnixNano() {
+	if d := time.Duration(notAfter - leaf.NotAfter.UnixNano()); serial == oldSerial || d < 0 || d >= time.Second {
 		t.Errorf("the agent row says serial %s expiring %d; the certificate is new and expires %d", serial, notAfter, leaf.NotAfter.UnixNano())
 	}
 	stays(t, srv.Hub.Session(c.Identity.AgentID), "a renewal keeps the session")

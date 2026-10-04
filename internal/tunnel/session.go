@@ -33,7 +33,34 @@ const (
 	maxAgentStreams = 8
 	// touchTimeout bounds one last-seen write.
 	touchTimeout = 5 * time.Second
+	// controlWriteTimeout bounds one write to an agent's control stream, so an
+	// agent that stopped reading cannot hold up whoever is writing to it.
+	controlWriteTimeout = 10 * time.Second
+	// renewTimeout bounds one renewal: a certificate signed and one transaction.
+	renewTimeout = 30 * time.Second
 )
+
+// errNoControlStream means the agent has not opened its control stream yet, or the
+// session has ended.
+var errNoControlStream = errors.New("tunnel: the agent has no control stream")
+
+// sendControl writes one message, as a line of JSON, to the agent's control
+// stream. It fails when the agent has not opened one (it is a message for a
+// session that is already up) or when the write does not finish in time.
+func (s *Session) sendControl(v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	s.ctlMu.Lock()
+	defer s.ctlMu.Unlock()
+	if s.ctl == nil {
+		return errNoControlStream
+	}
+	_ = s.ctl.SetWriteDeadline(time.Now().Add(controlWriteTimeout))
+	_, err = s.ctl.Write(append(b, '\n'))
+	return err
+}
 
 // LastSeenRecorder is told about every sign of life from an agent, so that the
 // database can keep a "last seen" without a write per heartbeat: the hub calls
@@ -193,6 +220,9 @@ func (h *Hub) agentStream(s *Session, st *yamux.Stream) {
 		h.log.Warn("closed an agent-opened stream that is not the control stream", "agent_id", s.AgentID, "kind", kind[0])
 		return
 	}
+	s.ctlMu.Lock()
+	s.ctl = st
+	s.ctlMu.Unlock()
 	h.readControl(s, st)
 }
 
@@ -222,12 +252,56 @@ func (h *Hub) readControl(s *Session, st io.Reader) {
 			if json.Unmarshal(sc.Bytes(), &d) == nil {
 				h.denied(s, d)
 			}
+		case wire.TypeRenew:
+			h.renew(s)
 		}
 	}
 	if errors.Is(sc.Err(), bufio.ErrTooLong) {
 		h.log.Warn("agent session closed: a control line was longer than the limit", "agent_id", s.AgentID, "limit", wire.MaxControlLine)
 		s.close(websocket.StatusMessageTooBig, "control line too long")
 	}
+}
+
+// renew answers an agent's request for a new certificate (D-04). The work, a
+// signature and a transaction, runs off the control reader so heartbeats keep being
+// read, and only one renewal per session runs at a time: a line that arrives while
+// one is in progress is dropped, since the agent asks once and waits.
+//
+// A revoked agent is told so and its session is closed (T-02-83). Any other refusal
+// is only said: the session stays, and the agent asks again later.
+func (h *Hub) renew(s *Session) {
+	if !s.renewing.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer s.renewing.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), renewTimeout)
+		defer cancel()
+		res, err := h.v.Renew(ctx, s.AgentID, s.IP)
+		if err != nil {
+			code := wire.RenewInternal
+			var re *RefuseError
+			if errors.As(err, &re) {
+				code = re.Code
+			} else {
+				h.log.Warn("could not renew an agent's certificate", "agent_id", s.AgentID, "environment_id", s.EnvID, "error", err)
+			}
+			if werr := s.sendControl(wire.RenewRefused{T: wire.TypeRenewRefused, Code: code}); werr != nil {
+				h.log.Debug("could not tell an agent its renewal was refused", "agent_id", s.AgentID, "error", werr)
+			}
+			if code == wire.ReasonRevoked {
+				h.log.Warn("a revoked agent asked for a new certificate; its session is closed", "agent_id", s.AgentID, "environment_id", s.EnvID)
+				s.endWith(DisconnectRevoked)
+				s.kick(wire.ReasonRevoked)
+			}
+			return
+		}
+		if err := s.sendControl(wire.Renewed{T: wire.TypeRenewed, Cert: res.Cert}); err != nil {
+			// The new certificate is recorded and the old one still works until it
+			// expires: the agent asks again, and is told it is not due.
+			h.log.Warn("could not send an agent its renewed certificate", "agent_id", s.AgentID, "environment_id", s.EnvID, "error", err)
+		}
+	}()
 }
 
 // beat records a heartbeat in memory and tells the last-seen recorder.

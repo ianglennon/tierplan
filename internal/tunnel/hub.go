@@ -207,10 +207,17 @@ type Session struct {
 	denyLimit  *rate.Limiter
 	suppressed atomic.Int64
 
-	// control is set once the agent's control stream has been accepted.
+	// control is set once the agent's control stream has been accepted. ctl is that
+	// stream, which the server writes its own messages to (a renewed certificate, new
+	// addresses); ctlMu serializes those writes, because lines must not interleave.
 	control atomic.Bool
-	hbMu    sync.Mutex
-	status  SessionStatus
+	ctlMu   sync.Mutex
+	ctl     *yamux.Stream
+	// renewing is set while a renewal for this session is being made, so a flood of
+	// renew lines is one renewal and not a queue of them.
+	renewing atomic.Bool
+	hbMu     sync.Mutex
+	status   SessionStatus
 
 	// order is the place of this connection among those the hub accepted: a later
 	// accept has a higher number. Of two handshakes of one agent that overlap, the

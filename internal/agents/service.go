@@ -897,10 +897,100 @@ func (s *Service) ListNodes(ctx context.Context, envID string) ([]Node, error) {
 	return out, nil
 }
 
+// renewEligibleBelow is how little life a certificate must have left before the
+// server renews it: half of a full life. An agent asks at two thirds of the life, so
+// at a third left, and anything much earlier is a fault or a flood. Every renewal is
+// a certificate signed and a write on the single database writer.
+const renewEligibleBelow = leafLifetime / 2
+
 // Renew issues a new certificate for the same key to an agent that asked for one
-// over its live session (D-04). It implements tunnel.Verifier.
+// over its live session (D-04, RESEARCH Pattern 3). It implements tunnel.Verifier.
+//
+// The status is read again inside the transaction that records the new certificate,
+// and the update itself only changes an active agent, so a revoke that commits first
+// always wins and no certificate is recorded for a revoked agent (T-02-83). The key
+// is the one stored at enrolment: a renewal never rotates it. A certificate that is
+// still good for more than half a life is refused with wire.RenewNotDue and nothing
+// is written. The agent's old certificate stays valid until it expires, because
+// authentication is by key, so an agent that crashes before saving the new one
+// loses nothing.
 func (s *Service) Renew(ctx context.Context, agentID, ip string) (tunnel.RenewResult, error) {
-	return tunnel.RenewResult{}, errors.New("agents: renewal is not implemented")
+	revoked := &tunnel.Refusal{Code: wire.ReasonRevoked, Detail: "an administrator revoked this agent", AuditReason: wire.ReasonRevoked}
+	notDue := &tunnel.Refusal{Code: wire.RenewNotDue, Detail: "the certificate has more than half of its life left", AuditReason: wire.RenewNotDue}
+
+	row, err := s.st.RQ.GetAgent(ctx, agentID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return tunnel.RenewResult{}, &tunnel.Refusal{Code: wire.ReasonAuthRejected, Detail: "no such agent", AuditReason: "unknown_agent"}
+	case err != nil:
+		return tunnel.RenewResult{}, fmt.Errorf("load the agent: %w", err)
+	case row.Status != statusActive:
+		return tunnel.RenewResult{}, revoked
+	}
+	now := s.now().UTC()
+	// The cheap refusal comes before the CA is opened and a certificate is signed.
+	if time.Unix(0, row.CertNotAfter).Sub(now) > renewEligibleBelow {
+		return tunnel.RenewResult{}, notDue
+	}
+	if len(row.PublicKey) != ed25519.PublicKeySize {
+		return tunnel.RenewResult{}, fmt.Errorf("the stored key of agent %s is not an Ed25519 key", agentID)
+	}
+	caRow, err := s.st.RQ.GetCA(ctx, row.EnvID)
+	if err != nil {
+		return tunnel.RenewResult{}, fmt.Errorf("load the CA: %w", err)
+	}
+	authority, err := loadCA(s.v, row.EnvID, caRow.CertPem, caRow.KeySealed)
+	if err != nil {
+		return tunnel.RenewResult{}, err
+	}
+	leaf, err := authority.issue(agentID, row.EnvID, ed25519.PublicKey(row.PublicKey), now)
+	if err != nil {
+		return tunnel.RenewResult{}, err
+	}
+	fp := sha256.Sum256(leaf.DER)
+	fingerprint := hex.EncodeToString(fp[:])
+
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return tunnel.RenewResult{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	// Read again under the single writer: a revoke, or another renewal, may have
+	// committed since the read above.
+	cur, err := q.GetAgent(ctx, agentID)
+	switch {
+	case err != nil:
+		return tunnel.RenewResult{}, fmt.Errorf("load the agent: %w", err)
+	case cur.Status != statusActive:
+		return tunnel.RenewResult{}, revoked
+	case time.Unix(0, cur.CertNotAfter).Sub(now) > renewEligibleBelow:
+		return tunnel.RenewResult{}, notDue
+	}
+	changed, err := q.RenewAgentCert(ctx, sqlc.RenewAgentCertParams{
+		CertSerial: leaf.Serial, CertFingerprint: fingerprint, CertNotAfter: leaf.NotAfter.UnixNano(), ID: agentID,
+	})
+	if err != nil {
+		return tunnel.RenewResult{}, fmt.Errorf("record the renewed certificate: %w", err)
+	}
+	if changed == 0 {
+		return tunnel.RenewResult{}, revoked
+	}
+	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+		Actor: rbac.System(enrolActor).AuditActor(), Action: audit.ActionAgentCertRenewed,
+		TargetType: targetAgent, TargetID: agentID, EnvID: row.EnvID, Result: audit.ResultSuccess,
+		IP: ip, UserAgent: "bayplan-agent/" + cur.AgentVersion,
+		Details: map[string]string{
+			"fingerprint": fingerprint, "node": cur.Name, "serial": leaf.Serial,
+			"not_after": leaf.NotAfter.Format(time.RFC3339), "previous_serial": cur.CertSerial,
+		},
+	}); err != nil {
+		return tunnel.RenewResult{}, fmt.Errorf("audit certificate renewed: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return tunnel.RenewResult{}, fmt.Errorf("commit: %w", err)
+	}
+	return tunnel.RenewResult{Cert: leaf.DER, NotAfter: leaf.NotAfter}, nil
 }
 
 // StillActive reports whether the agent exists and has not been revoked. The hub

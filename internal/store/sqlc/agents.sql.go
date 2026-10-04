@@ -644,6 +644,35 @@ func (q *Queries) RecordClusterChange(ctx context.Context, arg RecordClusterChan
 	return result.RowsAffected()
 }
 
+const renewAgentCert = `-- name: RenewAgentCert :execrows
+UPDATE agents
+SET cert_serial = ?, cert_fingerprint = ?, cert_not_after = ?
+WHERE id = ? AND status = 'active'
+`
+
+type RenewAgentCertParams struct {
+	CertSerial      string
+	CertFingerprint string
+	CertNotAfter    int64
+	ID              string
+}
+
+// A renewal keeps the key and changes only the certificate's record. The status
+// test is what makes a revoke that commits first win: no row is changed, so the
+// renewal is refused (T-02-83).
+func (q *Queries) RenewAgentCert(ctx context.Context, arg RenewAgentCertParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, renewAgentCert,
+		arg.CertSerial,
+		arg.CertFingerprint,
+		arg.CertNotAfter,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const revokeAgent = `-- name: RevokeAgent :execrows
 UPDATE agents
 SET status = 'revoked', revoked_at = ?, revoked_by = ?, revoke_reason = ?

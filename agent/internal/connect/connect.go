@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -145,7 +146,10 @@ type runner struct {
 
 	// cur is the identity, once the agent has one. It is also kept in memory when
 	// there is no state directory, so a reconnect in the same process never
-	// enrols a second agent.
+	// enrols a second agent. mu guards it, because the control reader of a session
+	// that is ending may still be saving a renewed certificate while the next
+	// connection begins.
+	mu   sync.Mutex
 	cur  state.State
 	have bool
 	// forceEnrol makes the next attempt enrol although an identity exists: the
@@ -323,7 +327,9 @@ func (r *runner) rejoin() time.Duration {
 			r.log.Warn("the agent removed its revoked identity but could not remove every file of it", "dir", r.cfg.StateDir, "error", err)
 		}
 	}
+	r.mu.Lock()
 	r.cur, r.have, r.forceEnrol = state.State{}, false, false
+	r.mu.Unlock()
 	r.rejoinedAt = now
 	r.log.Info("the agent's identity was revoked; it dropped it and will enrol again with its join token")
 	return 0
@@ -426,8 +432,43 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 }
 
 // hooks is what the control stream of the next session hands the server's messages
-// to.
-func (r *runner) hooks() controlHooks { return controlHooks{} }
+// to: the renewal of the certificate the agent holds now.
+func (r *runner) hooks() controlHooks {
+	r.mu.Lock()
+	cur := r.cur
+	r.mu.Unlock()
+	return controlHooks{renew: newRenewer(cur.Cert, cur.AgentID, cur.Key, r.env.now, r.env.rnd, r.log, r.saveCert)}
+}
+
+// saveCert keeps a renewed certificate: the identity on the volume is replaced
+// atomically (state.Save writes every file under a temporary name first), and the
+// next connection says hello with it. A crash before this returns leaves the old
+// certificate, which the server still accepts until it expires (authentication is by
+// key). The certificate must be for the key the agent holds now, so a renewal that
+// arrives after the identity was dropped and replaced cannot overwrite the new one.
+func (r *runner) saveCert(cert []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.have {
+		return errors.New("the agent has no identity to renew")
+	}
+	leaf, err := x509.ParseCertificate(cert)
+	if err != nil {
+		return fmt.Errorf("read the renewed certificate: %w", err)
+	}
+	if pub, ok := leaf.PublicKey.(ed25519.PublicKey); !ok || !pub.Equal(publicOf(r.cur.Key)) {
+		return errors.New("the renewed certificate is not for the key this agent holds now")
+	}
+	next := r.cur
+	next.Cert = cert
+	if r.cfg.StateDir != "" {
+		if err := state.Save(r.cfg.StateDir, next); err != nil {
+			return err
+		}
+	}
+	r.cur = next
+	return nil
+}
 
 // minHeartbeat is the shortest interval the agent accepts from a server.
 const minHeartbeat = 10 * time.Millisecond
@@ -435,10 +476,13 @@ const minHeartbeat = 10 * time.Millisecond
 // credentials is what this attempt presents: the certificate and key when the
 // agent has an identity, else a fresh key and the join token.
 func (r *runner) credentials() (credentials, error) {
-	if r.have && !r.forceEnrol {
+	r.mu.Lock()
+	cur, have := r.cur, r.have
+	r.mu.Unlock()
+	if have && !r.forceEnrol {
 		return credentials{
-			mode: wire.ModeHello, agentID: r.cur.AgentID, cert: r.cur.Cert,
-			pub: publicOf(r.cur.Key), priv: r.cur.Key,
+			mode: wire.ModeHello, agentID: cur.AgentID, cert: cur.Cert,
+			pub: publicOf(cur.Key), priv: cur.Key,
 		}, nil
 	}
 	if r.cfg.JoinToken == "" {
@@ -462,19 +506,24 @@ func (r *runner) accept(cr credentials, w wire.Welcome, verified bool) error {
 		if len(w.Cert) == 0 {
 			return errors.New("the server welcomed the agent without a certificate")
 		}
-		r.cur = state.State{AgentID: w.AgentID, EnvID: w.EnvID, Key: cr.priv, Cert: w.Cert}
-		r.have = true
+		cur := state.State{AgentID: w.AgentID, EnvID: w.EnvID, Key: cr.priv, Cert: w.Cert}
+		r.mu.Lock()
+		r.cur, r.have = cur, true
+		r.mu.Unlock()
 		r.log.Info("enrolled with Bayplan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", r.aud)
 		if r.cfg.StateDir != "" {
-			if err := state.Save(r.cfg.StateDir, r.cur); err != nil {
+			if err := state.Save(r.cfg.StateDir, cur); err != nil {
 				// Staying connected beats stopping: the identity is in memory, and
 				// the agent says so loudly because a restart will enrol again.
 				r.log.Error("the agent could not save its identity; a restart will enrol it again as a new agent", "dir", r.cfg.StateDir, "error", err)
 			}
 		}
 	default:
-		if w.AgentID != r.cur.AgentID {
-			return fmt.Errorf("the server welcomed agent %q but this agent is %q", w.AgentID, r.cur.AgentID)
+		r.mu.Lock()
+		mine := r.cur.AgentID
+		r.mu.Unlock()
+		if w.AgentID != mine {
+			return fmt.Errorf("the server welcomed agent %q but this agent is %q", w.AgentID, mine)
 		}
 		r.log.Info("connected to Bayplan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", r.aud)
 	}
