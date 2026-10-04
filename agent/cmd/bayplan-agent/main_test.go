@@ -338,6 +338,43 @@ func TestThePolicyFlagsReachTheConnection(t *testing.T) {
 	}
 }
 
+func TestTheAllowInsecureSwitchReachesTheConnection(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{{"true", true}, {"", false}, {"false", false}} {
+		h := &harness{}
+		d := h.deps(map[string]string{
+			"BAYPLAN_AGENT_URL":            "ws://bayplan.example/agent/connect",
+			"BAYPLAN_AGENT_JOIN_TOKEN":     secret,
+			"BAYPLAN_AGENT_ALLOW_INSECURE": tc.value,
+		}, nil)
+		code := run(d)
+		if tc.want {
+			if code != 0 {
+				t.Fatalf("switch %q: exit %d, stderr: %s", tc.value, code, h.stderr.String())
+			}
+			if !h.gotConn.AllowInsecure {
+				t.Errorf("switch %q: connect got AllowInsecure false, want true", tc.value)
+			}
+			if !strings.Contains(h.stderr.String(), "allow_insecure=true") {
+				t.Errorf("switch %q: the start line does not carry allow_insecure=true: %s", tc.value, h.stderr.String())
+			}
+			continue
+		}
+		// Without the switch the same address never reaches the connection.
+		if code != 2 || h.gotConn.AllowInsecure || slices.Contains(h.events, "connect") {
+			t.Errorf("switch %q: exit %d, events %v; want exit 2 and no connect", tc.value, code, h.events)
+		}
+	}
+	// With an allowed (wss) URL and no switch, AllowInsecure is false and the line says so.
+	h := &harness{}
+	d := h.deps(map[string]string{"BAYPLAN_AGENT_URL": "wss://bayplan.example/agent/connect", "BAYPLAN_AGENT_JOIN_TOKEN": secret}, nil)
+	if code := run(d); code != 0 || h.gotConn.AllowInsecure || !strings.Contains(h.stderr.String(), "allow_insecure=false") {
+		t.Errorf("wss without the switch: exit %d, AllowInsecure %v, stderr %s", code, h.gotConn.AllowInsecure, h.stderr.String())
+	}
+}
+
 func TestSelfMaintenanceReachesTheConnectionAndHonoursTheHostSwitch(t *testing.T) {
 	for _, tc := range []struct {
 		flag     string

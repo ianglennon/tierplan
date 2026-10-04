@@ -626,3 +626,38 @@ func TestStartURLsCapsTheListAtMaxURLs(t *testing.T) {
 		t.Fatalf("StartURLs kept %d addresses (changed %v) starting with %s, want %d starting with the new one", len(got), changed, got[0].URL, MaxURLs)
 	}
 }
+
+func TestDialableURLAllowsPlainWSOnlyToLoopbackOrWithTheSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		url              string
+		without, withSwi bool
+	}{
+		{"wss://bayplan.example/agent/connect", true, true},
+		{"ws://bayplan.example/agent/connect", false, true},
+		{"ws://127.0.0.1:7480/agent/connect", true, true},
+		{"ws://127.1.2.3/agent/connect", true, true},
+		{"ws://[::1]:7480/agent/connect", true, true},
+		{"ws://[::ffff:127.0.0.1]/agent/connect", true, true},
+		{"ws://localhost:7480/agent/connect", true, true},
+		{"ws://LOCALHOST/agent/connect", true, true},
+		{"ws://192.168.1.10/agent/connect", false, true},
+		{"ws://[2001:db8::1]/agent/connect", false, true},
+		{"ws://[::ffff:192.168.1.10]/agent/connect", false, true},
+		{"ws://localhost.example/agent/connect", false, true},
+		{"ws://127.0.0.1.example/agent/connect", false, true},
+		// ValidURL refuses these, with or without the switch.
+		{"wss://user:pw@bayplan.example/agent/connect", false, false},
+		{"ws://user@127.0.0.1/agent/connect", false, false},
+		{"wss://bayplan.example/agent/connect?x=1", false, false},
+		{"wss://bayplan.example/agent/connect#f", false, false},
+		{"https://bayplan.example/agent/connect", false, false},
+		{"", false, false},
+	} {
+		if got := DialableURL(tc.url, false); got != tc.without {
+			t.Errorf("DialableURL(%q, false) = %v, want %v", tc.url, got, tc.without)
+		}
+		if got := DialableURL(tc.url, true); got != tc.withSwi {
+			t.Errorf("DialableURL(%q, true) = %v, want %v", tc.url, got, tc.withSwi)
+		}
+	}
+}

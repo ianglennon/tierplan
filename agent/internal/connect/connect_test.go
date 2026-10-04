@@ -59,6 +59,47 @@ func TestRunRefusesAnAddressThatIsNotAWebSocketURL(t *testing.T) {
 	}
 }
 
+// recordingTransport counts every request it is given and answers none of them.
+type recordingTransport struct {
+	mu   sync.Mutex
+	reqs []string
+}
+
+func (rt *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	rt.mu.Lock()
+	rt.reqs = append(rt.reqs, r.URL.String())
+	rt.mu.Unlock()
+	return nil, errors.New("the test transport dials nothing")
+}
+
+func (rt *recordingTransport) seen() []string {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return append([]string(nil), rt.reqs...)
+}
+
+// A plain ws:// address for a host that is not loopback sends the join token to a
+// peer the agent never authenticated, so Run refuses it at once and never dials
+// unless the agent itself carries BAYPLAN_AGENT_ALLOW_INSECURE (T-02-31).
+func TestRunRefusesPlainWSToAnotherHostWithoutTheSwitchAndNeverDials(t *testing.T) {
+	rt := &recordingTransport{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := Run(ctx, Config{
+		URL: "ws://bayplan.example/agent/connect", JoinToken: "bpjt_tok",
+		HTTPClient: &http.Client{Transport: rt}, SocketPath: filepath.Join(t.TempDir(), "none.sock"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_ALLOW_INSECURE") || !strings.Contains(err.Error(), "BAYPLAN_AGENT_URL") {
+		t.Fatalf("Run = %v, want an error naming BAYPLAN_AGENT_URL and BAYPLAN_AGENT_ALLOW_INSECURE", err)
+	}
+	if strings.Contains(err.Error(), "bpjt_tok") {
+		t.Errorf("the error carries the token: %v", err)
+	}
+	if got := rt.seen(); len(got) != 0 {
+		t.Errorf("the agent made requests %v, want none", got)
+	}
+}
+
 func TestARefusalNamesItsCode(t *testing.T) {
 	err := error(&RefusedError{Code: "auth_rejected", Detail: "the join token was not accepted"})
 	var re *RefusedError

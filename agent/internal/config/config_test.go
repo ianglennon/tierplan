@@ -331,6 +331,7 @@ func TestLoadNeverPutsTheTokenInAnErrorOrALogLine(t *testing.T) {
 		{"BAYPLAN_AGENT_URL": "https://wrong", "BAYPLAN_AGENT_JOIN_TOKEN": secret},
 		{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": secret, "BAYPLAN_AGENT_DOCKER_GID": "nope"},
 		{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": secret},
+		{"BAYPLAN_AGENT_URL": "ws://bayplan.example/agent/connect", "BAYPLAN_AGENT_JOIN_TOKEN": secret},
 	}
 	for _, c := range cases {
 		_, err := Load(env(c), files(nil))
@@ -492,5 +493,78 @@ func TestLoadHelperReadsTheSocketTheStateDirectoryAndTheGroup(t *testing.T) {
 func TestLoadHelperRefusesAGroupThatIsNotANumber(t *testing.T) {
 	if _, err := LoadHelper(env(map[string]string{"BAYPLAN_AGENT_DOCKER_GID": "docker"})); err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_DOCKER_GID") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestLoadRefusesPlainWSToAnotherHostWithoutTheSwitch(t *testing.T) {
+	for _, u := range []string{"ws://bayplan.example/agent/connect", "ws://192.168.1.10:7480/agent/connect", "ws://[2001:db8::1]/agent/connect"} {
+		_, err := Load(env(map[string]string{"BAYPLAN_AGENT_URL": u, "BAYPLAN_AGENT_JOIN_TOKEN": "tok"}), files(nil))
+		if err == nil {
+			t.Errorf("URL %q without the switch: want an error", u)
+			continue
+		}
+		for _, want := range []string{"BAYPLAN_AGENT_URL", "BAYPLAN_AGENT_ALLOW_INSECURE", "wss://", "development"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("URL %q: the error %q does not mention %s", u, err, want)
+			}
+		}
+		cfg, err := Load(env(map[string]string{"BAYPLAN_AGENT_URL": u, "BAYPLAN_AGENT_JOIN_TOKEN": "tok", "BAYPLAN_AGENT_ALLOW_INSECURE": "true"}), files(nil))
+		if err != nil || !cfg.AllowInsecure {
+			t.Errorf("URL %q with the switch: cfg.AllowInsecure %v, err %v; want it loaded", u, cfg.AllowInsecure, err)
+		}
+	}
+	for _, u := range []string{"ws://127.0.0.1:7480/agent/connect", "ws://localhost/agent/connect", goodURL} {
+		cfg, err := Load(env(map[string]string{"BAYPLAN_AGENT_URL": u, "BAYPLAN_AGENT_JOIN_TOKEN": "tok"}), files(nil))
+		if err != nil || cfg.AllowInsecure {
+			t.Errorf("URL %q without the switch: cfg.AllowInsecure %v, err %v; want it loaded with the switch off", u, cfg.AllowInsecure, err)
+		}
+	}
+}
+
+func TestLoadReadsTheAllowInsecureSwitchStrictly(t *testing.T) {
+	base := map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "tok"}
+	cfg, err := Load(env(base), files(nil))
+	if err != nil || cfg.AllowInsecure {
+		t.Fatalf("default: AllowInsecure %v, err %v; want false", cfg.AllowInsecure, err)
+	}
+	for v, want := range map[string]bool{"true": true, "TRUE": true, "1": true, "false": false, "0": false} {
+		m := map[string]string{"BAYPLAN_AGENT_ALLOW_INSECURE": v}
+		for k, x := range base {
+			m[k] = x
+		}
+		cfg, err := Load(env(m), files(nil))
+		if err != nil || cfg.AllowInsecure != want {
+			t.Errorf("value %q: AllowInsecure %v, err %v; want %v", v, cfg.AllowInsecure, err, want)
+		}
+	}
+	m := map[string]string{"BAYPLAN_AGENT_ALLOW_INSECURE": "yes please"}
+	for k, x := range base {
+		m[k] = x
+	}
+	_, err = Load(env(m), files(nil))
+	if err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_ALLOW_INSECURE") {
+		t.Fatalf("a switch that is not a boolean: err = %v, want one naming the variable", err)
+	}
+}
+
+func TestLoadRefusesAURLWithUserInfoAQueryOrAFragmentWithoutRepeatingIt(t *testing.T) {
+	for _, u := range []string{
+		"wss://user:hunter2@bayplan.example/agent/connect",
+		"wss://hunter2@bayplan.example/agent/connect",
+		"wss://bayplan.example/agent/connect?token=hunter2",
+		"wss://bayplan.example/agent/connect#hunter2",
+		"ws://user:hunter2@127.0.0.1/agent/connect",
+	} {
+		_, err := Load(env(map[string]string{"BAYPLAN_AGENT_URL": u, "BAYPLAN_AGENT_JOIN_TOKEN": "tok", "BAYPLAN_AGENT_ALLOW_INSECURE": "true"}), files(nil))
+		if err == nil {
+			t.Errorf("URL %q: want an error", u)
+			continue
+		}
+		if !strings.Contains(err.Error(), "BAYPLAN_AGENT_URL") {
+			t.Errorf("URL %q: the error %q does not name BAYPLAN_AGENT_URL", u, err)
+		}
+		if strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "user:") {
+			t.Errorf("URL %q: the error repeats part of the value: %v", u, err)
+		}
 	}
 }
