@@ -21,6 +21,17 @@ func (q *Queries) CountEnvironmentsOfKind(ctx context.Context, kind string) (int
 	return count, err
 }
 
+const countFoldedEnvironments = `-- name: CountFoldedEnvironments :one
+SELECT COUNT(*) FROM environments WHERE kind = 'agent' AND local_node_id IS NOT NULL
+`
+
+func (q *Queries) CountFoldedEnvironments(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countFoldedEnvironments)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteEnvironment = `-- name: DeleteEnvironment :execrows
 DELETE FROM environments WHERE id = ?
 `

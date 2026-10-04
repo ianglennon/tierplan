@@ -325,3 +325,19 @@ func TestTheSocketTargetOfAFoldedEnvironmentStartsWithTheServerAndStopsWhenTheEn
 		t.Errorf("the socket target of a removed environment is %v, want stopped", st.State)
 	}
 }
+
+func TestAFoldedHostCountsAsManagedButCanStillBeAddedAgainAsItsOwnEnvironment(t *testing.T) {
+	f := newFoldRig(t, nil)
+	ctx := context.Background()
+	if has, err := f.svc.HasLocal(ctx); err != nil || !has {
+		t.Fatalf("HasLocal before the fold = %v, %v, want true: the local host is an environment", has, err)
+	}
+	f.fold(t)
+	if has, err := f.svc.HasLocal(ctx); err != nil || !has {
+		t.Fatalf("HasLocal after the fold = %v, %v, want true: the swarm environment manages the host, so nothing offers to add it", has, err)
+	}
+	// Undoing a fold is adding the local host again (the Phase 1 opt-in).
+	if _, err := f.svc.AddLocal(ctx, admin, "", false, "", ""); err != nil {
+		t.Fatalf("AddLocal after a fold: %v, want the local host to be addable again", err)
+	}
+}

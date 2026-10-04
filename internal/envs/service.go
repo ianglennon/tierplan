@@ -528,9 +528,23 @@ func (s *Service) Disconnected(sess *tunnel.Session, code string) {
 
 var _ tunnel.Observer = (*Service)(nil)
 
-// HasLocal reports whether the local host is already an environment, for the
-// "managed" flag of GET /api/local-host.
+// HasLocal reports whether the local host is already managed, for the "managed" flag of
+// GET /api/local-host: it is its own environment, or it was folded into a swarm
+// environment (D-48), which reaches it through its socket.
 func (s *Service) HasLocal(ctx context.Context) (bool, error) {
+	if has, err := s.hasLocalEnvironment(ctx); err != nil || has {
+		return has, err
+	}
+	n, err := s.st.RQ.CountFoldedEnvironments(ctx)
+	if err != nil {
+		return false, fmt.Errorf("count folded environments: %w", err)
+	}
+	return n > 0, nil
+}
+
+// hasLocalEnvironment reports whether the local host is an environment of its own.
+// Adding it again after a fold is allowed, and undoes the fold's effect on the list.
+func (s *Service) hasLocalEnvironment(ctx context.Context) (bool, error) {
 	n, err := s.st.RQ.CountEnvironmentsOfKind(ctx, KindLocal)
 	if err != nil {
 		return false, fmt.Errorf("count local environments: %w", err)
@@ -565,7 +579,7 @@ func (s *Service) AddLocal(ctx context.Context, actor audit.Actor, name string, 
 	if name != "" && !validName(name) {
 		return Environment{}, ErrInvalidName
 	}
-	if exists, err := s.HasLocal(ctx); err != nil {
+	if exists, err := s.hasLocalEnvironment(ctx); err != nil {
 		return Environment{}, err
 	} else if exists {
 		return Environment{}, ErrLocalExists
