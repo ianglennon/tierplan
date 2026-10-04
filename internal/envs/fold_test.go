@@ -249,7 +249,7 @@ func TestAfterTheFoldTheSocketIsATargetACoveredNodeAndAManagerThatServesClusterR
 	}
 }
 
-func TestANodeReachedThroughTheSocketAndThroughAnAgentCountsOnceWithTheSocketWinning(t *testing.T) {
+func TestAFoldedNodeReachedThroughTheSocketAndThroughAnAgentCountsOnceWithTheSocketWinning(t *testing.T) {
 	f := newFoldRig(t, nil)
 	f.fold(t)
 	ctx := context.Background()
