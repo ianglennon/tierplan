@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -250,7 +251,7 @@ func TestMergePinsIgnoresWhatIsNotAPinAndCapsTheList(t *testing.T) {
 func TestActivePinsSkipsTheExpired(t *testing.T) {
 	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 	es := []PinEntry{{Pin: pin("A")}, {Pin: pin("B"), ExpiresAt: now.Add(time.Hour)}, {Pin: pin("C"), ExpiresAt: now}}
-	if got := ActivePins(es, now); !slicesEqual(got, []string{pin("A"), pin("B")}) {
+	if got := ActivePins(es, now); !slices.Equal(got, []string{pin("A"), pin("B")}) {
 		t.Fatalf("ActivePins = %v, want A and B", got)
 	}
 }
@@ -292,18 +293,6 @@ func slicesContain(s []string, v string) bool {
 		}
 	}
 	return false
-}
-
-func slicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func TestDiscardRemovesTheIdentityAndOnlyTheIdentity(t *testing.T) {
@@ -406,7 +395,7 @@ func urlsOf(es []URLEntry) []string {
 func TestMergeURLsStartsFromWhatTheServerSaysAndKeepsItsOrder(t *testing.T) {
 	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 	got := MergeURLs(nil, []string{urlB, urlC}, now)
-	if !slicesEqual(urlsOf(got), []string{urlB, urlC}) {
+	if !slices.Equal(urlsOf(got), []string{urlB, urlC}) {
 		t.Fatalf("URLs = %v, want B then C in the server's order", urlsOf(got))
 	}
 	for _, e := range got {
@@ -421,7 +410,7 @@ func TestMergeURLsPutsTheNewURLFirstAndKeepsThePreviousOneAsAFallbackFor30Days(t
 	current := []URLEntry{{URL: urlA}}
 
 	got := MergeURLs(current, []string{urlB}, now)
-	if !slicesEqual(urlsOf(got), []string{urlB, urlA}) {
+	if !slices.Equal(urlsOf(got), []string{urlB, urlA}) {
 		t.Fatalf("URLs = %v, want the new B first and the previous A after it", urlsOf(got))
 	}
 	if !got[0].ExpiresAt.IsZero() {
@@ -451,10 +440,10 @@ func TestMergeURLsDropsThePreviousURLOnceItsThirtyDaysAreUp(t *testing.T) {
 	if got := MergeURLs(got, []string{urlB}, now.Add(URLOverlap)); slicesContain(urlsOf(got), urlA) {
 		t.Errorf("A kept at its expiry: %+v", got)
 	}
-	if got := ActiveURLs(got, now.Add(URLOverlap)); !slicesEqual(got, []string{urlB}) {
+	if got := ActiveURLs(got, now.Add(URLOverlap)); !slices.Equal(got, []string{urlB}) {
 		t.Errorf("ActiveURLs after the expiry = %v, want only B", got)
 	}
-	if got := ActiveURLs(got, now); !slicesEqual(got, []string{urlB, urlA}) {
+	if got := ActiveURLs(got, now); !slices.Equal(got, []string{urlB, urlA}) {
 		t.Errorf("ActiveURLs inside the overlap = %v, want B then A", got)
 	}
 }
@@ -462,7 +451,7 @@ func TestMergeURLsDropsThePreviousURLOnceItsThirtyDaysAreUp(t *testing.T) {
 func TestActiveURLsSkipsTheExpiredAndKeepsTheOrder(t *testing.T) {
 	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 	es := []URLEntry{{URL: urlB}, {URL: urlA, ExpiresAt: now.Add(time.Hour)}, {URL: urlC, ExpiresAt: now}}
-	if got := ActiveURLs(es, now); !slicesEqual(got, []string{urlB, urlA}) {
+	if got := ActiveURLs(es, now); !slices.Equal(got, []string{urlB, urlA}) {
 		t.Fatalf("ActiveURLs = %v, want B then A", got)
 	}
 }
@@ -485,7 +474,7 @@ func TestMergeURLsIgnoresWhatIsNotAnAddressTheAgentWouldDialAndCapsTheList(t *te
 		"wss://bayplan.example.com/" + strings.Repeat("a", MaxURLLen),
 	}
 	got := MergeURLs(nil, append(bad, urlA, urlA), now)
-	if !slicesEqual(urlsOf(got), []string{urlA}) {
+	if !slices.Equal(urlsOf(got), []string{urlA}) {
 		t.Fatalf("URLs = %v, want only the one well-formed address, once", urlsOf(got))
 	}
 	var many []string
@@ -545,7 +534,7 @@ func TestLoadURLsDropsEntriesThatAreNotAddresses(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := LoadURLs(dir)
-	if err != nil || !slicesEqual(urlsOf(got), []string{urlB}) {
+	if err != nil || !slices.Equal(urlsOf(got), []string{urlB}) {
 		t.Fatalf("LoadURLs = %+v, %v; want only B", got, err)
 	}
 }

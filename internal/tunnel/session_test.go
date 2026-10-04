@@ -540,7 +540,7 @@ func withEndpoint(t *testing.T, cur *atomic.Value) *tunneltest.Server {
 	t.Helper()
 	return tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub {
 		return h.WithTiming(10*time.Second, 1000*day).
-			WithEndpoint(func() string { return cur.Load().(string) }).
+			WithEndpoint(func() string { s, _ := cur.Load().(string); return s }).
 			WithPins(func() []string { return []string{testPin} })
 	}})
 }
