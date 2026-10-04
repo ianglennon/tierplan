@@ -166,8 +166,8 @@ func TestCheckEnrolledWithATokenReadsNothing(t *testing.T) {
 	}{
 		"variable": {map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN": "bpjt_a_b"}, nil}, //nolint:gosec // a test fixture, not a credential
 		"file": {
-			map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t"},
-			map[string]string{"/run/secrets/t": "bpjt_a_b\n"}, //nolint:gosec // a test fixture, not a credential
+			map[string]string{"BAYPLAN_AGENT_URL": goodURL, "BAYPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t"}, //nolint:gosec // a test fixture, not a credential
+			map[string]string{"/run/secrets/t": "bpjt_a_b\n"},                                                  //nolint:gosec // a test fixture, not a credential
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
