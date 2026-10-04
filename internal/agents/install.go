@@ -194,7 +194,10 @@ func CleanupCommands(generation int) (swarm, standalone string) {
 // ManualUpdateCommand is the command an operator runs to bring an agent of the
 // given environment type ("swarm" or "standalone") to image. It is what a
 // version_incompatible refusal shows (D-25). A swarm updates its service in
-// place. A standalone host recreates the container with the same flags; its state
+// place and keeps its environment, so it needs no switch. A standalone host
+// recreates the container with the same flags, including the agent's
+// BAYPLAN_AGENT_ALLOW_INSECURE when the install had it (a development server and a
+// plain address, T-02-31), so a recreated dev agent keeps dialing; its state
 // volume already holds the agent's identity, so no join token goes in. An
 // unknown type, or a value that could escape its quotes, answers "".
 func ManualUpdateCommand(envType, image string, p InstallParams) string {
@@ -214,6 +217,7 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 			" -v " + dockerSock + ":" + dockerSock + " -v " + VolumeName + ":" + stateDir +
 			" --label " + labelPair +
 			envFlag("-e", "BAYPLAN_AGENT_URL", p.Endpoint) +
+			insecureFlag("-e", p) +
 			optionalEnvFlag("-e", "BAYPLAN_AGENT_PIN", p.Pin) +
 			" " + image
 	}
