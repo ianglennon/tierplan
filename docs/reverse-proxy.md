@@ -58,7 +58,7 @@ The configurations below have a site for each: a dedicated host name, `bayplan.e
 
 Agents dial the public URL with `/agent/connect` added, over `wss://`, so the proxy must pass WebSocket upgrades on that path. An agent that is refused with a message about the transport is reaching Bayplan over plain HTTP without a trusted proxy saying `https`: check `BAYPLAN_TRUSTED_PROXIES` and the `X-Forwarded-Proto` line.
 
-When the hosts that run agents reach Bayplan at a different address than people do (for example an internal name or a LAN address), set the agent URL with `BAYPLAN_AGENT_URL`, such as `https://bayplan.internal:7480`. The install commands then carry that address, and Bayplan accepts agents that dial it. Set it before you install agents: changing it to another host later leaves agents that are already enrolled dialling the old address, and they cannot connect until they are reinstalled.
+When the hosts that run agents reach Bayplan at a different address than people do (for example an internal name or a LAN address), set the agent URL with `BAYPLAN_AGENT_URL`, such as `https://bayplan.internal:7480`. The install commands then carry that address, and Bayplan accepts agents that dial it. You can change it later in Settings, General. Bayplan tells every connected agent the new address over its tunnel straight away, and each agent dials the new address first and keeps the old one as a fallback for 30 days. The settings page warns you how many agents are offline at that moment: they cannot be told, and Bayplan accepts agents on one address at a time, so an agent that was offline and still dials a different host than the new address cannot connect until it is reinstalled with the new address.
 
 ## Server-Sent Events, WebSockets and timeouts
 
