@@ -177,8 +177,22 @@ func TestInstallCommandAgentImageTagFollowsTheServer(t *testing.T) {
 	}
 }
 
-func TestInstallCommandsAreOneLinersWithALeadingSpaceAndNoInboundPort(t *testing.T) {
+// devParams is goldenParams for a development server: a plain endpoint and the
+// server's switch, so the install texts carry the agent's switch too (T-02-31).
+func devParams() agents.InstallParams {
 	p := goldenParams()
+	p.Endpoint, p.AllowInsecure = "ws://10.0.0.5:7480/agent/connect", true
+	return p
+}
+
+func TestInstallCommandsAreOneLinersWithALeadingSpaceAndNoInboundPort(t *testing.T) {
+	for label, p := range map[string]agents.InstallParams{"production": goldenParams(), "development": devParams()} {
+		t.Run(label, func(t *testing.T) { checkOneLiners(t, p) })
+	}
+}
+
+func checkOneLiners(t *testing.T, p agents.InstallParams) {
+	t.Helper()
 	p.Generation = 2
 	in := mustBuild(t, p)
 	oneLiners := map[string]string{
@@ -215,7 +229,13 @@ func TestInstallCommandsAreOneLinersWithALeadingSpaceAndNoInboundPort(t *testing
 var singleQuoted = regexp.MustCompile(`'[^']*'`)
 
 func TestInstallCommandKeepsTheTokenInsideSingleQuotesAndOutOfEveryURL(t *testing.T) {
-	p := goldenParams()
+	for label, p := range map[string]agents.InstallParams{"production": goldenParams(), "development": devParams()} {
+		t.Run(label, func(t *testing.T) { checkTokenQuoting(t, p) })
+	}
+}
+
+func checkTokenQuoting(t *testing.T, p agents.InstallParams) {
+	t.Helper()
 	p.Generation = 2
 	in := mustBuild(t, p)
 
@@ -440,5 +460,96 @@ func TestCleanupCommandsAreTheOnesTheInstallGivesAndNameTheGivenSecretGeneration
 	}
 	if other, _ := agents.CleanupCommands(4); !strings.Contains(other, agents.SecretName(4)) {
 		t.Fatalf("generation 4: %q", other)
+	}
+}
+
+// TestInstallCommandCarriesTheAgentSwitchOnlyForAPlainEndpointWithTheServerSwitch
+// pins T-02-31: the agent's BAYPLAN_AGENT_ALLOW_INSECURE is in an install only when
+// the server's own switch is on and the endpoint is ws://. Every production text
+// (wss://, or no server switch) is free of it, the manual update included.
+func TestInstallCommandCarriesTheAgentSwitchOnlyForAPlainEndpointWithTheServerSwitch(t *testing.T) {
+	const plain = "ws://10.0.0.5:7480/agent/connect"
+	const name = "BAYPLAN_AGENT_ALLOW_INSECURE"
+	cases := []struct {
+		label    string
+		allow    bool
+		endpoint string
+		want     bool
+	}{
+		{"production: wss, no server switch", false, goldenEndpoint, false},
+		{"wss whatever the server switch", true, goldenEndpoint, false},
+		{"plain endpoint without the server switch", false, plain, false},
+		{"development: plain endpoint with the server switch", true, plain, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			p := goldenParams()
+			p.Endpoint, p.AllowInsecure, p.Generation = tc.endpoint, tc.allow, 2
+			in := mustBuild(t, p)
+			// The four texts carry it exactly once, right after the address; the rotate
+			// command and the cleanup commands never do.
+			for label, text := range map[string]string{
+				"swarm command": in.SwarmCommand, "standalone command": in.StandaloneCommand,
+				"stack file": in.SwarmStackFile, "compose file": in.StandaloneComposeFile,
+			} {
+				got := strings.Count(text, name)
+				if tc.want && got != 1 || !tc.want && got != 0 {
+					t.Errorf("%s holds %s %d times, want %v:\n%s", label, name, got, tc.want, text)
+				}
+			}
+			for label, text := range map[string]string{
+				"rotate command": in.SwarmRotateCommand, "swarm cleanup": in.SwarmCleanup, "standalone cleanup": in.StandaloneCleanup,
+			} {
+				if strings.Contains(text, name) {
+					t.Errorf("%s carries %s:\n%s", label, name, text)
+				}
+			}
+			if tc.want {
+				for label, want := range map[string]string{
+					"swarm command":      "--env 'BAYPLAN_AGENT_URL=" + plain + "' --env '" + name + "=true'",
+					"standalone command": "-e 'BAYPLAN_AGENT_URL=" + plain + "' -e '" + name + "=true'",
+					"stack file":         "BAYPLAN_AGENT_URL: \"" + plain + "\"\n      " + name + ": \"true\"\n",
+					"compose file":       "BAYPLAN_AGENT_URL: \"" + plain + "\"\n      " + name + ": \"true\"\n",
+				} {
+					text := map[string]string{"swarm command": in.SwarmCommand, "standalone command": in.StandaloneCommand,
+						"stack file": in.SwarmStackFile, "compose file": in.StandaloneComposeFile}[label]
+					if !strings.Contains(text, want) {
+						t.Errorf("%s lacks the switch right after the address, %q:\n%s", label, want, text)
+					}
+				}
+			}
+
+			// The manual update and its hint follow the same rule; the swarm one never
+			// carries it, because a service update keeps the service's environment.
+			image := agents.AgentImage(p.ServerVersion)
+			standalone := agents.ManualUpdateCommand("standalone", image, p)
+			if got := strings.Contains(standalone, "-e '"+name+"=true'"); got != tc.want {
+				t.Errorf("standalone manual update carries the switch = %v, want %v:\n%s", got, tc.want, standalone)
+			}
+			if tc.want && !strings.Contains(standalone, "-e 'BAYPLAN_AGENT_URL="+plain+"' -e '"+name+"=true'") {
+				t.Errorf("standalone manual update lacks the switch right after the address:\n%s", standalone)
+			}
+			if swarm := agents.ManualUpdateCommand("swarm", image, p); strings.Contains(swarm, name) {
+				t.Errorf("swarm manual update carries the switch:\n%s", swarm)
+			}
+			hint := agents.UpdateHint(true, "standalone", p)
+			if got := strings.Contains(hint, "-e '"+name+"=true'"); got != tc.want {
+				t.Errorf("update hint carries the switch = %v, want %v:\n%s", got, tc.want, hint)
+			}
+			if hint := agents.UpdateHint(true, "swarm", p); strings.Contains(hint, name) {
+				t.Errorf("swarm update hint carries the switch:\n%s", hint)
+			}
+
+			if strings.Contains(standalone, p.Token) || strings.Contains(hint, p.Token) {
+				t.Error("a manual update command carries the join token")
+			}
+		})
+	}
+
+	// The golden endpoint's install is the production shape: it never changes.
+	for label, text := range allInstallText(mustBuild(t, goldenParams())) {
+		if strings.Contains(text, name) {
+			t.Errorf("golden %s carries %s", label, name)
+		}
 	}
 }

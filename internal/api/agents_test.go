@@ -30,8 +30,13 @@ type rotatedBody struct {
 		Generation int    `json:"generation"`
 		Swarm      struct {
 			Command       string `json:"command"`
+			StackFile     string `json:"stackFile"`
 			RotateCommand string `json:"rotateCommand"`
 		} `json:"swarm"`
+		Standalone struct {
+			Command     string `json:"command"`
+			ComposeFile string `json:"composeFile"`
+		} `json:"standalone"`
 	} `json:"install"`
 	EnvType   string `json:"envType"`
 	HasAgents bool   `json:"hasAgents"`
@@ -1061,5 +1066,67 @@ func TestTheNodeListSaysWhichAgentsAreBehindTheServerAndNeverARevokedOne(t *test
 	f.h = f.build(t)
 	if f.node(t, env.ID, a.id).UpdateAvailable {
 		t.Fatal("an agent is offered an update by a development server")
+	}
+}
+
+// The rotate answer and the node list's manual update command follow the same rule
+// as the first install: the agent's switch only for a plain ws:// address while the
+// server's switch is on (T-02-31).
+func TestRotateAndManualUpdateCarryTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t *testing.T) {
+	const name = "BAYPLAN_AGENT_ALLOW_INSECURE"
+	cases := []struct {
+		label string
+		allow bool
+		url   string
+		want  bool
+	}{
+		{"switch off, http agent URL", false, "http://10.0.0.5:7480", false},
+		{"switch on, http agent URL", true, "http://10.0.0.5:7480", true},
+		{"switch on, https agent URL", true, "https://bayplan.example.com", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			f := newAgentFix(t)
+			f.agentAllowInsecure = tc.allow
+			f.h = f.build(t)
+			f.inst.ApplyAgentURL(tc.url)
+
+			// The rotate answer: a new install for the same environment.
+			id, _ := f.agentEnv(t)
+			got, rec := f.rotate(t, id)
+			if rec.code != http.StatusOK || got.Install == nil {
+				t.Fatalf("rotate: %d %s", rec.code, rec.body)
+			}
+			for label, text := range map[string]string{
+				"swarm command": got.Install.Swarm.Command, "stack file": got.Install.Swarm.StackFile,
+				"standalone command": got.Install.Standalone.Command, "compose file": got.Install.Standalone.ComposeFile,
+				"rotate command": got.Install.Swarm.RotateCommand,
+			} {
+				want := tc.want && label != "rotate command" // a secret swap sets no environment
+				if has := strings.Contains(text, name); has != want {
+					t.Errorf("rotated %s carries the agent switch = %v, want %v:\n%s", label, has, want, text)
+				}
+			}
+
+			// The node list: a standalone agent behind the server on a host that refuses
+			// self-update is given the recreate command, a swarm node the service update.
+			env := f.srv.NewEnvironment(t, "Dev")
+			plain := f.connect(t, env, dockertest.FakeConfig{Hostname: "plain"}, &wire.Facts{
+				EngineID: "ENG:plain", Hostname: "plain", EngineReachable: true, Policy: wire.PolicyFacts{SelfUpdate: false}})
+			f.srv.Events.WaitLen(t, 1)
+			cmd := f.node(t, env.ID, plain.id).ManualUpdateCommand
+			if !strings.Contains(cmd, "docker run") {
+				t.Fatalf("a standalone agent's manual update is not a docker run: %q", cmd)
+			}
+			if has := strings.Contains(cmd, "-e '"+name+"=true'"); has != tc.want {
+				t.Errorf("the standalone manual update carries the agent switch = %v, want %v:\n%s", has, tc.want, cmd)
+			}
+			env2 := f.srv.NewEnvironment(t, "DevSwarm")
+			node := f.connect(t, env2, dockertest.FakeConfig{Hostname: "node", SwarmState: "active"}, swarmFacts("node", true, false))
+			f.srv.Events.WaitLen(t, 2)
+			if cmd := f.node(t, env2.ID, node.id).ManualUpdateCommand; !strings.Contains(cmd, "docker service update") || strings.Contains(cmd, name) {
+				t.Errorf("the swarm manual update = %q, want a service update without the agent switch", cmd)
+			}
+		})
 	}
 }

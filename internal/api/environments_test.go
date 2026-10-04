@@ -1227,3 +1227,40 @@ func TestOverviewOfALocalSwarmManagerDoesNotGuessItsNodeCount(t *testing.T) {
 		t.Fatalf("nodes = %+v, want null: the cluster's node count is not read here", o.Nodes)
 	}
 }
+
+// The agent's own BAYPLAN_AGENT_ALLOW_INSECURE is in the install texts only while
+// the server's switch is on and the address is plain ws:// (T-02-31). A production
+// install, wss:// or a server without the switch, never carries it.
+func TestEnvironmentAddAgentCarriesTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t *testing.T) {
+	const name = "BAYPLAN_AGENT_ALLOW_INSECURE"
+	cases := []struct {
+		label string
+		allow bool
+		url   string
+		want  bool
+	}{
+		{"switch off, http agent URL", false, "http://10.0.0.5:7480", false},
+		{"switch on, http agent URL", true, "http://10.0.0.5:7480", true},
+		{"switch on, https agent URL", true, "https://bayplan.example.com", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			f := newEnvFix(t, dockertest.FakeConfig{})
+			f.agentAllowInsecure = tc.allow
+			f.h = f.build(t)
+			f.inst.ApplyAgentURL(tc.url)
+			got, rec := f.addAgent(t)
+			if rec.code != http.StatusCreated || got.Install == nil {
+				t.Fatalf("status = %d: %s", rec.code, rec.body)
+			}
+			for label, text := range map[string]string{
+				"swarm command": got.Install.Swarm.Command, "stack file": got.Install.Swarm.StackFile,
+				"standalone command": got.Install.Standalone.Command, "compose file": got.Install.Standalone.ComposeFile,
+			} {
+				if has := strings.Contains(text, name); has != tc.want {
+					t.Errorf("%s carries the agent switch = %v, want %v:\n%s", label, has, tc.want, text)
+				}
+			}
+		})
+	}
+}
