@@ -9,7 +9,12 @@ import { NoPermission } from "@/components/full-page-state";
 import { RelativeTime } from "@/components/relative-time";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
-import { nodeSearchSchema, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
+import {
+  nodeRowKey,
+  nodeSearchSchema,
+  useEnvIsSwarm,
+  useNodeColumn,
+} from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -63,7 +68,7 @@ function Volumes() {
           : undefined
       }
       banner={swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : undefined}
-      getRowKey={(v) => v.name}
+      getRowKey={(v) => nodeRowKey(v.node, v.name)}
     />
   );
 }
