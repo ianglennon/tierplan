@@ -304,6 +304,7 @@ type agentItem struct {
 		Reason string `json:"reason"`
 	} `json:"updateState"`
 	ManualUpdateCommand string `json:"manualUpdateCommand"`
+	UpdateAvailable     bool   `json:"updateAvailable"`
 	RevokedAt           string `json:"revokedAt"`
 	RevokeReason        string `json:"revokeReason"`
 	LastDenial          *struct {
@@ -1028,5 +1029,37 @@ func TestTheNodeListGivesTheManualUpdateCommandWhenTheHostRefusesSelfUpdate(t *t
 	}
 	if n := f.node(t, env.ID, letting.id); n.UpdateState.State != "idle" {
 		t.Errorf("update state = %+v, want idle", n.UpdateState)
+	}
+}
+
+func TestTheNodeListSaysWhichAgentsAreBehindTheServerAndNeverARevokedOne(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Production")
+	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active"}, swarmFacts("alpha", true, true))
+	b := f.connect(t, env, dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active"}, swarmFacts("bravo", false, true))
+	f.srv.Events.WaitLen(t, 2)
+
+	// The server is v0.2.1 and tunneltest's agents are v0.2.0.
+	if !f.node(t, env.ID, a.id).UpdateAvailable || !f.node(t, env.ID, b.id).UpdateAvailable {
+		t.Fatalf("agents of v0.2.0 under a v0.2.1 server must be updateAvailable: %+v", f.nodes(t, env.ID))
+	}
+	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/agents/"+b.id+"/revoke", ``); rec.code != http.StatusNoContent {
+		t.Fatalf("revoke: %d %s", rec.code, rec.body)
+	}
+	if f.node(t, env.ID, b.id).UpdateAvailable {
+		t.Fatal("a revoked agent is offered an update")
+	}
+
+	// The same agents under a server of their own version are not behind.
+	f.serverVersion = "v0.2.0"
+	f.h = f.build(t)
+	if f.node(t, env.ID, a.id).UpdateAvailable {
+		t.Fatal("an agent of the server's own version is offered an update")
+	}
+	// A development server cannot be compared with, so nothing is offered.
+	f.serverVersion = "dev"
+	f.h = f.build(t)
+	if f.node(t, env.ID, a.id).UpdateAvailable {
+		t.Fatal("an agent is offered an update by a development server")
 	}
 }

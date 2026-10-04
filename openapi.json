@@ -286,6 +286,10 @@
             ],
             "type": "string"
           },
+          "updateAvailable": {
+            "description": "True for an agent that is not revoked and runs an older release than this server, so an update would bring it up to date. Never true for a development build on either side, which cannot be compared",
+            "type": "boolean"
+          },
           "updateState": {
             "$ref": "#/components/schemas/UpdateStateBody",
             "description": "How the agent's update is going. Held in memory, so it is idle again after the server restarts"
@@ -305,7 +309,8 @@
           "clockOffsetSeconds",
           "readOnly",
           "selfUpdate",
-          "updateState"
+          "updateState",
+          "updateAvailable"
         ],
         "type": "object"
       },

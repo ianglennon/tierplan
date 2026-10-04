@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
 )
 
 // TestSwarmUninstallOnRemove removes an environment with uninstallAgents on a real

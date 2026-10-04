@@ -803,6 +803,8 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "revoked";
+            /** @description True for an agent that is not revoked and runs an older release than this server, so an update would bring it up to date. Never true for a development build on either side, which cannot be compared */
+            updateAvailable: boolean;
             /** @description How the agent's update is going. Held in memory, so it is idle again after the server restarts */
             updateState: components["schemas"]["UpdateStateBody"];
         };

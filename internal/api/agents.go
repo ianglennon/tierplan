@@ -188,6 +188,7 @@ type AgentBody struct {
 	SelfUpdate          bool            `json:"selfUpdate" doc:"The host owner allowed the agent to update itself. Reported only while it is connected"`
 	LastDenial          *DenialBody     `json:"lastDenial,omitempty" doc:"The last request the agent refused by its own policy, while it is connected. Absent if it has refused none"`
 	UpdateState         UpdateStateBody `json:"updateState" doc:"How the agent's update is going. Held in memory, so it is idle again after the server restarts"`
+	UpdateAvailable     bool            `json:"updateAvailable" doc:"True for an agent that is not revoked and runs an older release than this server, so an update would bring it up to date. Never true for a development build on either side, which cannot be compared"`
 	ManualUpdateCommand string          `json:"manualUpdateCommand,omitempty" doc:"The one-line command that updates this agent by hand, present when the agent is behind and Bayplan cannot update it: it is outside the server's version window, it is too old to update itself, or its host owner turned self-update off"`
 	RevokedAt           string          `json:"revokedAt,omitempty" format:"date-time" doc:"When the agent was revoked"`
 	RevokeReason        string          `json:"revokeReason,omitempty" doc:"The reason given when it was revoked"`
@@ -258,6 +259,7 @@ func agentBodies(nodes []agents.Node, live AgentSessions, envID, leaderID string
 		if b.UpdateState.State == "" {
 			b.UpdateState.State = agents.UpdateIdle
 		}
+		b.UpdateAvailable = n.Status == "active" && tunnel.Behind(u.serverVersion, b.AgentVersion)
 		if n.Status == "active" && agents.ManualUpdateNeeded(u.serverVersion, b.AgentVersion, b.Connected, b.SelfUpdate) {
 			b.ManualUpdateCommand = u.command(b.Role)
 		}
