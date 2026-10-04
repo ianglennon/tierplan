@@ -19,8 +19,16 @@ const MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
 // plain http: from an address that is not localhost, which is the usual way a
 // self-hosted Bayplan is opened. A hidden textarea is selected and copied with
 // the legacy command, then removed, and focus goes back to where it was.
-function execCopy(text: string): boolean {
+//
+// The textarea sits inside the copying component (host), not on document.body.
+// A modal Dialog or AlertDialog traps focus: a textarea outside it loses focus
+// and its selection to the trap before the copy runs, so nothing is copied
+// (G-02-1a). With no host it goes beside the focused element, which is inside
+// whatever trap holds that element.
+function execCopy(text: string, host?: Element | null): boolean {
   const previous = document.activeElement;
+  const beside =
+    previous instanceof HTMLElement && previous !== document.body ? previous.parentElement : null;
   const area = document.createElement("textarea");
   area.value = text;
   area.setAttribute("readonly", "");
@@ -30,21 +38,25 @@ function execCopy(text: string): boolean {
   area.style.top = "0";
   area.style.left = "0";
   area.style.opacity = "0";
-  document.body.append(area);
+  (host ?? beside ?? document.body).append(area);
   try {
+    area.focus({ preventScroll: true });
     area.select();
+    // iOS ignores select() on a readonly field.
+    area.setSelectionRange(0, text.length);
     return document.execCommand("copy");
   } catch {
     return false;
   } finally {
     area.remove();
-    if (previous instanceof HTMLElement) previous.focus();
+    if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
   }
 }
 
 // copyText tries the clipboard API, then the textarea fallback. It reports
-// whether either worked and never throws.
-export async function copyText(text: string): Promise<boolean> {
+// whether either worked and never throws. host is where the fallback's helper
+// textarea goes: pass the element holding the Copy button.
+export async function copyText(text: string, host?: Element | null): Promise<boolean> {
   if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);
@@ -53,7 +65,7 @@ export async function copyText(text: string): Promise<boolean> {
       // Denied by a permission policy or an insecure context: try the fallback.
     }
   }
-  return execCopy(text);
+  return execCopy(text, host);
 }
 
 interface CopyableCodeProps {
@@ -80,6 +92,7 @@ export function CopyableCode({ code, label, secret }: CopyableCodeProps) {
   // once it has been revealed, so what the person copies by hand is real.
   const [selectOnShow, setSelectOnShow] = useState(false);
   const codeRef = useRef<HTMLElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -102,7 +115,7 @@ export function CopyableCode({ code, label, secret }: CopyableCodeProps) {
 
   async function onCopy() {
     clearTimeout(timer.current);
-    if (await copyText(code)) {
+    if (await copyText(code, sectionRef.current)) {
       setCopied(true);
       timer.current = setTimeout(() => setCopied(false), COPIED_MS);
       return;
@@ -122,7 +135,7 @@ export function CopyableCode({ code, label, secret }: CopyableCodeProps) {
 
   const copiedText = t("env.copy.copied", { label });
   return (
-    <section aria-label={label}>
+    <section ref={sectionRef} aria-label={label}>
       {/* The button sits beside the block, not over it, so a long line scrolls
           under nothing. */}
       <div className="flex items-start gap-1 rounded-lg border bg-muted">
