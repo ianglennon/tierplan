@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/bayplan/agent/internal/connect"
 	"github.com/ianglennon/bayplan/agent/internal/privdrop"
+	"github.com/ianglennon/bayplan/agent/internal/selfmaint"
 	"github.com/ianglennon/bayplan/agent/internal/version"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
@@ -31,6 +33,9 @@ type harness struct {
 	dropErr error
 	dropOpt privdrop.Options
 	gotConn connect.Config
+	// recreateErr is what the stubbed helper returns; gotRecreate what it was given.
+	recreateErr error
+	gotRecreate selfmaint.RecreateOptions
 }
 
 func (h *harness) deps(env map[string]string, files map[string]string) deps {
@@ -55,6 +60,11 @@ func (h *harness) deps(env map[string]string, files map[string]string) deps {
 			h.events = append(h.events, "connect")
 			h.gotConn = c
 			return nil
+		},
+		recreate: func(_ context.Context, o selfmaint.RecreateOptions) error {
+			h.events = append(h.events, "recreate")
+			h.gotRecreate = o
+			return h.recreateErr
 		},
 		getuid: func() int { return 1000 },
 		getgid: func() int { return 1000 },
@@ -228,5 +238,86 @@ func TestSelfMaintenanceReachesTheConnectionAndHonoursTheHostSwitch(t *testing.T
 				t.Fatalf("update answered %+v, want error %s", res, tc.wantCode)
 			}
 		})
+	}
+}
+
+func TestTheHelperSubcommandRecreatesTheTargetWithoutAURLOrAToken(t *testing.T) {
+	dir := t.TempDir()
+	h := &harness{}
+	d := h.deps(map[string]string{"BAYPLAN_AGENT_STATE_DIR": dir, "BAYPLAN_AGENT_SOCKET": "/s/docker.sock", "BAYPLAN_AGENT_DOCKER_GID": "42"}, nil)
+	d.args = []string{"helper", "recreate", "--target", "abc123"}
+	if code := run(d); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
+	}
+	if want := []string{"drop", "recreate"}; !reflect.DeepEqual(h.events, want) {
+		t.Fatalf("events = %v, want %v: no connect loop, and the privileges are dropped first", h.events, want)
+	}
+	if h.dropOpt.SocketPath != "/s/docker.sock" || h.dropOpt.DockerGID == nil || *h.dropOpt.DockerGID != 42 {
+		t.Fatalf("drop options = %+v", h.dropOpt)
+	}
+	o := h.gotRecreate
+	if o.TargetID != "abc123" || o.SocketPath != "/s/docker.sock" || o.Timeout != selfmaint.ConnectTimeout {
+		t.Fatalf("recreate options = %+v", o)
+	}
+
+	// The marker is the modification time of the connected file in the state directory.
+	if at, err := o.Marker(); err != nil || !at.IsZero() {
+		t.Fatalf("with no marker the time is zero, got %v, %v", at, err)
+	}
+	path := filepath.Join(dir, "connected")
+	if err := os.WriteFile(path, []byte("2026-10-04T10:00:00Z\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 4, 10, 0, 7, 123456789, time.UTC)
+	if err := os.Chtimes(path, want, want); err != nil {
+		t.Fatal(err)
+	}
+	if at, err := o.Marker(); err != nil || !at.Equal(want) {
+		t.Fatalf("marker = %v, %v, want the file's modification time %v", at, err, want)
+	}
+}
+
+func TestTheHelperSubcommandExitCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		err     error
+		dropErr error
+		want    int
+		recreat bool
+	}{
+		{"success", []string{"helper", "recreate", "--target", "x"}, nil, nil, 0, true},
+		{"rolled back", []string{"helper", "recreate", "--target", "x"}, selfmaint.ErrRolledBack, nil, 1, true},
+		{"other failure", []string{"helper", "recreate", "--target", "x"}, errors.New("boom"), nil, 1, true},
+		{"no target", []string{"helper", "recreate"}, nil, nil, 2, false},
+		{"empty target", []string{"helper", "recreate", "--target", ""}, nil, nil, 2, false},
+		{"no subcommand", []string{"helper"}, nil, nil, 2, false},
+		{"unknown subcommand", []string{"helper", "explode", "--target", "x"}, nil, nil, 2, false},
+		{"unknown flag", []string{"helper", "recreate", "--target", "x", "--force"}, nil, nil, 2, false},
+		{"failed drop", []string{"helper", "recreate", "--target", "x"}, nil, errors.New("no"), 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &harness{recreateErr: tc.err, dropErr: tc.dropErr}
+			d := h.deps(map[string]string{"BAYPLAN_AGENT_STATE_DIR": t.TempDir()}, nil)
+			d.args = tc.args
+			if code := run(d); code != tc.want {
+				t.Fatalf("exit %d, want %d; stderr: %s", code, tc.want, h.stderr.String())
+			}
+			if got := slices.Contains(h.events, "recreate"); got != tc.recreat {
+				t.Fatalf("recreate ran = %v, want %v (events %v)", got, tc.recreat, h.events)
+			}
+			if slices.Contains(h.events, "connect") {
+				t.Fatalf("the helper must not run the connect loop: %v", h.events)
+			}
+		})
+	}
+}
+
+func TestTheHelperSubcommandRejectsABadDockerGID(t *testing.T) {
+	h := &harness{}
+	d := h.deps(map[string]string{"BAYPLAN_AGENT_DOCKER_GID": "x"}, nil)
+	d.args = []string{"helper", "recreate", "--target", "x"}
+	if code := run(d); code != 2 || len(h.events) != 0 {
+		t.Fatalf("exit %d, events %v", code, h.events)
 	}
 }

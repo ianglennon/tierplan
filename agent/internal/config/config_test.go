@@ -372,3 +372,31 @@ func TestLoadRefusesAPinThatIsNotASHA256Pin(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadHelperNeedsNoURLAndNoToken(t *testing.T) {
+	cfg, err := LoadHelper(env(nil))
+	if err != nil {
+		t.Fatalf("a helper needs neither a URL nor a token: %v", err)
+	}
+	if cfg.SocketPath != DefaultSocket || cfg.StateDir != DefaultStateDir || cfg.DockerGID != nil {
+		t.Fatalf("defaults = %+v", cfg)
+	}
+}
+
+func TestLoadHelperReadsTheSocketTheStateDirectoryAndTheGroup(t *testing.T) {
+	cfg, err := LoadHelper(env(map[string]string{
+		"BAYPLAN_AGENT_SOCKET": "/x/d.sock", "BAYPLAN_AGENT_STATE_DIR": "/x/state", "BAYPLAN_AGENT_DOCKER_GID": "7",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SocketPath != "/x/d.sock" || cfg.StateDir != "/x/state" || cfg.DockerGID == nil || *cfg.DockerGID != 7 {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadHelperRefusesAGroupThatIsNotANumber(t *testing.T) {
+	if _, err := LoadHelper(env(map[string]string{"BAYPLAN_AGENT_DOCKER_GID": "docker"})); err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_DOCKER_GID") {
+		t.Fatalf("err = %v", err)
+	}
+}
