@@ -349,7 +349,8 @@ func SavePins(dir string, entries []PinEntry) error {
 }
 
 // URLOverlap is how long an address that the server stopped listing stays in the
-// dial list as a fallback (D-19).
+// dial list (D-19). The server accepts only its current host and port, so the
+// entry helps only if the change is reverted.
 const URLOverlap = 30 * 24 * time.Hour
 
 // MaxURLs bounds the addresses kept. A server lists one; the cap keeps a

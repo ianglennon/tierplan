@@ -444,8 +444,10 @@ func (h *Hub) URLs() []string {
 // PushURLs tells every connected agent where to dial from now on and which server
 // pins are current (D-19, D-06): urls with the address to dial first at the front.
 // It is best effort and returns at once with how many sessions it is writing to; an
-// agent whose control stream cannot be written to is logged and left, and learns
-// the address from its next welcome. A session that has not opened its control
+// agent whose control stream cannot be written to is logged and left and, if the
+// change moved the host or port, is refused at its next connection until it is
+// reinstalled or the change is reverted, because the server accepts one audience
+// (the handshake check in handshake.go). A session that has not opened its control
 // stream yet is told when it does (see agentStream).
 func (h *Hub) PushURLs(urls, pins []string) int {
 	if len(urls) == 0 {
@@ -464,7 +466,7 @@ func (h *Hub) PushURLs(urls, pins []string) int {
 		go func() {
 			// A control stream that is not set up yet is told when it is (agentStream).
 			if err := s.sendControl(msg); err != nil && !errors.Is(err, errNoControlStream) {
-				h.log.Warn("could not tell an agent the new server address; it learns it from its next welcome", "agent_id", s.AgentID, "environment_id", s.EnvID, "error", err)
+				h.log.Warn("could not tell an agent the new server address; if the host or port changed it will be refused at its next connection", "agent_id", s.AgentID, "environment_id", s.EnvID, "error", err)
 			}
 		}()
 	}

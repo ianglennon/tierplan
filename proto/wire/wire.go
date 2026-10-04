@@ -245,8 +245,9 @@ type RenewRefused struct {
 
 // URLUpdate is the server telling a connected agent where to dial from now on and
 // which server pins are current. URLs lists the endpoints, the one to dial first
-// at the front. The agent keeps the one it had before as a fallback for a while
-// (D-19). Pins are what a welcome carries: the server's own certificate pins.
+// at the front. The agent keeps the address it had before in its dial list for a
+// while (D-19), but the server accepts only its current host and port, so that
+// entry is an undo window, not a fallback the server honours. Pins are what a welcome carries: the server's own certificate pins.
 type URLUpdate struct {
 	T    string   `json:"t"`
 	URLs []string `json:"urls"`

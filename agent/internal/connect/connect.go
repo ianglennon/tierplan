@@ -17,7 +17,9 @@
 // The agent keeps its certificate fresh by asking for a new one over the control
 // stream (renew.go), and keeps the address it dials and the server's pins current
 // from what the server tells it (D-19): the newest address is dialed first and the
-// previous one is a fallback for 30 days.
+// previous one is kept in the list for 30 days. The server accepts only its current
+// host and port, so the previous address helps only if an administrator changes it
+// back (or if the change kept the host and port).
 package connect
 
 import (
@@ -224,8 +226,9 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 
 	// Until the server says otherwise the address from the environment is the only
 	// one. Once it has pushed one, the stored list rules and the environment's
-	// address is just one more entry in it, kept for 30 days: an operator who wants
-	// to move an agent changes the address in Bayplan.
+	// address is just one more entry in it, kept for 30 days as an undo window in
+	// case the change is reverted: an operator who wants to move an agent changes
+	// the address in Bayplan.
 	r := &runner{cfg: cfg, env: env, log: log, urls: []state.URLEntry{{URL: cfg.URL}}}
 	if cfg.StateDir != "" {
 		cur, ok, err := state.Load(cfg.StateDir)
@@ -562,8 +565,8 @@ func pushable(raw string) bool {
 }
 
 // mergeURLs keeps the addresses a welcome or a push lists, the newest first, and the
-// ones it no longer lists for 30 days (state.MergeURLs), saving them when they
-// changed. A list with nothing usable in it changes nothing. It is only called for a
+// ones it no longer lists for 30 days in case the change is reverted
+// (state.MergeURLs), saving them when they changed. A list with nothing usable in it changes nothing. It is only called for a
 // verified session.
 func (r *runner) mergeURLs(fromServer []string) {
 	var usable []string
@@ -582,7 +585,7 @@ func (r *runner) mergeURLs(fromServer []string) {
 		return
 	}
 	r.urls = merged
-	r.log.Info("the server changed the address the agent dials; the previous one stays as a fallback for 30 days", "address", usable[0])
+	r.log.Info("the server changed the address the agent dials; the previous one is kept for 30 days in case the change is reverted", "address", usable[0])
 	if r.cfg.StateDir == "" {
 		return
 	}
