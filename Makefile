@@ -108,7 +108,8 @@ dev:
 # server logs a warning at start while it is on. While it is on, the command Bayplan
 # shows also sets BAYPLAN_AGENT_ALLOW_INSECURE=true on the agents, which otherwise
 # refuse plain ws:// to another host. Neither belongs anywhere but this
-# target. To let the dev swarm's nodes reach the server, listen on every interface:
+# target and the proxy smoke test (scripts/proxy-smoke.sh). To let the dev
+# swarm's nodes reach the server, listen on every interface:
 # make dev DEV_LISTEN=0.0.0.0:7480 (the default stays loopback).
 DEV_LISTEN ?= 127.0.0.1:7480
 DEV_PUBLIC_URL ?= http://localhost:5173
