@@ -14,7 +14,7 @@ import "@/i18n";
 const ME = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: [], environments: {} },
+  permissions: { global: [], environments: { "*": ["environments.read"] } },
 };
 
 interface Sent {
@@ -25,6 +25,8 @@ interface Sent {
 
 let sent: Sent[] = [];
 let meStatus = 200;
+// What GET /api/environments/warnings answers; the bell of a reader lists it.
+let envWarnings: unknown[] = [];
 
 function stubApi() {
   vi.stubGlobal(
@@ -46,6 +48,7 @@ function stubApi() {
         return new Response(null, { status: 204 });
       }
       if (path === "/api/environments") return Response.json({ items: [] });
+      if (path === "/api/environments/warnings") return Response.json({ items: envWarnings });
       if (path === "/api/version") {
         return Response.json({
           commit: "",
@@ -86,6 +89,7 @@ const sourceLinks = () => screen.queryAllByRole("link", SOURCE_LINK);
 beforeEach(() => {
   sent = [];
   meStatus = 200;
+  envWarnings = [];
   setCsrfToken(null);
   setViewport(1024);
   stubApi();
@@ -111,9 +115,9 @@ describe("app shell", () => {
     renderAt("/");
     expect(await screen.findByText("No environments yet")).toBeTruthy();
     expect(
-      screen.getByText(/Bayplan can manage the Docker host it runs on through the Docker socket/),
+      screen.getByText(/Bayplan gives you one command that installs a small agent on it/),
     ).toBeTruthy();
-    expect(document.title).toBe("Home · Lab");
+    expect(document.title).toBe("Environments · Lab");
   });
 
   it("puts the skip link first and points it at the main landmark", async () => {
@@ -138,6 +142,18 @@ describe("app shell", () => {
     expect(JSON.stringify({ ...window.localStorage, ...window.sessionStorage })).not.toContain(
       "csrf-1",
     );
+  });
+});
+
+describe("header bell", () => {
+  it("is there for someone who may read an environment but not the settings, with their environments' problems", async () => {
+    envWarnings = [
+      { id: "env_offline", severity: "error", envId: "e1", envName: "Edge", reason: "timeout" },
+    ];
+    renderAt("/");
+    expect(await screen.findByRole("button", { name: "Warnings, 1 item" })).toBeTruthy();
+    // Instance warnings are an admin's: no settings.read, no request for them.
+    expect(sent.some((s) => s.path === "/api/warnings")).toBe(false);
   });
 });
 

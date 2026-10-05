@@ -14,9 +14,12 @@ import "@/i18n";
 const ADMIN = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: ["environments.write"], environments: {} },
+  permissions: { global: ["environments.create"], environments: { "*": ["environments.read"] } },
 };
-const VIEWER = { ...ADMIN, permissions: { global: [], environments: {} } };
+const VIEWER = {
+  ...ADMIN,
+  permissions: { global: [], environments: { "*": ["environments.read"] } },
+};
 
 const DETECTED = {
   socketPath: "/var/run/docker.sock",
@@ -40,6 +43,26 @@ interface Call {
   csrf: string | null;
   body?: Record<string, unknown>;
 }
+
+// The host once it is an environment, as the list returns it.
+const ADDED = {
+  id: "e1",
+  name: "lab-1",
+  kind: "local",
+  enabled: true,
+  isSelfHost: true,
+  isLocalSocket: true,
+  createdAt: "2026-10-01T10:00:00Z",
+  engine: {},
+  status: { state: "online" },
+  agentVersion: null,
+  agents: null,
+  engineVersion: null,
+  failingServices: null,
+  lastSeen: null,
+  nodes: null,
+  updateAvailable: false,
+};
 
 let calls: Call[];
 let me: Record<string, unknown> | null;
@@ -70,7 +93,7 @@ beforeEach(() => {
       if (path === "/api/local-host") return Response.json(localHost);
       if (path === "/api/environments" && req.method === "POST") {
         // Adding the host makes it an environment.
-        environments = [{ id: "e1", name: "lab-1" }];
+        environments = [{ ...ADDED }];
         localHost = { ...DETECTED, managed: true };
         return Response.json({ id: "e1" }, { status: 201 });
       }
@@ -131,8 +154,10 @@ describe("/welcome (wizard step 4)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Manage this host" }));
 
-    // Home sends a user who has an environment to its dashboard (plan 19).
-    await waitFor(() => expect(router.state.location.pathname).toBe("/env/e1"));
+    // Home sends a user with no last-used environment to the overview, which
+    // now lists the host that was just added.
+    await waitFor(() => expect(router.state.location.pathname).toBe("/environments"));
+    expect(await screen.findByRole("link", { name: "lab-1" })).toBeTruthy();
     expect(posts()).toEqual([
       { path: "/api/environments", method: "POST", csrf: "csrf-1", body: { kind: "local" } },
     ]);
@@ -144,7 +169,7 @@ describe("/welcome (wizard step 4)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/environments"));
     expect(posts()).toEqual([]);
   });
 
@@ -160,10 +185,10 @@ describe("/welcome (wizard step 4)", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/setup"));
   });
 
-  it("sends a user without environments.write to /, and never asks for the socket", async () => {
+  it("sends a user without environments.create to /, and never asks for the socket", async () => {
     me = VIEWER;
     const router = renderAt("/welcome");
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/environments"));
     expect(calls.some((c) => c.path === "/api/local-host")).toBe(false);
   });
 
@@ -196,7 +221,9 @@ describe("the signed-in home with no environments", () => {
 
     expect(await screen.findByRole("heading", { name: "No Docker socket found" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Copy the docker run command" })).toBeTruthy();
-    expect(screen.getByText("Remote hosts will be available in a later release.")).toBeTruthy();
+    // The overview's own empty state says what remote hosts need; the
+    // after-setup footnote belongs to the wizard only.
+    expect(screen.queryByText(/Remote hosts will be available/)).toBeNull();
     expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
   });
@@ -206,12 +233,12 @@ describe("the signed-in home with no environments", () => {
     renderAt("/");
 
     expect(await screen.findByText("No environments yet")).toBeTruthy();
-    expect(screen.getByText("Ask an admin to add a Docker host.")).toBeTruthy();
+    expect(screen.getByText("Ask an admin to add an environment.")).toBeTruthy();
     expect(calls.some((c) => c.path === "/api/local-host")).toBe(false);
   });
 
   it("shows no empty state once an environment exists", async () => {
-    environments = [{ id: "e1", name: "lab-1" }];
+    environments = [{ ...ADDED }];
     renderAt("/");
     await waitFor(() => expect(calls.some((c) => c.path === "/api/environments")).toBe(true));
     await new Promise((r) => setTimeout(r, 50));

@@ -39,7 +39,14 @@ const reasonCurrentPasswordIncorrect = "current_password_incorrect" //nolint:gos
 const (
 	warningDataNotPersisted = "data_not_persisted"
 	warningKeyBackup        = "key_backup"
+	// warningProxyPrefix turns an observer signal kind into a warning ID: the
+	// reverse proxy warnings are proxy_untrusted_forwarded, proxy_url_mismatch and
+	// the third kind with the same prefix (D-53).
+	warningProxyPrefix = "proxy_"
 )
+
+// proxyKinds are the observer's signal kinds in the order the warnings are listed.
+var proxyKinds = []string{httpx.SignalUntrustedForwarded, httpx.SignalURLMismatch, httpx.SignalWebSocketFailing}
 
 const (
 	// settingKeyBackupAck holds the UTC nanoseconds at which an admin said they
@@ -62,6 +69,9 @@ type AccountDeps struct {
 	DataDir datadir.Info
 	// Vault drives the key_backup warning.
 	Vault *vault.Vault
+	// Proxy holds what the reverse proxy observer has seen, for the proxy
+	// warnings. Nil means there are none.
+	Proxy *httpx.ProxyObserver
 	// Limiter throttles POST /api/me/password per user ID, right and wrong
 	// attempts alike, so a stolen session cannot guess the current password at
 	// the speed of the hash alone (T-01-60). Nil means no throttle.
@@ -95,9 +105,13 @@ type ChangePasswordOutput struct {
 
 // WarningBody is one instance warning that needs an admin's attention.
 type WarningBody struct {
-	ID      string `json:"id" enum:"data_not_persisted,key_backup" doc:"Which warning this is"`
+	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing" doc:"Which warning this is"`
 	Reason  string `json:"reason,omitempty" doc:"For data_not_persisted: why the data directory is not persisted"`
 	KeyPath string `json:"keyPath,omitempty" doc:"For key_backup: where the generated encryption key is stored"`
+	IP      string `json:"ip,omitempty" doc:"For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from"`
+	Host    string `json:"host,omitempty" doc:"For proxy_url_mismatch: the host the newest request was for"`
+	Scheme  string `json:"scheme,omitempty" doc:"For proxy_url_mismatch: the scheme the newest request effectively used, http or https"`
+	URL     string `json:"url,omitempty" doc:"For proxy_url_mismatch: the public URL the request should have matched"`
 }
 
 // WarningsBody lists the warnings that apply right now.
@@ -259,7 +273,7 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			return nil, internal("commit", err)
 		}
 		return &ChangePasswordOutput{
-			SetCookie:    d.Sessions.Cookie(raw, remember, d.Instance.Secure()),
+			SetCookie:    d.Sessions.Cookie(raw, remember, d.Instance.CookieScope()),
 			CacheControl: "no-store",
 			Body:         ChangePasswordBody{CSRFToken: d.Sessions.CSRFToken(idHash)},
 		}, nil
@@ -272,6 +286,8 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 		Summary:     "List the instance warnings that need an admin's attention",
 		Description: "Includes data_not_persisted while the data directory would be lost with the container, and key_backup " +
 			"while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). " +
+			"The reverse proxy warnings (the proxy_ ones) are listed while " +
+			"Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). " +
 			"The plain-HTTP warning is the browser's to compute and is not listed.",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*WarningsOutput, error) {
@@ -288,6 +304,7 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 				return nil, internal("read key backup acknowledgement", err)
 			}
 		}
+		items = append(items, proxyItems(d)...)
 		return &WarningsOutput{CacheControl: "no-store", Body: WarningsBody{Items: items}}, nil
 	})
 
@@ -332,4 +349,33 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 		}
 		return nil, nil
 	})
+}
+
+// proxyItems turns what the proxy observer has seen into warnings: one per kind,
+// from the newest sighting of it. The sightings carry the TCP peer and the
+// request's own host and scheme, never a forwarded value, so nothing a caller
+// chose is believed here; the bell shows them to settings.read holders only.
+func proxyItems(d AccountDeps) []WarningBody {
+	if d.Proxy == nil {
+		return nil
+	}
+	newest := map[string]httpx.Signal{}
+	for _, s := range d.Proxy.Signals() {
+		if _, ok := newest[s.Kind]; !ok {
+			newest[s.Kind] = s
+		}
+	}
+	var out []WarningBody
+	for _, kind := range proxyKinds {
+		s, ok := newest[kind]
+		if !ok {
+			continue
+		}
+		w := WarningBody{ID: warningProxyPrefix + kind, IP: s.Peer}
+		if kind == httpx.SignalURLMismatch {
+			w.Host, w.Scheme, w.URL = s.Host, s.Scheme, d.Instance.PublicURL()
+		}
+		out = append(out, w)
+	}
+	return out
 }

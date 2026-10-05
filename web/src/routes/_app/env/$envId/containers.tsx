@@ -10,7 +10,14 @@ import { NoPermission } from "@/components/full-page-state";
 import { RelativeTime } from "@/components/relative-time";
 import { StatusDot } from "@/components/status-dot";
 import { Badge } from "@/components/ui/badge";
+import { NodesBanner } from "@/features/environments/nodes-banner";
 import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
+import {
+  nodeRowKey,
+  nodeSearchSchema,
+  useEnvIsSwarm,
+  useNodeColumn,
+} from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -34,7 +41,11 @@ function Containers() {
   const key = "dashboard.lists.containers";
   useDocumentTitle(t(`${key}.title`));
   const allowed = usePermission("containers.read", envId);
-  const query = useQuery({ ...containersQuery(envId), enabled: allowed });
+  const { node } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const swarm = useEnvIsSwarm(envId);
+  const nodeColumn = useNodeColumn<ContainerRow>();
+  const query = useQuery({ ...containersQuery(envId, swarm ? node : undefined), enabled: allowed });
   const envName = useEnvName(envId);
   const missing = t("dashboard.time.missing");
 
@@ -92,11 +103,22 @@ function Containers() {
       columns={columns}
       query={query}
       envName={envName}
-      getRowKey={(c) => c.id}
+      nodeColumn={swarm ? nodeColumn : undefined}
+      nodeFilter={
+        swarm
+          ? {
+              value: node,
+              onChange: (n) => void navigate({ search: { node: n }, replace: true }),
+            }
+          : undefined
+      }
+      banner={swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : undefined}
+      getRowKey={(c) => nodeRowKey(c.node, c.id)}
     />
   );
 }
 
 export const Route = createFileRoute("/_app/env/$envId/containers")({
+  validateSearch: nodeSearchSchema,
   component: Containers,
 });

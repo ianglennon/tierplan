@@ -28,6 +28,13 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// The two agent timing settings are named in the table and in the check that
+// ties them together.
+const (
+	envAgentHeartbeatInterval = "BAYPLAN_AGENT_HEARTBEAT_INTERVAL"
+	envAgentOfflineAfter      = "BAYPLAN_AGENT_OFFLINE_AFTER"
+)
+
 // redactedMark replaces the value of a set secret in Redacted.
 const redactedMark = "[redacted]"
 
@@ -36,6 +43,10 @@ type Config struct {
 	Listen    string
 	DataDir   string
 	PublicURL string // normalised origin plus optional path, no trailing slash; empty when unset
+	// AgentURL is where agents dial when that differs from the public URL, such as
+	// an internal host name or a LAN address (D-18). Normalised like PublicURL;
+	// empty when unset, and then agents dial the public URL.
+	AgentURL string
 
 	EncryptionKey string // secret
 	// TrustedProxies are the peers whose forwarded headers are believed (D-39).
@@ -57,6 +68,25 @@ type Config struct {
 	LogLevel  slog.Level
 	// DockerHost is the raw string; the Docker transport enforces unix-only (D-21).
 	DockerHost string
+
+	// AgentHeartbeatInterval is how often agents are told to heartbeat,
+	// AgentOfflineAfter how long a session may be silent before it is closed,
+	// and AgentReconnectGrace how long after a server start an environment shows
+	// "Reconnecting" instead of offline (D-41).
+	AgentHeartbeatInterval time.Duration
+	AgentOfflineAfter      time.Duration
+	AgentReconnectGrace    time.Duration
+	// FailingServiceGrace is how long after a swarm service was updated it is not
+	// counted as failing (D-34).
+	FailingServiceGrace time.Duration
+	// AgentAllowInsecure lets agents connect over plain ws:// to an agent address
+	// that is not this machine; for development only. Join tokens and Docker
+	// answers then travel unencrypted, and install commands for a plain address
+	// also set it on the agent. A plain address on this machine needs no switch.
+	// AgentConnectBurst is how many connection attempts one client address may
+	// make at once.
+	AgentAllowInsecure bool
+	AgentConnectBurst  int
 
 	// raw holds the resolved text of every setting, for Redacted.
 	raw map[string]string
@@ -91,6 +121,8 @@ var settings = []setting{
 		apply: func(c *Config, raw string) error { c.DataDir = raw; return nil }},
 	{env: "BAYPLAN_PUBLIC_URL", flag: "public-url", desc: "externally visible base URL; overrides and locks the stored value",
 		apply: func(c *Config, raw string) (err error) { c.PublicURL, err = normalisePublicURL(raw); return err }},
+	{env: "BAYPLAN_AGENT_URL", flag: "agent-url", desc: "address agents dial when it differs from the public URL; overrides and locks the stored value",
+		apply: func(c *Config, raw string) (err error) { c.AgentURL, err = normalisePublicURL(raw); return err }},
 	{env: "BAYPLAN_ENCRYPTION_KEY", secret: true, desc: "key for secrets at rest (also BAYPLAN_ENCRYPTION_KEY_FILE)",
 		apply: func(c *Config, raw string) error { c.EncryptionKey = raw; return nil }},
 	{env: "BAYPLAN_TRUSTED_PROXIES", flag: "trusted-proxies", desc: "comma-separated IPs or CIDRs of proxies whose forwarded headers are trusted",
@@ -132,6 +164,24 @@ var settings = []setting{
 			c.DockerGID = &n
 			return nil
 		}},
+	{env: envAgentHeartbeatInterval, flag: "agent-heartbeat-interval", def: "10s", desc: "how often agents send a heartbeat; sent to each agent when it connects",
+		apply: func(c *Config, raw string) (err error) {
+			c.AgentHeartbeatInterval, err = parseDuration(raw)
+			return err
+		}},
+	{env: envAgentOfflineAfter, flag: "agent-offline-after", def: "30s", desc: "silence after which an agent connection is closed and the agent counts as offline; at least twice the heartbeat interval",
+		apply: func(c *Config, raw string) (err error) { c.AgentOfflineAfter, err = parseDuration(raw); return err }},
+	{env: "BAYPLAN_AGENT_RECONNECT_GRACE", flag: "agent-reconnect-grace", def: "60s", desc: "after a start, how long an environment shows Reconnecting instead of offline while its agents come back",
+		apply: func(c *Config, raw string) (err error) { c.AgentReconnectGrace, err = parseDuration(raw); return err }},
+	{env: "BAYPLAN_FAILING_SERVICE_GRACE", flag: "failing-service-grace", def: "2m", desc: "how long after a swarm service was updated it is not counted as failing",
+		apply: func(c *Config, raw string) (err error) { c.FailingServiceGrace, err = parseDuration(raw); return err }},
+	{env: "BAYPLAN_AGENT_ALLOW_INSECURE", flag: "agent-allow-insecure", def: "false", desc: "development only: let agents connect over plain ws:// to an agent address that is not this machine, which sends join tokens and Docker answers unencrypted; install commands for a plain address then set it on the agent too",
+		apply: func(c *Config, raw string) (err error) {
+			c.AgentAllowInsecure, err = strconv.ParseBool(raw)
+			return err
+		}},
+	{env: "BAYPLAN_AGENT_CONNECT_BURST", flag: "agent-connect-burst", def: "200", desc: "how many connection attempts one client address may make at once on the agent endpoint; sized so a whole swarm behind one NAT can reconnect together",
+		apply: func(c *Config, raw string) (err error) { c.AgentConnectBurst, err = parseInt(raw, 1); return err }},
 	{env: "BAYPLAN_LOG_LEVEL", flag: "log-level", def: "info", desc: "log level: debug, info, warn or error",
 		apply: func(c *Config, raw string) error {
 			switch strings.ToLower(raw) {
@@ -232,6 +282,12 @@ func (c Config) crossCheck() error {
 	if c.TLSSelfSigned && c.TLSCertFile != "" {
 		return errors.New("BAYPLAN_TLS_SELF_SIGNED conflicts with BAYPLAN_TLS_CERT_FILE and BAYPLAN_TLS_KEY_FILE; use one or the other")
 	}
+	// A window shorter than two heartbeats would call an agent offline after one
+	// late or lost heartbeat.
+	if c.AgentOfflineAfter < 2*c.AgentHeartbeatInterval {
+		return fmt.Errorf("%s (%s) must be at least twice %s (%s)",
+			envAgentOfflineAfter, c.AgentOfflineAfter, envAgentHeartbeatInterval, c.AgentHeartbeatInterval)
+	}
 	return nil
 }
 
@@ -303,10 +359,59 @@ func parsePrefixes(raw string) ([]netip.Prefix, error) {
 	return out, nil
 }
 
+// reservedSegments are the first path segments Bayplan serves itself: its API,
+// assets, agent endpoint, probes and the SPA's own routes. A public URL whose
+// path started with one would make the base path shadow a route (D-50, T-02-14).
+var reservedSegments = map[string]bool{
+	"api": true, "assets": true, "agent": true, "healthz": true, "readyz": true,
+	"setup": true, "openapi": true, "docs": true, "schemas": true, "env": true,
+	"environments": true, "settings": true, "audit": true, "login": true, "welcome": true,
+}
+
+// reservedSegment returns the first segment of the decoded URL path when
+// Bayplan serves it itself, and "" otherwise. Only the first segment is
+// Bayplan's to claim: /tools/api is a fine base. A name such as openapi.json is
+// treated as the openapi segment, as the router does.
+func reservedSegment(p string) string {
+	first, _, _ := strings.Cut(strings.TrimPrefix(p, "/"), "/")
+	if reservedSegments[first] {
+		return first
+	}
+	if strings.HasPrefix(first, "openapi.") {
+		return first
+	}
+	return ""
+}
+
 // NormalisePublicURL validates a public URL the same way BAYPLAN_PUBLIC_URL is
 // validated, so a value entered in the setup wizard and one set in the
 // environment are held to one rule. Empty stays empty.
 func NormalisePublicURL(raw string) (string, error) { return normalisePublicURL(raw) }
+
+// AgentEndpoint is the address an agent dials for the URL it is told to use, the
+// agent URL or else the public URL: the same host and base path, https as wss and
+// http as ws, with /agent/connect on the end (D-18). It is the one place that
+// builds the address, so the install commands, the welcome and Settings agree.
+func AgentEndpoint(baseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return "", fmt.Errorf("parse the URL: %w", err)
+	}
+	var scheme string
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		scheme = "wss"
+	case "http":
+		scheme = "ws"
+	default:
+		return "", fmt.Errorf("the URL %q is not http or https", baseURL)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("the URL %q has no host", baseURL)
+	}
+	out := url.URL{Scheme: scheme, Host: u.Host, Path: strings.TrimRight(u.Path, "/") + "/agent/connect"}
+	return out.String(), nil
+}
 
 // normalisePublicURL accepts an absolute http or https URL and returns its
 // origin plus an optional path with no trailing slash. Empty stays empty.
@@ -326,6 +431,9 @@ func normalisePublicURL(raw string) (string, error) {
 	}
 	if u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
 		return "", errors.New("must not contain a query or fragment")
+	}
+	if seg := reservedSegment(u.Path); seg != "" {
+		return "", fmt.Errorf("must not start with /%s, which Bayplan serves itself", seg)
 	}
 	path := strings.TrimRight(u.EscapedPath(), "/")
 	return u.Scheme + "://" + strings.ToLower(u.Host) + path, nil

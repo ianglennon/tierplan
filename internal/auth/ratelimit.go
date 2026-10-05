@@ -83,6 +83,14 @@ func limiterKey(raw string) string {
 	return p.Masked().String()
 }
 
+// AddrKey is the key IPLimiter budgets by, for a caller that bounds something
+// else per client address the same way: every address of one IPv6 /64 is one
+// key, an IPv4-mapped IPv6 address is its IPv4 address, and a text that is not
+// an address comes back unchanged. Without it a second counter would treat
+// 2001:db8:1:2::1 and 2001:db8:1:2::2 as two clients while the limiter treats
+// them as one.
+func AddrKey(raw string) string { return limiterKey(raw) }
+
 // Allow reports whether ip may make another attempt, and counts it if so.
 func (l *IPLimiter) Allow(ip string) bool {
 	now := l.now()

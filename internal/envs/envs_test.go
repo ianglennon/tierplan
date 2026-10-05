@@ -360,7 +360,7 @@ func TestRemoveDeletesTheRowStopsTheMonitorAndChangesNothingInDocker(t *testing.
 	r := newRig(t, dockertest.FakeConfig{})
 	e := r.add(t)
 	eventually(t, "online", func() bool { return r.mon.Status(e.ID).State == StateOnline })
-	if err := r.svc.Remove(context.Background(), admin, e.ID, "203.0.113.9", "ua"); err != nil {
+	if err := r.svc.Remove(context.Background(), admin, e.ID, "203.0.113.9", "ua", false); err != nil {
 		t.Fatal(err)
 	}
 	if r.rowCount(t) != 0 {
@@ -383,7 +383,7 @@ func TestRemoveDeletesTheRowStopsTheMonitorAndChangesNothingInDocker(t *testing.
 			t.Errorf("Docker was asked for %s", p)
 		}
 	}
-	if err := r.svc.Remove(context.Background(), admin, e.ID, "", ""); !errors.Is(err, ErrNotFound) {
+	if err := r.svc.Remove(context.Background(), admin, e.ID, "", "", false); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second Remove err = %v, want ErrNotFound", err)
 	}
 	// With the row gone, the local host can be opted in again.

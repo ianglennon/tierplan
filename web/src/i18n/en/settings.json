@@ -16,11 +16,27 @@
       "readOnly": "You can view these settings but not change them.",
       "submit": "Save settings",
       "pending": "Saving…",
+      "publicUrl": {
+        "helper": "The address people use to reach Bayplan. If Bayplan runs under a path, include it, for example https://example.com/bayplan. It controls cookies and request origin checks."
+      },
+      "agentUrl": {
+        "label": "Agent URL",
+        "helper": "Leave empty to use the public URL. Set it if your hosts reach Bayplan at a different address, such as an internal hostname.",
+        "placeholder": "https://bayplan.internal:7480",
+        "locked": "Set by the BAYPLAN_AGENT_URL environment variable.",
+        "insecure": "Agents refuse a plain http address for another host. Use an https address. For development only, start Bayplan with BAYPLAN_AGENT_ALLOW_INSECURE=true.",
+        "refused": "Agents can't connect to this Bayplan. They would dial {{endpoint}}, a plain ws:// address for another host, which agents refuse, and so does Bayplan. Set an https agent URL above, or give Bayplan an https public URL. For development only, BAYPLAN_AGENT_ALLOW_INSECURE=true on Bayplan allows it."
+      },
       "confirm": {
         "title": "Change the public URL?",
         "body": "You're using Bayplan at {{origin}}. If the new address doesn't match how you reach Bayplan, you may be signed out and requests can be blocked.",
         "cancel": "Cancel",
-        "confirm": "Change public URL"
+        "confirm": "Change public URL",
+        "agentTitle": "Change the agent URL?",
+        "agentConfirm": "Change agent URL",
+        "agentsTold": "Agents connected over wss:// are sent the new address now and switch to it on their next connection, if it's also a wss:// address. Agents on plain ws:// aren't told. From now on Bayplan refuses agents that dial a different host or port: there's no fallback period.",
+        "offline_one": "{{count}} agent is offline. It can't learn the new address, and Bayplan will refuse it until you reinstall it with the new address or change the URL back.",
+        "offline_other": "{{count}} agents are offline. They can't learn the new address, and Bayplan will refuse them until you reinstall them with the new address or change the URL back."
       }
     },
     "environments": {

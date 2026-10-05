@@ -33,6 +33,7 @@ import (
 // the handler.
 
 type eventDTO struct {
+	Node       string            `json:"node"`
 	ID         string            `json:"id"`
 	Time       string            `json:"time"`
 	Type       string            `json:"type"`
@@ -63,6 +64,7 @@ func newEventsFix(t *testing.T, cfg dockertest.FakeConfig, heartbeat time.Durati
 	f.snaps = envs.NewSnapshots(mon, 5*time.Second, f.clk.now)
 	f.hub = envs.NewHub(mon, f.snaps, slog.New(slog.DiscardHandler), time.Now)
 	t.Cleanup(f.hub.Close)
+	f.agg = envs.NewAggregator(svc, f.snaps, f.hub, f.clk.now)
 	f.eventsHeartbeat, f.eventsMaxStreams = heartbeat, maxStreams
 	f.localHost.DockerHost = "unix://" + fake.SocketPath()
 	f.localHost.ProbeTimeout = 500 * time.Millisecond
@@ -174,12 +176,18 @@ func (c *sseConn) bodyString() string {
 // the raw session ID; lastEventID may be empty.
 func (f *eventsFix) openStream(t *testing.T, cookie, lastEventID string) *sseConn {
 	t.Helper()
+	return openSSE(t, f.authFixture, f.streamPath(), cookie, lastEventID)
+}
+
+// openSSE is openStream for any stream route of the fixture's router.
+func openSSE(t *testing.T, f *authFixture, path, cookie, lastEventID string) *sseConn {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest(http.MethodGet, f.streamPath(), nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
 	req.Header.Set("User-Agent", authUA)
 	req.RemoteAddr = authIP + ":40000"
 	if cookie != "" {
-		req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.Secure()), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
+		req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
 	}
 	if lastEventID != "" {
 		req.Header.Set("Last-Event-ID", lastEventID)
@@ -490,7 +498,7 @@ func TestEventRoutesNeedEnvironmentsReadAndAKnownEnvironment(t *testing.T) {
 		t.Errorf("recent events of an unknown environment = %d, want 404", rec.Code)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/env/no-such-env/events/stream", nil)
-	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.Secure()), Value: f.cookie}) //nolint:gosec // a request cookie as a browser sends it
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: f.cookie}) //nolint:gosec // a request cookie as a browser sends it
 	rec2 := httptest.NewRecorder()
 	f.h.ServeHTTP(rec2, req)
 	if rec2.Code != http.StatusNotFound {
@@ -636,7 +644,7 @@ func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.
 		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
 		c := f.openStream(t, f.cookie, "")
 		actor := audit.Actor{Type: audit.ActorUser, ID: "id-admin", Name: "admin"}
-		if err := f.svc.Remove(context.Background(), actor, f.env.ID, authIP, authUA); err != nil {
+		if err := f.svc.Remove(context.Background(), actor, f.env.ID, authIP, authUA, false); err != nil {
 			t.Fatal(err)
 		}
 		c.waitEnded(t, time.Second, "the environment was removed")
@@ -717,5 +725,102 @@ func TestEventStreamKeepsRunningWhileTheSessionStaysValid(t *testing.T) {
 	case <-c.done:
 		t.Fatal("the stream ended with a valid session")
 	default:
+	}
+}
+
+// The merged feed of a swarm and the node on every event (plan 02-21, ENV-06, D-46).
+
+func TestEventsOfALocalEnvironmentCarryTheEnginesNameAsTheirNode(t *testing.T) {
+	f := newEventsFix(t, dockertest.FakeConfig{Hostname: "node-1"}, time.Hour, 0)
+	f.waitStream(t)
+	publish(f, "c1")
+	f.waitBuffered(t, 1)
+
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + f.env.ID + "/events", cookie: f.cookie})
+	var body recentBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Items) != 1 || body.Items[0].Node != "node-1" {
+		t.Fatalf("recent = %s (%v), want one event with node node-1", rec.Body, err)
+	}
+	c := f.openStream(t, f.cookie, "")
+	if _, e := c.mustNext(t); e.Node != "node-1" {
+		t.Errorf("stream frame node = %q, want node-1", e.Node)
+	}
+}
+
+// sseLines reads a stream's frames: each data line with the id line before it.
+type sseLines struct {
+	sc *bufio.Scanner
+	id string
+}
+
+func (l *sseLines) next(t *testing.T) (string, eventDTO) {
+	t.Helper()
+	for l.sc.Scan() {
+		line := l.sc.Text()
+		switch {
+		case strings.HasPrefix(line, "id: "):
+			l.id = strings.TrimPrefix(line, "id: ")
+		case strings.HasPrefix(line, "data: "):
+			var e eventDTO
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &e); err != nil {
+				t.Fatalf("frame %q: %v", line, err)
+			}
+			return l.id, e
+		}
+	}
+	t.Fatalf("the stream ended before the next event (%v)", l.sc.Err())
+	return "", eventDTO{}
+}
+
+func (f *swarmFix) openEvents(t *testing.T, ts *httptest.Server, lastID string) *sseLines {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	t.Cleanup(cancel)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/env/"+f.env.ID+"/events/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: f.cookie}) //nolint:gosec // a request cookie as a browser sends it
+	if lastID != "" {
+		req.Header.Set("Last-Event-ID", lastID)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream: %d", resp.StatusCode)
+	}
+	return &sseLines{sc: bufio.NewScanner(resp.Body)}
+}
+
+func TestSwarmEventStreamMergesEveryNodesEventsWithTheirNodeAndReplaysFromLastEventID(t *testing.T) {
+	s := newSwarmFix(t)
+	ts := httptest.NewServer(s.h)
+	defer ts.Close()
+
+	live := s.openEvents(t, ts, "")
+	base := time.Now().UnixNano()
+	s.m1.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "a1", TimeNano: base, Attributes: map[string]string{"name": "web"}})
+	id1, e1 := live.next(t)
+	s.w.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "a2", TimeNano: base + 1, Attributes: map[string]string{"name": "job"}})
+	id2, e2 := live.next(t)
+	if e1.ActorID != "a1" || e1.Node != "mgr-1" || e2.ActorID != "a2" || e2.Node != "wrk-1" {
+		t.Fatalf("frames = %+v and %+v, want a1 from mgr-1 then a2 from wrk-1", e1, e2)
+	}
+
+	// A browser that reconnects with the id of the first frame gets the second and
+	// nothing it has seen: the replay works across the merged feed.
+	again := s.openEvents(t, ts, id1)
+	if id, e := again.next(t); e.ActorID != "a2" || e.Node != "wrk-1" || id != id2 {
+		t.Errorf("first frame after Last-Event-ID = %+v (id %s), want a2 from wrk-1 only", e, id)
+	}
+
+	// The polling fallback is the same feed, newest first.
+	rec := s.get(t, s.env.ID, "events")
+	var body recentBody
+	if err := json.Unmarshal(rec.body, &body); err != nil || len(body.Items) != 2 || body.Items[0].ActorID != "a2" || body.Items[0].Node != "wrk-1" || body.Items[1].Node != "mgr-1" {
+		t.Errorf("recent = %s (%v), want a2 on wrk-1 then a1 on mgr-1", rec.body, err)
 	}
 }

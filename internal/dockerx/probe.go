@@ -44,24 +44,31 @@ const (
 
 // ProbeResult is what Bayplan learned about an engine.
 type ProbeResult struct {
-	Reachable      bool      `json:"reachable"`
-	Supported      bool      `json:"supported"`
-	Reason         string    `json:"reason,omitempty"`
-	Detail         string    `json:"detail,omitempty"`
-	EngineName     string    `json:"engineName,omitempty"`
-	EngineVersion  string    `json:"engineVersion,omitempty"`
-	APIVersion     string    `json:"apiVersion,omitempty"`
-	NegotiatedAPI  string    `json:"negotiatedApi,omitempty"`
-	OSType         string    `json:"osType,omitempty"`
-	OS             string    `json:"os,omitempty"`
-	Arch           string    `json:"arch,omitempty"`
-	KernelVersion  string    `json:"kernelVersion,omitempty"`
-	StorageDriver  string    `json:"storageDriver,omitempty"`
-	NCPU           int       `json:"ncpu,omitempty"`
-	MemTotal       int64     `json:"memTotal,omitempty"`
-	Hostname       string    `json:"hostname,omitempty"`
-	Type           string    `json:"type,omitempty"`
-	SwarmNodeState string    `json:"swarmNodeState,omitempty"`
+	Reachable      bool   `json:"reachable"`
+	Supported      bool   `json:"supported"`
+	Reason         string `json:"reason,omitempty"`
+	Detail         string `json:"detail,omitempty"`
+	EngineName     string `json:"engineName,omitempty"`
+	EngineVersion  string `json:"engineVersion,omitempty"`
+	APIVersion     string `json:"apiVersion,omitempty"`
+	NegotiatedAPI  string `json:"negotiatedApi,omitempty"`
+	OSType         string `json:"osType,omitempty"`
+	OS             string `json:"os,omitempty"`
+	Arch           string `json:"arch,omitempty"`
+	KernelVersion  string `json:"kernelVersion,omitempty"`
+	StorageDriver  string `json:"storageDriver,omitempty"`
+	NCPU           int    `json:"ncpu,omitempty"`
+	MemTotal       int64  `json:"memTotal,omitempty"`
+	Hostname       string `json:"hostname,omitempty"`
+	Type           string `json:"type,omitempty"`
+	SwarmNodeState string `json:"swarmNodeState,omitempty"`
+	// EngineID is the engine's own ID (/info ID). SwarmNodeID is the node's ID in a
+	// swarm it has joined, and SwarmClusterID the swarm's ID, kept for a manager only:
+	// a worker never learns it, and an agent drops it for anything but a manager, so
+	// the two sides compare the same facts (D-48).
+	EngineID       string    `json:"engineId,omitempty"`
+	SwarmNodeID    string    `json:"swarmNodeId,omitempty"`
+	SwarmClusterID string    `json:"swarmClusterId,omitempty"`
 	ProbedAt       time.Time `json:"probedAt"`
 }
 
@@ -303,6 +310,13 @@ func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
 		res.NCPU = in.Info.NCPU
 		res.MemTotal = in.Info.MemTotal
 		res.SwarmNodeState = info.SwarmNodeState
+		res.EngineID = in.Info.ID
+		if info.SwarmNodeState != "" && info.SwarmNodeState != "inactive" {
+			res.SwarmNodeID = in.Info.Swarm.NodeID
+			if info.ControlAvailable && in.Info.Swarm.Cluster != nil {
+				res.SwarmClusterID = in.Info.Swarm.Cluster.ID
+			}
+		}
 
 	default:
 		// Below the floor, or an API version that is not major.minor. A client

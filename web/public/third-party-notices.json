@@ -775,6 +775,11 @@
     "licence": "MIT"
   },
   {
+    "name": "cmdk",
+    "version": "1.1.1",
+    "licence": "MIT"
+  },
+  {
     "name": "cn",
     "version": "0.2.6",
     "licence": "MIT"
@@ -1155,6 +1160,11 @@
     "licence": "MIT"
   },
   {
+    "name": "github.com/coder/websocket",
+    "version": "v1.8.15",
+    "licence": "ISC"
+  },
+  {
     "name": "github.com/containerd/errdefs",
     "version": "v1.0.0",
     "licence": "Apache-2.0"
@@ -1213,6 +1223,11 @@
     "name": "github.com/google/uuid",
     "version": "v1.6.0",
     "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/hashicorp/yamux",
+    "version": "v0.1.2",
+    "licence": "MPL-2.0"
   },
   {
     "name": "github.com/mfridman/interpolate",

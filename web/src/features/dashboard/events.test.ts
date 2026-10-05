@@ -12,12 +12,14 @@ import {
   mergeEvents,
 } from "@/features/dashboard/events";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
+import { resetBasePathForTests } from "@/lib/base-path";
 
 type EventDTO = components["schemas"]["EventDTO"];
 
 function ev(id: string, time: string, over: Partial<EventDTO> = {}): EventDTO {
   return {
     id,
+    node: "node-1",
     time,
     type: "container",
     action: "start",
@@ -26,6 +28,18 @@ function ev(id: string, time: string, over: Partial<EventDTO> = {}): EventDTO {
     attributes: {},
     ...over,
   };
+}
+
+// announceBase does what the server does when it renders index.html (plan
+// 02-03): it puts the base path in a meta tag the SPA reads once.
+function announceBase(base: string | null): void {
+  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  resetBasePathForTests();
+  if (base === null) return;
+  const meta = document.createElement("meta");
+  meta.name = "bayplan-base";
+  meta.content = base;
+  document.head.append(meta);
 }
 
 const flush = () => vi.advanceTimersByTimeAsync(0);
@@ -125,9 +139,25 @@ describe("invalidationKeys", () => {
     expect(invalidationKeys("network", "e1")).toEqual([summary, ["env", "e1", "networks"]]);
     expect(invalidationKeys("volume", "e1")).toEqual([summary, ["env", "e1", "volumes"]]);
   });
+
+  it("makes only the summary stale for a row of Bayplan's own, which has no list", () => {
+    expect(invalidationKeys("bayplan", "e1")).toEqual([["env", "e1", "summary"]]);
+  });
 });
 
 describe("createEventsConnection", () => {
+  it("opens the stream under the base path the server announced", async () => {
+    announceBase("/bayplan");
+    try {
+      const c = connect(() => Promise.resolve([]));
+      c.connection.start();
+      expect(c.source()?.url).toBe("/bayplan/api/env/e1/events/stream");
+      c.connection.close();
+    } finally {
+      announceBase(null);
+    }
+  });
+
   it("loads, opens the stream on the guarded route and goes live", async () => {
     const c = connect(() => Promise.resolve([ev("a", "2026-10-02T10:00:01Z")]));
     expect(c.states()).toEqual([]);

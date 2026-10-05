@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 import { Server } from "lucide-react";
 import { type RefObject, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -198,7 +198,7 @@ function RenameForm({ environment, onDone, onPendingChange }: RenameFormProps) {
   );
 }
 
-interface RenameDialogProps {
+export interface RenameDialogProps {
   environment: EnvironmentItem;
   onClose: () => void;
   returnFocusRef: RefObject<HTMLElement | null>;
@@ -206,7 +206,7 @@ interface RenameDialogProps {
 
 // RenameDialog is "Rename environment" (D-20). It cannot be dismissed while the
 // request is in flight, and focus goes back to the row's Rename button.
-function RenameDialog({ environment, onClose, returnFocusRef }: RenameDialogProps) {
+export function RenameDialog({ environment, onClose, returnFocusRef }: RenameDialogProps) {
   const t = useT();
   const [pending, setPending] = useState(false);
   return (
@@ -242,14 +242,27 @@ function EnvironmentRow({
 }) {
   const t = useT();
   const healthLabel = useHealthLabel();
+  // Phase 1's Rename and Remove host belong to the local host. An agent
+  // environment is managed on its own page.
+  const isLocal = environment.kind === "local";
   return (
     <Item variant="outline" role="listitem" className="max-md:gap-3">
       <ItemContent>
         <ItemTitle className="w-full flex-wrap">
-          <span className="min-w-0 break-words" title={environment.name}>
+          {/* Every environment has a page of its own (D-38). */}
+          <Link
+            to="/settings/environments/$envId"
+            params={{ envId: environment.id }}
+            className="min-w-0 break-words text-accent-ink underline-offset-4 hover:underline focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            title={environment.name}
+          >
             {environment.name}
-          </span>
-          <TypeBadge type={environment.type} />
+          </Link>
+          <TypeBadge
+            envType={environment.envType}
+            type={environment.type}
+            isLocalSocket={environment.isLocalSocket}
+          />
           {environment.isSelfHost ? (
             <Badge variant="outline" className="shrink-0">
               {t("dashboard.selfBadge")}
@@ -267,24 +280,38 @@ function EnvironmentRow({
         </div>
       </ItemContent>
       <ItemActions className="max-md:w-full">
-        <Button
-          type="button"
-          variant="ghost"
-          className={`${TOUCH_HEIGHT} max-md:flex-1`}
-          aria-label={t("settings.environments.renameAria", { name: environment.name })}
-          onClick={(e) => onRename(e.currentTarget)}
-        >
-          {t("settings.environments.rename")}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          className={`${TOUCH_HEIGHT} border-destructive/40 text-status-offline-text hover:text-status-offline-text max-md:flex-1`}
-          aria-label={t("settings.environments.removeAria", { name: environment.name })}
-          onClick={(e) => onRemove(e.currentTarget)}
-        >
-          {t("settings.environments.remove")}
-        </Button>
+        {isLocal ? (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              className={`${TOUCH_HEIGHT} max-md:flex-1`}
+              aria-label={t("settings.environments.renameAria", { name: environment.name })}
+              onClick={(e) => onRename(e.currentTarget)}
+            >
+              {t("settings.environments.rename")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className={`${TOUCH_HEIGHT} border-destructive/40 text-status-offline-text hover:text-status-offline-text max-md:flex-1`}
+              aria-label={t("settings.environments.removeAria", { name: environment.name })}
+              onClick={(e) => onRemove(e.currentTarget)}
+            >
+              {t("settings.environments.remove")}
+            </Button>
+          </>
+        ) : (
+          <Button asChild variant="outline" className={`${TOUCH_HEIGHT} max-md:flex-1`}>
+            <Link
+              to="/settings/environments/$envId"
+              params={{ envId: environment.id }}
+              aria-label={t("envsettings.list.manageAria", { name: environment.name })}
+            >
+              {t("envsettings.list.manage")}
+            </Link>
+          </Button>
+        )}
       </ItemActions>
     </Item>
   );

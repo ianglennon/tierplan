@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { hasPermission } from "@/hooks/use-me";
+import { hasAnyEnvironmentPermission, hasPermission } from "@/hooks/use-me";
 
 const me = {
   user: { id: "u1", username: "admin", role: "admin" },
@@ -43,5 +43,32 @@ describe("hasPermission", () => {
 
   it("is false while the user is not loaded", () => {
     expect(hasPermission(undefined, "audit.read")).toBe(false);
+  });
+});
+
+describe("hasAnyEnvironmentPermission", () => {
+  it("is true when the * list holds the permission", () => {
+    expect(hasAnyEnvironmentPermission(me, "environments.read")).toBe(true);
+  });
+
+  it("is true when one environment's own list holds it", () => {
+    expect(hasAnyEnvironmentPermission(me, "containers.read")).toBe(true);
+  });
+
+  it("is false when no environment list holds it, even if the global list does", () => {
+    expect(hasAnyEnvironmentPermission(me, "audit.read")).toBe(false);
+    expect(hasAnyEnvironmentPermission(me, "volumes.read")).toBe(false);
+  });
+
+  it("is false for an empty map, a null list and a user who is not loaded", () => {
+    const empty = { ...me, permissions: { global: [], environments: {} } };
+    expect(hasAnyEnvironmentPermission(empty, "environments.read")).toBe(false);
+    expect(
+      hasAnyEnvironmentPermission(
+        { ...me, permissions: { global: [], environments: { env2: null } } },
+        "environments.read",
+      ),
+    ).toBe(false);
+    expect(hasAnyEnvironmentPermission(undefined, "environments.read")).toBe(false);
   });
 });

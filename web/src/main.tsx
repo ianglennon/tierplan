@@ -14,10 +14,11 @@ import "@fontsource-variable/geist-mono";
 import "./index.css";
 import "@/i18n";
 import { queryClient } from "@/api/query-client";
+import { basePath } from "@/lib/base-path";
 import { watchSystemTheme } from "@/lib/theme";
 import { routeTree } from "./routeTree.gen";
 
-const router = createRouter({ routeTree });
+const router = createRouter({ routeTree, basepath: basePath() || undefined });
 
 declare module "@tanstack/react-router" {
   interface Register {

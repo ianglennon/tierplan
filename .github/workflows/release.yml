@@ -2,9 +2,10 @@
 # SPDX-FileCopyrightText: 2026 The Bayplan Authors
 #
 # Release pipeline (D-75). A pushed v* tag builds the binaries, the multi-arch
-# image and the SBOMs with goreleaser, publishes ghcr.io/ianglennon/bayplan:X.Y.Z
-# and :X.Y (never a floating catch-all tag) and signs the checksums and the image
-# with keyless cosign. No release is cut in Phase 1: nothing tags v0.1.0 until
+# images and the SBOMs with goreleaser, publishes ghcr.io/ianglennon/bayplan and
+# ghcr.io/ianglennon/bayplan-agent (D-16) as X.Y.Z and X.Y (never a floating
+# catch-all tag) and signs the checksums and both image digests with keyless
+# cosign (docker_signs in .goreleaser.yaml covers every image). No release is cut in Phase 1: nothing tags v0.1.0 until
 # the user decides to.
 #
 # Supply chain (T-01-111): every action is pinned to a full commit SHA with the

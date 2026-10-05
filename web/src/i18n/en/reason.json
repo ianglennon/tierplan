@@ -1,0 +1,140 @@
+{
+  "reason": {
+    "since": "since {{time}}",
+    "unknown": {
+      "text": "Connection problem ({{code}})",
+      "hint": "Look at the agent's log on the host and at the Bayplan logs."
+    },
+    "commands": {
+      "agentOfflineStandalone": {
+        "caption": "Standalone host",
+        "label": "the standalone check command"
+      },
+      "agentOfflineSwarm": {
+        "caption": "Swarm manager",
+        "label": "the swarm check command"
+      },
+      "versionUpdate": {
+        "caption": "Update the agent",
+        "label": "the agent update command"
+      }
+    },
+    "codes": {
+      "agent_offline": {
+        "text": "The agent on {{node}} isn't connected.",
+        "textGeneric": "The agent isn't connected.",
+        "hint": "Check that it's running. It reconnects by itself when it can reach Bayplan."
+      },
+      "tls_untrusted": {
+        "text": "The agent doesn't trust Bayplan's certificate.",
+        "hint": "Use a certificate from a public CA, or reinstall the agent with the command from Show install command. It carries the certificate pin."
+      },
+      "auth_rejected": {
+        "text": "Bayplan rejected the agent's credentials.",
+        "hint": "Generate a new join token and reinstall the agent with the new command."
+      },
+      "cert_expired": {
+        "text": "The agent's certificate expired before it could renew.",
+        "hint": "Reinstall the agent with a fresh join token. It enrols again with a new certificate."
+      },
+      "cert_expiring": {
+        "text": "The agent's certificate on {{node}} is about to expire.",
+        "textGeneric": "An agent certificate is about to expire.",
+        "hint": "The agent renews it by itself while it is connected. If this stays, reinstall the agent with a fresh join token."
+      },
+      "revoked": {
+        "text": "An admin revoked {{node}}.",
+        "textGeneric": "An admin revoked the agent.",
+        "hint": "Remove the agent from the host. To let it back in, unblock the node in Settings. Its agent enrols again by itself if it still has its join token."
+      },
+      "blocked": {
+        "text": "{{node}} is blocked from enrolling.",
+        "textGeneric": "A node is blocked from enrolling.",
+        "hint": "Unblock it in Settings → Environments, in the nodes list."
+      },
+      "version_incompatible": {
+        "text": "Agent {{version}} can't talk to this Bayplan.",
+        "textGeneric": "The agent can't talk to this Bayplan.",
+        "older": "The agent is older than Bayplan supports.",
+        "newer": "The agent is newer than this Bayplan.",
+        "hint": "Update the agent by hand.",
+        "hintCommand": "Update the agent by hand:"
+      },
+      "clock_skew": {
+        "text": "The clock on {{node}} is {{offset}} out of step.",
+        "textGeneric": "The clock on a node is out of step.",
+        "hint": "Sync the host's clock (NTP). Bayplan accepts up to 5 minutes of difference."
+      },
+      "timeout": {
+        "text": "{{node}} stopped answering.",
+        "textGeneric": "A node stopped answering.",
+        "hint": "Check the network between the host and Bayplan. The agent reconnects by itself."
+      },
+      "not_a_manager": {
+        "text": "No manager node is reporting.",
+        "hint": "Only worker nodes are connected. Check the agent on a manager node, and that the manager is running."
+      },
+      "no_quorum": {
+        "text": "This swarm has lost quorum.",
+        "hint": "Bring a manager node back online. Bayplan can't read cluster data until most managers are up. Node-local data still works."
+      },
+      "cluster_changed": {
+        "text": "This swarm was re-initialised.",
+        "hint": "Adopt the new cluster to keep this environment, or remove it."
+      },
+      "engine_unreachable": {
+        "text": "The agent can't reach Docker on {{node}}.",
+        "textGeneric": "The agent can't reach Docker.",
+        "hint": "Check that `/var/run/docker.sock` is mounted into the agent and that the Docker daemon is running."
+      },
+      "unsupported_engine": {
+        "text": "{{engine}} {{version}} on {{node}} isn't supported.",
+        "textGeneric": "Docker on a node isn't supported.",
+        "hint": "Bayplan needs Docker Engine 24 or later. Upgrade Docker on that node. Its other data is left out until then."
+      },
+      "agent_policy_denied": {
+        "text": "The agent refused a request ({{endpoint}}).",
+        "textGeneric": "The agent refused a request.",
+        "hint": "The host's agent policy doesn't allow it. This is recorded in the audit log. If you didn't expect it, check the Bayplan server and the agent's settings."
+      },
+      "duplicate_environment": {
+        "text": "{{host}} already belongs to {{environment}}.",
+        "textHost": "{{host}} already belongs to another environment.",
+        "textGeneric": "This host already belongs to another environment.",
+        "hint": "Open {{environment}}, or remove it first, then enrol this host again.",
+        "hintGeneric": "Open the other environment, or remove it first, then enrol this host again."
+      },
+      "type_mismatch": {
+        "text": "{{host}} is a {{hostType}}, but {{environment}} is a {{envType}}.",
+        "textGeneric": "This host is a different type from the environment it tried to join.",
+        "hint": "Add it as a separate environment."
+      },
+      "host_mismatch": {
+        "text": "{{environment}} already manages a different host.",
+        "textGeneric": "This environment already manages a different host.",
+        "hint": "Add {{host}} as its own environment.",
+        "hintGeneric": "Add this host as its own environment."
+      },
+      "unreachable": {
+        "text": "Docker isn't answering on the local socket.",
+        "hint": "Check that `/var/run/docker.sock` is mounted into Bayplan and that the Docker daemon is running."
+      },
+      "api_too_old": {
+        "text": "This Docker Engine is older than Bayplan supports.",
+        "hint": "Bayplan needs Docker Engine 24 or later. Upgrade Docker Engine, then retry."
+      },
+      "podman": {
+        "text": "Podman isn't supported.",
+        "hint": "Bayplan manages Docker Engine only."
+      },
+      "rootless": {
+        "text": "This Docker setup isn't supported.",
+        "hint": "Bayplan manages Docker Engine 24 or later."
+      },
+      "docker_desktop": {
+        "text": "This Docker setup isn't supported.",
+        "hint": "Bayplan manages Docker Engine 24 or later."
+      }
+    }
+  }
+}

@@ -9,14 +9,14 @@
 
 import type { Page } from "@playwright/test";
 
-import { AUTH_STATE } from "./env";
-import { expect, expectVersionFooter, test } from "./helpers";
+import { AUTH_STATE, at } from "./env";
+import { expect, expectVersionFooter, openFirstEnvironment, test } from "./helpers";
 
 test.describe("signed out", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
   test("the setup address closes and the sign-in page shows the footer", async ({ page }) => {
-    await page.goto("/setup");
+    await page.goto(at("/setup"));
     await expect(page).toHaveURL(/\/login$/);
     await expectVersionFooter(page);
   });
@@ -26,8 +26,7 @@ test.describe("signed in", () => {
   test.use({ storageState: AUTH_STATE });
 
   async function envBase(page: Page): Promise<string> {
-    await page.goto("/");
-    await expect(page).toHaveURL(/\/env\/[^/]+$/);
+    await openFirstEnvironment(page);
     return new URL(page.url()).pathname;
   }
 
@@ -39,10 +38,10 @@ test.describe("signed in", () => {
       `${base}/images`,
       `${base}/volumes`,
       `${base}/networks`,
-      "/audit",
-      "/settings/general",
-      "/settings/environments",
-      "/settings/about",
+      at("/audit"),
+      at("/settings/general"),
+      at("/settings/environments"),
+      at("/settings/about"),
     ];
     for (const route of routes) {
       await page.goto(route);

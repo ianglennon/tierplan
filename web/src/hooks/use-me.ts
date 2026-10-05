@@ -62,6 +62,22 @@ export function usePermission(perm: string, envId?: string): boolean {
   return hasPermission(data, perm, envId);
 }
 
+// hasAnyEnvironmentPermission is true when the "*" list or any one environment's
+// list holds perm. It is the gate for what is filtered per environment rather
+// than granted globally, such as the overview: environments.read is held per
+// environment, so the overview opens for anyone who may read at least one and
+// the server limits its rows to those (D-49). Like hasPermission it only
+// decides what to show.
+export function hasAnyEnvironmentPermission(me: Me | undefined, perm: string): boolean {
+  if (!me) return false;
+  return Object.values(me.permissions.environments).some((list) => (list ?? []).includes(perm));
+}
+
+export function useAnyEnvironmentPermission(perm: string): boolean {
+  const { data } = useMe();
+  return hasAnyEnvironmentPermission(data, perm);
+}
+
 // useDocumentTitle sets the tab title to "{page} · {instance name}", or just
 // the instance name when there is no page.
 export function useDocumentTitle(page?: string): void {

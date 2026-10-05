@@ -13,9 +13,13 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/agents"
+	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
 // Stable problem types of the environment routes. The SPA maps each to copy.
@@ -26,23 +30,86 @@ const (
 	problemUnsupportedEngine      = "unsupported_engine"
 	problemInvalidName            = "invalid_name"
 	problemEnvironmentNotFound    = "environment_not_found"
+	problemPublicURLRequired      = "public_url_required"
+	// problemInsecureAgentURL: the address agents are given is plain ws:// for a
+	// host that is not this machine and the development switch is off, so agents
+	// would refuse it (G-02-R4-3). It is checked before anything is created.
+	problemInsecureAgentURL    = "insecure_agent_url"
+	problemAgentsUnavailable   = "agents_unavailable"
+	problemAgentNotFound       = "agent_not_found"
+	problemAgentAlreadyRevoked = "agent_already_revoked"
+	problemNotBlocked          = "not_blocked"
+	problemNoClusterChange     = "no_cluster_change"
+	problemClusterInUse        = "cluster_in_use"
+	problemAgentOffline        = "agent_offline"
+	problemNoManager           = "no_manager_connected"
+	problemSelfUpdateDisabled  = "self_update_disabled"
+	problemAgentUpToDate       = "agent_up_to_date"
+	problemUpdateInProgress    = "update_in_progress"
+	problemNothingToChange     = "nothing_to_change"
+	problemFoldNotOffered      = "fold_not_offered"
 )
 
 // EnvironmentsDeps are the dependencies of the environment routes.
 type EnvironmentsDeps struct {
 	Envs *envs.Service
+	// Agents creates agent environments and their join tokens. Nil means the
+	// server cannot add one.
+	Agents *agents.Service
+	// Instance supplies the address agents dial: the agent URL, else the public
+	// URL, with its base path (D-18). Nil, or neither URL set, means no agent
+	// environment can be added.
+	Instance *instance.Instance
+	// TLSPin returns the SPKI pin of the self-signed certificate Bayplan serves, or
+	// "" when it serves a supplied certificate or plain HTTP, and then the install
+	// carries no pin (D-06). Nil means none.
+	TLSPin func() string
+	// AgentAllowInsecure is the server's BAYPLAN_AGENT_ALLOW_INSECURE, a development
+	// switch. A plain ws:// address for a host that is not this machine is handed out
+	// only while it is on, and then the install also tells the agent to accept it
+	// (T-02-31); otherwise adding an environment is refused (insecure_agent_url).
+	// A wss:// install never carries it, and a plain address on this machine needs it
+	// for neither.
+	AgentAllowInsecure bool
 	// Checker filters the list to the environments the caller may read.
 	Checker *rbac.Checker
+	// Updater is asked to look at an environment's agents when automatic updates
+	// are switched on for it. Nil means nothing is, until an agent connects.
+	Updater *agents.Updater
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
 
-// EnvironmentStatusBody is what the health monitor currently believes.
+// EnvironmentIssueBody is one reason an environment is degraded: a node that is
+// missing, cannot reach Docker, runs an unsupported engine, or has a certificate or
+// clock that needs attention. It carries only a fixed code and a node name.
+type EnvironmentIssueBody struct {
+	Code  string `json:"code" doc:"A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring or clock_skew"`
+	Node  string `json:"node,omitempty" doc:"The node's host name, at most 64 characters; absent for an agent that has not enrolled yet"`
+	Since string `json:"since,omitempty" format:"date-time" doc:"When this began"`
+}
+
+// EnvironmentStatusBody is the health of an environment: the rollup of its agents
+// for an agent environment (D-33), what the health monitor believes for the local
+// socket.
 type EnvironmentStatusBody struct {
-	State       string `json:"state" enum:"unknown,online,offline,unsupported" doc:"online: the engine answers and is supported. offline: it does not answer. unsupported: it answers but Bayplan does not manage it. unknown: not probed yet"`
-	Since       string `json:"since,omitempty" format:"date-time" doc:"When the environment entered this state; for offline, the first failed probe"`
-	Reason      string `json:"reason,omitempty" doc:"Why it is offline or unsupported, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop"`
-	LastAttempt string `json:"lastAttempt,omitempty" format:"date-time" doc:"When the most recent probe finished"`
+	State       string                 `json:"state" enum:"unknown,online,offline,unsupported,pending,reconnecting,degraded,revoked,cluster_changed" doc:"online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but Bayplan does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet"`
+	Since       string                 `json:"since,omitempty" format:"date-time" doc:"When the environment entered this state; for offline, when contact was lost"`
+	Reason      string                 `json:"reason,omitempty" doc:"Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum or cert_expiring; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop"`
+	LastAttempt string                 `json:"lastAttempt,omitempty" format:"date-time" doc:"When the most recent probe of the environment's engine finished"`
+	Issues      []EnvironmentIssueBody `json:"issues,omitempty" doc:"What is wrong with a degraded environment, worst first, then by node"`
+}
+
+// statusBody builds the status of an environment from its rolled-up health and the
+// time of the last probe of its engine.
+func statusBody(h envs.Health, lastAttempt time.Time) EnvironmentStatusBody {
+	body := EnvironmentStatusBody{
+		State: string(h.State), Since: rfc3339(h.Since), Reason: h.Reason, LastAttempt: rfc3339(lastAttempt),
+	}
+	for _, is := range h.Issues {
+		body.Issues = append(body.Issues, EnvironmentIssueBody{Code: is.Code, Node: is.Node, Since: rfc3339(is.Since)})
+	}
+	return body
 }
 
 // EnvironmentEngineBody identifies the engine behind an environment.
@@ -53,17 +120,96 @@ type EnvironmentEngineBody struct {
 	NegotiatedAPI string `json:"negotiatedApi,omitempty" doc:"The API version Bayplan uses with it"`
 }
 
+// EnvironmentNodesBody is how many of an environment's nodes are ready of how many it has.
+type EnvironmentNodesBody struct {
+	Ready int `json:"ready" doc:"Nodes whose agent is connected or was heard from within the last 30 seconds"`
+	Total int `json:"total" doc:"Nodes the environment should have: one per agent that is not revoked"`
+}
+
+// EnvironmentFailingBody is how many of an environment's services are failing of how many it has.
+type EnvironmentFailingBody struct {
+	Failing int `json:"failing" doc:"Services with tasks that keep failing"`
+	Total   int `json:"total" doc:"Services in the environment"`
+}
+
+// EnvironmentAgentsBody is how many of a swarm's expected agents are connected.
+type EnvironmentAgentsBody struct {
+	Connected int `json:"connected" doc:"Agents with a live connection"`
+	Expected  int `json:"expected" doc:"Agents the swarm should have: one per node whose agent was not revoked"`
+}
+
 // EnvironmentBody is one managed environment.
 type EnvironmentBody struct {
 	ID         string                `json:"id" doc:"The environment ID, used in /api/env/{envId}/..."`
 	Name       string                `json:"name" doc:"The display name; defaults to the daemon's hostname"`
-	Kind       string                `json:"kind" enum:"local" doc:"local: the Docker socket on the host Bayplan runs on"`
+	Kind       string                `json:"kind" enum:"local,agent" doc:"local: the Docker socket on the host Bayplan runs on. agent: one or more hosts that dial in through an agent"`
 	Type       string                `json:"type,omitempty" enum:"swarm-manager,swarm-worker,standalone" doc:"What the engine is; absent until it has answered"`
 	IsSelfHost bool                  `json:"isSelfHost" doc:"True for the Docker host Bayplan itself runs on"`
 	Enabled    bool                  `json:"enabled"`
 	CreatedAt  string                `json:"createdAt" format:"date-time"`
 	Status     EnvironmentStatusBody `json:"status"`
 	Engine     EnvironmentEngineBody `json:"engine"`
+
+	EnvType          string                           `json:"envType,omitempty" enum:"swarm,standalone" doc:"What the environment is; absent until it is known. An agent environment gets it from its first agent"`
+	IsLocalSocket    bool                             `json:"isLocalSocket" doc:"True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent"`
+	Nodes            Nullable[EnvironmentNodesBody]   `json:"nodes" doc:"Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster"`
+	FailingServices  Nullable[EnvironmentFailingBody] `json:"failingServices" doc:"Failing and total services; null until service data is known"`
+	Agents           Nullable[EnvironmentAgentsBody]  `json:"agents" doc:"Connected and expected agents; null except on a swarm"`
+	AgentVersion     *string                          `json:"agentVersion" nullable:"true" doc:"The oldest agent version in the environment; null when it has no agent, and for the local socket"`
+	UpdateAvailable  bool                             `json:"updateAvailable" doc:"True when an agent is older than this server by a minor or a patch version"`
+	AutoUpdate       *bool                            `json:"autoUpdate,omitempty" doc:"Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent"`
+	EngineVersion    *string                          `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
+	LastSeen         *string                          `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
+	PendingClusterID string                           `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to"`
+	FoldOffered      bool                             `json:"foldOffered,omitempty" doc:"True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice"`
+}
+
+// InstallSwarmBody is the swarm install: one command for a manager, or a stack file.
+type InstallSwarmBody struct {
+	Command       string `json:"command" doc:"One line to run on any swarm manager. It creates a Docker secret from the join token and starts the agent as a global service. Starts with a space so a shell set to ignore space-led commands keeps it out of its history"`
+	StackFile     string `json:"stackFile" doc:"The same service as a stack file for docker stack deploy. A stack file cannot create a secret from text, so it names the secret as external and its first comment line holds the one-line command that creates it"`
+	RotateCommand string `json:"rotateCommand,omitempty" doc:"One line that swaps a running service over to this token's secret without stopping it. Present only for a token that replaces an earlier one, never for a first install"`
+}
+
+// InstallStandaloneBody is the standalone install: one command, or a compose file.
+type InstallStandaloneBody struct {
+	Command     string `json:"command" doc:"One line that starts the agent on a single Docker host. Starts with a space so a shell set to ignore space-led commands keeps it out of its history"`
+	ComposeFile string `json:"composeFile" doc:"The same container as a compose file for docker compose up, with the same environment as the command"`
+}
+
+// InstallCleanupBody is how to take the agent off a host by hand.
+type InstallCleanupBody struct {
+	Swarm      string `json:"swarm" doc:"Commands that remove the service and the secret on a manager, and the agent volume on every node"`
+	Standalone string `json:"standalone" doc:"One line that removes the agent container and its volume"`
+}
+
+// InstallBody is what an admin needs to connect hosts to a new agent environment.
+// It is in the answer to adding one and nowhere else: the join token is stored
+// only as a hash and cannot be shown again. Every text is built in one place,
+// agents.BuildInstall.
+type InstallBody struct {
+	JoinToken     string                `json:"joinToken" doc:"The join token the agent presents once to enrol. Shown only in this answer; it is inside the commands and files below"`
+	AgentURL      string                `json:"agentUrl" doc:"The address the agent dials, for example wss://bayplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request"`
+	Image         string                `json:"image" doc:"The agent image. Its tag is this server's exact version, or edge for a development or edge server"`
+	Pin           string                `json:"pin,omitempty" doc:"The SPKI pin of the self-signed certificate Bayplan serves, which the agent trusts instead of system roots. Present only when Bayplan serves its own self-signed certificate"`
+	SecretName    string                `json:"secretName" doc:"The Docker secret the swarm install creates for this token, bayplan-agent-token-g followed by the generation"`
+	Generation    int                   `json:"generation" doc:"Which token this is for the environment, from 1; each rotation adds one"`
+	Swarm         InstallSwarmBody      `json:"swarm" doc:"The install for a swarm"`
+	Standalone    InstallStandaloneBody `json:"standalone" doc:"The install for a standalone host"`
+	ManualCleanup InstallCleanupBody    `json:"manualCleanup" doc:"Commands that remove the agent by hand, for a host that is offline when its environment is removed"`
+}
+
+// AddEnvironmentBody is the answer to adding an environment: the environment, and
+// for an agent environment the install details.
+type AddEnvironmentBody struct {
+	EnvironmentBody
+	Install *InstallBody `json:"install,omitempty" doc:"Present for an agent environment only: the join token, the address the agent dials, and the commands and files that install it"`
+}
+
+// AddEnvironmentOutput wraps AddEnvironmentBody for huma.
+type AddEnvironmentOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         AddEnvironmentBody
 }
 
 // EnvironmentListBody lists the environments the caller may see.
@@ -88,9 +234,9 @@ type AddEnvironmentInput struct {
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      struct {
-		Kind             string `json:"kind" enum:"local" doc:"local is the only kind in this release: the Docker socket on this server's own host"`
-		Name             string `json:"name,omitempty" maxLength:"1024" doc:"1 to 64 characters; defaults to the hostname the daemon reports"`
-		AllowUnsupported bool   `json:"allowUnsupported,omitempty" doc:"Add the host even though its engine is not supported; it is stored and shown as unsupported"`
+		Kind             string `json:"kind" enum:"local,agent" doc:"local: the Docker socket on this server's own host. agent: a new environment whose hosts run the Bayplan agent and dial in; the answer carries the join token"`
+		Name             string `json:"name,omitempty" maxLength:"1024" doc:"1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent"`
+		AllowUnsupported bool   `json:"allowUnsupported,omitempty" doc:"Local only: add the host even though its engine is not supported; it is stored and shown as unsupported"`
 	}
 }
 
@@ -99,18 +245,28 @@ type EnvironmentPathInput struct {
 	EnvID string `path:"envId" doc:"The environment ID"`
 }
 
-// RenameEnvironmentInput renames an environment.
-type RenameEnvironmentInput struct {
+// UpdateEnvironmentInput changes an environment's name, its automatic agent
+// updates, or both.
+type UpdateEnvironmentInput struct {
 	EnvironmentPathInput
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      struct {
-		Name string `json:"name" maxLength:"1024" doc:"The new name, 1 to 64 characters"`
+		Name       *string `json:"name,omitempty" maxLength:"1024" doc:"The new name, 1 to 64 characters"`
+		AutoUpdate *bool   `json:"autoUpdate,omitempty" doc:"Switch automatic agent updates on or off for an agent environment"`
 	}
 }
 
 // RemoveEnvironmentInput removes an environment.
 type RemoveEnvironmentInput struct {
+	EnvironmentPathInput
+	UninstallAgents bool `query:"uninstallAgents" default:"false" doc:"Also tell every online agent of the environment to remove itself from its host before the environment is removed"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// FoldLocalInput folds this host into the swarm environment {envId}.
+type FoldLocalInput struct {
 	EnvironmentPathInput
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
@@ -125,22 +281,45 @@ func rfc3339(t time.Time) string {
 
 func environmentBody(e envs.Environment) EnvironmentBody {
 	p := e.Status.Probe
-	return EnvironmentBody{
+	o := e.Overview
+	body := EnvironmentBody{
 		ID: e.ID, Name: e.Name, Kind: e.Kind,
 		Type:       p.Type,
 		IsSelfHost: e.Kind == envs.KindLocal,
 		Enabled:    e.Enabled,
 		CreatedAt:  rfc3339(e.CreatedAt),
-		Status: EnvironmentStatusBody{
-			State:       string(e.Status.State),
-			Since:       rfc3339(e.Status.Since),
-			Reason:      e.Status.Reason,
-			LastAttempt: rfc3339(e.Status.LastAttempt),
-		},
+		Status:     statusBody(e.Health, e.Status.LastAttempt),
 		Engine: EnvironmentEngineBody{
 			Name: p.EngineName, Version: p.EngineVersion, APIVersion: p.APIVersion, NegotiatedAPI: p.NegotiatedAPI,
 		},
+		EnvType: o.EnvType, IsLocalSocket: o.IsLocalSocket, UpdateAvailable: o.UpdateAvailable,
 	}
+	if e.Kind == agents.KindAgent {
+		auto := e.AutoUpdate
+		body.AutoUpdate = &auto
+	}
+	if o.Nodes != nil {
+		body.Nodes = Some(EnvironmentNodesBody{Ready: o.Nodes.Ready, Total: o.Nodes.Total})
+	}
+	if o.Failing != nil {
+		body.FailingServices = Some(EnvironmentFailingBody{Failing: o.Failing.Failing, Total: o.Failing.Total})
+	}
+	if o.Agents != nil {
+		body.Agents = Some(EnvironmentAgentsBody{Connected: o.Agents.Connected, Expected: o.Agents.Expected})
+	}
+	body.PendingClusterID = e.PendingClusterID
+	body.FoldOffered = e.FoldOffered
+	if o.AgentVersion != "" {
+		body.AgentVersion = &o.AgentVersion
+	}
+	if o.EngineVersion != "" {
+		body.EngineVersion = &o.EngineVersion
+	}
+	if !o.LastSeen.IsZero() {
+		seen := rfc3339(o.LastSeen)
+		body.LastSeen = &seen
+	}
+	return body
 }
 
 // canRead reports whether the grants listed for each environment include
@@ -154,7 +333,7 @@ func canRead(perEnv map[string][]rbac.Perm, id string) bool {
 // RegisterEnvironments registers the environment routes: list, add, rename,
 // remove, and the retry-now action under /api/env/{envId}. Adding the local
 // host is the admin's opt-in to managing a root-equivalent socket (D-19), so it
-// needs environments.write and nothing is added automatically.
+// needs environments.create and nothing is added automatically.
 func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
@@ -169,10 +348,12 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			return httpx.Problem(http.StatusConflict, problemEngineUnreachable, "A Docker socket exists but the engine did not answer. Check that Bayplan may open it.")
 		case errors.Is(err, envs.ErrUnsupportedEngine):
 			return httpx.Problem(http.StatusConflict, problemUnsupportedEngine, "Bayplan does not support the Docker engine on this host. Add it anyway to see it as unsupported.")
-		case errors.Is(err, envs.ErrInvalidName):
+		case errors.Is(err, envs.ErrInvalidName), errors.Is(err, agents.ErrInvalidName):
 			return httpx.Problem(http.StatusUnprocessableEntity, problemInvalidName, "The name must be 1 to 64 characters.")
-		case errors.Is(err, envs.ErrNotFound):
+		case errors.Is(err, envs.ErrNotFound), errors.Is(err, agents.ErrEnvironmentNotFound):
 			return httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
+		case errors.Is(err, envs.ErrFoldNotOffered):
+			return httpx.Problem(http.StatusConflict, problemFoldNotOffered, "This Bayplan host is not a manager of that swarm, or it was folded into it a moment ago.")
 		}
 		d.Log.Error("environment request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
@@ -186,7 +367,7 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		Method:      http.MethodGet,
 		Path:        "/api/environments",
 		Summary:     "List the environments the signed-in user may see",
-		Description: "Each environment comes with the health monitor's status. An environment the caller does not hold " +
+		Description: "Each environment comes with its health: for an agent environment the rollup of its agents (pending, reconnecting, online, degraded with its issues, offline, unsupported, revoked or cluster_changed, each with a stable reason code and since), for the local socket the health monitor's status. An environment the caller does not hold " +
 			"environments.read for is left out, so the list never reveals what the caller cannot open.",
 		Tags: []string{"environments"},
 	}, rbac.SelfService, func(ctx context.Context, _ *struct{}) (*EnvironmentListOutput, error) {
@@ -215,39 +396,71 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		OperationID:   "addEnvironment",
 		Method:        http.MethodPost,
 		Path:          "/api/environments",
-		Summary:       "Add the Docker host Bayplan runs on as an environment",
+		Summary:       "Add an environment",
 		DefaultStatus: http.StatusCreated,
-		Description: "The admin's explicit opt-in to managing this host (D-19): nothing is added at startup. Needs a Docker " +
-			"socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or " +
-			"local_environment_exists; 422 invalid_name. The name defaults to the hostname the daemon reports. Audited as environment.added.",
+		Description: "kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is " +
+			"added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine " +
+			"(unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the " +
+			"Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) " +
+			"and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, " +
+			"with its base path); 409 " + problemPublicURLRequired + " when Bayplan has neither, and 409 " + problemInsecureAgentURL +
+			" when that address is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off. Nothing is created in either case. 422 invalid_name. " +
+			"The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AddEnvironmentInput) (*EnvironmentOutput, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsCreate, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if in.Body.Kind == agents.KindAgent {
+			return addAgentEnvironment(ctx, d, fail, p, in)
 		}
 		e, err := d.Envs.AddLocal(ctx, p.AuditActor(), in.Body.Name, in.Body.AllowUnsupported, httpx.ClientIP(ctx), in.UserAgent)
 		if err != nil {
 			return nil, fail("add environment", err)
 		}
-		return one(e), nil
+		return &AddEnvironmentOutput{CacheControl: "no-store", Body: AddEnvironmentBody{EnvironmentBody: environmentBody(e)}}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
-		OperationID: "renameEnvironment",
+		OperationID: "updateEnvironment",
 		Method:      http.MethodPatch,
 		Path:        "/api/environments/{envId}",
-		Summary:     "Rename an environment",
-		Description: "422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.",
-		Tags:        []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RenameEnvironmentInput) (*EnvironmentOutput, error) {
+		Summary:     "Rename an environment or switch its automatic agent updates",
+		Description: "Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the " +
+			"name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed " +
+			"the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the " +
+			"environment's connected agents at once.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateEnvironmentInput) (*EnvironmentOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
-		e, err := d.Envs.Rename(ctx, p.AuditActor(), in.EnvID, in.Body.Name, httpx.ClientIP(ctx), in.UserAgent)
+		if in.Body.Name == nil && in.Body.AutoUpdate == nil {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemNothingToChange, "Send a name, autoUpdate or both.")
+		}
+		ip := httpx.ClientIP(ctx)
+		if in.Body.AutoUpdate != nil {
+			if d.Agents == nil {
+				return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot manage agent environments.")
+			}
+			// Checked first, so a name sent with it is not applied when the switch cannot be.
+			if err := d.Agents.SetAutoUpdate(ctx, p.AuditActor(), in.EnvID, *in.Body.AutoUpdate, ip, in.UserAgent); err != nil {
+				return nil, fail("set auto-update", err)
+			}
+			if *in.Body.AutoUpdate && d.Updater != nil {
+				go d.Updater.Sweep(in.EnvID)
+			}
+		}
+		if in.Body.Name != nil {
+			if _, err := d.Envs.Rename(ctx, p.AuditActor(), in.EnvID, *in.Body.Name, ip, in.UserAgent); err != nil {
+				return nil, fail("rename environment", err)
+			}
+		}
+		e, err := d.Envs.Get(ctx, in.EnvID)
 		if err != nil {
-			return nil, fail("rename environment", err)
+			return nil, fail("read the environment", err)
 		}
 		return one(e), nil
 	})
@@ -258,18 +471,49 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		Path:          "/api/environments/{envId}",
 		Summary:       "Remove an environment",
 		DefaultStatus: http.StatusNoContent,
-		Description: "Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched " +
-			"(D-20). Audited as environment.removed.",
+		Description: "Needs environments.delete. Stops managing the host. Revokes every agent, disables the join token and deletes the environment, " +
+			"and changes nothing in Docker: its containers, networks and volumes are untouched (D-20, D-30). With uninstallAgents=true each online agent is " +
+			"first told to uninstall itself (a swarm's agents through one manager, which removes the agent service and its token secret; every agent " +
+			"removes its own container and state volume), and the request waits up to 30 seconds for their answers. Whatever they answer, or do not, the " +
+			"revoking and deletion follow, so hosts that were offline or refused keep their agent until the admin runs the manual cleanup command that GET " +
+			"/api/env/{envId}/agents gives. Audited as environment.removed, agent.revoked per agent, and agent.uninstalled per agent that confirmed.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RemoveEnvironmentInput) (*struct{}, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsDelete, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RemoveEnvironmentInput) (*struct{}, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
-		if err := d.Envs.Remove(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent); err != nil {
+		if err := d.Envs.Remove(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent, in.UninstallAgents); err != nil {
 			return nil, fail("remove environment", err)
 		}
 		return nil, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "foldLocalHost",
+		Method:      http.MethodPost,
+		Path:        "/api/environments/{envId}/fold-local",
+		Summary:     "Fold this Bayplan host into a swarm environment",
+		Description: "Offered when the Docker host Bayplan runs on is a manager of a swarm that is enrolled through agents: the local socket's own " +
+			"/info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment " +
+			"then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate " +
+			"local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. " +
+			"404 environment_not_found; 409 " + problemFoldNotOffered + " when the host is not a manager of that swarm, or was folded already. Needs " +
+			"environments.manage. Audited as environment.local_folded.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *FoldLocalInput) (*EnvironmentOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if err := d.Envs.FoldLocal(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent); err != nil {
+			return nil, fail("fold the local host", err)
+		}
+		e, err := d.Envs.Get(ctx, in.EnvID)
+		if err != nil {
+			return nil, fail("read the environment", err)
+		}
+		return one(e), nil
 	})
 
 	// Reconnect is deliberately not audited: it changes no Bayplan or Docker
@@ -291,4 +535,71 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		}
 		return one(e), nil
 	})
+}
+
+// addAgentEnvironment creates an agent environment and answers with its join
+// token and the install built from it. The token is in this answer only: the
+// server keeps its hash, and it is in no audit row.
+func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(string, error) error, p *rbac.Principal, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
+	if d.Agents == nil {
+		return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot add agent environments.")
+	}
+	endpoint := ""
+	if d.Instance != nil {
+		endpoint = d.Instance.AgentEndpoint()
+	}
+	if endpoint == "" {
+		return nil, httpx.Problem(http.StatusConflict, problemPublicURLRequired,
+			"Bayplan has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with BAYPLAN_PUBLIC_URL or BAYPLAN_AGENT_URL.")
+	}
+	if tunnel.PlainAddressRefused(endpoint, d.AgentAllowInsecure) {
+		return nil, insecureAgentURLProblem()
+	}
+	created, err := d.Agents.CreateEnvironment(ctx, p.AuditActor(), in.Body.Name, httpx.ClientIP(ctx), in.UserAgent)
+	if err != nil {
+		return nil, fail("add agent environment", err)
+	}
+	e, err := d.Envs.Get(ctx, created.EnvID)
+	if err != nil {
+		return nil, fail("read the new environment", err)
+	}
+	pin := ""
+	if d.TLSPin != nil {
+		pin = d.TLSPin()
+	}
+	install, err := agents.BuildInstall(agents.InstallParams{
+		Token: created.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: created.Generation,
+		AllowInsecure: d.AgentAllowInsecure,
+	})
+	if err != nil {
+		// The environment exists and its token cannot be shown again. A value that
+		// breaks the quoting is a server bug, so it is logged and not hidden.
+		return nil, fail("build the install", err)
+	}
+	return &AddEnvironmentOutput{CacheControl: "no-store", Body: AddEnvironmentBody{
+		EnvironmentBody: environmentBody(e),
+		Install:         installBody(install),
+	}}, nil
+}
+
+// insecureAgentURLProblem is the 409 for an agent address agents would refuse. It
+// sits next to the empty-address check at add and rotate, before an environment or
+// a token is created, so nothing exists whose install is never shown. The detail is
+// fixed and does not repeat the address.
+func insecureAgentURLProblem() error {
+	return httpx.Problem(http.StatusConflict, problemInsecureAgentURL,
+		"The address agents are given is plain ws:// for a host that is not this machine. Agents refuse it, and so does Bayplan. "+
+			"Set an https public URL or agent URL in Settings, or with BAYPLAN_PUBLIC_URL or BAYPLAN_AGENT_URL. "+
+			"BAYPLAN_AGENT_ALLOW_INSECURE=true on Bayplan allows it for development only.")
+}
+
+// installBody maps the built install to its API shape.
+func installBody(in agents.Install) *InstallBody {
+	return &InstallBody{
+		JoinToken: in.JoinToken, AgentURL: in.AgentURL, Image: in.Image, Pin: in.Pin,
+		SecretName: in.SecretName, Generation: in.Generation,
+		Swarm:         InstallSwarmBody{Command: in.SwarmCommand, StackFile: in.SwarmStackFile, RotateCommand: in.SwarmRotateCommand},
+		Standalone:    InstallStandaloneBody{Command: in.StandaloneCommand, ComposeFile: in.StandaloneComposeFile},
+		ManualCleanup: InstallCleanupBody{Swarm: in.SwarmCleanup, Standalone: in.StandaloneCleanup},
+	}
 }

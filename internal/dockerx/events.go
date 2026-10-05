@@ -26,8 +26,12 @@ type EventRow struct {
 	ID       string
 	Time     time.Time
 	TimeNano int64
-	// Type is container, image, network or volume.
+	// Type is container, image, network or volume; Bayplan's own rows have the type
+	// bayplan.
 	Type string
+	// Scope is local for what happened on this node and swarm for what happened to
+	// the cluster, which every manager reports; empty for a row of Bayplan's own.
+	Scope string
 	// Action is what happened, for example start, die, pull or connect.
 	Action string
 	// ActorID is the ID of the container, image, network or volume.
@@ -144,6 +148,7 @@ func eventRow(m events.Message) (EventRow, bool) {
 		Time:     time.Unix(0, nano).UTC(),
 		TimeNano: nano,
 		Type:     typ,
+		Scope:    m.Scope,
 		Action:   action,
 		ActorID:  m.Actor.ID,
 		// Never nil, so a JSON consumer always sees an object.

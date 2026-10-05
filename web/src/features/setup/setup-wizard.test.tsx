@@ -13,11 +13,24 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SetupWizard } from "@/features/setup/setup-wizard";
+import { resetBasePathForTests } from "@/lib/base-path";
 import "@/i18n";
 
 interface Call {
   url: string;
   body: Record<string, unknown>;
+}
+
+// announceBase does what the server does when it renders index.html (plan
+// 02-03): it puts the base path in a meta tag the SPA reads once.
+function announceBase(base: string | null): void {
+  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  resetBasePathForTests();
+  if (base === null) return;
+  const meta = document.createElement("meta");
+  meta.name = "bayplan-base";
+  meta.content = base;
+  document.head.append(meta);
 }
 
 const PASSWORD = "correct horse battery";
@@ -235,6 +248,20 @@ describe("SetupWizard", () => {
     expect(field("Public URL").value).toBe(window.location.origin);
     expect(field("Public URL").readOnly).toBe(false);
     expect(field("Instance name").getAttribute("maxlength")).toBe("64");
+  });
+
+  it("pre-fills the public URL with the origin plus the base path under a base", async () => {
+    announceBase("/bayplan");
+    try {
+      stubApi({});
+      await renderWizard();
+      await passToken();
+      fillAdmin();
+      await screen.findByText("Name this instance");
+      expect(field("Public URL").value).toBe(`${window.location.origin}/bayplan`);
+    } finally {
+      announceBase(null);
+    }
   });
 
   it("makes the public URL read-only with the locked helper when the environment sets it", async () => {

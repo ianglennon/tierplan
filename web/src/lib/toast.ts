@@ -19,3 +19,13 @@ export function toastSuccess(message: string): void {
 export function toastError(message: string): void {
   toast.error(createElement("span", { role: "alert" }, message), { duration: ERROR_TOAST_MS });
 }
+
+// toastSuccessWithAction is a success toast with one button, such as "Rotate
+// join token" after a revoke. A person needs time to read the message and then
+// decide to press it, so it stays as long as an error does.
+export function toastSuccessWithAction(message: string, label: string, onClick: () => void): void {
+  toast.success(createElement("span", { role: "status" }, message), {
+    duration: ERROR_TOAST_MS,
+    action: { label, onClick },
+  });
+}

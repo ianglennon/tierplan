@@ -25,6 +25,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { lowerAscii, MAX_USERNAME_LENGTH } from "@/features/setup/schemas";
 import { meQueryOptions, UnauthenticatedError, useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
+import { withBase } from "@/lib/base-path";
 import { safeNext } from "@/lib/redirect";
 import { cn } from "@/lib/utils";
 
@@ -83,7 +84,7 @@ function LoginPage() {
       // one (WR-15). This also drops the old /api/me answer, so the app shell
       // loads the permissions that sign-in does not carry.
       queryClient.clear();
-      router.history.push(safeNext(next));
+      router.history.push(withBase(safeNext(next)));
     } catch {
       setErrorKey("common.errors.unreachable");
     } finally {
@@ -192,7 +193,7 @@ export const Route = createFileRoute("/login")({
       if (err instanceof UnauthenticatedError) return;
       throw err;
     }
-    throw redirect({ href: safeNext(search.next) });
+    throw redirect({ href: withBase(safeNext(search.next)) });
   },
   component: LoginPage,
 });

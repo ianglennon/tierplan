@@ -19,12 +19,15 @@ import (
 	"github.com/ianglennon/bayplan/internal/vault"
 )
 
-// Cookie names (D-12, D-32). The __Host- prefix makes a browser accept the
+// Cookie names (D-12, D-32, D-50). The __Host- prefix makes a browser accept the
 // cookie only with Secure, Path=/ and no Domain, so it is used whenever the
-// public URL is https; over plain http the prefix would make the browser drop
-// the cookie, so the bare name is used.
+// public URL is https and has no path. Under a base path the cookie needs
+// Path=<base>, which __Host- forbids, so https uses __Secure- (Secure is still
+// required, Path and Domain are free). Over plain http either prefix would make
+// the browser drop the cookie, so the bare name is used.
 const (
-	secureCookieName = "__Host-bayplan_session"
+	hostCookieName   = "__Host-bayplan_session"
+	secureCookieName = "__Secure-bayplan_session"
 	plainCookieName  = "bayplan_session"
 )
 
@@ -92,27 +95,51 @@ func (m *Sessions) CreateTx(ctx context.Context, tx *sql.Tx, userID string, reme
 	return rawID, idHash, nil
 }
 
-// CookieName is the session cookie's name for a public URL that is (secure) or
-// is not https.
-func CookieName(secure bool) string {
-	if secure {
+// CookieScope is what decides the session cookie's name, Path and Secure flag:
+// whether the public URL is https, and the path of the public URL (D-50).
+type CookieScope struct {
+	// Secure is true when the public URL is https.
+	Secure bool
+	// BasePath is the path of the public URL, "" for the root.
+	BasePath string
+}
+
+// CookieName is the session cookie's name for the scope: __Host- for https at
+// the root, __Secure- for https under a base path, bare over http (D-50). The
+// authenticator reads only this name, so a cookie tossed under another name or
+// scope is ignored (T-02-12).
+func CookieName(scope CookieScope) string {
+	switch {
+	case scope.Secure && scope.BasePath == "":
+		return hostCookieName
+	case scope.Secure:
 		return secureCookieName
+	default:
+		return plainCookieName
 	}
-	return plainCookieName
+}
+
+// cookiePath is "/" at the root and the base path under one, so a browser sends
+// the cookie only to Bayplan's own path and not to a neighbour on the same host.
+func cookiePath(scope CookieScope) string {
+	if scope.BasePath == "" {
+		return "/"
+	}
+	return scope.BasePath
 }
 
 // Cookie builds the session cookie. It is returned by value so a huma handler
 // can hand it to the response through a `header:"Set-Cookie"` output field.
 // Without remember there is no Max-Age, so the browser drops it when it closes;
 // with remember it lasts the remember lifetime. It is HttpOnly, SameSite=Lax,
-// Path=/ and never has a Domain.
-func (m *Sessions) Cookie(rawID string, remember, secure bool) http.Cookie {
+// Path=/ (or the base path, D-50) and never has a Domain.
+func (m *Sessions) Cookie(rawID string, remember bool, scope CookieScope) http.Cookie {
 	c := http.Cookie{ //nolint:gosec // Secure follows the public URL scheme (D-12): the __Host- prefix needs it, and over plain http a Secure cookie would never be stored
-		Name:     CookieName(secure),
+		Name:     CookieName(scope),
 		Value:    rawID,
-		Path:     "/",
+		Path:     cookiePath(scope),
 		HttpOnly: true,
-		Secure:   secure,
+		Secure:   scope.Secure,
 		SameSite: http.SameSiteLaxMode,
 	}
 	if remember {
@@ -122,14 +149,14 @@ func (m *Sessions) Cookie(rawID string, remember, secure bool) http.Cookie {
 }
 
 // ClearCookie builds the cookie that makes a browser delete the session cookie.
-func ClearCookie(secure bool) http.Cookie {
+func ClearCookie(scope CookieScope) http.Cookie {
 	return http.Cookie{ //nolint:gosec // Secure must match the cookie being cleared (D-12)
-		Name:     CookieName(secure),
+		Name:     CookieName(scope),
 		Value:    "",
-		Path:     "/",
+		Path:     cookiePath(scope),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   secure,
+		Secure:   scope.Secure,
 		SameSite: http.SameSiteLaxMode,
 	}
 }

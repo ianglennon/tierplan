@@ -1,0 +1,220 @@
+{
+  "envsettings": {
+    "pageTitle": "{{name}}",
+    "list": {
+      "manage": "Manage",
+      "manageAria": "Manage {{name}}"
+    },
+    "breadcrumb": {
+      "label": "Breadcrumb",
+      "settings": "Settings",
+      "environments": "Environments"
+    },
+    "loading": "Loading the environment…",
+    "loadFailed": "Couldn't load the environment.",
+    "retry": "Try again",
+    "notFound": {
+      "heading": "Environment not found",
+      "body": "It doesn't exist, or it was removed.",
+      "back": "Back to environments"
+    },
+    "sections": {
+      "general": "General",
+      "connection": "Connection",
+      "nodes": "Nodes and agents",
+      "token": "Join token",
+      "updates": "Agent updates",
+      "remove": "Remove environment"
+    },
+    "general": {
+      "name": "Name",
+      "rename": "Rename",
+      "renameAria": "Rename {{name}}"
+    },
+    "connection": {
+      "health": "Health",
+      "connectsTo": "Connects to",
+      "moreIssues_one": "and {{count}} more issue",
+      "moreIssues_other": "and {{count}} more issues"
+    },
+    "token": {
+      "body": "The join token lets a host enrol into this environment. It stays valid until you rotate or disable it. Enrolled agents keep working when it changes.",
+      "lastChanged": "Last changed {{when}} by {{user}}.",
+      "show": "Show install command",
+      "disable": "Disable token",
+      "disabledBadge": "Disabled",
+      "disabledBody": "The join token is disabled. Show install command generates a new one.",
+      "loading": "Loading the join token…",
+      "loadFailed": "Couldn't load the join token.",
+      "retry": "Try again",
+      "disableConfirm": {
+        "title": "Disable the join token?",
+        "body": "No new host can enrol until you generate a new token with Show install command. Enrolled agents aren't affected.",
+        "cancel": "Cancel",
+        "confirm": "Disable token",
+        "pending": "Disabling…"
+      }
+    },
+    "nodes": {
+      "tableLabel": "Nodes and agents",
+      "loading": "Loading nodes…",
+      "loadFailed": "Couldn't load the nodes.",
+      "retry": "Try again",
+      "empty": "No agents have connected yet.",
+      "missing": "—",
+      "columns": {
+        "node": "Node",
+        "role": "Role",
+        "agent": "Agent",
+        "agentVersion": "Agent version",
+        "engine": "Engine",
+        "certificate": "Certificate",
+        "clock": "Clock",
+        "lastSeen": "Last seen",
+        "actions": "Actions"
+      },
+      "roles": {
+        "leader": "Leader",
+        "manager": "Manager",
+        "worker": "Worker",
+        "standalone": "Standalone",
+        "localSocket": "Local socket",
+        "local": "Local socket"
+      },
+      "agentState": {
+        "connected": "Connected",
+        "disconnected": "Disconnected"
+      },
+      "badges": {
+        "revoked": "Revoked",
+        "blocked": "Blocked",
+        "readOnly": "Read-only (set on host)",
+        "readOnlyTip": "BAYPLAN_AGENT_READ_ONLY is set on this host. The agent refuses every change Bayplan asks for."
+      },
+      "actionsFor": "Actions for {{node}}",
+      "revokeNode": "Revoke node",
+      "unblockNode": "Unblock node",
+      "fingerprintAria": "Certificate fingerprint of {{node}}",
+      "copyFingerprint": "Copy certificate fingerprint of {{node}}",
+      "fingerprintCopied": "Certificate fingerprint copied.",
+      "clockOff": "Clock off",
+      "updateAgent": "Update agent",
+      "updating": "Updating…",
+      "updateFailed": "Update failed: {{reason}}",
+      "updateBadge": "Update"
+    },
+    "cert": {
+      "expiresIn_one": "Expires in {{count}} day",
+      "expiresIn_other": "Expires in {{count}} days",
+      "expired": "Expired {{when}}",
+      "notRenewing": "Not renewing"
+    },
+    "revoke": {
+      "title": "Revoke {{node}}?",
+      "body": "{{node}} is disconnected now and its certificate is rejected for good. It can't enrol again until you unblock it. If the host itself may be compromised, also rotate the join token.",
+      "cancel": "Cancel",
+      "confirm": "Revoke node",
+      "pending": "Revoking…",
+      "done": "{{node}} was revoked.",
+      "rotate": "Rotate join token",
+      "alreadyRevoked": "That node was revoked while you were looking at it.",
+      "failed": "Couldn't revoke the node. Try again."
+    },
+    "unblock": {
+      "title": "Unblock {{node}}?",
+      "body": "{{node}} can enrol again with the join token. The agent that was revoked isn't revived. If the host's agent still has its join token, it enrols again by itself within a minute. If not, install the agent on the host again.",
+      "cancel": "Cancel",
+      "confirm": "Unblock node",
+      "pending": "Unblocking…",
+      "done": "{{node}} was unblocked.",
+      "notBlocked": "That node was already unblocked.",
+      "failed": "Couldn't unblock the node. Try again."
+    },
+    "adopt": {
+      "button": "Adopt new cluster",
+      "title": "Adopt the new cluster?",
+      "body": "{{name}} will be bound to the swarm that now reports cluster ID {{id}}. This is recorded in the audit log.",
+      "bodyNoId": "{{name}} will be bound to the swarm that now reports a new cluster ID. This is recorded in the audit log.",
+      "cancel": "Cancel",
+      "confirm": "Adopt new cluster",
+      "pending": "Adopting…",
+      "done": "{{name}} now follows the new cluster.",
+      "noChange": "There is nothing left to adopt. Another admin may have adopted it already.",
+      "inUse": "Another environment already manages that cluster, so this one can't adopt it.",
+      "failed": "Couldn't adopt the new cluster. Try again."
+    },
+    "fold": {
+      "title": "Local host",
+      "alert": "This Bayplan host is a manager of {{swarm}}. It can be reached through the Docker socket, so it needs no agent.",
+      "button": "Fold into {{swarm}}",
+      "dialogTitle": "Fold this host into {{swarm}}?",
+      "body": "Bayplan will reach this node through the socket, and the separate Local socket environment is retired. Nothing changes on the host. This is recorded in the audit log.",
+      "cancel": "Cancel",
+      "confirm": "Fold into {{swarm}}",
+      "pending": "Folding…",
+      "done": "{{swarm}} now reaches this host through the Docker socket.",
+      "notOffered": "This host is no longer a manager of that swarm, or it was folded a moment ago. Nothing was changed.",
+      "failed": "Couldn't fold this host. Try again."
+    },
+    "updates": {
+      "autoLabel": "Update agents automatically",
+      "autoHelper": "After a Bayplan upgrade, agents here are updated within the compatibility window. Turn this off to update them yourself.",
+      "autoFailed": "Couldn't change the setting. Try again.",
+      "updateAll": "Update all agents ({{count}})",
+      "starting": "Starting…",
+      "progress": "Updating agents ({{done}} of {{total}})",
+      "swarmNote": "In a swarm one update rolls every node's agent, one after the other, so Update agent on one node updates them all.",
+      "manualOff": "Self-update is turned off on {{node}}. Update it by hand:",
+      "manualOther": "Bayplan can't update {{node}} by itself. Update it by hand:",
+      "manualLabel": "the update command for {{node}}"
+    },
+    "updateReasons": {
+      "image_not_own_repository": "the update image isn't from the agent's own repository",
+      "image_invalid": "the update image isn't a valid reference",
+      "not_a_manager": "a worker can't update the swarm's agent service",
+      "self_update_disabled": "the host turned self-update off",
+      "busy": "another update is already running on that host",
+      "own_container_unknown": "the agent couldn't identify its own container",
+      "update_failed": "Docker refused the update (see the agent's log)",
+      "not_implemented": "this agent is too old to update itself",
+      "insecure_session": "the agent's connection isn't TLS-verified, so it won't update itself",
+      "no_answer": "the agent didn't answer, so it can't update itself",
+      "no_new_version": "the agent never came back on the new version",
+      "rolled_back": "the new version didn't connect, so the old one was put back"
+    },
+    "updateErrors": {
+      "agent_offline": "That agent isn't connected, so it can't be told to update. Update it by hand, or wait until it is back.",
+      "no_manager_connected": "No manager of this swarm is connected, and a swarm's agents are updated through a manager.",
+      "self_update_disabled": "The owner of that host turned agent self-update off. Update it by hand.",
+      "agent_up_to_date": "That agent already runs this server's version.",
+      "update_in_progress": "An update is already running.",
+      "failed": "Couldn't start the update. Try again."
+    },
+    "remove": {
+      "cardBody": "Bayplan stops managing this environment, revokes every agent and disables the join token. You can also have it uninstall the agent from the hosts.",
+      "cardBodyLocal": "Bayplan stops managing this host. Nothing on it is changed.",
+      "button": "Remove environment",
+      "buttonLocal": "Remove host",
+      "title": "Remove {{name}}?",
+      "body": "Bayplan will stop managing this environment and revoke every agent and the join token. Containers, images, volumes and networks on the hosts are not changed.",
+      "uninstall": "Also uninstall the agent from the hosts",
+      "helperSome": "{{online}} of {{total}} agents are online. The others need the manual command below.",
+      "helperAll": "All {{total}} agents are online.",
+      "helperNone": "No agents are online. Use the manual command below.",
+      "helperLoading": "Checking which agents are online…",
+      "helperUnknown": "Couldn't tell which agents are online. Use the manual command below.",
+      "waiting": "Telling the agents to uninstall. This can take up to 30 seconds.",
+      "manualTrigger": "Manual cleanup command",
+      "manualBody": "If an agent is offline, or you leave the box unchecked, run this on each host:",
+      "manualSwarm": "Swarm",
+      "manualStandalone": "Standalone host",
+      "manualSwarmLabel": "the swarm cleanup command",
+      "manualStandaloneLabel": "the standalone cleanup command",
+      "cancel": "Cancel",
+      "confirm": "Remove environment",
+      "pending": "Removing…",
+      "failed": "Couldn't remove the environment. Try again.",
+      "done": "{{name}} was removed."
+    }
+  }
+}

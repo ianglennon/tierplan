@@ -97,6 +97,8 @@ type client struct {
 	ip string
 	// trustedPeer is true when the TCP peer is inside BAYPLAN_TRUSTED_PROXIES.
 	trustedPeer bool
+	// scheme is the scheme the caller used, as EffectiveScheme works it out.
+	scheme string
 }
 
 // PrincipalFrom returns the authenticated principal of the request, nil when
@@ -180,10 +182,53 @@ func ClientIP(ctx context.Context) string {
 	return c.ip
 }
 
+// EffectiveScheme is the scheme the caller used to reach Bayplan: https for a
+// request that arrived over TLS, the scheme a trusted proxy reports in
+// X-Forwarded-Proto, and http for everything else. The header of a peer that is
+// not in BAYPLAN_TRUSTED_PROXIES is never read, and neither is any other
+// forwarded header (D-51). Outside the client-address middleware it is http.
+func EffectiveScheme(ctx context.Context) string {
+	c, _ := ctx.Value(clientKey{}).(client)
+	if c.scheme == "" {
+		return schemeHTTP
+	}
+	return c.scheme
+}
+
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
+// forwardedScheme is the scheme the last proxy in a chain put in
+// X-Forwarded-Proto, or "" when the header says nothing usable. The last value is
+// the one the trusted peer closest to Bayplan added; the ones before it were
+// supplied further out.
+func forwardedScheme(h http.Header) string {
+	vals := h.Values("X-Forwarded-Proto")
+	if len(vals) == 0 {
+		return ""
+	}
+	last := vals[len(vals)-1]
+	if i := strings.LastIndexByte(last, ','); i >= 0 {
+		last = last[i+1:]
+	}
+	switch p := strings.ToLower(strings.TrimSpace(last)); p {
+	case schemeHTTP, schemeHTTPS:
+		return p
+	}
+	return ""
+}
+
 func peerTrusted(ctx context.Context) bool {
 	c, _ := ctx.Value(clientKey{}).(client)
 	return c.trustedPeer
 }
+
+// PeerTrusted reports whether the TCP peer of the request is one of
+// BAYPLAN_TRUSTED_PROXIES. The agent endpoint uses it to decide whether a
+// forwarded scheme and a TLS exporter value can be believed.
+func PeerTrusted(ctx context.Context) bool { return peerTrusted(ctx) }
 
 // Problem types the policy emits. The SPA maps them to copy.
 const (
@@ -222,6 +267,14 @@ func checkRoute(method, path string, need rbac.Requirement) {
 // rightmost address that is not itself a trusted proxy is used, so a client
 // cannot choose the address by prepending to X-Forwarded-For.
 func clientIP(trusted []netip.Prefix) func(http.Handler) http.Handler {
+	return ClientIPMiddleware(trusted)
+}
+
+// ClientIPMiddleware is the middleware that records the client address and
+// whether the TCP peer is a trusted proxy. The router installs it; it is exported
+// so a handler served outside the router, and the tests of one, can sit behind
+// the same logic.
+func ClientIPMiddleware(trusted []netip.Prefix) func(http.Handler) http.Handler {
 	var strategy realclientip.Strategy
 	if len(trusted) > 0 {
 		ranges := make([]net.IPNet, 0, len(trusted))
@@ -241,12 +294,20 @@ func clientIP(trusted []netip.Prefix) func(http.Handler) http.Handler {
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			c := client{ip: req.RemoteAddr}
+			c := client{ip: req.RemoteAddr, scheme: schemeHTTP}
+			if req.TLS != nil {
+				c.scheme = schemeHTTPS
+			}
 			if ap, err := netip.ParseAddrPort(req.RemoteAddr); err == nil {
 				peer := ap.Addr().Unmap()
 				c.ip = peer.String()
 				if strategy != nil && inPrefixes(peer, trusted) {
 					c.trustedPeer = true
+					if req.TLS == nil {
+						if p := forwardedScheme(req.Header); p != "" {
+							c.scheme = p
+						}
+					}
 					if fwd := strategy.ClientIP(req.Header, req.RemoteAddr); fwd != "" {
 						c.ip = fwd
 					}
@@ -300,21 +361,17 @@ func isMutating(method string) bool {
 
 // expectedOrigin is the origin a browser-issued mutation must come from: the
 // configured public origin, or before setup stores one, the origin the request
-// itself arrived at. The scheme follows the connection, or X-Forwarded-Proto
-// when the peer is a trusted proxy.
+// itself arrived at. The scheme is the effective one: the connection, or what a
+// trusted proxy says in X-Forwarded-Proto.
 func (r *Router) expectedOrigin(req *http.Request) string {
 	if r.opts.PublicOrigin != nil {
 		if o := r.opts.PublicOrigin(); o != "" {
 			return canonicalOrigin(schemeOf(o), hostOf(o))
 		}
 	}
-	scheme := "http"
+	scheme := EffectiveScheme(req.Context())
 	if req.TLS != nil {
-		scheme = "https"
-	} else if peerTrusted(req.Context()) {
-		if p := strings.ToLower(req.Header.Get("X-Forwarded-Proto")); p == "https" || p == "http" {
-			scheme = p
-		}
+		scheme = schemeHTTPS
 	}
 	return canonicalOrigin(scheme, req.Host)
 }
@@ -536,7 +593,12 @@ func (r *Router) Guarded(method, path string, need rbac.Requirement, h http.Hand
 // operation: it serves the SPA while setup is needed and redirects to /login
 // once an admin exists (D-06). /login is an SPA route served by the fallback,
 // and /api/version is registered as Public.
-var exemptPaths = map[string]bool{"/healthz": true, "/readyz": true, "/setup": true, "/setup/*": true}
+//
+// /agent/connect is the fifth: the WebSocket an agent dials. It is exempt from
+// user authentication because the agent handshake is its own authentication
+// (join token or certificate, proof of possession, per-environment CA), and it
+// is not in the OpenAPI contract.
+var exemptPaths = map[string]bool{"/healthz": true, "/readyz": true, "/setup": true, "/setup/*": true, "/agent/connect": true}
 
 // Problem builds the RFC 9457 error a huma handler returns when it must answer
 // with a specific status and a stable machine-readable type the SPA maps to
@@ -562,7 +624,7 @@ func VerifyAllGuarded(r *Router) error {
 		case !ok:
 			problems = append(problems, "unguarded route "+key+" (register it with httpx.Register or Router.Guarded)")
 		case rec.Exempt && !exemptPaths[rec.Path]:
-			problems = append(problems, "route "+key+" is exempt from the policy but is not on the D-47 list (/healthz, /readyz, /setup)")
+			problems = append(problems, "route "+key+" is exempt from the policy but is not on the D-47 list (/healthz, /readyz, /setup, /agent/connect)")
 		}
 		return nil
 	})

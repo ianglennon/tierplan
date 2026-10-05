@@ -1,28 +1,343 @@
 {
   "components": {
     "schemas": {
+      "AddEnvironmentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agentVersion": {
+            "description": "The oldest agent version in the environment; null when it has no agent, and for the local socket",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agents": {
+            "description": "Connected and expected agents; null except on a swarm",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentAgentsBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "autoUpdate": {
+            "description": "Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent",
+            "type": "boolean"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/EnvironmentEngineBody"
+          },
+          "engineVersion": {
+            "description": "The Docker engine version, as the engine reported it; null until it has answered",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "envType": {
+            "description": "What the environment is; absent until it is known. An agent environment gets it from its first agent",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          },
+          "failingServices": {
+            "description": "Failing and total services; null until service data is known",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentFailingBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "foldOffered": {
+            "description": "True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The environment ID, used in /api/env/{envId}/...",
+            "type": "string"
+          },
+          "install": {
+            "$ref": "#/components/schemas/InstallBody",
+            "description": "Present for an agent environment only: the join token, the address the agent dials, and the commands and files that install it"
+          },
+          "isLocalSocket": {
+            "description": "True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent",
+            "type": "boolean"
+          },
+          "isSelfHost": {
+            "description": "True for the Docker host Bayplan itself runs on",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "local: the Docker socket on the host Bayplan runs on. agent: one or more hosts that dial in through an agent",
+            "enum": [
+              "local",
+              "agent"
+            ],
+            "type": "string"
+          },
+          "lastSeen": {
+            "description": "The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The display name; defaults to the daemon's hostname",
+            "type": "string"
+          },
+          "nodes": {
+            "description": "Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentNodesBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pendingClusterId": {
+            "description": "Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EnvironmentStatusBody"
+          },
+          "type": {
+            "description": "What the engine is; absent until it has answered",
+            "enum": [
+              "swarm-manager",
+              "swarm-worker",
+              "standalone"
+            ],
+            "type": "string"
+          },
+          "updateAvailable": {
+            "description": "True when an agent is older than this server by a minor or a patch version",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "isSelfHost",
+          "enabled",
+          "createdAt",
+          "status",
+          "engine",
+          "isLocalSocket",
+          "nodes",
+          "failingServices",
+          "agents",
+          "agentVersion",
+          "updateAvailable",
+          "engineVersion",
+          "lastSeen"
+        ],
+        "type": "object"
+      },
       "AddEnvironmentInputBody": {
         "additionalProperties": false,
         "properties": {
           "allowUnsupported": {
-            "description": "Add the host even though its engine is not supported; it is stored and shown as unsupported",
+            "description": "Local only: add the host even though its engine is not supported; it is stored and shown as unsupported",
             "type": "boolean"
           },
           "kind": {
-            "description": "local is the only kind in this release: the Docker socket on this server's own host",
+            "description": "local: the Docker socket on this server's own host. agent: a new environment whose hosts run the Bayplan agent and dial in; the answer carries the join token",
             "enum": [
-              "local"
+              "local",
+              "agent"
             ],
             "type": "string"
           },
           "name": {
-            "description": "1 to 64 characters; defaults to the hostname the daemon reports",
+            "description": "1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent",
             "maxLength": 1024,
             "type": "string"
           }
         },
         "required": [
           "kind"
+        ],
+        "type": "object"
+      },
+      "AdoptClusterBody": {
+        "additionalProperties": false,
+        "properties": {
+          "clusterId": {
+            "description": "The swarm cluster ID the environment is bound to now",
+            "type": "string"
+          },
+          "previousClusterId": {
+            "description": "The cluster ID it was bound to; absent if it had none",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clusterId"
+        ],
+        "type": "object"
+      },
+      "AgentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agentVersion": {
+            "description": "The agent's version when it last connected or enrolled",
+            "type": "string"
+          },
+          "blocked": {
+            "description": "True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them",
+            "type": "boolean"
+          },
+          "certFingerprint": {
+            "description": "The full SHA-256 of the agent's certificate, in hex. Absent for the local host",
+            "type": "string"
+          },
+          "certNotAfter": {
+            "description": "When the agent's certificate expires. Absent for the local host",
+            "format": "date-time",
+            "type": "string"
+          },
+          "clockOffsetSeconds": {
+            "description": "How far the agent's clock is ahead of the server's, in seconds, measured when it last connected; negative is behind, 0 when it has not connected since the server started",
+            "format": "int64",
+            "type": "integer"
+          },
+          "connected": {
+            "description": "Whether the agent has a live connection now",
+            "type": "boolean"
+          },
+          "engineVersion": {
+            "description": "The Docker Engine version the agent reported. Present only while it is connected",
+            "type": "string"
+          },
+          "id": {
+            "description": "The agent ID",
+            "type": "string"
+          },
+          "lastDenial": {
+            "$ref": "#/components/schemas/DenialBody",
+            "description": "The last request the agent refused by its own policy, while it is connected. Absent if it has refused none"
+          },
+          "lastSeen": {
+            "description": "When the agent was last heard from. Absent if it never has been",
+            "format": "date-time",
+            "type": "string"
+          },
+          "manualUpdateCommand": {
+            "description": "The one-line command that updates this agent by hand, present when the agent is behind and Bayplan cannot update it: it is outside the server's version window, it is too old to update itself, or its host owner turned self-update off",
+            "type": "string"
+          },
+          "node": {
+            "description": "The hostname the agent reported when it enrolled",
+            "type": "string"
+          },
+          "readOnly": {
+            "description": "The host owner set the agent to read-only. Reported only while it is connected",
+            "type": "boolean"
+          },
+          "renewalFailing": {
+            "description": "True when the certificate has less than 7 days left, which means it should have renewed already and has not, or has expired. Never set for a revoked agent",
+            "type": "boolean"
+          },
+          "revokeReason": {
+            "description": "The reason given when it was revoked",
+            "type": "string"
+          },
+          "revokedAt": {
+            "description": "When the agent was revoked",
+            "format": "date-time",
+            "type": "string"
+          },
+          "role": {
+            "description": "What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this Bayplan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it",
+            "enum": [
+              "leader",
+              "manager",
+              "worker",
+              "standalone",
+              "local"
+            ],
+            "type": "string"
+          },
+          "selfUpdate": {
+            "description": "The host owner allowed the agent to update itself. Reported only while it is connected",
+            "type": "boolean"
+          },
+          "status": {
+            "description": "revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back",
+            "enum": [
+              "active",
+              "revoked"
+            ],
+            "type": "string"
+          },
+          "updateAvailable": {
+            "description": "True for an agent that is not revoked and runs an older release than this server, so an update would bring it up to date. Never true for a development build on either side, which cannot be compared",
+            "type": "boolean"
+          },
+          "updateState": {
+            "$ref": "#/components/schemas/UpdateStateBody",
+            "description": "How the agent's update is going. Held in memory, so it is idle again after the server restarts"
+          }
+        },
+        "required": [
+          "id",
+          "node",
+          "role",
+          "status",
+          "blocked",
+          "connected",
+          "agentVersion",
+          "renewalFailing",
+          "clockOffsetSeconds",
+          "readOnly",
+          "selfUpdate",
+          "updateState",
+          "updateAvailable"
+        ],
+        "type": "object"
+      },
+      "AgentListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent",
+            "items": {
+              "$ref": "#/components/schemas/AgentBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "manualCleanup": {
+            "$ref": "#/components/schemas/InstallCleanupBody",
+            "description": "The commands that take the agent off a host by hand, for the hosts Bayplan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token"
+          }
+        },
+        "required": [
+          "items",
+          "manualCleanup"
         ],
         "type": "object"
       },
@@ -274,6 +589,10 @@
             "description": "The container name without the leading slash",
             "type": "string"
           },
+          "node": {
+            "description": "The node the container runs on",
+            "type": "string"
+          },
           "ports": {
             "description": "Ports as 0.0.0.0:8080-\u003e80/tcp, or 80/tcp when not published",
             "items": {
@@ -303,6 +622,7 @@
           }
         },
         "required": [
+          "node",
           "id",
           "name",
           "state",
@@ -326,6 +646,26 @@
               "null"
             ]
           },
+          "nodes": {
+            "description": "The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notReporting": {
+            "description": "Nodes that should have answered and did not, so these rows are not the whole cluster",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "total": {
             "description": "How many there are, whatever the cap",
             "format": "int64",
@@ -339,13 +679,171 @@
         "required": [
           "items",
           "total",
-          "truncated"
+          "truncated",
+          "nodes",
+          "notReporting"
+        ],
+        "type": "object"
+      },
+      "DenialBody": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "When it refused",
+            "format": "date-time",
+            "type": "string"
+          },
+          "endpoint": {
+            "description": "The Docker API path the agent refused",
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "at"
+        ],
+        "type": "object"
+      },
+      "EnvWarningBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "description": "For cert_not_renewing and clock_skew: the agent",
+            "type": "string"
+          },
+          "count": {
+            "description": "For manual_update_needed: how many agents need an update by hand",
+            "format": "int64",
+            "type": "integer"
+          },
+          "days": {
+            "description": "For pending_long: whole days since the environment was added",
+            "format": "int64",
+            "type": "integer"
+          },
+          "envId": {
+            "description": "The environment the problem is about. Absent for manual_update_needed when it spans more than one environment",
+            "type": "string"
+          },
+          "envName": {
+            "description": "That environment's name, at most 64 characters. For fold_offered, the swarm environment",
+            "type": "string"
+          },
+          "expiresAt": {
+            "description": "For cert_not_renewing: when the certificate expires",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "Which problem this is",
+            "enum": [
+              "env_offline",
+              "cert_not_renewing",
+              "manual_update_needed",
+              "clock_skew",
+              "pending_long",
+              "cluster_changed",
+              "fold_offered"
+            ],
+            "type": "string"
+          },
+          "node": {
+            "description": "For cert_not_renewing and clock_skew: the node's host name, at most 64 characters",
+            "type": "string"
+          },
+          "offsetSeconds": {
+            "description": "For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind",
+            "format": "int64",
+            "type": "integer"
+          },
+          "reason": {
+            "description": "For env_offline and cluster_changed: the environment's reason code, as in its status",
+            "type": "string"
+          },
+          "severity": {
+            "description": "error: an environment is out of reach or a certificate has expired. warning: something needs attention",
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "type": "string"
+          },
+          "since": {
+            "description": "When the problem began, where that is known. Items are shown newest first",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity"
+        ],
+        "type": "object"
+      },
+      "EnvWarningsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Only the warnings that apply, errors first, then newest first; empty when there are none",
+            "items": {
+              "$ref": "#/components/schemas/EnvWarningBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "EnvironmentAgentsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "connected": {
+            "description": "Agents with a live connection",
+            "format": "int64",
+            "type": "integer"
+          },
+          "expected": {
+            "description": "Agents the swarm should have: one per node whose agent was not revoked",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "connected",
+          "expected"
         ],
         "type": "object"
       },
       "EnvironmentBody": {
         "additionalProperties": false,
         "properties": {
+          "agentVersion": {
+            "description": "The oldest agent version in the environment; null when it has no agent, and for the local socket",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agents": {
+            "description": "Connected and expected agents; null except on a swarm",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentAgentsBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "autoUpdate": {
+            "description": "Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent",
+            "type": "boolean"
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -356,23 +854,81 @@
           "engine": {
             "$ref": "#/components/schemas/EnvironmentEngineBody"
           },
+          "engineVersion": {
+            "description": "The Docker engine version, as the engine reported it; null until it has answered",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "envType": {
+            "description": "What the environment is; absent until it is known. An agent environment gets it from its first agent",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          },
+          "failingServices": {
+            "description": "Failing and total services; null until service data is known",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentFailingBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "foldOffered": {
+            "description": "True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice",
+            "type": "boolean"
+          },
           "id": {
             "description": "The environment ID, used in /api/env/{envId}/...",
             "type": "string"
+          },
+          "isLocalSocket": {
+            "description": "True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent",
+            "type": "boolean"
           },
           "isSelfHost": {
             "description": "True for the Docker host Bayplan itself runs on",
             "type": "boolean"
           },
           "kind": {
-            "description": "local: the Docker socket on the host Bayplan runs on",
+            "description": "local: the Docker socket on the host Bayplan runs on. agent: one or more hosts that dial in through an agent",
             "enum": [
-              "local"
+              "local",
+              "agent"
             ],
             "type": "string"
           },
+          "lastSeen": {
+            "description": "The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "description": "The display name; defaults to the daemon's hostname",
+            "type": "string"
+          },
+          "nodes": {
+            "description": "Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentNodesBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pendingClusterId": {
+            "description": "Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to",
             "type": "string"
           },
           "status": {
@@ -386,6 +942,10 @@
               "standalone"
             ],
             "type": "string"
+          },
+          "updateAvailable": {
+            "description": "True when an agent is older than this server by a minor or a patch version",
+            "type": "boolean"
           }
         },
         "required": [
@@ -396,7 +956,15 @@
           "enabled",
           "createdAt",
           "status",
-          "engine"
+          "engine",
+          "isLocalSocket",
+          "nodes",
+          "failingServices",
+          "agents",
+          "agentVersion",
+          "updateAvailable",
+          "engineVersion",
+          "lastSeen"
         ],
         "type": "object"
       },
@@ -422,6 +990,48 @@
         },
         "type": "object"
       },
+      "EnvironmentFailingBody": {
+        "additionalProperties": false,
+        "properties": {
+          "failing": {
+            "description": "Services with tasks that keep failing",
+            "format": "int64",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Services in the environment",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "failing",
+          "total"
+        ],
+        "type": "object"
+      },
+      "EnvironmentIssueBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring or clock_skew",
+            "type": "string"
+          },
+          "node": {
+            "description": "The node's host name, at most 64 characters; absent for an agent that has not enrolled yet",
+            "type": "string"
+          },
+          "since": {
+            "description": "When this began",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
       "EnvironmentListBody": {
         "additionalProperties": false,
         "properties": {
@@ -437,6 +1047,26 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "EnvironmentNodesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "ready": {
+            "description": "Nodes whose agent is connected or was heard from within the last 30 seconds",
+            "format": "int64",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Nodes the environment should have: one per agent that is not revoked",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ready",
+          "total"
         ],
         "type": "object"
       },
@@ -473,12 +1103,24 @@
             "type": "string"
           },
           "reason": {
-            "description": "Why, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop",
+            "description": "Why, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager or no_quorum; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop",
             "type": "string"
           },
           "since": {
-            "description": "environment_offline: when the engine first stopped answering",
+            "description": "When the environment entered this state; for offline, when contact was lost",
             "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "The environment's health state, so the page can say what is wrong: pending (no agent has enrolled), reconnecting (the server just started), offline, revoked, cluster_changed or unsupported",
+            "enum": [
+              "offline",
+              "unsupported",
+              "pending",
+              "reconnecting",
+              "revoked",
+              "cluster_changed"
+            ],
             "type": "string"
           },
           "status": {
@@ -529,27 +1171,42 @@
       "EnvironmentStatusBody": {
         "additionalProperties": false,
         "properties": {
+          "issues": {
+            "description": "What is wrong with a degraded environment, worst first, then by node",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentIssueBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "lastAttempt": {
-            "description": "When the most recent probe finished",
+            "description": "When the most recent probe of the environment's engine finished",
             "format": "date-time",
             "type": "string"
           },
           "reason": {
-            "description": "Why it is offline or unsupported, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop",
+            "description": "Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum or cert_expiring; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop",
             "type": "string"
           },
           "since": {
-            "description": "When the environment entered this state; for offline, the first failed probe",
+            "description": "When the environment entered this state; for offline, when contact was lost",
             "format": "date-time",
             "type": "string"
           },
           "state": {
-            "description": "online: the engine answers and is supported. offline: it does not answer. unsupported: it answers but Bayplan does not manage it. unknown: not probed yet",
+            "description": "online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but Bayplan does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet",
             "enum": [
               "unknown",
               "online",
               "offline",
-              "unsupported"
+              "unsupported",
+              "pending",
+              "reconnecting",
+              "degraded",
+              "revoked",
+              "cluster_changed"
             ],
             "type": "string"
           }
@@ -562,6 +1219,16 @@
       "EnvironmentSummaryBody": {
         "additionalProperties": false,
         "properties": {
+          "byNode": {
+            "description": "Each node that answered, by name, with its own counts; a standalone host or the local socket is one node",
+            "items": {
+              "$ref": "#/components/schemas/NodeCountsBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "counts": {
             "$ref": "#/components/schemas/SummaryCountsBody"
           },
@@ -580,6 +1247,16 @@
             "description": "True on a swarm worker, which can show only its own containers, images, volumes and networks (D-24)",
             "type": "boolean"
           },
+          "notReporting": {
+            "description": "Nodes that should have answered and did not: no agent connected, or its read failed or timed out. Their rows are left out of the counts, so when this is not empty the counts are not the whole cluster",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "selfContainerId": {
             "description": "The ID of Bayplan's own container, when it can tell (D-27)",
             "type": "string"
@@ -589,6 +1266,8 @@
           "environment",
           "engine",
           "counts",
+          "byNode",
+          "notReporting",
           "isWorker",
           "fetchedAt"
         ],
@@ -692,23 +1371,29 @@
             "description": "The container, image, network or volume name; empty when Docker gave none",
             "type": "string"
           },
+          "node": {
+            "description": "The node the event happened on; for a row of Bayplan's own, the node it concerns, such as the manager that took over",
+            "type": "string"
+          },
           "time": {
             "description": "When it happened, in UTC, with sub-second precision",
             "format": "date-time",
             "type": "string"
           },
           "type": {
-            "description": "What kind of object it is about",
+            "description": "What kind of object it is about. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event",
             "enum": [
               "container",
               "image",
               "network",
-              "volume"
+              "volume",
+              "bayplan"
             ],
             "type": "string"
           }
         },
         "required": [
+          "node",
           "id",
           "time",
           "type",
@@ -749,6 +1434,10 @@
             "description": "The full image ID",
             "type": "string"
           },
+          "node": {
+            "description": "The node that holds the image",
+            "type": "string"
+          },
           "repoTags": {
             "description": "repository:tag for each tag, or [\"\u003cnone\u003e\"] for an untagged image",
             "items": {
@@ -770,6 +1459,7 @@
           }
         },
         "required": [
+          "node",
           "id",
           "shortId",
           "repoTags",
@@ -790,6 +1480,26 @@
               "null"
             ]
           },
+          "nodes": {
+            "description": "The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notReporting": {
+            "description": "Nodes that should have answered and did not, so these rows are not the whole cluster",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "total": {
             "description": "How many there are, whatever the cap",
             "format": "int64",
@@ -803,7 +1513,120 @@
         "required": [
           "items",
           "total",
-          "truncated"
+          "truncated",
+          "nodes",
+          "notReporting"
+        ],
+        "type": "object"
+      },
+      "InstallBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agentUrl": {
+            "description": "The address the agent dials, for example wss://bayplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request",
+            "type": "string"
+          },
+          "generation": {
+            "description": "Which token this is for the environment, from 1; each rotation adds one",
+            "format": "int64",
+            "type": "integer"
+          },
+          "image": {
+            "description": "The agent image. Its tag is this server's exact version, or edge for a development or edge server",
+            "type": "string"
+          },
+          "joinToken": {
+            "description": "The join token the agent presents once to enrol. Shown only in this answer; it is inside the commands and files below",
+            "type": "string"
+          },
+          "manualCleanup": {
+            "$ref": "#/components/schemas/InstallCleanupBody",
+            "description": "Commands that remove the agent by hand, for a host that is offline when its environment is removed"
+          },
+          "pin": {
+            "description": "The SPKI pin of the self-signed certificate Bayplan serves, which the agent trusts instead of system roots. Present only when Bayplan serves its own self-signed certificate",
+            "type": "string"
+          },
+          "secretName": {
+            "description": "The Docker secret the swarm install creates for this token, bayplan-agent-token-g followed by the generation",
+            "type": "string"
+          },
+          "standalone": {
+            "$ref": "#/components/schemas/InstallStandaloneBody",
+            "description": "The install for a standalone host"
+          },
+          "swarm": {
+            "$ref": "#/components/schemas/InstallSwarmBody",
+            "description": "The install for a swarm"
+          }
+        },
+        "required": [
+          "joinToken",
+          "agentUrl",
+          "image",
+          "secretName",
+          "generation",
+          "swarm",
+          "standalone",
+          "manualCleanup"
+        ],
+        "type": "object"
+      },
+      "InstallCleanupBody": {
+        "additionalProperties": false,
+        "properties": {
+          "standalone": {
+            "description": "One line that removes the agent container and its volume",
+            "type": "string"
+          },
+          "swarm": {
+            "description": "Commands that remove the service and the secret on a manager, and the agent volume on every node",
+            "type": "string"
+          }
+        },
+        "required": [
+          "swarm",
+          "standalone"
+        ],
+        "type": "object"
+      },
+      "InstallStandaloneBody": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "One line that starts the agent on a single Docker host. Starts with a space so a shell set to ignore space-led commands keeps it out of its history",
+            "type": "string"
+          },
+          "composeFile": {
+            "description": "The same container as a compose file for docker compose up, with the same environment as the command",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "composeFile"
+        ],
+        "type": "object"
+      },
+      "InstallSwarmBody": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "One line to run on any swarm manager. It creates a Docker secret from the join token and starts the agent as a global service. Starts with a space so a shell set to ignore space-led commands keeps it out of its history",
+            "type": "string"
+          },
+          "rotateCommand": {
+            "description": "One line that swaps a running service over to this token's secret without stopping it. Present only for a token that replaces an earlier one, never for a first install",
+            "type": "string"
+          },
+          "stackFile": {
+            "description": "The same service as a stack file for docker stack deploy. A stack file cannot create a secret from text, so it names the secret as external and its first comment line holds the one-line command that creates it",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "stackFile"
         ],
         "type": "object"
       },
@@ -943,6 +1766,10 @@
           "name": {
             "type": "string"
           },
+          "node": {
+            "description": "The node the network is local to, or Cluster for a swarm-wide network",
+            "type": "string"
+          },
           "scope": {
             "description": "local, or swarm for a cluster-wide network",
             "type": "string"
@@ -959,6 +1786,7 @@
           }
         },
         "required": [
+          "node",
           "id",
           "name",
           "driver",
@@ -980,6 +1808,26 @@
               "null"
             ]
           },
+          "nodes": {
+            "description": "The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notReporting": {
+            "description": "Nodes that should have answered and did not, so these rows are not the whole cluster",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "total": {
             "description": "How many there are, whatever the cap",
             "format": "int64",
@@ -993,7 +1841,44 @@
         "required": [
           "items",
           "total",
-          "truncated"
+          "truncated",
+          "nodes",
+          "notReporting"
+        ],
+        "type": "object"
+      },
+      "NodeCountsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "containers": {
+            "description": "Containers on this node, stopped ones included",
+            "format": "int64",
+            "type": "integer"
+          },
+          "images": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "networks": {
+            "description": "Networks local to this node; a swarm-wide network is counted in the total only",
+            "format": "int64",
+            "type": "integer"
+          },
+          "node": {
+            "description": "The node's host name",
+            "type": "string"
+          },
+          "volumes": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "node",
+          "containers",
+          "images",
+          "volumes",
+          "networks"
         ],
         "type": "object"
       },
@@ -1042,6 +1927,9 @@
           "detail": {
             "type": "string"
           },
+          "engineId": {
+            "type": "string"
+          },
           "engineName": {
             "type": "string"
           },
@@ -1087,6 +1975,12 @@
           "supported": {
             "type": "boolean"
           },
+          "swarmClusterId": {
+            "type": "string"
+          },
+          "swarmNodeId": {
+            "type": "string"
+          },
           "swarmNodeState": {
             "type": "string"
           },
@@ -1101,26 +1995,94 @@
         ],
         "type": "object"
       },
-      "RenameEnvironmentInputBody": {
+      "RecentEnvironmentsBody": {
         "additionalProperties": false,
         "properties": {
-          "name": {
-            "description": "The new name, 1 to 64 characters",
-            "maxLength": 1024,
-            "type": "string"
+          "environmentIds": {
+            "description": "Up to 3 environment IDs, most recently used first",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
-          "name"
+          "environmentIds"
+        ],
+        "type": "object"
+      },
+      "RevokeAgentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "Why the node is revoked, for the audit log and the node table. Optional",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RotateTokenBody": {
+        "additionalProperties": false,
+        "properties": {
+          "envType": {
+            "description": "What the environment's active agents run on. Absent while it has none",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          },
+          "hasAgents": {
+            "description": "Whether the environment has an active agent. A swarm that has agents is moved to the new token with install.swarm.rotateCommand, which is present only then; otherwise a first install needs the new token's command",
+            "type": "boolean"
+          },
+          "install": {
+            "$ref": "#/components/schemas/InstallBody",
+            "description": "The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it"
+          }
+        },
+        "required": [
+          "install",
+          "hasAgents"
         ],
         "type": "object"
       },
       "SettingsBody": {
         "additionalProperties": false,
         "properties": {
+          "agentEndpoint": {
+            "description": "The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set",
+            "type": "string"
+          },
+          "agentEndpointRefused": {
+            "description": "True when agentEndpoint is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off. Agents refuse such an address and Bayplan refuses their plain connections, and adding an agent environment or rotating a join token answers 409 insecure_agent_url until the agent URL or the public URL is https",
+            "type": "boolean"
+          },
+          "agentUrl": {
+            "description": "The address agents dial when it differs from the public URL; empty means they dial the public URL",
+            "type": "string"
+          },
+          "agentUrlLocked": {
+            "description": "True when the BAYPLAN_AGENT_URL environment variable fixes the agent URL",
+            "type": "boolean"
+          },
+          "enrolledAgents": {
+            "description": "How many agents are enrolled and not revoked, across all environments. A change of the public URL or the agent URL needs a confirmation while this is above 0",
+            "format": "int64",
+            "type": "integer"
+          },
           "instanceName": {
             "description": "The name shown in the header, tab titles and the sign-in page",
             "type": "string"
+          },
+          "offlineAgents": {
+            "description": "How many of the enrolled agents have no connection now. They cannot be sent a new address, so after a change of the host or port agents dial they are refused until they are reinstalled with the new address or the change is reverted",
+            "format": "int64",
+            "type": "integer"
           },
           "publicUrl": {
             "description": "The URL users reach Bayplan at; drives the Origin check and the cookie Secure flag",
@@ -1134,7 +2096,13 @@
         "required": [
           "instanceName",
           "publicUrl",
-          "publicUrlLocked"
+          "publicUrlLocked",
+          "agentUrl",
+          "agentUrlLocked",
+          "agentEndpoint",
+          "agentEndpointRefused",
+          "enrolledAgents",
+          "offlineAgents"
         ],
         "type": "object"
       },
@@ -1310,9 +2278,72 @@
         ],
         "type": "object"
       },
+      "TokenStatusBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the token was made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdBy": {
+            "description": "The username of the admin who made it, or the principal as recorded when that is not an account",
+            "type": "string"
+          },
+          "disabled": {
+            "description": "True while the token enrols nobody, until the next rotation",
+            "type": "boolean"
+          },
+          "generation": {
+            "description": "Which token this is for the environment, from 1",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "generation",
+          "createdAt",
+          "createdBy",
+          "disabled"
+        ],
+        "type": "object"
+      },
+      "UpdateAgentsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "started": {
+            "description": "How many updates were sent: one for a swarm, whose agent service rolls every node, otherwise one per agent that was behind. 0 when none was needed, or one was already running",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "started"
+        ],
+        "type": "object"
+      },
+      "UpdateEnvironmentInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "autoUpdate": {
+            "description": "Switch automatic agent updates on or off for an agent environment",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The new name, 1 to 64 characters",
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "UpdateSettingsInputBody": {
         "additionalProperties": false,
         "properties": {
+          "agentUrl": {
+            "description": "New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while BAYPLAN_AGENT_URL is set. An http agent URL for a host that is not this machine is refused with 422 insecure_agent_url unless BAYPLAN_AGENT_ALLOW_INSECURE is on",
+            "type": "string"
+          },
           "instanceName": {
             "description": "New instance name, 1 to 64 characters",
             "type": "string"
@@ -1322,6 +2353,28 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "UpdateStateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, insecure_session, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed",
+            "type": "string"
+          },
+          "state": {
+            "description": "idle: nothing is running. updating: an update was sent and the agent has not yet come back on the new version. failed: the last update did not finish, and reason says why, until the agent runs the server's version or another update is started",
+            "enum": [
+              "idle",
+              "updating",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
         "type": "object"
       },
       "UserBody": {
@@ -1406,9 +2459,14 @@
           },
           "name": {
             "type": "string"
+          },
+          "node": {
+            "description": "The node that holds the volume",
+            "type": "string"
           }
         },
         "required": [
+          "node",
           "name",
           "driver"
         ],
@@ -1421,6 +2479,26 @@
             "description": "At most 500 rows",
             "items": {
               "$ref": "#/components/schemas/VolumeItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "nodes": {
+            "description": "The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notReporting": {
+            "description": "Nodes that should have answered and did not, so these rows are not the whole cluster",
+            "items": {
+              "type": "string"
             },
             "type": [
               "array",
@@ -1440,19 +2518,32 @@
         "required": [
           "items",
           "total",
-          "truncated"
+          "truncated",
+          "nodes",
+          "notReporting"
         ],
         "type": "object"
       },
       "WarningBody": {
         "additionalProperties": false,
         "properties": {
+          "host": {
+            "description": "For proxy_url_mismatch: the host the newest request was for",
+            "type": "string"
+          },
           "id": {
             "description": "Which warning this is",
             "enum": [
               "data_not_persisted",
-              "key_backup"
+              "key_backup",
+              "proxy_untrusted_forwarded",
+              "proxy_url_mismatch",
+              "proxy_websocket_failing"
             ],
+            "type": "string"
+          },
+          "ip": {
+            "description": "For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from",
             "type": "string"
           },
           "keyPath": {
@@ -1461,6 +2552,14 @@
           },
           "reason": {
             "description": "For data_not_persisted: why the data directory is not persisted",
+            "type": "string"
+          },
+          "scheme": {
+            "description": "For proxy_url_mismatch: the scheme the newest request effectively used, http or https",
+            "type": "string"
+          },
+          "url": {
+            "description": "For proxy_url_mismatch: the public URL the request should have matched",
             "type": "string"
           }
         },
@@ -1861,9 +2960,60 @@
         ]
       }
     },
+    "/api/env/{envId}/agents": {
+      "get": {
+        "description": "Every enrolled agent with its node name, role, status, whether its host is blocked, whether it is connected, versions, the full certificate fingerprint and expiry, clock offset, when it was last seen, the policy flags the host owner set and the last request it refused. Problems come first: revoked agents, then agents that are not connected, then the rest by node name. A local-socket environment has none, and an empty manualCleanup. Never carries a key, a token or a serial. 404 environment_not_found when the environment does not exist or the caller may not read it. Needs environments.read on the environment.",
+        "operationId": "listEnvironmentAgents",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the agents of an environment's nodes",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/containers": {
       "get": {
-        "description": "Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+        "description": "Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables, labels or mounts. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "listContainers",
         "parameters": [
           {
@@ -1873,6 +3023,17 @@
             "required": true,
             "schema": {
               "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list",
+            "explode": false,
+            "in": "query",
+            "name": "node",
+            "schema": {
+              "description": "Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list",
+              "maxLength": 128,
               "type": "string"
             }
           }
@@ -1903,7 +3064,17 @@
                 }
               }
             },
-            "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason."
+            "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProblem"
+                }
+              }
+            },
+            "description": "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint."
           },
           "503": {
             "content": {
@@ -1913,7 +3084,7 @@
                 }
               }
             },
-            "description": "environment_offline: the engine does not answer. Carries since and reason."
+            "description": "environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since."
           }
         },
         "summary": "List the containers of an environment",
@@ -1975,7 +3146,7 @@
     },
     "/api/env/{envId}/images": {
       "get": {
-        "description": "Newest first. An untagged image is listed as \u003cnone\u003e. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+        "description": "Newest first. An untagged image is listed as \u003cnone\u003e. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "listImages",
         "parameters": [
           {
@@ -1985,6 +3156,17 @@
             "required": true,
             "schema": {
               "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list",
+            "explode": false,
+            "in": "query",
+            "name": "node",
+            "schema": {
+              "description": "Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list",
+              "maxLength": 128,
               "type": "string"
             }
           }
@@ -2015,7 +3197,17 @@
                 }
               }
             },
-            "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason."
+            "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProblem"
+                }
+              }
+            },
+            "description": "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint."
           },
           "503": {
             "content": {
@@ -2025,7 +3217,7 @@
                 }
               }
             },
-            "description": "environment_offline: the engine does not answer. Carries since and reason."
+            "description": "environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since."
           }
         },
         "summary": "List the images of an environment",
@@ -2036,7 +3228,7 @@
     },
     "/api/env/{envId}/networks": {
       "get": {
-        "description": "By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+        "description": "By name. On a swarm a swarm-wide network is listed once, from the manager in use, with node Cluster; local networks are listed per node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "listNetworks",
         "parameters": [
           {
@@ -2046,6 +3238,17 @@
             "required": true,
             "schema": {
               "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list",
+            "explode": false,
+            "in": "query",
+            "name": "node",
+            "schema": {
+              "description": "Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list",
+              "maxLength": 128,
               "type": "string"
             }
           }
@@ -2076,7 +3279,17 @@
                 }
               }
             },
-            "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason."
+            "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProblem"
+                }
+              }
+            },
+            "description": "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint."
           },
           "503": {
             "content": {
@@ -2086,7 +3299,7 @@
                 }
               }
             },
-            "description": "environment_offline: the engine does not answer. Carries since and reason."
+            "description": "environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since."
           }
         },
         "summary": "List the networks of an environment",
@@ -2148,7 +3361,7 @@
     },
     "/api/env/{envId}/summary": {
       "get": {
-        "description": "The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+        "description": "The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. On a swarm the counts are the cluster's totals over the nodes that answered, with each node's own counts in byNode; notReporting names the nodes that did not, and while it is not empty the totals are not the whole cluster. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "getEnvironmentSummary",
         "parameters": [
           {
@@ -2188,7 +3401,17 @@
                 }
               }
             },
-            "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason."
+            "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProblem"
+                }
+              }
+            },
+            "description": "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint."
           },
           "503": {
             "content": {
@@ -2198,7 +3421,7 @@
                 }
               }
             },
-            "description": "environment_offline: the engine does not answer. Carries since and reason."
+            "description": "environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since."
           }
         },
         "summary": "The dashboard of an environment",
@@ -2209,7 +3432,7 @@
     },
     "/api/env/{envId}/volumes": {
       "get": {
-        "description": "By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.",
+        "description": "By name. On a swarm every node's volumes, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "listVolumes",
         "parameters": [
           {
@@ -2219,6 +3442,17 @@
             "required": true,
             "schema": {
               "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list",
+            "explode": false,
+            "in": "query",
+            "name": "node",
+            "schema": {
+              "description": "Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list",
+              "maxLength": 128,
               "type": "string"
             }
           }
@@ -2249,7 +3483,17 @@
                 }
               }
             },
-            "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason."
+            "description": "environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentProblem"
+                }
+              }
+            },
+            "description": "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint."
           },
           "503": {
             "content": {
@@ -2259,7 +3503,7 @@
                 }
               }
             },
-            "description": "environment_offline: the engine does not answer. Carries since and reason."
+            "description": "environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since."
           }
         },
         "summary": "List the volumes of an environment",
@@ -2270,7 +3514,7 @@
     },
     "/api/environments": {
       "get": {
-        "description": "Each environment comes with the health monitor's status. An environment the caller does not hold environments.read for is left out, so the list never reveals what the caller cannot open.",
+        "description": "Each environment comes with its health: for an agent environment the rollup of its agents (pending, reconnecting, online, degraded with its issues, offline, unsupported, revoked or cluster_changed, each with a stable reason code and since), for the local socket the health monitor's status. An environment the caller does not hold environments.read for is left out, so the list never reveals what the caller cannot open.",
         "operationId": "listEnvironments",
         "responses": {
           "200": {
@@ -2307,7 +3551,7 @@
         ]
       },
       "post": {
-        "description": "The admin's explicit opt-in to managing this host (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists; 422 invalid_name. The name defaults to the hostname the daemon reports. Audited as environment.added.",
+        "description": "kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, with its base path); 409 public_url_required when Bayplan has neither, and 409 insecure_agent_url when that address is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off. Nothing is created in either case. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.",
         "operationId": "addEnvironment",
         "requestBody": {
           "content": {
@@ -2324,7 +3568,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EnvironmentBody"
+                  "$ref": "#/components/schemas/AddEnvironmentBody"
                 }
               }
             },
@@ -2348,7 +3592,46 @@
             "description": "Error"
           }
         },
-        "summary": "Add the Docker host Bayplan runs on as an environment",
+        "summary": "Add an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/warnings": {
+      "get": {
+        "description": "Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.",
+        "operationId": "listEnvironmentWarnings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvWarningsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the environment problems that need attention",
         "tags": [
           "environments"
         ]
@@ -2356,7 +3639,7 @@
     },
     "/api/environments/{envId}": {
       "delete": {
-        "description": "Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched (D-20). Audited as environment.removed.",
+        "description": "Needs environments.delete. Stops managing the host. Revokes every agent, disables the join token and deletes the environment, and changes nothing in Docker: its containers, networks and volumes are untouched (D-20, D-30). With uninstallAgents=true each online agent is first told to uninstall itself (a swarm's agents through one manager, which removes the agent service and its token secret; every agent removes its own container and state volume), and the request waits up to 30 seconds for their answers. Whatever they answer, or do not, the revoking and deletion follow, so hosts that were offline or refused keep their agent until the admin runs the manual cleanup command that GET /api/env/{envId}/agents gives. Audited as environment.removed, agent.revoked per agent, and agent.uninstalled per agent that confirmed.",
         "operationId": "removeEnvironment",
         "parameters": [
           {
@@ -2367,6 +3650,17 @@
             "schema": {
               "description": "The environment ID",
               "type": "string"
+            }
+          },
+          {
+            "description": "Also tell every online agent of the environment to remove itself from its host before the environment is removed",
+            "explode": false,
+            "in": "query",
+            "name": "uninstallAgents",
+            "schema": {
+              "default": false,
+              "description": "Also tell every online agent of the environment to remove itself from its host before the environment is removed",
+              "type": "boolean"
             }
           }
         ],
@@ -2391,8 +3685,8 @@
         ]
       },
       "patch": {
-        "description": "422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.",
-        "operationId": "renameEnvironment",
+        "description": "Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the environment's connected agents at once.",
+        "operationId": "updateEnvironment",
         "parameters": [
           {
             "description": "The environment ID",
@@ -2409,7 +3703,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RenameEnvironmentInputBody"
+                "$ref": "#/components/schemas/UpdateEnvironmentInputBody"
               }
             }
           },
@@ -2444,7 +3738,445 @@
             "description": "Error"
           }
         },
-        "summary": "Rename an environment",
+        "summary": "Rename an environment or switch its automatic agent updates",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/adopt-cluster": {
+      "post": {
+        "description": "A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.manage.",
+        "operationId": "adoptEnvironmentCluster",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdoptClusterBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Adopt the new cluster of a re-initialised swarm",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/agents/{agentId}/revoke": {
+      "post": {
+        "description": "The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked when it was revoked already, by this admin or another. Needs environments.revoke. Audited as agent.revoked and agent.blocked.",
+        "operationId": "revokeEnvironmentAgent",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeAgentBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Revoke a node's agent",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/agents/{agentId}/unblock": {
+      "post": {
+        "description": "Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. An agent that still has its join token drops its revoked identity and enrols again by itself at its next try, within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. Audited as agent.unblocked.",
+        "operationId": "unblockEnvironmentAgent",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Let a revoked node's host enrol again",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/agents/{agentId}/update": {
+      "post": {
+        "description": "Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled (the host owner refused), agent_up_to_date or update_in_progress. Needs environments.manage. Audited as agent.updated, or agent.update_failed with its reason when the update does not finish.",
+        "operationId": "updateEnvironmentAgent",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Update an agent to this server's version",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/fold-local": {
+      "post": {
+        "description": "Offered when the Docker host Bayplan runs on is a manager of a swarm that is enrolled through agents: the local socket's own /info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. 404 environment_not_found; 409 fold_not_offered when the host is not a manager of that swarm, or was folded already. Needs environments.manage. Audited as environment.local_folded.",
+        "operationId": "foldLocalHost",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Fold this Bayplan host into a swarm environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/token": {
+      "delete": {
+        "description": "The current join token enrols nobody from now on. Agents that are already enrolled keep working. Rotating the token makes a new one and enables enrolment again. Disabling a disabled token changes nothing. 404 environment_not_found. Needs environments.token. Audited as environment.token_disabled.",
+        "operationId": "disableEnvironmentToken",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Disable an environment's join token",
+        "tags": [
+          "environments"
+        ]
+      },
+      "get": {
+        "description": "The generation, when and by whom it was made, and whether it is disabled. Never the token: it is stored only as a hash. 404 environment_not_found. Needs environments.token.",
+        "operationId": "getEnvironmentToken",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenStatusBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Show which join token an environment has",
+        "tags": [
+          "environments"
+        ]
+      },
+      "post": {
+        "description": "Makes a new join token and retires the current one in the same transaction. The old install command stops enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents it carries the one-line rotate command. 404 environment_not_found; 409 public_url_required when Bayplan has no address to give agents, and 409 insecure_agent_url when that address is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off; the current token stays in both cases. Needs environments.token. Audited as environment.token_rotated with the new generation.",
+        "operationId": "rotateEnvironmentToken",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateTokenBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Rotate an environment's join token",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/update-agents": {
+      "post": {
+        "description": "Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.manage. Audited like an update of one agent.",
+        "operationId": "updateEnvironmentAgents",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateAgentsBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Update every agent of an environment that is behind",
         "tags": [
           "environments"
         ]
@@ -2483,7 +4215,7 @@
     },
     "/api/local-host": {
       "get": {
-        "description": "Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.write because it is the context for adding the host.",
+        "description": "Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.create because it is the context for adding the host.",
         "operationId": "getLocalHost",
         "responses": {
           "200": {
@@ -2612,9 +4344,85 @@
         ]
       }
     },
+    "/api/me/recent-environments": {
+      "get": {
+        "description": "Up to 3 environment IDs, the most recently used first and, for uses at the same instant, in ID order. An environment that was removed, or that the user can no longer read, is left out.",
+        "operationId": "listRecentEnvironments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentEnvironmentsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The environments the signed-in user used last",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/me/recent-environments/{envId}": {
+      "put": {
+        "description": "Sets the environment's last-used time to now. Using the same environment again keeps one entry with the newer time. Only the newest 3 per user are kept. An environment that does not exist and one the user cannot read both answer 404 environment_not_found, so the answer never says which exist.",
+        "operationId": "recordRecentEnvironment",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Record that the signed-in user used an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/settings": {
       "get": {
-        "description": "publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04).",
+        "description": "publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19). agentEndpointRefused is true when agentEndpoint is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off: agents cannot connect to it (G-02-R4-3).",
         "operationId": "getSettings",
         "responses": {
           "200": {
@@ -2645,13 +4453,13 @@
             "description": "Error"
           }
         },
-        "summary": "Get the instance name and public URL",
+        "summary": "Get the instance name, public URL and agent URL",
         "tags": [
           "settings"
         ]
       },
       "patch": {
-        "description": "Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked and changes nothing. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is audited as settings.updated with the old and new value of every changed field.",
+        "description": "Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url, insecure_agent_url). An agent URL that is plain http for a host that is not this machine answers 422 insecure_agent_url unless BAYPLAN_AGENT_ALLOW_INSECURE is on, because agents refuse such an address; a loopback or https agent URL, clearing it, and an http public URL are accepted. A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.",
         "operationId": "updateSettings",
         "requestBody": {
           "content": {
@@ -2692,7 +4500,7 @@
             "description": "Error"
           }
         },
-        "summary": "Change the instance name or the public URL",
+        "summary": "Change the instance name, the public URL or the agent URL",
         "tags": [
           "settings"
         ]
@@ -2826,7 +4634,7 @@
     },
     "/api/warnings": {
       "get": {
-        "description": "Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The plain-HTTP warning is the browser's to compute and is not listed.",
+        "description": "Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). The plain-HTTP warning is the browser's to compute and is not listed.",
         "operationId": "listWarnings",
         "responses": {
           "200": {

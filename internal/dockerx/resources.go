@@ -154,10 +154,20 @@ func (c *Client) Snapshot(ctx context.Context, swarmManager bool) (Snapshot, err
 	if swarmManager {
 		nodes, err := cli.NodeList(ctx, client.NodeListOptions{})
 		if err != nil {
+			if IsQuorumLoss(err) {
+				// The node-local lists above are still good. The cluster counts are
+				// left out, and the caller says why from the cluster read (D-43).
+				snap.FetchedAt = time.Now().UTC()
+				return snap, nil
+			}
 			return Snapshot{}, fmt.Errorf("list swarm nodes on %s: %w", c.t.Describe(), err)
 		}
 		services, err := cli.ServiceList(ctx, client.ServiceListOptions{})
 		if err != nil {
+			if IsQuorumLoss(err) {
+				snap.FetchedAt = time.Now().UTC()
+				return snap, nil
+			}
 			return Snapshot{}, fmt.Errorf("list swarm services on %s: %w", c.t.Describe(), err)
 		}
 		nodeCount, serviceCount := len(nodes.Items), len(services.Items)

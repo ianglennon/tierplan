@@ -390,7 +390,7 @@ func TestDeletingAUserDeletesTheirSessions(t *testing.T) {
 
 func TestCookieOverHTTPSIsHostPrefixedSecureAndHTTPOnly(t *testing.T) {
 	f := newSessionFixture(t)
-	c := f.m.Cookie("rawid", false, true)
+	c := f.m.Cookie("rawid", false, auth.CookieScope{Secure: true})
 	if c.Name != "__Host-bayplan_session" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" {
 		t.Fatalf("https cookie = %+v", c)
 	}
@@ -400,14 +400,14 @@ func TestCookieOverHTTPSIsHostPrefixedSecureAndHTTPOnly(t *testing.T) {
 	if c.MaxAge != 0 || !c.Expires.IsZero() {
 		t.Fatalf("a browser-session cookie must carry no lifetime: MaxAge %d, Expires %v", c.MaxAge, c.Expires)
 	}
-	if auth.CookieName(true) != "__Host-bayplan_session" {
-		t.Fatalf("CookieName(true) = %q", auth.CookieName(true))
+	if auth.CookieName(auth.CookieScope{Secure: true}) != "__Host-bayplan_session" {
+		t.Fatalf("CookieName(secure) = %q", auth.CookieName(auth.CookieScope{Secure: true}))
 	}
 }
 
 func TestCookieWithRememberCarriesTheRememberLifetime(t *testing.T) {
 	f := newSessionFixture(t)
-	c := f.m.Cookie("rawid", true, true)
+	c := f.m.Cookie("rawid", true, auth.CookieScope{Secure: true})
 	if want := int(testRemember / time.Second); c.MaxAge != want {
 		t.Fatalf("MaxAge = %d, want %d", c.MaxAge, want)
 	}
@@ -415,19 +415,19 @@ func TestCookieWithRememberCarriesTheRememberLifetime(t *testing.T) {
 
 func TestCookieOverPlainHTTPDropsThePrefixAndSecure(t *testing.T) {
 	f := newSessionFixture(t)
-	c := f.m.Cookie("rawid", false, false)
+	c := f.m.Cookie("rawid", false, auth.CookieScope{Secure: false})
 	if c.Name != "bayplan_session" || c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" {
 		t.Fatalf("http cookie = %+v", c)
 	}
-	if auth.CookieName(false) != "bayplan_session" {
-		t.Fatalf("CookieName(false) = %q", auth.CookieName(false))
+	if auth.CookieName(auth.CookieScope{Secure: false}) != "bayplan_session" {
+		t.Fatalf("CookieName(plain) = %q", auth.CookieName(auth.CookieScope{Secure: false}))
 	}
 }
 
 func TestClearCookieExpiresTheSameNameImmediately(t *testing.T) {
 	for _, secure := range []bool{true, false} {
-		c := auth.ClearCookie(secure)
-		if c.Name != auth.CookieName(secure) || c.MaxAge != -1 || c.Value != "" || c.Path != "/" || !c.HttpOnly {
+		c := auth.ClearCookie(auth.CookieScope{Secure: secure})
+		if c.Name != auth.CookieName(auth.CookieScope{Secure: secure}) || c.MaxAge != -1 || c.Value != "" || c.Path != "/" || !c.HttpOnly {
 			t.Errorf("ClearCookie(%v) = %+v", secure, c)
 		}
 		if c.Secure != secure {
@@ -438,7 +438,7 @@ func TestClearCookieExpiresTheSameNameImmediately(t *testing.T) {
 
 func TestCookieHeaderCarriesTheHardeningAttributesAndNoDomain(t *testing.T) {
 	f := newSessionFixture(t)
-	c := f.m.Cookie("rawid", true, true)
+	c := f.m.Cookie("rawid", true, auth.CookieScope{Secure: true})
 	s := c.String()
 	for _, want := range []string{"__Host-bayplan_session=rawid", "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=2592000"} {
 		if !strings.Contains(s, want) {

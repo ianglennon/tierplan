@@ -14,7 +14,7 @@ import "@/i18n";
 const ME = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: [], environments: {} },
+  permissions: { global: [], environments: { "*": ["environments.read"] } },
 };
 
 interface Sent {
@@ -125,7 +125,7 @@ describe("sign out from the user menu (WR-17)", () => {
     await clickLogOut();
     expect(await screen.findByText("Something went wrong. Try again.")).toBeTruthy();
     expect(logoutCalls()).toBe(1);
-    expect(router.state.location.pathname).toBe("/");
+    expect(router.state.location.pathname).toBe("/environments");
     // The CSRF token and the cache are untouched.
     expect(queryClient.getQueryData(["me"])).toBeTruthy();
     sent = [];
@@ -148,7 +148,7 @@ describe("sign out from the user menu (WR-17)", () => {
     expect(
       await screen.findByText("Can't reach Bayplan. Check your connection and try again."),
     ).toBeTruthy();
-    expect(router.state.location.pathname).toBe("/");
+    expect(router.state.location.pathname).toBe("/environments");
     expect(queryClient.getQueryData(["me"])).toBeTruthy();
   });
 
@@ -161,7 +161,7 @@ describe("sign out from the user menu (WR-17)", () => {
       expect(
         (await screen.findAllByText("Something went wrong. Try again.")).length,
       ).toBeGreaterThan(0);
-      expect(router.state.location.pathname).toBe("/");
+      expect(router.state.location.pathname).toBe("/environments");
       cleanup();
     }
   });

@@ -13,7 +13,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UserMenu } from "@/components/user-menu";
 import { VersionFooter } from "@/components/version-footer";
 import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
-import { meQueryOptions, UnauthenticatedError, useMe, usePermission } from "@/hooks/use-me";
+import { EnvPalette } from "@/features/environments/env-palette";
+import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
+import {
+  meQueryOptions,
+  UnauthenticatedError,
+  useAnyEnvironmentPermission,
+  useMe,
+  usePermission,
+} from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { getSidebarOpen, setSidebarOpen } from "@/lib/sidebar-state";
 
@@ -24,6 +32,10 @@ function ShellBody() {
   const { data: me } = useMe();
   // Instance warnings are for admins: the server refuses them to anyone else.
   const canSeeWarnings = usePermission("settings.read");
+  // The bell also carries the problems of the environments the caller may read (D-39),
+  // which the server filters to them, so anyone who may read one gets the bell.
+  const readsEnvironments = useAnyEnvironmentPermission("environments.read");
+  const canSeeBell = canSeeWarnings || readsEnvironments;
   const { state, isMobile, openMobile } = useSidebar();
   // The mirror image of AppSidebar: the sidebar holds the footer while it is
   // expanded or its drawer is open, so this holds it the rest of the time.
@@ -36,7 +48,7 @@ function ShellBody() {
         <SidebarTrigger aria-label={t("shell.toggleSidebar")} className="max-md:size-11" />
         {/* The page title goes here: breadcrumbs or a heading, set by each page. */}
         <div id="header-title" className="min-w-0 flex-1 truncate text-sm font-medium" />
-        {canSeeWarnings ? <HealthBell /> : null}
+        {canSeeBell ? <HealthBell /> : null}
         {me ? <UserMenu username={me.user.username} role={me.user.role} /> : null}
       </header>
       <main id="main" tabIndex={-1} className="flex-1 p-4 outline-none md:p-6">
@@ -86,16 +98,24 @@ function AppLayout() {
       >
         {t("shell.skipLink")}
       </a>
-      <SidebarProvider
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          setSidebarOpen(next);
-        }}
-      >
-        <AppSidebar />
-        <ShellBody />
-      </SidebarProvider>
+      {/* One health stream for the whole signed-in app (D-36): the overview,
+          the switcher and the bell all read what it keeps current. */}
+      <EnvHealthStreamProvider>
+        <SidebarProvider
+          open={open}
+          onOpenChange={(next) => {
+            setOpen(next);
+            setSidebarOpen(next);
+          }}
+        >
+          <AppSidebar />
+          <ShellBody />
+          {/* Cmd/Ctrl+K from any signed-in page (D-35). A code editor added
+              later must set data-code-editor on its root, or the shortcut
+              will open this over the editor's own use of the key. */}
+          <EnvPalette />
+        </SidebarProvider>
+      </EnvHealthStreamProvider>
     </TooltipProvider>
   );
 }

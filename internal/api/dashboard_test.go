@@ -4,9 +4,12 @@
 package api_test
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -14,9 +17,13 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/bayplan/proto/wire"
 )
 
 // The environment summary and the four read-only lists (plan 18, ENV-07, PLAT-06,
@@ -548,5 +555,454 @@ func TestEachListDocumentsItsOwn200Schema(t *testing.T) {
 				t.Errorf("%s: %s response is not documented", path, status)
 			}
 		}
+	}
+}
+
+// An agent that refuses a read is not an offline environment: the page says what
+// was refused (plan 02-07, D-29).
+func TestAnAgentThatRefusesARequestIs502AgentPolicyDeniedNamingTheEndpoint(t *testing.T) {
+	cfg := richEngine()
+	cfg.PolicyDeny = true
+	f, e := dashEnv(t, cfg)
+	for _, what := range dataPaths {
+		rec := f.get(t, e, what)
+		if rec.code != http.StatusBadGateway || rec.ptyp != "agent_policy_denied" {
+			t.Errorf("%s: status %d type %q, want 502 agent_policy_denied: %s", what, rec.code, rec.ptyp, rec.body)
+			continue
+		}
+		var p struct{ Detail string }
+		if err := json.Unmarshal(rec.body, &p); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(p.Detail, "The agent refused a request (GET /") || !strings.HasSuffix(p.Detail, ").") {
+			t.Errorf("%s: detail %q does not name the endpoint", what, p.Detail)
+		}
+	}
+}
+
+// The dashboard, the lists and the events of an agent environment, read through
+// its agent's target (plan 02-11, ENV-01, ENV-06, D-33, D-40, P1 D-58).
+
+// agentProblem is the typed problem of a data route: the Phase 1 members plus the
+// environment's state.
+type agentProblem struct {
+	Type   string `json:"type"`
+	Status int    `json:"status"`
+	State  string `json:"state"`
+	Since  string `json:"since"`
+	Reason string `json:"reason"`
+	Engine struct {
+		Name       string `json:"name"`
+		Version    string `json:"version"`
+		APIVersion string `json:"apiVersion"`
+	} `json:"engine"`
+}
+
+func (f *agentFix) get(t *testing.T, envID, what string) *envRec {
+	t.Helper()
+	return f.req(t, http.MethodGet, "/api/env/"+envID+"/"+what, "")
+}
+
+func TestAgentEnvironmentSummaryAndListsAreReadThroughTheTunnel(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	f.connect(t, env, dockertest.FakeConfig{
+		Hostname: "edge-1", Version: "28.4.0",
+		Containers: []dockertest.FakeContainer{
+			{ID: "a1", Names: []string{"/web"}, Image: "nginx:1.27", State: "running", Status: "Up 2 hours"},
+			{ID: "a2", Names: []string{"/db"}, Image: "postgres:17", State: "exited", Status: "Exited (0) 3 hours ago"},
+		},
+		Images:   []dockertest.FakeImage{{ID: "sha256:0123456789abcdef0123456789abcdef", RepoTags: []string{"nginx:1.27"}, Size: 1234}},
+		Volumes:  []dockertest.FakeVolume{{Name: "data", Driver: "local"}},
+		Networks: []dockertest.FakeNetwork{{ID: "n1", Name: "bridge", Driver: "bridge", Scope: "local"}},
+	}, nil)
+	f.whenState(t, env.ID, "online")
+
+	var s summaryBody
+	waitFor(t, "the summary", func() bool {
+		rec := f.get(t, env.ID, "summary")
+		if rec.code != http.StatusOK {
+			return false
+		}
+		s = decode[summaryBody](t, rec)
+		return true
+	})
+	if s.Environment.ID != env.ID || s.Environment.Name != "Remote" || s.Environment.Type != "standalone" || s.Environment.Status.State != "online" {
+		t.Errorf("environment = %+v", s.Environment)
+	}
+	if s.Engine.Version != "28.4.0" || s.Counts.Containers != 2 || s.Counts.ContainersRunning != 1 || s.Counts.Images != 1 || s.Counts.Volumes != 1 || s.Counts.Networks != 1 {
+		t.Errorf("engine %+v counts %+v, want what the agent's daemon reported", s.Engine, s.Counts)
+	}
+	containers := decode[listBody[containerItem]](t, f.get(t, env.ID, "containers"))
+	if containers.Total != 2 || containers.Items[0].Name != "db" || containers.Items[1].Name != "web" {
+		t.Errorf("containers = %+v", containers)
+	}
+	for what, total := range map[string]int{"images": 1, "volumes": 1, "networks": 1} {
+		rec := f.get(t, env.ID, what)
+		if rec.code != http.StatusOK {
+			t.Errorf("%s: %d %s", what, rec.code, rec.body)
+			continue
+		}
+		var l struct {
+			Total int `json:"total"`
+		}
+		if err := json.Unmarshal(rec.body, &l); err != nil || l.Total != total {
+			t.Errorf("%s: %s, want a total of %d", what, rec.body, total)
+		}
+	}
+}
+
+func TestPendingAgentEnvironmentDataRoutesAnswer503EnvironmentOfflineWithStatePending(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Waiting")
+	for _, what := range dataPaths {
+		rec := f.get(t, env.ID, what)
+		if rec.code != http.StatusServiceUnavailable || rec.ptyp != "environment_offline" {
+			t.Errorf("%s: %d %q, want 503 environment_offline: %s", what, rec.code, rec.ptyp, rec.body)
+			continue
+		}
+		if p := decode[agentProblem](t, rec); p.State != "pending" || p.Reason != "" || p.Since != "" {
+			t.Errorf("%s: problem = %+v, want state pending with no reason and no since", what, p)
+		}
+	}
+}
+
+func TestRevokedAgentEnvironmentDataRoutesAnswer503WithStateRevokedItsReasonAndSince(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
+	f.whenState(t, env.ID, "online")
+	f.srv.Events.WaitLen(t, 1)
+	_ = a.conn.WS.CloseNow()
+	f.srv.Events.WaitLen(t, 2)
+	f.tclk.Advance(time.Minute)
+	revokedAt := f.tclk.Now()
+	f.srv.Exec(t, `UPDATE agents SET status = 'revoked', revoked_at = ? WHERE id = ?`, revokedAt.UnixNano(), a.id)
+
+	for _, what := range dataPaths {
+		rec := f.get(t, env.ID, what)
+		if rec.code != http.StatusServiceUnavailable || rec.ptyp != "environment_offline" {
+			t.Errorf("%s: %d %q, want 503 environment_offline: %s", what, rec.code, rec.ptyp, rec.body)
+			continue
+		}
+		if p := decode[agentProblem](t, rec); p.State != "revoked" || p.Reason != "revoked" || p.Since != utc(revokedAt) {
+			t.Errorf("%s: problem = %+v, want revoked / revoked since %s", what, p, utc(revokedAt))
+		}
+	}
+}
+
+func TestOfflineAgentEnvironmentDataRoutesCarryTheReasonAndTheTimeTheContactWasLost(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
+	f.whenState(t, env.ID, "online")
+	f.srv.Events.WaitLen(t, 1)
+	_ = a.conn.WS.CloseNow()
+	f.srv.Events.WaitLen(t, 2)
+	droppedAt := f.tclk.Now()
+	f.tclk.Advance(31 * time.Second)
+
+	rec := f.get(t, env.ID, "summary")
+	if rec.code != http.StatusServiceUnavailable || rec.ptyp != "environment_offline" {
+		t.Fatalf("%d %q, want 503 environment_offline: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if p := decode[agentProblem](t, rec); p.State != "offline" || p.Reason != "agent_offline" || p.Since != utc(droppedAt) {
+		t.Fatalf("problem = %+v, want offline / agent_offline since %s", p, utc(droppedAt))
+	}
+}
+
+func TestUnsupportedAgentEngineAnswers409EnvironmentUnsupportedWithTheEngineAndTheD40Reason(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Old")
+	f.connect(t, env, dockertest.FakeConfig{APIVersion: "1.41", Version: "20.10.24", Hostname: "old"}, nil)
+	f.whenState(t, env.ID, "unsupported")
+	for _, what := range dataPaths {
+		rec := f.get(t, env.ID, what)
+		if rec.code != http.StatusConflict || rec.ptyp != "environment_unsupported" {
+			t.Errorf("%s: %d %q, want 409 environment_unsupported: %s", what, rec.code, rec.ptyp, rec.body)
+			continue
+		}
+		p := decode[agentProblem](t, rec)
+		if p.State != "unsupported" || p.Reason != "unsupported_engine" || p.Engine.Version != "20.10.24" || p.Engine.APIVersion != "1.41" {
+			t.Errorf("%s: problem = %+v", what, p)
+		}
+	}
+}
+
+func TestAgentEnvironmentEventsStreamDeliversAnEventPublishedOnTheAgentsDaemon(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
+	f.whenState(t, env.ID, "online")
+
+	ts := httptest.NewServer(f.h)
+	defer ts.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/env/"+env.ID+"/events/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: f.cookie}) //nolint:gosec // a request cookie as a browser sends it
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream: %d", resp.StatusCode)
+	}
+
+	a.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "abc123", Attributes: map[string]string{"name": "web"}})
+	sc := bufio.NewScanner(resp.Body)
+	got := false
+	for !got && sc.Scan() {
+		if line := sc.Text(); strings.HasPrefix(line, "data: ") && strings.Contains(line, `"action":"start"`) && strings.Contains(line, `"name":"web"`) {
+			got = true
+		}
+	}
+	if !got {
+		t.Fatalf("the event published on the agent's daemon never arrived (%v)", sc.Err())
+	}
+
+	// The polling fallback shows the same event.
+	waitFor(t, "the recent list", func() bool {
+		rec := f.get(t, env.ID, "events")
+		return rec.code == http.StatusOK && strings.Contains(string(rec.body), `"name":"web"`)
+	})
+}
+
+// The summary and lists of a swarm: every node, each row with its node, the
+// nodes that did not answer by name, and a node filter (plan 02-21, ENV-02, ENV-06,
+// D-46, T-02-73, T-02-74).
+
+type nodeCountsItem struct {
+	Node       string `json:"node"`
+	Containers int    `json:"containers"`
+	Images     int    `json:"images"`
+	Volumes    int    `json:"volumes"`
+	Networks   int    `json:"networks"`
+}
+
+type swarmSummary struct {
+	summaryBody
+	NotReporting *[]string        `json:"notReporting"`
+	ByNode       []nodeCountsItem `json:"byNode"`
+}
+
+type nodeListBody[T any] struct {
+	Items        []T       `json:"items"`
+	Total        int       `json:"total"`
+	Truncated    bool      `json:"truncated"`
+	Nodes        *[]string `json:"nodes"`
+	NotReporting *[]string `json:"notReporting"`
+}
+
+type nodeContainer struct {
+	Name string `json:"name"`
+	Node string `json:"node"`
+}
+
+type nodeNetwork struct {
+	Name  string `json:"name"`
+	Scope string `json:"scope"`
+	Node  string `json:"node"`
+}
+
+type nodeNamed struct {
+	Node string `json:"node"`
+}
+
+// swarmFix is a swarm of two managers and a worker whose worker holds 501 containers,
+// so a filter and the 500-row cap can be told apart.
+type swarmFix struct {
+	*agentFix
+	env       tunneltest.Environment
+	m1, m2, w *agentConn
+}
+
+func newSwarmFix(t *testing.T) *swarmFix {
+	t.Helper()
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Swarm")
+	mgr := func(i int) (dockertest.FakeConfig, *wire.Facts) {
+		name := fmt.Sprintf("mgr-%d", i)
+		return dockertest.FakeConfig{
+			Hostname: name, SwarmState: "active", SwarmControl: true, Nodes: 3, Services: 2,
+			Containers: []dockertest.FakeContainer{{ID: fmt.Sprintf("m%d", i), Names: []string{"/web"}, State: "running"}},
+			Images:     []dockertest.FakeImage{{ID: "sha256:" + strings.Repeat("a", 64), RepoTags: []string{"nginx:1"}, Size: 5}},
+			Volumes:    []dockertest.FakeVolume{{Name: "data", Driver: "local"}},
+			Networks: []dockertest.FakeNetwork{
+				{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"},
+				{ID: fmt.Sprintf("br%d", i), Name: "bridge", Driver: "bridge", Scope: "local"},
+			},
+		}, &wire.Facts{
+			EngineID: "ENG:" + name, Hostname: name, EngineReachable: true,
+			Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-" + name, ClusterID: "cluster-1", Control: true},
+		}
+	}
+	s := &swarmFix{agentFix: f, env: env}
+	cfg, facts := mgr(1)
+	s.m1 = f.connect(t, env, cfg, facts)
+	cfg, facts = mgr(2)
+	s.m2 = f.connect(t, env, cfg, facts)
+	var many []dockertest.FakeContainer
+	for i := range 501 {
+		many = append(many, dockertest.FakeContainer{ID: fmt.Sprintf("w%03d", i), Names: []string{fmt.Sprintf("/job-%03d", i)}, State: "running"})
+	}
+	s.w = f.connect(t, env, dockertest.FakeConfig{
+		Hostname: "wrk-1", SwarmState: "active", Containers: many,
+		Networks: []dockertest.FakeNetwork{{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"}, {ID: "brw", Name: "bridge", Driver: "bridge", Scope: "local"}},
+	}, &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
+	f.whenState(t, env.ID, "online")
+	return s
+}
+
+func TestSwarmSummaryHasClusterTotalsAPerNodeBreakdownAndNobodyMissing(t *testing.T) {
+	s := newSwarmFix(t)
+	var sum swarmSummary
+	waitFor(t, "the summary", func() bool {
+		rec := s.get(t, s.env.ID, "summary")
+		if rec.code != http.StatusOK {
+			return false
+		}
+		sum = decode[swarmSummary](t, rec)
+		return true
+	})
+	if sum.Counts.Containers != 503 || sum.Counts.Images != 2 || sum.Counts.Volumes != 2 {
+		t.Errorf("counts = %+v, want the totals over the three nodes", sum.Counts)
+	}
+	// One swarm network from the manager in use, and a bridge on each of the nodes.
+	if sum.Counts.Networks != 4 {
+		t.Errorf("networks = %d, want the overlay once and three bridges", sum.Counts.Networks)
+	}
+	if sum.Counts.Nodes == nil || *sum.Counts.Nodes != 3 || sum.Counts.Services == nil || *sum.Counts.Services != 2 {
+		t.Errorf("nodes/services = %v/%v, want the manager's 3 and 2", sum.Counts.Nodes, sum.Counts.Services)
+	}
+	if sum.NotReporting == nil || len(*sum.NotReporting) != 0 {
+		t.Errorf("notReporting = %v, want an empty list (not null) when every node answered", sum.NotReporting)
+	}
+	var names []string
+	for _, n := range sum.ByNode {
+		names = append(names, n.Node)
+	}
+	if !slices.Equal(names, []string{"mgr-1", "mgr-2", "wrk-1"}) {
+		t.Fatalf("byNode = %+v, want the three nodes by name", sum.ByNode)
+	}
+	if w := sum.ByNode[2]; w.Containers != 501 || w.Networks != 1 {
+		t.Errorf("wrk-1 = %+v, want its 501 containers and one local network", w)
+	}
+}
+
+func TestSwarmSummaryNamesTheNodeThatDidNotAnswer(t *testing.T) {
+	s := newSwarmFix(t)
+	s.srv.Hub.Kick(s.w.id, tunnel.DisconnectClosed)
+	waitFor(t, "the worker to be gone", func() bool {
+		for _, v := range s.srv.Hub.Views(s.env.ID) {
+			if v.AgentID == s.w.id && v.Connected {
+				return false
+			}
+		}
+		return true
+	})
+	rec := s.get(t, s.env.ID, "summary")
+	if rec.code != http.StatusOK {
+		t.Fatalf("summary: %d %s", rec.code, rec.body)
+	}
+	sum := decode[swarmSummary](t, rec)
+	if sum.NotReporting == nil || !slices.Equal(*sum.NotReporting, []string{"wrk-1"}) {
+		t.Errorf("notReporting = %v, want the missing node by name", sum.NotReporting)
+	}
+	if sum.Counts.Containers != 2 || len(sum.ByNode) != 2 {
+		t.Errorf("counts = %+v byNode = %+v, want only the two managers' totals, not a partial figure presented as the whole", sum.Counts, sum.ByNode)
+	}
+}
+
+func TestSwarmListsCarryEachRowsNodeAndTheNodeNamesAvailableForTheFilter(t *testing.T) {
+	s := newSwarmFix(t)
+	nets := decode[nodeListBody[nodeNetwork]](t, s.get(t, s.env.ID, "networks"))
+	var rows []string
+	for _, n := range nets.Items {
+		rows = append(rows, n.Node+"/"+n.Name+"/"+n.Scope)
+	}
+	want := []string{"mgr-1/bridge/local", "mgr-2/bridge/local", "wrk-1/bridge/local", "Cluster/ovl/swarm"}
+	slices.Sort(rows)
+	slices.Sort(want)
+	if !slices.Equal(rows, want) {
+		t.Errorf("networks = %v, want %v", rows, want)
+	}
+	if nets.Nodes == nil || !slices.Equal(*nets.Nodes, []string{"Cluster", "mgr-1", "mgr-2", "wrk-1"}) {
+		t.Errorf("networks nodes = %v, want the reporting nodes and Cluster for the filter", nets.Nodes)
+	}
+	for _, what := range []string{"images", "volumes"} {
+		l := decode[nodeListBody[nodeNamed]](t, s.get(t, s.env.ID, what))
+		if l.Total != 2 || len(l.Items) != 2 || l.Items[0].Node == "" {
+			t.Errorf("%s = %+v, want one row per manager with its node", what, l)
+		}
+		if l.Nodes == nil || !slices.Equal(*l.Nodes, []string{"mgr-1", "mgr-2", "wrk-1"}) || l.NotReporting == nil || len(*l.NotReporting) != 0 {
+			t.Errorf("%s nodes %v notReporting %v, want three nodes and nobody missing", what, l.Nodes, l.NotReporting)
+		}
+	}
+}
+
+func TestSwarmContainerListFiltersByNodeBeforeTheCapAndKeepsEveryNodeNameForTheFilter(t *testing.T) {
+	s := newSwarmFix(t)
+	all := decode[nodeListBody[nodeContainer]](t, s.get(t, s.env.ID, "containers"))
+	if all.Total != 503 || !all.Truncated || len(all.Items) != 500 {
+		t.Fatalf("unfiltered: total %d truncated %v items %d, want 503 / true / 500", all.Total, all.Truncated, len(all.Items))
+	}
+	w := decode[nodeListBody[nodeContainer]](t, s.get(t, s.env.ID, "containers?node=wrk-1"))
+	if w.Total != 501 || !w.Truncated || len(w.Items) != 500 {
+		t.Errorf("wrk-1: total %d truncated %v items %d, want the cap applied after the filter: 501 / true / 500", w.Total, w.Truncated, len(w.Items))
+	}
+	m := decode[nodeListBody[nodeContainer]](t, s.get(t, s.env.ID, "containers?node=mgr-2"))
+	if m.Total != 1 || m.Truncated || len(m.Items) != 1 || m.Items[0].Node != "mgr-2" {
+		t.Errorf("mgr-2 = %+v, want its one container", m)
+	}
+	if m.Nodes == nil || !slices.Equal(*m.Nodes, []string{"mgr-1", "mgr-2", "wrk-1"}) {
+		t.Errorf("nodes = %v, want every reporting node even with a filter on", m.Nodes)
+	}
+	none := decode[nodeListBody[nodeContainer]](t, s.get(t, s.env.ID, "containers?node=nobody"))
+	if none.Total != 0 || none.Items == nil || len(none.Items) != 0 {
+		t.Errorf("an unknown node = %+v, want an empty list that is not null", none)
+	}
+	if rec := s.get(t, s.env.ID, "containers?node="+strings.Repeat("n", 129)); rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("a node of 129 characters: %d, want 422 (T-02-74)", rec.code)
+	}
+}
+
+func TestStandaloneListsAndSummaryAreUnchangedApartFromTheOneNode(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	f.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Containers: []dockertest.FakeContainer{{ID: "a1", Names: []string{"/web"}, State: "running"}}}, nil)
+	f.whenState(t, env.ID, "online")
+	var sum swarmSummary
+	waitFor(t, "the summary", func() bool {
+		rec := f.get(t, env.ID, "summary")
+		if rec.code != http.StatusOK {
+			return false
+		}
+		sum = decode[swarmSummary](t, rec)
+		return true
+	})
+	if len(sum.ByNode) != 1 || sum.ByNode[0].Node != "edge-1" || sum.ByNode[0].Containers != 1 || sum.NotReporting == nil || len(*sum.NotReporting) != 0 {
+		t.Errorf("summary = %+v, want the one host and nobody missing", sum)
+	}
+	l := decode[nodeListBody[nodeContainer]](t, f.get(t, env.ID, "containers"))
+	if l.Total != 1 || l.Items[0].Node != "edge-1" || l.Nodes == nil || !slices.Equal(*l.Nodes, []string{"edge-1"}) {
+		t.Errorf("containers = %+v, want the row on edge-1", l)
+	}
+}
+
+func TestLocalSocketListsNameTheEngineAsTheOnlyNode(t *testing.T) {
+	f, e := dashEnv(t, richEngine())
+	waitFor(t, "the summary", func() bool { return f.get(t, e, "summary").code == http.StatusOK })
+	sum := decode[swarmSummary](t, f.get(t, e, "summary"))
+	if len(sum.ByNode) != 1 || sum.ByNode[0].Node != "node-1" || sum.ByNode[0].Containers != 3 {
+		t.Errorf("byNode = %+v, want the one engine", sum.ByNode)
+	}
+	l := decode[nodeListBody[nodeContainer]](t, f.get(t, e, "containers?node=node-1"))
+	if l.Total != 3 || l.Items[0].Node != "node-1" {
+		t.Errorf("containers = %+v, want all three on node-1", l)
 	}
 }

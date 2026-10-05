@@ -9,11 +9,11 @@ import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // Settings > Environments (D-20, D-60). Rename, remove and add change the
-// registry, so the tab needs environments.write; the server checks it again.
+// registry, so the tab needs environments.manage; the server checks it again.
 function EnvironmentsTab() {
   const t = useT();
   useDocumentTitle(t("settings.environments.tabTitle"));
-  const allowed = usePermission("environments.write");
+  const allowed = usePermission("environments.manage");
   if (!allowed) return <NoPermission />;
   return <EnvironmentsSettings />;
 }

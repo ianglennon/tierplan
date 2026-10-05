@@ -1,0 +1,87 @@
+{
+  "overview": {
+    "tabTitle": "Environments",
+    "title": "Environments",
+    "caption_one": "{{count}} environment",
+    "caption_other": "{{count}} environments",
+    "add": "Add environment",
+    "tableLabel": "Environments",
+    "loading": "Loading environments",
+    "columns": {
+      "health": "Health",
+      "name": "Name",
+      "type": "Type",
+      "nodes": "Nodes",
+      "failing": "Failing services",
+      "agents": "Agents",
+      "engine": "Engine",
+      "agent": "Agent",
+      "lastSeen": "Last seen"
+    },
+    "sort": {
+      "by": "Sort by {{column}}"
+    },
+    "cell": {
+      "missing": "—",
+      "now": "Now",
+      "nodesLabel_one": "{{ready}} of {{total}} node ready",
+      "nodesLabel_other": "{{ready}} of {{total}} nodes ready",
+      "failingLabel_one": "{{failing}} of {{total}} service failing",
+      "failingLabel_other": "{{failing}} of {{total}} services failing",
+      "agentsLabel_one": "{{connected}} of {{expected}} agent connected",
+      "agentsLabel_other": "{{connected}} of {{expected}} agents connected",
+      "update": "Update",
+      "updateLabel": "Agent update available"
+    },
+    "finishSetup": "Finish setup",
+    "mobile": {
+      "nodes_one": "{{ready}}/{{total}} node",
+      "nodes_other": "{{ready}}/{{total}} nodes",
+      "failing": "{{failing}} failing",
+      "agent": "agent {{version}}"
+    },
+    "announce": "{{name}} is now {{state}}",
+    "fold": {
+      "title": "This host is part of {{swarm}}",
+      "body": "Fold it into the swarm environment so it isn't listed twice.",
+      "review": "Review"
+    },
+    "error": {
+      "heading": "Couldn't load environments.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry"
+    },
+    "reason": {
+      "states": {
+        "pending": {
+          "text": "No agent has connected yet.",
+          "hint": "Install the Bayplan agent on a host to start managing it."
+        },
+        "reconnecting": {
+          "text": "Bayplan just started and is waiting for the agent to reconnect.",
+          "hint": "This usually takes under a minute."
+        },
+        "offline": {
+          "text": "Bayplan can't reach this environment.",
+          "hint": "Open it to see why."
+        },
+        "degraded": {
+          "text": "Something is wrong on part of this environment.",
+          "hint": "Open it to see which node."
+        },
+        "revoked": {
+          "text": "An admin revoked every agent.",
+          "hint": "Remove the agents from the hosts, or unblock them in Settings."
+        },
+        "cluster_changed": {
+          "text": "This swarm was re-initialised.",
+          "hint": "Adopt the new cluster to keep this environment, or remove it."
+        },
+        "unsupported": {
+          "text": "This Docker setup isn't supported.",
+          "hint": "Bayplan manages Docker Engine 24 or later."
+        }
+      }
+    }
+  }
+}

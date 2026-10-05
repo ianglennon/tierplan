@@ -3,14 +3,16 @@
 
 import createClient, { type Middleware } from "openapi-fetch";
 
+import { basePath, stripBase } from "@/lib/base-path";
 import type { paths } from "./schema";
 
 // Same-origin typed client generated from the committed openapi.json. The base
-// URL is the page origin, so `new Request()` always gets an absolute URL
-// (relative ones are rejected outside a browser, for example under Vitest).
+// URL is the page origin plus the base path Bayplan is served under (D-50), so
+// `new Request()` always gets an absolute URL (relative ones are rejected
+// outside a browser, for example under Vitest).
 // fetch is looked up per call, not captured at import time, so tests can stub it.
 export const api = createClient<paths>({
-  baseUrl: window.location.origin,
+  baseUrl: window.location.origin + basePath(),
   fetch: (input) => globalThis.fetch(input),
 });
 
@@ -24,8 +26,9 @@ export function setCsrfToken(token: string | null): void {
   csrfToken = token;
 }
 
-// The handler is told the path (with its query string) the user was on, so the
-// sign-in screen can send them back after they sign in again.
+// The handler is told the path (with its query string, without the base path)
+// the user was on, so the sign-in screen can send them back after they sign in
+// again.
 export function setUnauthorizedHandler(fn: ((path: string) => void) | null): void {
   onUnauthorized = fn;
 }
@@ -40,7 +43,8 @@ const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 // A 401 from these calls is an answer, not an expired session: a wrong
 // password, the pre-auth instance lookup and the setup wizard's own calls.
-function isExemptFrom401(pathname: string): boolean {
+function isExemptFrom401(requestPath: string): boolean {
+  const pathname = stripBase(requestPath);
   return (
     pathname === "/api/auth/login" ||
     pathname === "/api/instance" ||
@@ -61,7 +65,7 @@ const session: Middleware = {
       onUnauthorized &&
       !isExemptFrom401(new URL(request.url).pathname)
     ) {
-      onUnauthorized(window.location.pathname + window.location.search);
+      onUnauthorized(stripBase(window.location.pathname) + window.location.search);
     }
     return response;
   },

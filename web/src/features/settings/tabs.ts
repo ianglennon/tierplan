@@ -9,6 +9,6 @@
 // modules export nothing but their Route.
 export const SETTINGS_TABS = [
   { key: "general", to: "/settings/general", perm: "settings.read" },
-  { key: "environments", to: "/settings/environments", perm: "environments.write" },
+  { key: "environments", to: "/settings/environments", perm: "environments.manage" },
   { key: "about", to: "/settings/about", perm: "settings.read" },
 ] as const;

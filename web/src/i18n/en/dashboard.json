@@ -32,7 +32,8 @@
         "container": "Container",
         "image": "Image",
         "network": "Network",
-        "volume": "Volume"
+        "volume": "Volume",
+        "bayplan": "Bayplan"
       },
       "live": "Live",
       "reconnecting": "Reconnecting…",

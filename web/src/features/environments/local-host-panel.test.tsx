@@ -353,10 +353,18 @@ describe("LocalHostPanel, no Docker socket", () => {
     // The running version is v0.1.0, so the snippet names the 0.1 line.
     expect(text).toContain("ghcr.io/ianglennon/bayplan:0.1");
     expect(text).not.toContain(":latest");
-    expect(screen.getByText("Remote hosts will be available in a later release.")).toBeTruthy();
+    expect(
+      screen.getByText("You can add remote hosts and swarms after setup from Environments."),
+    ).toBeTruthy();
     expect(button("Continue")).toBeTruthy();
     await new Promise((r) => setTimeout(r, 50));
     expect(posts()).toEqual([]);
+  });
+
+  it("leaves the after-setup footnote out of Settings and the overview", async () => {
+    renderPanel({ mode: "settings" });
+    expect(await screen.findByRole("heading", { name: "No Docker socket found" })).toBeTruthy();
+    expect(screen.queryByText(/add remote hosts and swarms after setup/)).toBeNull();
   });
 
   it("looks again on Check again and shows the host once Docker is there", async () => {

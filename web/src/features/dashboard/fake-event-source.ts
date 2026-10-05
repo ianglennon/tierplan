@@ -46,4 +46,10 @@ export class FakeEventSource implements EventSourceLike {
   send(event: EventDTO): void {
     this.emit(new MessageEvent("docker", { data: JSON.stringify(event) }));
   }
+
+  // Any named frame, with the id the server put on it (the SSE id field,
+  // which a browser exposes as lastEventId). The environments stream uses it.
+  sendFrame(type: string, data: unknown, lastEventId = ""): void {
+    this.emit(new MessageEvent(type, { data: JSON.stringify(data), lastEventId }));
+  }
 }

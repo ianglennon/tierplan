@@ -7,7 +7,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
-import { containersQuery, LIST_REFETCH_MS } from "@/api/resources";
+import { containersQuery, LIST_REFETCH_MS, listKey } from "@/api/resources";
+import { nodeRowKey } from "@/features/resources/swarm-lists";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 
@@ -139,15 +140,21 @@ const NETWORKS = {
   truncated: false,
 };
 
-let answers: Record<string, () => Response | Promise<Response>>;
+let answers: Record<string, (url: URL) => Response | Promise<Response>>;
 let sent: string[];
+// Every API request's path and query, to see which node a list asked for.
+let sentUrls: string[];
+// What /api/environments answers; a swarm test swaps it.
+let envItem: Record<string, unknown>;
 
 function stubApi() {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
-      const path = new URL(req.url).pathname;
+      const url = new URL(req.url);
+      const path = url.pathname;
       sent.push(path);
+      sentUrls.push(`${path}${url.search}`);
       if (path === "/api/instance")
         return Response.json({ instanceName: "Lab", needsSetup: false, rememberDays: 30 });
       if (path === "/api/me") return Response.json(me);
@@ -159,10 +166,10 @@ function stubApi() {
           sourceUrl: "https://example.test",
           version: "v0.0.0",
         });
-      if (path === "/api/environments") return Response.json({ items: [LAB] });
+      if (path === "/api/environments") return Response.json({ items: [envItem] });
       if (path === "/api/env/e1/summary") return Response.json(SUMMARY);
       const answer = answers[path];
-      return answer ? answer() : Response.json({}, { status: 404 });
+      return answer ? answer(url) : Response.json({}, { status: 404 });
     }),
   );
 }
@@ -186,8 +193,23 @@ function cellsOf(row: HTMLElement): string[] {
     .map((c) => c.textContent ?? "");
 }
 
+// sameKeyWarnings installs a pass-through spy on console.error, so other errors
+// still print, and returns it. Read the duplicate-key warnings with
+// sameKeyWarningsOf(spy). Restore the spy with mockRestore in a finally block, as
+// the file's afterEach only unstubs globals and a leaked spy would capture later
+// tests' output (CR-D-01).
+function sameKeyWarnings() {
+  return vi.spyOn(console, "error");
+}
+
+function sameKeyWarningsOf(spy: ReturnType<typeof sameKeyWarnings>): string[] {
+  return spy.mock.calls.map((c) => String(c[0])).filter((m) => m.includes("same key"));
+}
+
 beforeEach(() => {
   sent = [];
+  sentUrls = [];
+  envItem = LAB;
   setCsrfToken(null);
   me = {
     user: { id: "u1", username: "admin", role: "admin" },
@@ -432,5 +454,440 @@ describe("dashboard tiles and the Resources nav group", () => {
     const sidebar = document.querySelector('[data-slot="sidebar"]') as HTMLElement;
     expect(within(sidebar).queryByRole("link", { name: "Containers" })).toBeNull();
     expect(within(sidebar).getByRole("link", { name: "Networks" })).toBeTruthy();
+  });
+});
+
+// Aggregated swarm lists (plan 22, ENV-02, ENV-06, D-46): a Node column after
+// the first column, the Node select held in the URL, the caption across nodes
+// and the banner that names the nodes that did not report.
+describe("swarm lists", () => {
+  const SWARM = {
+    ...LAB,
+    id: "e1",
+    name: "Prod swarm",
+    kind: "agent",
+    type: "swarm",
+    envType: "swarm",
+    isSelfHost: false,
+    isLocalSocket: false,
+    status: { state: "degraded" },
+  };
+
+  const row = (id: string, name: string, node: string) => ({
+    id,
+    name,
+    node,
+    state: "running",
+    status: "Up 1 hour",
+    image: "nginx",
+    created: ago(3600_000),
+    ports: null,
+    isSelf: false,
+  });
+
+  const ALL_CONTAINERS = [
+    row("c1", "web.1", "n1"),
+    row("c2", "web.2", "n2"),
+    row("c3", "db", "n3"),
+  ];
+
+  // The server filters by the node it is asked for and always lists every node
+  // that reported, with the ones that did not.
+  function containersFor(url: URL) {
+    const node = url.searchParams.get("node");
+    const items = node ? ALL_CONTAINERS.filter((c) => c.node === node) : ALL_CONTAINERS;
+    return Response.json({
+      items,
+      total: items.length,
+      truncated: false,
+      nodes: ["n1", "n2", "n3"],
+      notReporting: ["n4"],
+    });
+  }
+
+  beforeEach(() => {
+    envItem = SWARM;
+    answers["/api/env/e1/containers"] = containersFor;
+  });
+
+  function openNodeSelect() {
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Node" }), { key: "Enter" });
+  }
+
+  it("shows Node after Name, the caption across the nodes and the banner for a node that did not report", async () => {
+    renderAt("/env/e1/containers");
+    await screen.findByText("web.1");
+    const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(headers).toEqual(["Name", "Node", "State", "Image", "Created", "Status", "Ports"]);
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(cellsOf(rows[0] as HTMLElement).slice(0, 2)).toEqual(["web.1", "n1"]);
+    expect(cellsOf(rows[2] as HTMLElement).slice(0, 2)).toEqual(["db", "n3"]);
+    expect(screen.getByText("3 containers across 3 nodes")).toBeTruthy();
+    expect(
+      screen.getByText("1 node isn't reporting: n4. The totals below leave it out."),
+    ).toBeTruthy();
+    // The banner sits above the table.
+    const banner = screen.getByText(/isn't reporting/);
+    expect(
+      banner.compareDocumentPosition(screen.getByRole("table")) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("gives the Node column one width, so the table does not reflow as nodes report", async () => {
+    renderAt("/env/e1/containers");
+    await screen.findByText("web.1");
+    const header = screen.getByRole("columnheader", { name: "Node" });
+    expect(header.className).toContain("w-56");
+    expect(header.className).toContain("min-w-56");
+    const cell = within(screen.getAllByRole("row")[1] as HTMLElement).getAllByRole("cell")[1];
+    expect(cell?.className).toContain("w-56");
+  });
+
+  it("asks for one node, sets ?node= and shows only that node when it is chosen", async () => {
+    const router = renderAt("/env/e1/containers");
+    await screen.findByText("web.1");
+    openNodeSelect();
+    fireEvent.keyDown(await screen.findByRole("option", { name: "n2" }), { key: "Enter" });
+    await waitFor(() => expect(router.state.location.search).toEqual({ node: "n2" }));
+    await screen.findByText("1 container on n2");
+    expect(screen.queryByText("web.1")).toBeNull();
+    expect(screen.getByText("web.2")).toBeTruthy();
+    expect(sentUrls).toContain("/api/env/e1/containers?node=n2");
+  });
+
+  it("goes back to all nodes and drops the parameter", async () => {
+    const router = renderAt("/env/e1/containers?node=n2");
+    await screen.findByText("1 container on n2");
+    openNodeSelect();
+    fireEvent.keyDown(await screen.findByRole("option", { name: "All nodes" }), { key: "Enter" });
+    await screen.findByText("3 containers across 3 nodes");
+    expect(router.state.location.search).toEqual({});
+  });
+
+  it("reads the node from a link and asks the server for exactly it", async () => {
+    renderAt("/env/e1/containers?node=n3");
+    await screen.findByText("db");
+    expect(sentUrls).toContain("/api/env/e1/containers?node=n3");
+    expect(screen.getByRole("combobox", { name: "Node" }).textContent).toContain("n3");
+  });
+
+  it("keeps the rows on screen while the next node loads, so the page does not jump", async () => {
+    let release: (() => void) | undefined;
+    renderAt("/env/e1/containers");
+    await screen.findByText("web.1");
+    answers["/api/env/e1/containers"] = (url) =>
+      new Promise((resolve) => {
+        release = () => resolve(containersFor(url));
+      });
+    openNodeSelect();
+    fireEvent.keyDown(await screen.findByRole("option", { name: "n1" }), { key: "Enter" });
+    await waitFor(() => expect(release).toBeDefined());
+    expect(screen.getByText("web.2")).toBeTruthy();
+    expect(screen.queryByRole("table")?.getAttribute("aria-busy")).toBeNull();
+    (release as () => void)();
+    await waitFor(() => expect(screen.queryByText("web.2")).toBeNull());
+  });
+
+  it("says 'Nothing to show on n2 right now.' when the chosen node has no rows", async () => {
+    answers["/api/env/e1/containers"] = () =>
+      Response.json({
+        items: [],
+        total: 0,
+        truncated: false,
+        nodes: ["n1", "n2"],
+        notReporting: [],
+      });
+    renderAt("/env/e1/containers?node=n2");
+    await screen.findByText("Nothing to show on n2 right now.");
+    expect(screen.getByText("No containers")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Node" })).toBeTruthy();
+    expect(screen.queryByText(/isn't reporting/)).toBeNull();
+  });
+
+  it("shows 8 skeleton rows with the Node column and filter in place while the list loads", async () => {
+    answers["/api/env/e1/containers"] = () => new Promise<Response>(() => {});
+    renderAt("/env/e1/containers");
+    await screen.findByRole("heading", { name: "Containers" });
+    await screen.findByRole("columnheader", { name: "Node" });
+    expect(screen.getAllByRole("row")).toHaveLength(9);
+    expect((screen.getByRole("combobox", { name: "Node" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it("puts a swarm-scoped network under Cluster", async () => {
+    answers["/api/env/e1/networks"] = () =>
+      Response.json({
+        items: [
+          {
+            id: "n1",
+            name: "ingress",
+            node: "Cluster",
+            driver: "overlay",
+            scope: "swarm",
+            subnets: ["10.0.0.0/24"],
+            created: ago(86_400_000 * 10),
+          },
+          {
+            id: "n2",
+            name: "bridge",
+            node: "n1",
+            driver: "bridge",
+            scope: "local",
+            subnets: [],
+            created: ago(86_400_000 * 10),
+          },
+        ],
+        total: 2,
+        truncated: false,
+        nodes: ["Cluster", "n1"],
+        notReporting: [],
+      });
+    renderAt("/env/e1/networks");
+    await screen.findByText("ingress");
+    const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(headers).toEqual(["Name", "Node", "Driver", "Scope", "Subnet", "Created"]);
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(cellsOf(rows[0] as HTMLElement).slice(0, 2)).toEqual(["ingress", "Cluster"]);
+    expect(cellsOf(rows[1] as HTMLElement).slice(0, 2)).toEqual(["bridge", "n1"]);
+    // Cluster is a choice in the filter but not a node in the caption.
+    expect(screen.getByText("2 networks across 1 node")).toBeTruthy();
+    openNodeSelect();
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "All nodes",
+      "Cluster",
+      "n1",
+    ]);
+  });
+
+  it("gives images and volumes a Node column after their first column", async () => {
+    answers["/api/env/e1/images"] = () =>
+      Response.json({
+        items: [
+          {
+            id: "sha256:0123456789abcdef0123",
+            shortId: "0123456789ab",
+            node: "n1",
+            repoTags: ["nginx:1.27"],
+            size: 1024,
+            created: ago(60_000),
+          },
+        ],
+        total: 1,
+        truncated: false,
+        nodes: ["n1"],
+        notReporting: [],
+      });
+    answers["/api/env/e1/volumes"] = () =>
+      Response.json({
+        items: [{ name: "pgdata", node: "n2", driver: "local" }],
+        total: 1,
+        truncated: false,
+        nodes: ["n2"],
+        notReporting: [],
+      });
+    renderAt("/env/e1/images");
+    await screen.findByText("nginx:1.27");
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "Repository:tag",
+      "Node",
+      "Image ID",
+      "Size",
+      "Created",
+    ]);
+    cleanup();
+    renderAt("/env/e1/volumes");
+    await screen.findByText("pgdata");
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "Name",
+      "Node",
+      "Driver",
+      "Created",
+    ]);
+  });
+
+  it("renders the same image on two nodes as two rows with no duplicate-key warning (CR-D-01)", async () => {
+    const agentImage = (node: string) => ({
+      id: "sha256:a9e1c0de",
+      shortId: "a9e1c0de",
+      node,
+      repoTags: ["ghcr.io/ianglennon/bayplan-agent:0.1.0"],
+      size: 1024,
+      created: ago(60_000),
+    });
+    const imagesOn = (nodes: string[]) => () =>
+      Response.json({
+        items: nodes.map(agentImage),
+        total: nodes.length,
+        truncated: false,
+        nodes,
+        notReporting: [],
+      });
+    answers["/api/env/e1/images"] = imagesOn(["n1", "n2"]);
+    const spy = sameKeyWarnings();
+    try {
+      renderAt("/env/e1/images");
+      await screen.findAllByText("ghcr.io/ianglennon/bayplan-agent:0.1.0");
+      let rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+
+      answers["/api/env/e1/images"] = imagesOn(["n2", "n3"]);
+      await queryClient.invalidateQueries({ queryKey: listKey("e1", "images") });
+      await waitFor(() => {
+        rows = screen.getAllByRole("row").slice(1);
+        expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n2", "n3"]);
+      });
+      expect(sameKeyWarningsOf(spy)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("renders the same volume name on two nodes as two rows with no duplicate-key warning (CR-D-01)", async () => {
+    answers["/api/env/e1/volumes"] = () =>
+      Response.json({
+        items: [
+          { name: "pgdata", node: "n1", driver: "local" },
+          { name: "pgdata", node: "n2", driver: "local" },
+        ],
+        total: 2,
+        truncated: false,
+        nodes: ["n1", "n2"],
+        notReporting: [],
+      });
+    const spy = sameKeyWarnings();
+    try {
+      renderAt("/env/e1/volumes");
+      await screen.findAllByText("pgdata");
+      const rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      expect(sameKeyWarningsOf(spy)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keys networks and containers by node too, so the same id on two nodes gives two rows", async () => {
+    answers["/api/env/e1/networks"] = () =>
+      Response.json({
+        items: ["n1", "n2"].map((node) => ({
+          id: "b1",
+          name: "bridge",
+          node,
+          driver: "bridge",
+          scope: "local",
+          subnets: [],
+          created: ago(86_400_000),
+        })),
+        total: 2,
+        truncated: false,
+        nodes: ["n1", "n2"],
+        notReporting: [],
+      });
+    answers["/api/env/e1/containers"] = () =>
+      Response.json({
+        items: [row("c1", "web", "n1"), row("c1", "web", "n2")],
+        total: 2,
+        truncated: false,
+        nodes: ["n1", "n2"],
+        notReporting: [],
+      });
+    const spy = sameKeyWarnings();
+    try {
+      renderAt("/env/e1/networks");
+      await screen.findAllByText("bridge");
+      let rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      cleanup();
+      renderAt("/env/e1/containers");
+      await screen.findAllByText("web");
+      rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      expect(sameKeyWarningsOf(spy)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps standalone keys unique when rows carry no node", async () => {
+    envItem = LAB;
+    const spy = sameKeyWarnings();
+    try {
+      renderAt("/env/e1/images");
+      await screen.findByText("nginx:1.27, nginx:latest");
+      expect(screen.getAllByRole("row").slice(1)).toHaveLength(2);
+      cleanup();
+      renderAt("/env/e1/volumes");
+      await screen.findByText("pgdata");
+      expect(screen.getAllByRole("row").slice(1)).toHaveLength(1);
+      expect(sameKeyWarningsOf(spy)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("shows the banner on every list when a node is missing", async () => {
+    for (const resource of ["images", "volumes", "networks"] as const) {
+      answers[`/api/env/e1/${resource}`] = () =>
+        Response.json({
+          items: [],
+          total: 0,
+          truncated: false,
+          nodes: [],
+          notReporting: ["n1", "n2"],
+        });
+    }
+    renderAt("/env/e1/images");
+    await screen.findByText(/2 nodes aren't reporting: n1, n2\./);
+    cleanup();
+    renderAt("/env/e1/volumes");
+    await screen.findByText(/2 nodes aren't reporting: n1, n2\./);
+    cleanup();
+    renderAt("/env/e1/networks");
+    await screen.findByText(/2 nodes aren't reporting: n1, n2\./);
+  });
+
+  it("ignores a node parameter that is too long and sends nothing for it", async () => {
+    renderAt(`/env/e1/containers?node=${"x".repeat(200)}`);
+    await screen.findByText("web.1");
+    expect(sentUrls).toContain("/api/env/e1/containers");
+    expect(sentUrls.some((u) => u.includes("node="))).toBe(false);
+  });
+
+  it("sends a hostile node parameter as a plain query value and shows it as text", async () => {
+    const evil = "<img src=x onerror=alert(1)>";
+    renderAt(`/env/e1/containers?node=${encodeURIComponent(evil)}`);
+    await screen.findByText(`Nothing to show on ${evil} right now.`, {}, { timeout: 3000 });
+    expect(document.querySelector("img[src='x']")).toBeNull();
+    expect(sentUrls.some((u) => u.includes(`node=${encodeURIComponent(evil)}`))).toBe(true);
+  });
+
+  it("leaves a standalone host without the Node column, the filter and the banner", async () => {
+    envItem = LAB;
+    answers["/api/env/e1/containers"] = () => Response.json(CONTAINERS);
+    renderAt("/env/e1/containers");
+    await screen.findByText("old-job");
+    expect(screen.queryByRole("combobox", { name: "Node" })).toBeNull();
+    expect(screen.queryByRole("columnheader", { name: "Node" })).toBeNull();
+    expect(screen.queryByText(/isn't reporting/)).toBeNull();
+    expect(screen.getByText("3 containers")).toBeTruthy();
+  });
+});
+
+describe("nodeRowKey", () => {
+  it("joins the node and the id with a separator", () => {
+    expect(nodeRowKey("n1", "x")).toBe("n1|x");
+  });
+
+  it("differs for the same id on two nodes", () => {
+    expect(nodeRowKey("n2", "x")).not.toBe(nodeRowKey("n1", "x"));
+  });
+
+  it("keys a row with no node as '|<id>'", () => {
+    expect(nodeRowKey(undefined, "x")).toBe("|x");
+  });
+
+  it("keys a row with an empty node as '|<id>'", () => {
+    expect(nodeRowKey("", "x")).toBe("|x");
   });
 });

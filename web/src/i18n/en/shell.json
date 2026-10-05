@@ -8,12 +8,10 @@
     },
     "switcher": {
       "none": "No environment",
-      "manage": "Manage environments",
-      "loadFailed": "Couldn't load environments",
-      "label": "Environment",
       "menu": "Switch environment"
     },
     "nav": {
+      "environments": "Environments",
       "dashboard": "Dashboard",
       "resources": "Resources",
       "containers": "Containers",
@@ -32,9 +30,6 @@
       "dark": "Dark",
       "system": "System",
       "logout": "Log out"
-    },
-    "home": {
-      "tabTitle": "Home"
     },
     "account": {
       "changePassword": {

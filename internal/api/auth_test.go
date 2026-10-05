@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
@@ -65,6 +66,8 @@ type authFixture struct {
 	// environment-keyed vault.
 	dataInfo  datadir.Info
 	acctVault *vault.Vault
+	// proxy feeds the proxy items of GET /api/warnings (plan 02-25); nil means none.
+	proxy *httpx.ProxyObserver
 	// pwLimiter is the per-user throttle on POST /api/me/password; nil means none.
 	pwLimiter *auth.IPLimiter
 	// localHost feeds GET /api/local-host (plan 15).
@@ -74,8 +77,10 @@ type authFixture struct {
 	// exists and the environment routes are never called.
 	envSvc *envs.Service
 	// snaps, when set with envSvc, is the snapshot cache behind the summary and
-	// list routes (plan 18).
+	// list routes (plan 18); agg is the aggregator over it that the routes read
+	// through (plan 02-11).
 	snaps *envs.Snapshots
+	agg   *envs.Aggregator
 	// hub, when set with envSvc, is the events hub behind the events routes
 	// (plan 21); eventsHeartbeat and eventsMaxStreams tune them for a test.
 	hub              *envs.Hub
@@ -83,8 +88,38 @@ type authFixture struct {
 	eventsMaxStreams int
 	// eventsMaxLifetime caps how long one stream may live; zero is the default.
 	eventsMaxLifetime time.Duration
+	// brk, when set with envSvc, is the health broker behind GET
+	// /api/environments/stream (plan 02-12); envStreamHeartbeat, envStreamMaxStreams
+	// and envStreamMaxLifetime tune that stream for a test.
+	brk                  *envs.Broker
+	envStreamHeartbeat   time.Duration
+	envStreamMaxStreams  int
+	envStreamMaxLifetime time.Duration
 	// auditRetention feeds GET /api/audit (plan 24).
 	auditRetention int
+	// tlsPin is the pin Bayplan's own self-signed certificate would have; empty
+	// means it serves none (plan 02-09).
+	tlsPin string
+	// agentAllowInsecure is the server's BAYPLAN_AGENT_ALLOW_INSECURE as the
+	// environment, agent and settings routes see it; false unless a test sets it
+	// before build (plans 02-42, 02-45).
+	agentAllowInsecure bool
+	// agentSvc and liveAgents, when set, replace the agents service the agent routes
+	// use and say which tunnel hub the node list reads live state from (plan 02-15).
+	// A test with a real hub sets them to the tunneltest server's, so a revoke closes
+	// a real session.
+	agentSvc   *agents.Service
+	liveAgents api.AgentSessions
+	// agentCluster says which agent leads a swarm, for the role in the node list.
+	agentCluster api.AgentCluster
+	// updater and serverVersion are what the agent update routes use, when set.
+	updater       *agents.Updater
+	serverVersion string
+	// settingsAgents, when set, is what the settings routes count agents with and
+	// push new addresses through (plan 02-26).
+	settingsAgents api.SettingsAgents
+	// envWarningsNow is the clock of GET /api/environments/warnings; nil means the wall clock.
+	envWarningsNow func() time.Time
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -122,7 +157,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	checker := rbac.NewChecker(f.st)
 	opts := httpx.Options{
 		Checker:       checker,
-		Authenticator: auth.NewAuthenticator(f.st, authIdle, f.inst.Secure, f.clk.now),
+		Authenticator: auth.NewAuthenticator(f.st, authIdle, f.inst.CookieScope, f.clk.now),
 		Auditor:       f.aud,
 		MutationGuard: auth.NewCSRFGuard(f.sess),
 		PublicOrigin:  f.inst.PublicOrigin,
@@ -135,17 +170,50 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterAuth(r, api.AuthDeps{Login: login, Sessions: f.sess, Instance: f.inst, Store: f.st, Checker: checker, Log: log})
 	api.RegisterAccount(r, api.AccountDeps{
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
-		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Log: log,
+		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
 	})
-	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Log: log})
+	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, AgentAllowInsecure: f.agentAllowInsecure, Log: log})
 	api.RegisterLocalHost(r, f.localHost)
-	api.RegisterEnvironments(r, api.EnvironmentsDeps{Envs: f.envSvc, Checker: checker, Log: log})
-	if f.envSvc != nil && f.snaps != nil {
-		api.RegisterDashboard(r, api.DashboardDeps{Snapshots: f.snaps, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+	api.RegisterEnvironments(r, api.EnvironmentsDeps{
+		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,
+		TLSPin: func() string { return f.tlsPin }, AgentAllowInsecure: f.agentAllowInsecure, Checker: checker, Updater: f.updater, Log: log,
+	})
+	agentSvc := f.agentSvc
+	if agentSvc == nil {
+		agentSvc = agents.NewService(f.st, f.v, f.aud, f.clk.now)
 	}
-	if f.envSvc != nil && f.hub != nil {
-		api.RegisterEvents(r, api.EventsDeps{Hub: f.hub, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, MaxLifetime: f.eventsMaxLifetime, Log: log})
+	var foldedNodes api.FoldedNodes
+	if f.envSvc != nil {
+		foldedNodes = f.envSvc
 	}
+	api.RegisterAgents(r, api.AgentsDeps{
+		Agents: agentSvc, Local: foldedNodes, Live: f.liveAgents, Cluster: f.agentCluster, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
+		AgentAllowInsecure: f.agentAllowInsecure,
+		Updater:            f.updater, ServerVersion: f.serverVersion, Log: log,
+	})
+	if f.envSvc != nil {
+		api.RegisterEnvWarnings(r, api.EnvWarningsDeps{
+			Envs: f.envSvc, Checker: checker, Now: f.envWarningsNow, Log: log,
+			Agents: api.AgentsDeps{
+				Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
+				AgentAllowInsecure: f.agentAllowInsecure,
+				Updater:            f.updater, ServerVersion: f.serverVersion,
+			},
+		})
+	}
+	if f.envSvc != nil && f.agg != nil {
+		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+	}
+	if f.envSvc != nil && f.agg != nil && f.hub != nil {
+		api.RegisterEvents(r, api.EventsDeps{Aggregator: f.agg, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, MaxLifetime: f.eventsMaxLifetime, Log: log})
+	}
+	if f.envSvc != nil && f.brk != nil {
+		api.RegisterEnvStream(r, api.EnvStreamDeps{
+			Broker: f.brk, Checker: checker, Heartbeat: f.envStreamHeartbeat,
+			MaxStreamsPerUser: f.envStreamMaxStreams, MaxLifetime: f.envStreamMaxLifetime, Log: log,
+		})
+	}
+	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Now: f.clk.now, Log: log})
 	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Log: log})
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
@@ -203,7 +271,7 @@ func (f *authFixture) do(t *testing.T, h http.Handler, r authReq) *httptest.Resp
 		req.RemoteAddr = r.ip + ":40000"
 	}
 	if r.cookie != "" {
-		req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.Secure()), Value: r.cookie}) //nolint:gosec // a request cookie as a browser sends it
+		req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: r.cookie}) //nolint:gosec // a request cookie as a browser sends it
 	}
 	if r.csrf != "" {
 		req.Header.Set("X-CSRF-Token", r.csrf)

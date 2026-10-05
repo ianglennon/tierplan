@@ -1,0 +1,6 @@
+Swarm
+ docker service rm bayplan-agent && docker secret rm bayplan-agent-token-g1
+ docker volume rm bayplan-agent   # on every node that ran the agent
+
+Standalone
+ docker rm -f bayplan-agent && docker volume rm bayplan-agent

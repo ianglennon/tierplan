@@ -13,7 +13,15 @@ cd "$ROOT"
 failures=0
 scratch="$(mktemp -d)"
 ui_probe="web/src/components/ui/zz-spdx-probe.tsx"
-trap 'rm -rf "${scratch}" "${ui_probe}"' EXIT
+vite_pid=""
+stop_vite() {
+  if [ -n "${vite_pid}" ]; then
+    kill "${vite_pid}" 2>/dev/null
+    wait "${vite_pid}" 2>/dev/null
+    vite_pid=""
+  fi
+}
+trap 'stop_vite; rm -rf "${scratch}" "${ui_probe}"' EXIT
 
 # expect <fail|pass> <name> <command...>
 expect() {
@@ -121,6 +129,147 @@ if [ "$(grep -c '^Signed-off-by: Test Author <test@example.invalid>$' "${msg}")"
   echo "SCRIPT TEST FAIL: hook-adds-one-signoff"
   failures=$((failures + 1))
 fi
+
+# --- TLS confinement gate: the setting may appear only in the agent's tls.go ---
+tls_setting="Insecure""SkipVerify"
+tlsfix="${scratch}/tls-fixture"
+mkdir -p "${tlsfix}/agent/internal/connect" "${tlsfix}/internal/server" "${tlsfix}/web/node_modules/p"
+printf 'package connect\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/agent/internal/connect/tls.go"
+expect pass "tls-gate-allowed-file" scripts/insecure-tls-check.sh "${tlsfix}"
+printf 'package server\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/internal/server/healthcheck.go"
+expect fail "tls-gate-other-file" scripts/insecure-tls-check.sh "${tlsfix}"
+expect_out "tls-gate-other-file names the file" "internal/server/healthcheck.go"
+rm -f "${tlsfix}/internal/server/healthcheck.go"
+printf 'package p\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/web/node_modules/p/x.go"
+expect pass "tls-gate-skips-dependencies" scripts/insecure-tls-check.sh "${tlsfix}"
+printf 'package server\n// mentions %s\n' "${tls_setting}" >"${tlsfix}/internal/server/x_test.go"
+expect fail "tls-gate-test-file-comment" scripts/insecure-tls-check.sh "${tlsfix}"
+expect pass "tls-gate-repository" scripts/insecure-tls-check.sh
+
+# --- Dev loop (G-02-1b): make dev takes a public URL and a Vite host ---
+# MAKEFLAGS and MAKELEVEL are removed so an outer `make test-scripts` cannot leak
+# variables or the -n flag state into the make under test.
+mk() { env -u MAKEFLAGS -u MAKELEVEL make -n "$@"; }
+expect pass "dev-go-default-public-url" mk dev-go
+expect_out "dev-go-default-public-url" "BAYPLAN_PUBLIC_URL='http://localhost:5173'"
+expect pass "dev-go-custom-public-url" mk dev-go DEV_PUBLIC_URL=http://dev.example.test:5173
+expect_out "dev-go-custom-public-url" "BAYPLAN_PUBLIC_URL='http://dev.example.test:5173'"
+expect pass "dev-go-empty-public-url" mk dev-go DEV_PUBLIC_URL=
+expect_out "dev-go-empty-public-url (unset, so not locked)" "BAYPLAN_PUBLIC_URL=''"
+expect pass "dev-web-default" mk dev-web
+expect_out "dev-web-default passes the public URL to Vite" "BAYPLAN_DEV_PUBLIC_URL='http://localhost:5173'"
+if grep -qF -- "--host" <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: dev-web-default must not pass --host (Vite stays on loopback)"
+  failures=$((failures + 1))
+fi
+expect pass "dev-web-host" mk dev-web DEV_WEB_HOST=0.0.0.0
+expect_out "dev-web-host passes --host" "--host 0.0.0.0"
+
+# Vite's own host check: a Host header it does not know is answered 403 unless the
+# public URL's host name was passed in BAYPLAN_DEV_PUBLIC_URL.
+# vite_status <public-url-or-empty> <host-header>: prints the HTTP status.
+vite_status() {
+  local public_url="$1" host_header="$2" port="${DEV_LOOP_TEST_PORT:-5198}" i code=""
+  if [ ! -x web/node_modules/.bin/vite ]; then
+    echo "run pnpm -C web install (web/node_modules/.bin/vite is missing)" >&2
+    return 1
+  fi
+  (
+    cd web &&
+      if [ -n "${public_url}" ]; then export BAYPLAN_DEV_PUBLIC_URL="${public_url}"; else unset BAYPLAN_DEV_PUBLIC_URL; fi &&
+      exec node_modules/.bin/vite --host 127.0.0.1 --port "${port}" --strictPort
+  ) >"${scratch}/vite.log" 2>&1 &
+  vite_pid=$!
+  for ((i = 0; i < 30; i++)); do
+    if curl -s -o /dev/null "http://127.0.0.1:${port}/"; then
+      code="$(curl -s -o "${scratch}/vite.body" -w '%{http_code}' -H "Host: ${host_header}" "http://127.0.0.1:${port}/")"
+      break
+    fi
+    kill -0 "${vite_pid}" 2>/dev/null || break
+    sleep 1
+  done
+  stop_vite
+  if [ -z "${code}" ]; then
+    echo "vite did not answer within 30s:" >&2
+    sed 's/^/    /' "${scratch}/vite.log" >&2
+    return 1
+  fi
+  echo "${code}"
+}
+dev_port="${DEV_LOOP_TEST_PORT:-5198}"
+expect pass "vite-allows-public-url-host" vite_status "http://dev.example.test:${dev_port}" "dev.example.test:${dev_port}"
+if [ "${LAST_OUT##*$'\n'}" != "200" ]; then
+  echo "SCRIPT TEST FAIL: vite-allows-public-url-host (want 200, got: ${LAST_OUT##*$'\n'})"
+  failures=$((failures + 1))
+fi
+expect pass "vite-blocks-unknown-host" vite_status "" "dev.example.test:${dev_port}"
+if [ "${LAST_OUT##*$'\n'}" != "403" ]; then
+  echo "SCRIPT TEST FAIL: vite-blocks-unknown-host (want 403, got: ${LAST_OUT##*$'\n'})"
+  failures=$((failures + 1))
+fi
+
+# --- Dev swarm DNS (G-02-2a): which DNS servers the inner dockerds get ---
+# dns_run <VAR=value...>: runs `dev-swarm.sh dns` with only the given DNS settings,
+# leaving stdout in DNS_OUT, stderr in DNS_ERR and the exit status in DNS_RC.
+dns_run() {
+  DNS_OUT="$(env -u DEV_SWARM_DNS -u DEV_SWARM_RESOLV_CONF -u DEV_SWARM_SYSTEMD_RESOLV_CONF "$@" \
+    scripts/dev-swarm.sh dns 2>"${scratch}/dns.err")"
+  DNS_RC=$?
+  DNS_ERR="$(cat "${scratch}/dns.err")"
+}
+# dns_want <name> <want-stdout> <VAR=value...>: exit 0 and exactly this stdout.
+dns_want() {
+  local name="$1" want="$2"
+  shift 2
+  dns_run "$@"
+  if [ "${DNS_RC}" -ne 0 ] || [ "${DNS_OUT}" != "${want}" ]; then
+    echo "SCRIPT TEST FAIL: ${name} (exit ${DNS_RC}; got '${DNS_OUT}', want '${want}')"
+    [ -n "${DNS_ERR}" ] && echo "${DNS_ERR}" | sed 's/^/    /'
+    failures=$((failures + 1))
+  fi
+}
+# dns_refused <name> <entry> <VAR=value...>: exit 2, naming the entry and DEV_SWARM_DNS.
+dns_refused() {
+  local name="$1" entry="$2"
+  shift 2
+  dns_run "$@"
+  if [ "${DNS_RC}" -ne 2 ] || ! grep -qF -- "${entry}" <<<"${DNS_ERR}" || ! grep -qF "DEV_SWARM_DNS" <<<"${DNS_ERR}"; then
+    echo "SCRIPT TEST FAIL: ${name} (want exit 2 naming '${entry}' and DEV_SWARM_DNS; exit ${DNS_RC}, stderr: ${DNS_ERR})"
+    failures=$((failures + 1))
+  fi
+}
+
+printf '# generated\nsearch home.test\nnameserver 192.168.1.1\nnameserver 127.0.0.1\nnameserver ::1\n' >"${scratch}/resolv-mixed.conf"
+printf 'nameserver 127.0.0.53\noptions edns0 trust-ad\nsearch home.test\n' >"${scratch}/resolv-stub.conf"
+printf '# systemd\nnameserver 192.168.2.251\nsearch home.test\n' >"${scratch}/resolv-systemd.conf"
+printf 'nameserver 127.0.0.1\nnameserver ::1\n' >"${scratch}/resolv-loopback.conf"
+
+dns_want "dns-explicit" "192.168.2.251" DEV_SWARM_DNS=192.168.2.251
+dns_want "dns-explicit-list" $'192.168.2.251\n10.0.0.53' "DEV_SWARM_DNS=192.168.2.251, 10.0.0.53"
+dns_want "dns-explicit-comma-only" $'192.168.2.251\n10.0.0.53' "DEV_SWARM_DNS=192.168.2.251,10.0.0.53"
+dns_want "dns-explicit-ipv6" "2001:db8::53" DEV_SWARM_DNS=2001:db8::53
+dns_refused "dns-refuse-loopback-v4" "127.0.0.1" DEV_SWARM_DNS=127.0.0.1
+dns_refused "dns-refuse-loopback-v6" "::1" DEV_SWARM_DNS=::1
+dns_refused "dns-refuse-flag" "--insecure-registry=x" DEV_SWARM_DNS=--insecure-registry=x
+dns_refused "dns-refuse-octet-range" "999.1.1.1" DEV_SWARM_DNS=999.1.1.1
+dns_refused "dns-refuse-zone-index" "fe80::1%eth0" "DEV_SWARM_DNS=fe80::1%eth0"
+dns_refused "dns-refuse-one-bad-in-list" "bad.example" "DEV_SWARM_DNS=192.168.2.251 bad.example"
+dns_want "dns-detect-resolv-conf" "192.168.1.1" "DEV_SWARM_RESOLV_CONF=${scratch}/resolv-mixed.conf" \
+  "DEV_SWARM_SYSTEMD_RESOLV_CONF=${scratch}/resolv-systemd.conf"
+dns_want "dns-detect-systemd-fallback" "192.168.2.251" "DEV_SWARM_RESOLV_CONF=${scratch}/resolv-stub.conf" \
+  "DEV_SWARM_SYSTEMD_RESOLV_CONF=${scratch}/resolv-systemd.conf"
+dns_want "dns-explicit-beats-detection" "10.9.8.7" DEV_SWARM_DNS=10.9.8.7 "DEV_SWARM_RESOLV_CONF=${scratch}/resolv-mixed.conf"
+
+for variant in loopback-only systemd-missing; do
+  case "${variant}" in
+    loopback-only) dns_run "DEV_SWARM_RESOLV_CONF=${scratch}/resolv-stub.conf" "DEV_SWARM_SYSTEMD_RESOLV_CONF=${scratch}/resolv-loopback.conf" ;;
+    systemd-missing) dns_run "DEV_SWARM_RESOLV_CONF=${scratch}/resolv-loopback.conf" "DEV_SWARM_SYSTEMD_RESOLV_CONF=${scratch}/no-such-file" ;;
+  esac
+  if [ "${DNS_RC}" -ne 0 ] || [ -n "${DNS_OUT}" ] || ! grep -qF "8.8.8.8" <<<"${DNS_ERR}" || ! grep -qF "DEV_SWARM_DNS" <<<"${DNS_ERR}"; then
+    echo "SCRIPT TEST FAIL: dns-none-found-${variant} (want exit 0, empty stdout, a warning naming 8.8.8.8 and DEV_SWARM_DNS; exit ${DNS_RC}, stdout '${DNS_OUT}', stderr '${DNS_ERR}')"
+    failures=$((failures + 1))
+  fi
+done
 
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"

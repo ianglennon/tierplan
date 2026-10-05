@@ -6,13 +6,13 @@
 // and adding it back, and the About tab's source links. It runs last, because
 // removing the host changes the environment id the earlier specs used.
 
-import { AUTH_STATE } from "./env";
-import { expect, test } from "./helpers";
+import { AUTH_STATE, at } from "./env";
+import { expect, openFirstEnvironment, test } from "./helpers";
 
 test.use({ storageState: AUTH_STATE });
 
 test("General saves the instance name and keeps it across a reload", async ({ page }) => {
-  await page.goto("/settings/general");
+  await page.goto(at("/settings/general"));
   await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
   await expect(page.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
 
@@ -20,8 +20,11 @@ test("General saves the instance name and keeps it across a reload", async ({ pa
   const save = page.getByRole("button", { name: "Save settings" });
   // Nothing changed yet, so there is nothing to save.
   await expect(save).toBeDisabled();
-  // BAYPLAN_PUBLIC_URL is not set in this topology, so the address can be edited.
-  await expect(page.getByRole("img", { name: "Locked" })).toHaveCount(0);
+  // BAYPLAN_PUBLIC_URL is set in this topology (the proxy's address with its
+  // subpath), so the field is locked and says which variable holds it. The agent
+  // URL is set too, so it is locked as well.
+  await expect(page.getByRole("img", { name: "Locked" }).first()).toBeVisible();
+  await expect(page.getByText("Set by the BAYPLAN_PUBLIC_URL environment variable.")).toBeVisible();
 
   await name.fill("E2E Bayplan");
   await expect(save).toBeEnabled();
@@ -35,7 +38,7 @@ test("General saves the instance name and keeps it across a reload", async ({ pa
 test("Environments renames the host, asks before removing it, and adds it back", async ({
   page,
 }) => {
-  await page.goto("/settings/environments");
+  await page.goto(at("/settings/environments"));
   await expect(page.getByRole("tab", { name: "Environments" })).toHaveAttribute(
     "aria-selected",
     "true",
@@ -68,13 +71,12 @@ test("Environments renames the host, asks before removing it, and adds it back",
   await expect(page.getByRole("button", { name: /^Rename / })).toBeVisible();
 
   // The dashboard works on the re-added host.
-  await page.goto("/");
-  await expect(page).toHaveURL(/\/env\/[^/]+$/);
+  await openFirstEnvironment(page);
   await expect(page.getByRole("region", { name: "Dashboard" })).toBeVisible();
 });
 
 test("About shows the version, the source links and the third-party notices", async ({ page }) => {
-  await page.goto("/settings/about");
+  await page.goto(at("/settings/about"));
   const main = page.getByRole("main");
   const source = main.getByRole("link", { name: "Source code (opens in a new tab)" });
   await expect(source).toBeVisible();

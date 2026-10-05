@@ -7,7 +7,10 @@
 # Supply chain (T-01-12): every action is pinned to a full commit SHA with the
 # release tag in a trailing comment, the token is read-only and there are no
 # secrets. Plan 15 added the engine matrix (the integration job); plan 27 added
-# release-check and the main-only edge image; plan 28 adds the e2e job.
+# release-check and the main-only edge image; plan 28 adds the e2e job (plan 02-32
+# runs it behind Caddy at a subpath with a real agent and adds proxy-smoke). The swarm
+# job (Phase 2) runs the multi-node suite on Engines 24 and 29. Plan 02-34 adds
+# make e2e-copy (the clipboard fallback on an insecure origin) to the e2e job.
 name: CI
 
 on:
@@ -34,6 +37,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          # Three Go modules; setup-go's default key covers only the root go.sum.
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+            proto/go.mod
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: web/package.json
@@ -54,6 +62,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          # Three Go modules; setup-go's default key covers only the root go.sum.
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+            proto/go.mod
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: web/package.json
@@ -63,6 +76,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm -C web install --frozen-lockfile
+      # The server tests serve the embedded SPA (TestBasePathInvariant checks the
+      # index under a base path), so web/dist must be built first.
+      - run: pnpm -C web build
       - run: make test
 
   gen-check:
@@ -74,6 +90,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          # Three Go modules; setup-go's default key covers only the root go.sum.
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+            proto/go.mod
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: web/package.json
@@ -94,6 +115,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          # Three Go modules; setup-go's default key covers only the root go.sum.
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+            proto/go.mod
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: web/package.json
@@ -130,6 +156,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: make build && make smoke
+      # The agent image under the install commands' hardening flags: UID 1000,
+      # no-new-privileges, a writable state volume, the Docker socket.
+      - run: make agent-image agent-image-smoke
 
   dco:
     runs-on: ubuntu-24.04
@@ -181,7 +210,37 @@ jobs:
           done
           echo "docker:${{ matrix.engine }}-dind did not answer /_ping within 60s" >&2
           exit 1
+      # The agent tests run the real agent image in their own dind nodes, so it is
+      # built on the runner first (make test-int would build it too).
+      - name: Build the agent image
+        run: make agent-image
       - run: make test-int
+
+  # D-57, D-58: the multi-node suite on the oldest and newest Engines, on every
+  # pull request. Unlike the integration job there is no dind service: every test
+  # starts its own swarm of dind nodes (3 managers and a worker) on a network of
+  # its own, so the in-process Bayplan is reachable from them, and loads the agent
+  # image built here. One engine takes about ten minutes.
+  swarm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [24, 29]
+    env:
+      BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            agent/go.sum
+            proto/go.mod
+      - run: make test-swarm
 
   # D-75: the release configuration stays valid on every pull request, without a
   # tag and without Docker: goreleaser check, a snapshot build of this runner's
@@ -233,6 +292,9 @@ jobs:
             web/pnpm-lock.yaml
             e2e/pnpm-lock.yaml
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Fast and independent of the Docker stack: the clipboard fallback in a real
+      # browser on an insecure origin (G-02-1a).
+      - run: make e2e-copy
       - run: make e2e
       - name: Upload the Playwright report
         if: failure()
@@ -242,6 +304,32 @@ jobs:
           path: .devdata/playwright-report
           retention-days: 7
           if-no-files-found: ignore
+
+  # Plan 02-32: the same image behind Caddy, nginx and Traefik with the files in
+  # docs/proxy, at the root of a host and at /bayplan (make proxy-smoke, about
+  # 2.5 minutes; the proxy images are pulled). The e2e job above covers Caddy at
+  # a subpath through a browser and a real agent; this one covers the three
+  # documented configurations, and the three deliberately broken nginx ones that
+  # Bayplan must notice.
+  proxy-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - run: make proxy-smoke
 
   # D-75: every push to main publishes ghcr.io/ianglennon/bayplan:edge for amd64
   # and arm64, signed with keyless cosign. It is the only tag a push can move;
@@ -254,7 +342,7 @@ jobs:
   # :edge pushed but unsigned (WR-11).
   edge:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, test, gen-check, licences, spdx, build, integration, release-check, e2e]
+    needs: [lint, test, gen-check, licences, spdx, build, integration, release-check, e2e, proxy-smoke]
     concurrency:
       group: edge-publish
       cancel-in-progress: false
@@ -288,19 +376,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      - name: Build both binaries and the image context
+      - name: Build both binaries and the image contexts
         run: make edge-context
-      - name: Build, push and sign the edge image
+      # Both images are pushed and signed in this one step, so nothing can leave
+      # an :edge tag pushed but unsigned (WR-11).
+      - name: Build, push and sign the edge images
         run: |
           set -euo pipefail
-          docker buildx build dist/edge \
-            --platform linux/amd64,linux/arm64 \
-            --tag ghcr.io/ianglennon/bayplan:edge \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            --label "org.opencontainers.image.version=edge" \
-            --sbom=true \
-            --push \
-            --metadata-file "${RUNNER_TEMP}/edge-metadata.json"
-          digest="$(jq -r '."containerimage.digest"' "${RUNNER_TEMP}/edge-metadata.json")"
-          test -n "${digest}" && test "${digest}" != null
-          cosign sign --yes "ghcr.io/ianglennon/bayplan@${digest}"
+          publish() {
+            # publish NAME CONTEXT: push ghcr.io/ianglennon/NAME:edge, then sign its digest.
+            local name="$1" context="$2" meta digest
+            meta="${RUNNER_TEMP}/${name}-edge-metadata.json"
+            docker buildx build "${context}" \
+              --platform linux/amd64,linux/arm64 \
+              --tag "ghcr.io/ianglennon/${name}:edge" \
+              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --label "org.opencontainers.image.version=edge" \
+              --sbom=true \
+              --push \
+              --metadata-file "${meta}"
+            digest="$(jq -r '."containerimage.digest"' "${meta}")"
+            test -n "${digest}" && test "${digest}" != null
+            cosign sign --yes "ghcr.io/ianglennon/${name}@${digest}"
+          }
+          publish bayplan dist/edge
+          publish bayplan-agent dist/edge-agent

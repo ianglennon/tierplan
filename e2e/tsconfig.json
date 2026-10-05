@@ -13,5 +13,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": []
   },
-  "include": ["*.ts", "tests"]
+  "include": ["*.ts", "tests", "copy"]
 }

@@ -80,9 +80,9 @@ func RegisterLocalHost(r *httpx.Router, d LocalHostDeps) {
 		Summary:     "Detect the Docker engine on this server's own host",
 		Description: "Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: " +
 			"supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm " +
-			"worker or standalone. Read-only. Needs environments.write because it is the context for adding the host.",
+			"worker or standalone. Read-only. Needs environments.create because it is the context for adding the host.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsWrite, Scope: rbac.ScopeGlobal},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsCreate, Scope: rbac.ScopeGlobal},
 		func(ctx context.Context, _ *struct{}) (*LocalHostOutput, error) {
 			if parseErr != nil {
 				// Startup validates DOCKER_HOST, so this is unreachable in a

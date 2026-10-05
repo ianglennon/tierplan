@@ -40,6 +40,7 @@ import {
   type TokenValues,
   tokenFormSchema,
 } from "@/features/setup/schemas";
+import { basePath } from "@/lib/base-path";
 import { cn } from "@/lib/utils";
 
 type Step = 1 | 2 | 3;
@@ -112,7 +113,7 @@ export function SetupWizard() {
   const instanceForm = useForm<InstanceInput, unknown, InstanceValues>({
     resolver: zodResolver(instanceSchema),
     mode: "onBlur",
-    defaultValues: { instanceName: "", publicUrl: window.location.origin },
+    defaultValues: { instanceName: "", publicUrl: window.location.origin + basePath() },
   });
 
   // Every key starts with its namespace ("setup.errors.x", "common.errors.x").
@@ -204,7 +205,7 @@ export function SetupWizard() {
         instanceForm.reset(
           {
             instanceName: data.defaultInstanceName,
-            publicUrl: data.publicUrl || window.location.origin,
+            publicUrl: data.publicUrl || window.location.origin + basePath(),
           },
           { keepDirtyValues: true },
         );

@@ -146,7 +146,7 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 
 	// Healthcheck succeeds while the server is up. The listen address may be
 	// ":port" or "host:port"; only the port matters.
-	if err := Healthcheck(context.Background(), ":"+port, false); err != nil {
+	if err := Healthcheck(context.Background(), ":"+port, ""); err != nil {
 		t.Fatalf("Healthcheck while up: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 		t.Fatal("server did not shut down")
 	}
 
-	if err := Healthcheck(context.Background(), ":"+port, false); err == nil {
+	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil {
 		t.Fatal("Healthcheck after shutdown should fail")
 	}
 }
@@ -171,10 +171,10 @@ func TestHealthcheckRejectsNon200AndBadListen(t *testing.T) {
 	}))
 	defer ts.Close()
 	_, port, _ := net.SplitHostPort(strings.TrimPrefix(ts.URL, "http://"))
-	if err := Healthcheck(context.Background(), ":"+port, false); err == nil || !strings.Contains(err.Error(), "503") {
+	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("Healthcheck against a 503 = %v, want an error naming 503", err)
 	}
-	if err := Healthcheck(context.Background(), "no-port", false); err == nil {
+	if err := Healthcheck(context.Background(), "no-port", ""); err == nil {
 		t.Error("Healthcheck with an unusable listen address should fail")
 	}
 	if _, err := strconv.Atoi(port); err != nil {
@@ -320,7 +320,7 @@ func TestBuildSeedsTheAdminRoleAndEveryRouteIsGuarded(t *testing.T) {
 		t.Errorf("the assembled router has an unguarded route: %v", err)
 	}
 	// The openapi subcommand builds the same routes with no dependencies.
-	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.AuditDeps{}, api.SettingsDeps{})); err != nil {
+	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.AgentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.EnvStreamDeps{}, api.RecentDeps{}, api.AuditDeps{}, api.SettingsDeps{}, nil)); err != nil {
 		t.Errorf("the dependency-free router has an unguarded route: %v", err)
 	}
 }
@@ -431,6 +431,95 @@ func TestBuildSignsInWithTheSessionAuthenticatorAndCSRFGuard(t *testing.T) {
 	}
 	if rec := do(http.MethodGet, "/api/me", "", cookie, ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("/api/me after logout: %d, want 401", rec.Code)
+	}
+}
+
+// A reverse proxy that is not in BAYPLAN_TRUSTED_PROXIES shows up in the bell, and
+// one that is does not (plan 02-25, D-51, D-53).
+func TestBuildReportsForwardedHeadersFromAPeerThatIsNotATrustedProxy(t *testing.T) {
+	build := func(trusted string) (*Server, *http.Cookie) {
+		env := map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}
+		if trusted != "" {
+			env["BAYPLAN_TRUSTED_PROXIES"] = trusted
+		}
+		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = srv.Close() })
+		const password = "correct horse battery"
+		hash, err := auth.HashPassword(password)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		tx, err := srv.Store().Write.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		now := time.Now().UnixNano()
+		if err := srv.Store().Q.WithTx(tx).InsertUser(ctx, sqlc.InsertUserParams{
+			ID: "u1", Username: "admin", PasswordHash: hash, CreatedAt: now, UpdatedAt: now, PasswordChangedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := rbac.AssignGlobalRole(ctx, tx, srv.Store().Q, rbac.PrincipalUser, "u1", rbac.AdminRoleID); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"username":"admin","password":"`+password+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || len(rec.Result().Cookies()) != 1 {
+			t.Fatalf("login: %d %s", rec.Code, rec.Body)
+		}
+		return srv, rec.Result().Cookies()[0]
+	}
+	warnings := func(srv *Server, cookie *http.Cookie, forwarded bool) []string {
+		req := httptest.NewRequest(http.MethodGet, "/api/warnings", nil)
+		req.AddCookie(cookie)
+		if forwarded {
+			req.Header.Set("X-Forwarded-For", "203.0.113.9")
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		var body struct {
+			Items []struct {
+				ID string `json:"id"`
+				IP string `json:"ip"`
+			} `json:"items"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil {
+			t.Fatalf("GET /api/warnings: %d %s", rec.Code, rec.Body)
+		}
+		var out []string
+		for _, it := range body.Items {
+			if strings.HasPrefix(it.ID, "proxy_") {
+				out = append(out, it.ID+"@"+it.IP)
+			}
+		}
+		return out
+	}
+
+	srv, cookie := build("")
+	if got := warnings(srv, cookie, false); len(got) != 0 {
+		t.Fatalf("without any forwarded header: %v, want no proxy warning", got)
+	}
+	// httptest requests come from 192.0.2.1. The first request carries the header
+	// and is recorded as it passes; the second one reads it back.
+	warnings(srv, cookie, true)
+	if got := warnings(srv, cookie, false); len(got) != 1 || got[0] != "proxy_untrusted_forwarded@192.0.2.1" {
+		t.Fatalf("after a request with X-Forwarded-For from an untrusted peer: %v, want proxy_untrusted_forwarded naming 192.0.2.1", got)
+	}
+
+	srv, cookie = build("192.0.2.0/24")
+	warnings(srv, cookie, true)
+	if got := warnings(srv, cookie, false); len(got) != 0 {
+		t.Fatalf("from a trusted proxy: %v, want no proxy warning", got)
 	}
 }
 
@@ -731,7 +820,7 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 
 	// A supplied certificate is the operator's own: HSTS is sent (D-37).
 	src := t.TempDir()
-	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", nil); err != nil {
+	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	supplied := map[string]string{
@@ -772,7 +861,7 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 			t.Skipf("cannot bind 127.0.0.2: %v", err)
 		}
 		port := healthyOn(t, ln)
-		if err := Healthcheck(context.Background(), "127.0.0.2:"+port, false); err != nil {
+		if err := Healthcheck(context.Background(), "127.0.0.2:"+port, ""); err != nil {
 			t.Errorf("Healthcheck on the address the server is bound to: %v", err)
 		}
 	})
@@ -782,7 +871,7 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 			t.Skipf("no IPv6 loopback: %v", err)
 		}
 		port := healthyOn(t, ln)
-		if err := Healthcheck(context.Background(), "[::1]:"+port, false); err != nil {
+		if err := Healthcheck(context.Background(), "[::1]:"+port, ""); err != nil {
 			t.Errorf("Healthcheck on [::1]: %v", err)
 		}
 	})
@@ -793,7 +882,7 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 		}
 		port := healthyOn(t, ln)
 		for _, listen := range []string{":" + port, "0.0.0.0:" + port, "[::]:" + port} {
-			if err := Healthcheck(context.Background(), listen, false); err != nil {
+			if err := Healthcheck(context.Background(), listen, ""); err != nil {
 				t.Errorf("Healthcheck(%q): %v", listen, err)
 			}
 		}

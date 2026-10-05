@@ -17,26 +17,37 @@ type Permission struct {
 
 // Registered permission names.
 const (
-	PermEnvironmentsRead  Perm = "environments.read"
-	PermEnvironmentsWrite Perm = "environments.write"
-	PermContainersRead    Perm = "containers.read"
-	PermImagesRead        Perm = "images.read"
-	PermVolumesRead       Perm = "volumes.read"
-	PermNetworksRead      Perm = "networks.read"
-	PermAuditRead         Perm = "audit.read"
-	PermSettingsRead      Perm = "settings.read"
-	PermSettingsWrite     Perm = "settings.write"
-	PermContainersExec    Perm = "containers.exec"
-	PermSecretsReveal     Perm = "secrets.reveal"
-	PermVolumesDelete     Perm = "volumes.delete"
-	PermJanitorPolicy     Perm = "janitor.policy"
+	PermEnvironmentsRead   Perm = "environments.read"
+	PermEnvironmentsCreate Perm = "environments.create"
+	PermEnvironmentsManage Perm = "environments.manage"
+	PermEnvironmentsToken  Perm = "environments.token"
+	PermEnvironmentsRevoke Perm = "environments.revoke"
+	PermEnvironmentsDelete Perm = "environments.delete"
+	PermContainersRead     Perm = "containers.read"
+	PermImagesRead         Perm = "images.read"
+	PermVolumesRead        Perm = "volumes.read"
+	PermNetworksRead       Perm = "networks.read"
+	PermAuditRead          Perm = "audit.read"
+	PermSettingsRead       Perm = "settings.read"
+	PermSettingsWrite      Perm = "settings.write"
+	PermContainersExec     Perm = "containers.exec"
+	PermSecretsReveal      Perm = "secrets.reveal"
+	PermVolumesDelete      Perm = "volumes.delete"
+	PermJanitorPolicy      Perm = "janitor.policy"
 )
 
-// registry lists every permission. The four Dangerous entries are registered
-// now although no Phase 1 route uses them, so Phase 3 can rely on the flag.
+// registry lists every permission. environments.read stays scoped to one
+// environment, so the overview and the global health stream show only what the
+// caller may read; the rest of environment administration is global and split
+// as D-49 asks (environments.write is retired). The Dangerous entries that no
+// route uses yet are registered now so Phase 3 can rely on the flag.
 var registry = []Permission{
 	{Name: PermEnvironmentsRead, Scope: ScopeEnvironment, Description: "View an environment"},
-	{Name: PermEnvironmentsWrite, Scope: ScopeGlobal, Description: "Add, rename and remove environments"},
+	{Name: PermEnvironmentsCreate, Scope: ScopeGlobal, Description: "Add environments"},
+	{Name: PermEnvironmentsManage, Scope: ScopeGlobal, Description: "Rename environments and manage their agents"},
+	{Name: PermEnvironmentsToken, Scope: ScopeGlobal, Dangerous: true, Description: "Show or rotate an environment's join token"},
+	{Name: PermEnvironmentsRevoke, Scope: ScopeGlobal, Description: "Revoke, block and unblock agents"},
+	{Name: PermEnvironmentsDelete, Scope: ScopeGlobal, Dangerous: true, Description: "Remove environments"},
 	{Name: PermContainersRead, Scope: ScopeEnvironment, Description: "View containers"},
 	{Name: PermImagesRead, Scope: ScopeEnvironment, Description: "View images"},
 	{Name: PermVolumesRead, Scope: ScopeEnvironment, Description: "View volumes"},

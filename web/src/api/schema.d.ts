@@ -104,6 +104,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the agents of an environment's nodes
+         * @description Every enrolled agent with its node name, role, status, whether its host is blocked, whether it is connected, versions, the full certificate fingerprint and expiry, clock offset, when it was last seen, the policy flags the host owner set and the last request it refused. Problems come first: revoked agents, then agents that are not connected, then the rest by node name. A local-socket environment has none, and an empty manualCleanup. Never carries a key, a token or a serial. 404 environment_not_found when the environment does not exist or the caller may not read it. Needs environments.read on the environment.
+         */
+        get: operations["listEnvironmentAgents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/containers": {
         parameters: {
             query?: never;
@@ -113,7 +133,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. Read-only rows: no variables, labels or mounts. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables, labels or mounts. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -153,7 +173,7 @@ export interface paths {
         };
         /**
          * List the images of an environment
-         * @description Newest first. An untagged image is listed as <none>. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         * @description Newest first. An untagged image is listed as <none>. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listImages"];
         put?: never;
@@ -173,7 +193,7 @@ export interface paths {
         };
         /**
          * List the networks of an environment
-         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         * @description By name. On a swarm a swarm-wide network is listed once, from the manager in use, with node Cluster; local networks are listed per node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listNetworks"];
         put?: never;
@@ -213,7 +233,7 @@ export interface paths {
         };
         /**
          * The dashboard of an environment
-         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. On a swarm the counts are the cluster's totals over the nodes that answered, with each node's own counts in byNode; notReporting names the nodes that did not, and while it is not empty the totals are not the whole cluster. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["getEnvironmentSummary"];
         put?: never;
@@ -233,7 +253,7 @@ export interface paths {
         };
         /**
          * List the volumes of an environment
-         * @description By name. At most 500 rows with the total. 503 environment_offline (with since and reason) when the engine does not answer, 409 environment_unsupported (with the engine) when it is not one Bayplan manages.
+         * @description By name. On a swarm every node's volumes, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listVolumes"];
         put?: never;
@@ -253,15 +273,35 @@ export interface paths {
         };
         /**
          * List the environments the signed-in user may see
-         * @description Each environment comes with the health monitor's status. An environment the caller does not hold environments.read for is left out, so the list never reveals what the caller cannot open.
+         * @description Each environment comes with its health: for an agent environment the rollup of its agents (pending, reconnecting, online, degraded with its issues, offline, unsupported, revoked or cluster_changed, each with a stable reason code and since), for the local socket the health monitor's status. An environment the caller does not hold environments.read for is left out, so the list never reveals what the caller cannot open.
          */
         get: operations["listEnvironments"];
         put?: never;
         /**
-         * Add the Docker host Bayplan runs on as an environment
-         * @description The admin's explicit opt-in to managing this host (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists; 422 invalid_name. The name defaults to the hostname the daemon reports. Audited as environment.added.
+         * Add an environment
+         * @description kind local is the admin's explicit opt-in to managing the Docker host Bayplan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Bayplan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, with its base path); 409 public_url_required when Bayplan has neither, and 409 insecure_agent_url when that address is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off. Nothing is created in either case. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.
          */
         post: operations["addEnvironment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the environment problems that need attention
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
+         */
+        get: operations["listEnvironmentWarnings"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -280,16 +320,164 @@ export interface paths {
         post?: never;
         /**
          * Remove an environment
-         * @description Stops managing the host. Changes nothing in Docker: its containers, networks and volumes are untouched (D-20). Audited as environment.removed.
+         * @description Needs environments.delete. Stops managing the host. Revokes every agent, disables the join token and deletes the environment, and changes nothing in Docker: its containers, networks and volumes are untouched (D-20, D-30). With uninstallAgents=true each online agent is first told to uninstall itself (a swarm's agents through one manager, which removes the agent service and its token secret; every agent removes its own container and state volume), and the request waits up to 30 seconds for their answers. Whatever they answer, or do not, the revoking and deletion follow, so hosts that were offline or refused keep their agent until the admin runs the manual cleanup command that GET /api/env/{envId}/agents gives. Audited as environment.removed, agent.revoked per agent, and agent.uninstalled per agent that confirmed.
          */
         delete: operations["removeEnvironment"];
         options?: never;
         head?: never;
         /**
-         * Rename an environment
-         * @description 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name.
+         * Rename an environment or switch its automatic agent updates
+         * @description Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the environment's connected agents at once.
          */
-        patch: operations["renameEnvironment"];
+        patch: operations["updateEnvironment"];
+        trace?: never;
+    };
+    "/api/environments/{envId}/adopt-cluster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt the new cluster of a re-initialised swarm
+         * @description A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.manage.
+         */
+        post: operations["adoptEnvironmentCluster"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}/agents/{agentId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a node's agent
+         * @description The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked when it was revoked already, by this admin or another. Needs environments.revoke. Audited as agent.revoked and agent.blocked.
+         */
+        post: operations["revokeEnvironmentAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}/agents/{agentId}/unblock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Let a revoked node's host enrol again
+         * @description Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. An agent that still has its join token drops its revoked identity and enrols again by itself at its next try, within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. Audited as agent.unblocked.
+         */
+        post: operations["unblockEnvironmentAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}/agents/{agentId}/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update an agent to this server's version
+         * @description Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled (the host owner refused), agent_up_to_date or update_in_progress. Needs environments.manage. Audited as agent.updated, or agent.update_failed with its reason when the update does not finish.
+         */
+        post: operations["updateEnvironmentAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}/fold-local": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fold this Bayplan host into a swarm environment
+         * @description Offered when the Docker host Bayplan runs on is a manager of a swarm that is enrolled through agents: the local socket's own /info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. 404 environment_not_found; 409 fold_not_offered when the host is not a manager of that swarm, or was folded already. Needs environments.manage. Audited as environment.local_folded.
+         */
+        post: operations["foldLocalHost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Show which join token an environment has
+         * @description The generation, when and by whom it was made, and whether it is disabled. Never the token: it is stored only as a hash. 404 environment_not_found. Needs environments.token.
+         */
+        get: operations["getEnvironmentToken"];
+        put?: never;
+        /**
+         * Rotate an environment's join token
+         * @description Makes a new join token and retires the current one in the same transaction. The old install command stops enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents it carries the one-line rotate command. 404 environment_not_found; 409 public_url_required when Bayplan has no address to give agents, and 409 insecure_agent_url when that address is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off; the current token stays in both cases. Needs environments.token. Audited as environment.token_rotated with the new generation.
+         */
+        post: operations["rotateEnvironmentToken"];
+        /**
+         * Disable an environment's join token
+         * @description The current join token enrols nobody from now on. Agents that are already enrolled keep working. Rotating the token makes a new one and enables enrolment again. Disabling a disabled token changes nothing. 404 environment_not_found. Needs environments.token. Audited as environment.token_disabled.
+         */
+        delete: operations["disableEnvironmentToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}/update-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update every agent of an environment that is behind
+         * @description Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.manage. Audited like an update of one agent.
+         */
+        post: operations["updateEnvironmentAgents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/instance": {
@@ -318,7 +506,7 @@ export interface paths {
         };
         /**
          * Detect the Docker engine on this server's own host
-         * @description Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.write because it is the context for adding the host.
+         * @description Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.create because it is the context for adding the host.
          */
         get: operations["getLocalHost"];
         put?: never;
@@ -366,6 +554,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/recent-environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The environments the signed-in user used last
+         * @description Up to 3 environment IDs, the most recently used first and, for uses at the same instant, in ID order. An environment that was removed, or that the user can no longer read, is left out.
+         */
+        get: operations["listRecentEnvironments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/recent-environments/{envId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Record that the signed-in user used an environment
+         * @description Sets the environment's last-used time to now. Using the same environment again keeps one entry with the newer time. Only the newest 3 per user are kept. An environment that does not exist and one the user cannot read both answer 404 environment_not_found, so the answer never says which exist.
+         */
+        put: operations["recordRecentEnvironment"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -374,8 +602,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get the instance name and public URL
-         * @description publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04).
+         * Get the instance name, public URL and agent URL
+         * @description publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19). agentEndpointRefused is true when agentEndpoint is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off: agents cannot connect to it (G-02-R4-3).
          */
         get: operations["getSettings"];
         put?: never;
@@ -384,8 +612,8 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Change the instance name or the public URL
-         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url). A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked and changes nothing. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. Each change is audited as settings.updated with the old and new value of every changed field.
+         * Change the instance name, the public URL or the agent URL
+         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url, insecure_agent_url). An agent URL that is plain http for a host that is not this machine answers 422 insecure_agent_url unless BAYPLAN_AGENT_ALLOW_INSECURE is on, because agents refuse such an address; a loopback or https agent URL, clearing it, and an http public URL are accepted. A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
          */
         patch: operations["updateSettings"];
         trace?: never;
@@ -453,7 +681,7 @@ export interface paths {
         };
         /**
          * List the instance warnings that need an admin's attention
-         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The plain-HTTP warning is the browser's to compute and is not listed.
+         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). The plain-HTTP warning is the browser's to compute and is not listed.
          */
         get: operations["listWarnings"];
         put?: never;
@@ -488,16 +716,145 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        AddEnvironmentInputBody: {
-            /** @description Add the host even though its engine is not supported; it is stored and shown as unsupported */
-            allowUnsupported?: boolean;
+        AddEnvironmentBody: {
+            /** @description The oldest agent version in the environment; null when it has no agent, and for the local socket */
+            agentVersion: string | null;
+            /** @description Connected and expected agents; null except on a swarm */
+            agents: components["schemas"]["EnvironmentAgentsBody"] | null;
+            /** @description Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent */
+            autoUpdate?: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            enabled: boolean;
+            engine: components["schemas"]["EnvironmentEngineBody"];
+            /** @description The Docker engine version, as the engine reported it; null until it has answered */
+            engineVersion: string | null;
             /**
-             * @description local is the only kind in this release: the Docker socket on this server's own host
+             * @description What the environment is; absent until it is known. An agent environment gets it from its first agent
              * @enum {string}
              */
-            kind: "local";
-            /** @description 1 to 64 characters; defaults to the hostname the daemon reports */
+            envType?: "swarm" | "standalone";
+            /** @description Failing and total services; null until service data is known */
+            failingServices: components["schemas"]["EnvironmentFailingBody"] | null;
+            /** @description True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice */
+            foldOffered?: boolean;
+            /** @description The environment ID, used in /api/env/{envId}/... */
+            id: string;
+            /** @description Present for an agent environment only: the join token, the address the agent dials, and the commands and files that install it */
+            install?: components["schemas"]["InstallBody"];
+            /** @description True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent */
+            isLocalSocket: boolean;
+            /** @description True for the Docker host Bayplan itself runs on */
+            isSelfHost: boolean;
+            /**
+             * @description local: the Docker socket on the host Bayplan runs on. agent: one or more hosts that dial in through an agent
+             * @enum {string}
+             */
+            kind: "local" | "agent";
+            /**
+             * Format: date-time
+             * @description The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen
+             */
+            lastSeen: string | null;
+            /** @description The display name; defaults to the daemon's hostname */
+            name: string;
+            /** @description Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster */
+            nodes: components["schemas"]["EnvironmentNodesBody"] | null;
+            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to */
+            pendingClusterId?: string;
+            status: components["schemas"]["EnvironmentStatusBody"];
+            /**
+             * @description What the engine is; absent until it has answered
+             * @enum {string}
+             */
+            type?: "swarm-manager" | "swarm-worker" | "standalone";
+            /** @description True when an agent is older than this server by a minor or a patch version */
+            updateAvailable: boolean;
+        };
+        AddEnvironmentInputBody: {
+            /** @description Local only: add the host even though its engine is not supported; it is stored and shown as unsupported */
+            allowUnsupported?: boolean;
+            /**
+             * @description local: the Docker socket on this server's own host. agent: a new environment whose hosts run the Bayplan agent and dial in; the answer carries the join token
+             * @enum {string}
+             */
+            kind: "local" | "agent";
+            /** @description 1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent */
             name?: string;
+        };
+        AdoptClusterBody: {
+            /** @description The swarm cluster ID the environment is bound to now */
+            clusterId: string;
+            /** @description The cluster ID it was bound to; absent if it had none */
+            previousClusterId?: string;
+        };
+        AgentBody: {
+            /** @description The agent's version when it last connected or enrolled */
+            agentVersion: string;
+            /** @description True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them */
+            blocked: boolean;
+            /** @description The full SHA-256 of the agent's certificate, in hex. Absent for the local host */
+            certFingerprint?: string;
+            /**
+             * Format: date-time
+             * @description When the agent's certificate expires. Absent for the local host
+             */
+            certNotAfter?: string;
+            /**
+             * Format: int64
+             * @description How far the agent's clock is ahead of the server's, in seconds, measured when it last connected; negative is behind, 0 when it has not connected since the server started
+             */
+            clockOffsetSeconds: number;
+            /** @description Whether the agent has a live connection now */
+            connected: boolean;
+            /** @description The Docker Engine version the agent reported. Present only while it is connected */
+            engineVersion?: string;
+            /** @description The agent ID */
+            id: string;
+            /** @description The last request the agent refused by its own policy, while it is connected. Absent if it has refused none */
+            lastDenial?: components["schemas"]["DenialBody"];
+            /**
+             * Format: date-time
+             * @description When the agent was last heard from. Absent if it never has been
+             */
+            lastSeen?: string;
+            /** @description The one-line command that updates this agent by hand, present when the agent is behind and Bayplan cannot update it: it is outside the server's version window, it is too old to update itself, or its host owner turned self-update off */
+            manualUpdateCommand?: string;
+            /** @description The hostname the agent reported when it enrolled */
+            node: string;
+            /** @description The host owner set the agent to read-only. Reported only while it is connected */
+            readOnly: boolean;
+            /** @description True when the certificate has less than 7 days left, which means it should have renewed already and has not, or has expired. Never set for a revoked agent */
+            renewalFailing: boolean;
+            /** @description The reason given when it was revoked */
+            revokeReason?: string;
+            /**
+             * Format: date-time
+             * @description When the agent was revoked
+             */
+            revokedAt?: string;
+            /**
+             * @description What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this Bayplan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it
+             * @enum {string}
+             */
+            role: "leader" | "manager" | "worker" | "standalone" | "local";
+            /** @description The host owner allowed the agent to update itself. Reported only while it is connected */
+            selfUpdate: boolean;
+            /**
+             * @description revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back
+             * @enum {string}
+             */
+            status: "active" | "revoked";
+            /** @description True for an agent that is not revoked and runs an older release than this server, so an update would bring it up to date. Never true for a development build on either side, which cannot be compared */
+            updateAvailable: boolean;
+            /** @description How the agent's update is going. Held in memory, so it is idle again after the server restarts */
+            updateState: components["schemas"]["UpdateStateBody"];
+        };
+        AgentListBody: {
+            /** @description One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent */
+            items: components["schemas"]["AgentBody"][] | null;
+            /** @description The commands that take the agent off a host by hand, for the hosts Bayplan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token */
+            manualCleanup: components["schemas"]["InstallCleanupBody"];
         };
         AuditEntryDTO: {
             /** @description A stable action key such as auth.login */
@@ -589,6 +946,8 @@ export interface components {
             isSelf: boolean;
             /** @description The container name without the leading slash */
             name: string;
+            /** @description The node the container runs on */
+            node: string;
             /** @description Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published */
             ports: string[] | null;
             /**
@@ -602,6 +961,10 @@ export interface components {
         ContainerListBody: {
             /** @description At most 500 rows */
             items: components["schemas"]["ContainerItem"][] | null;
+            /** @description The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown */
+            nodes: string[] | null;
+            /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
+            notReporting: string[] | null;
             /**
              * Format: int64
              * @description How many there are, whatever the cap
@@ -610,28 +973,130 @@ export interface components {
             /** @description True when total is more than the rows returned */
             truncated: boolean;
         };
+        DenialBody: {
+            /**
+             * Format: date-time
+             * @description When it refused
+             */
+            at: string;
+            /** @description The Docker API path the agent refused */
+            endpoint: string;
+        };
+        EnvWarningBody: {
+            /** @description For cert_not_renewing and clock_skew: the agent */
+            agentId?: string;
+            /**
+             * Format: int64
+             * @description For manual_update_needed: how many agents need an update by hand
+             */
+            count?: number;
+            /**
+             * Format: int64
+             * @description For pending_long: whole days since the environment was added
+             */
+            days?: number;
+            /** @description The environment the problem is about. Absent for manual_update_needed when it spans more than one environment */
+            envId?: string;
+            /** @description That environment's name, at most 64 characters. For fold_offered, the swarm environment */
+            envName?: string;
+            /**
+             * Format: date-time
+             * @description For cert_not_renewing: when the certificate expires
+             */
+            expiresAt?: string;
+            /**
+             * @description Which problem this is
+             * @enum {string}
+             */
+            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered";
+            /** @description For cert_not_renewing and clock_skew: the node's host name, at most 64 characters */
+            node?: string;
+            /**
+             * Format: int64
+             * @description For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind
+             */
+            offsetSeconds?: number;
+            /** @description For env_offline and cluster_changed: the environment's reason code, as in its status */
+            reason?: string;
+            /**
+             * @description error: an environment is out of reach or a certificate has expired. warning: something needs attention
+             * @enum {string}
+             */
+            severity: "error" | "warning";
+            /**
+             * Format: date-time
+             * @description When the problem began, where that is known. Items are shown newest first
+             */
+            since?: string;
+        };
+        EnvWarningsBody: {
+            /** @description Only the warnings that apply, errors first, then newest first; empty when there are none */
+            items: components["schemas"]["EnvWarningBody"][] | null;
+        };
+        EnvironmentAgentsBody: {
+            /**
+             * Format: int64
+             * @description Agents with a live connection
+             */
+            connected: number;
+            /**
+             * Format: int64
+             * @description Agents the swarm should have: one per node whose agent was not revoked
+             */
+            expected: number;
+        };
         EnvironmentBody: {
+            /** @description The oldest agent version in the environment; null when it has no agent, and for the local socket */
+            agentVersion: string | null;
+            /** @description Connected and expected agents; null except on a swarm */
+            agents: components["schemas"]["EnvironmentAgentsBody"] | null;
+            /** @description Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent */
+            autoUpdate?: boolean;
             /** Format: date-time */
             createdAt: string;
             enabled: boolean;
             engine: components["schemas"]["EnvironmentEngineBody"];
+            /** @description The Docker engine version, as the engine reported it; null until it has answered */
+            engineVersion: string | null;
+            /**
+             * @description What the environment is; absent until it is known. An agent environment gets it from its first agent
+             * @enum {string}
+             */
+            envType?: "swarm" | "standalone";
+            /** @description Failing and total services; null until service data is known */
+            failingServices: components["schemas"]["EnvironmentFailingBody"] | null;
+            /** @description True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice */
+            foldOffered?: boolean;
             /** @description The environment ID, used in /api/env/{envId}/... */
             id: string;
+            /** @description True for the Docker socket on the host Bayplan runs on, as opposed to hosts that dial in through an agent */
+            isLocalSocket: boolean;
             /** @description True for the Docker host Bayplan itself runs on */
             isSelfHost: boolean;
             /**
-             * @description local: the Docker socket on the host Bayplan runs on
+             * @description local: the Docker socket on the host Bayplan runs on. agent: one or more hosts that dial in through an agent
              * @enum {string}
              */
-            kind: "local";
+            kind: "local" | "agent";
+            /**
+             * Format: date-time
+             * @description The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen
+             */
+            lastSeen: string | null;
             /** @description The display name; defaults to the daemon's hostname */
             name: string;
+            /** @description Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster */
+            nodes: components["schemas"]["EnvironmentNodesBody"] | null;
+            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to */
+            pendingClusterId?: string;
             status: components["schemas"]["EnvironmentStatusBody"];
             /**
              * @description What the engine is; absent until it has answered
              * @enum {string}
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
+            /** @description True when an agent is older than this server by a minor or a patch version */
+            updateAvailable: boolean;
         };
         EnvironmentEngineBody: {
             /** @description The newest Engine API version the daemon speaks */
@@ -643,8 +1108,43 @@ export interface components {
             /** @description The engine version */
             version?: string;
         };
+        EnvironmentFailingBody: {
+            /**
+             * Format: int64
+             * @description Services with tasks that keep failing
+             */
+            failing: number;
+            /**
+             * Format: int64
+             * @description Services in the environment
+             */
+            total: number;
+        };
+        EnvironmentIssueBody: {
+            /** @description A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring or clock_skew */
+            code: string;
+            /** @description The node's host name, at most 64 characters; absent for an agent that has not enrolled yet */
+            node?: string;
+            /**
+             * Format: date-time
+             * @description When this began
+             */
+            since?: string;
+        };
         EnvironmentListBody: {
             items: components["schemas"]["EnvironmentBody"][] | null;
+        };
+        EnvironmentNodesBody: {
+            /**
+             * Format: int64
+             * @description Nodes whose agent is connected or was heard from within the last 30 seconds
+             */
+            ready: number;
+            /**
+             * Format: int64
+             * @description Nodes the environment should have: one per agent that is not revoked
+             */
+            total: number;
         };
         EnvironmentProblem: {
             /**
@@ -662,13 +1162,18 @@ export interface components {
              * @example https://example.com/error-log/abc123
              */
             instance?: string;
-            /** @description Why, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop */
+            /** @description Why, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager or no_quorum; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop */
             reason?: string;
             /**
              * Format: date-time
-             * @description environment_offline: when the engine first stopped answering
+             * @description When the environment entered this state; for offline, when contact was lost
              */
             since?: string;
+            /**
+             * @description The environment's health state, so the page can say what is wrong: pending (no agent has enrolled), reconnecting (the server just started), offline, revoked, cluster_changed or unsupported
+             * @enum {string}
+             */
+            state?: "offline" | "unsupported" | "pending" | "reconnecting" | "revoked" | "cluster_changed";
             /**
              * Format: int64
              * @description HTTP status code
@@ -697,25 +1202,29 @@ export interface components {
             version?: string;
         };
         EnvironmentStatusBody: {
+            /** @description What is wrong with a degraded environment, worst first, then by node */
+            issues?: components["schemas"]["EnvironmentIssueBody"][] | null;
             /**
              * Format: date-time
-             * @description When the most recent probe finished
+             * @description When the most recent probe of the environment's engine finished
              */
             lastAttempt?: string;
-            /** @description Why it is offline or unsupported, as a stable code such as unreachable, api_too_old, podman, rootless or docker_desktop */
+            /** @description Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum or cert_expiring; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop */
             reason?: string;
             /**
              * Format: date-time
-             * @description When the environment entered this state; for offline, the first failed probe
+             * @description When the environment entered this state; for offline, when contact was lost
              */
             since?: string;
             /**
-             * @description online: the engine answers and is supported. offline: it does not answer. unsupported: it answers but Bayplan does not manage it. unknown: not probed yet
+             * @description online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but Bayplan does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet
              * @enum {string}
              */
-            state: "unknown" | "online" | "offline" | "unsupported";
+            state: "unknown" | "online" | "offline" | "unsupported" | "pending" | "reconnecting" | "degraded" | "revoked" | "cluster_changed";
         };
         EnvironmentSummaryBody: {
+            /** @description Each node that answered, by name, with its own counts; a standalone host or the local socket is one node */
+            byNode: components["schemas"]["NodeCountsBody"][] | null;
             counts: components["schemas"]["SummaryCountsBody"];
             engine: components["schemas"]["SummaryEngineBody"];
             environment: components["schemas"]["SummaryEnvironmentBody"];
@@ -726,6 +1235,8 @@ export interface components {
             fetchedAt: string;
             /** @description True on a swarm worker, which can show only its own containers, images, volumes and networks (D-24) */
             isWorker: boolean;
+            /** @description Nodes that should have answered and did not: no agent connected, or its read failed or timed out. Their rows are left out of the counts, so when this is not empty the counts are not the whole cluster */
+            notReporting: string[] | null;
             /** @description The ID of Bayplan's own container, when it can tell (D-27) */
             selfContainerId?: string;
         };
@@ -783,16 +1294,18 @@ export interface components {
             id: string;
             /** @description The container, image, network or volume name; empty when Docker gave none */
             name: string;
+            /** @description The node the event happened on; for a row of Bayplan's own, the node it concerns, such as the manager that took over */
+            node: string;
             /**
              * Format: date-time
              * @description When it happened, in UTC, with sub-second precision
              */
             time: string;
             /**
-             * @description What kind of object it is about
+             * @description What kind of object it is about. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event
              * @enum {string}
              */
-            type: "container" | "image" | "network" | "volume";
+            type: "container" | "image" | "network" | "volume" | "bayplan";
         };
         EventListBody: {
             /** @description At most 50 events, newest first */
@@ -803,6 +1316,8 @@ export interface components {
             created?: string;
             /** @description The full image ID */
             id: string;
+            /** @description The node that holds the image */
+            node: string;
             /** @description repository:tag for each tag, or ["<none>"] for an untagged image */
             repoTags: string[] | null;
             /** @description The first 12 characters of the ID, without the sha256: prefix */
@@ -816,6 +1331,10 @@ export interface components {
         ImageListBody: {
             /** @description At most 500 rows */
             items: components["schemas"]["ImageItem"][] | null;
+            /** @description The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown */
+            nodes: string[] | null;
+            /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
+            notReporting: string[] | null;
             /**
              * Format: int64
              * @description How many there are, whatever the cap
@@ -823,6 +1342,49 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        InstallBody: {
+            /** @description The address the agent dials, for example wss://bayplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
+            agentUrl: string;
+            /**
+             * Format: int64
+             * @description Which token this is for the environment, from 1; each rotation adds one
+             */
+            generation: number;
+            /** @description The agent image. Its tag is this server's exact version, or edge for a development or edge server */
+            image: string;
+            /** @description The join token the agent presents once to enrol. Shown only in this answer; it is inside the commands and files below */
+            joinToken: string;
+            /** @description Commands that remove the agent by hand, for a host that is offline when its environment is removed */
+            manualCleanup: components["schemas"]["InstallCleanupBody"];
+            /** @description The SPKI pin of the self-signed certificate Bayplan serves, which the agent trusts instead of system roots. Present only when Bayplan serves its own self-signed certificate */
+            pin?: string;
+            /** @description The Docker secret the swarm install creates for this token, bayplan-agent-token-g followed by the generation */
+            secretName: string;
+            /** @description The install for a standalone host */
+            standalone: components["schemas"]["InstallStandaloneBody"];
+            /** @description The install for a swarm */
+            swarm: components["schemas"]["InstallSwarmBody"];
+        };
+        InstallCleanupBody: {
+            /** @description One line that removes the agent container and its volume */
+            standalone: string;
+            /** @description Commands that remove the service and the secret on a manager, and the agent volume on every node */
+            swarm: string;
+        };
+        InstallStandaloneBody: {
+            /** @description One line that starts the agent on a single Docker host. Starts with a space so a shell set to ignore space-led commands keeps it out of its history */
+            command: string;
+            /** @description The same container as a compose file for docker compose up, with the same environment as the command */
+            composeFile: string;
+        };
+        InstallSwarmBody: {
+            /** @description One line to run on any swarm manager. It creates a Docker secret from the join token and starts the agent as a global service. Starts with a space so a shell set to ignore space-led commands keeps it out of its history */
+            command: string;
+            /** @description One line that swaps a running service over to this token's secret without stopping it. Present only for a token that replaces an earlier one, never for a first install */
+            rotateCommand?: string;
+            /** @description The same service as a stack file for docker stack deploy. A stack file cannot create a secret from text, so it names the secret as external and its first comment line holds the one-line command that creates it */
+            stackFile: string;
         };
         InstanceBody: {
             /** @description Display name of this instance, empty before setup */
@@ -875,6 +1437,8 @@ export interface components {
             driver: string;
             id: string;
             name: string;
+            /** @description The node the network is local to, or Cluster for a swarm-wide network */
+            node: string;
             /** @description local, or swarm for a cluster-wide network */
             scope: string;
             /** @description The IPAM subnets in CIDR notation; empty when the network has none */
@@ -883,6 +1447,10 @@ export interface components {
         NetworkListBody: {
             /** @description At most 500 rows */
             items: components["schemas"]["NetworkItem"][] | null;
+            /** @description The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown */
+            nodes: string[] | null;
+            /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
+            notReporting: string[] | null;
             /**
              * Format: int64
              * @description How many there are, whatever the cap
@@ -890,6 +1458,24 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        NodeCountsBody: {
+            /**
+             * Format: int64
+             * @description Containers on this node, stopped ones included
+             */
+            containers: number;
+            /** Format: int64 */
+            images: number;
+            /**
+             * Format: int64
+             * @description Networks local to this node; a swarm-wide network is counted in the total only
+             */
+            networks: number;
+            /** @description The node's host name */
+            node: string;
+            /** Format: int64 */
+            volumes: number;
         };
         PermissionsBody: {
             /** @description Permissions per environment ID; the key * holds those that apply to every environment */
@@ -903,6 +1489,7 @@ export interface components {
             apiVersion?: string;
             arch?: string;
             detail?: string;
+            engineId?: string;
             engineName?: string;
             engineVersion?: string;
             hostname?: string;
@@ -920,16 +1507,51 @@ export interface components {
             reason?: string;
             storageDriver?: string;
             supported: boolean;
+            swarmClusterId?: string;
+            swarmNodeId?: string;
             swarmNodeState?: string;
             type?: string;
         };
-        RenameEnvironmentInputBody: {
-            /** @description The new name, 1 to 64 characters */
-            name: string;
+        RecentEnvironmentsBody: {
+            /** @description Up to 3 environment IDs, most recently used first */
+            environmentIds: string[] | null;
+        };
+        RevokeAgentBody: {
+            /** @description Why the node is revoked, for the audit log and the node table. Optional */
+            reason?: string;
+        };
+        RotateTokenBody: {
+            /**
+             * @description What the environment's active agents run on. Absent while it has none
+             * @enum {string}
+             */
+            envType?: "swarm" | "standalone";
+            /** @description Whether the environment has an active agent. A swarm that has agents is moved to the new token with install.swarm.rotateCommand, which is present only then; otherwise a first install needs the new token's command */
+            hasAgents: boolean;
+            /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
+            install: components["schemas"]["InstallBody"];
         };
         SettingsBody: {
+            /** @description The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set */
+            agentEndpoint: string;
+            /** @description True when agentEndpoint is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off. Agents refuse such an address and Bayplan refuses their plain connections, and adding an agent environment or rotating a join token answers 409 insecure_agent_url until the agent URL or the public URL is https */
+            agentEndpointRefused: boolean;
+            /** @description The address agents dial when it differs from the public URL; empty means they dial the public URL */
+            agentUrl: string;
+            /** @description True when the BAYPLAN_AGENT_URL environment variable fixes the agent URL */
+            agentUrlLocked: boolean;
+            /**
+             * Format: int64
+             * @description How many agents are enrolled and not revoked, across all environments. A change of the public URL or the agent URL needs a confirmation while this is above 0
+             */
+            enrolledAgents: number;
             /** @description The name shown in the header, tab titles and the sign-in page */
             instanceName: string;
+            /**
+             * Format: int64
+             * @description How many of the enrolled agents have no connection now. They cannot be sent a new address, so after a change of the host or port agents dial they are refused until they are reinstalled with the new address or the change is reverted
+             */
+            offlineAgents: number;
             /** @description The URL users reach Bayplan at; drives the Origin check and the cookie Secure flag */
             publicUrl: string;
             /** @description True when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL */
@@ -1020,11 +1642,51 @@ export interface components {
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
         };
+        TokenStatusBody: {
+            /**
+             * Format: date-time
+             * @description When the token was made
+             */
+            createdAt: string;
+            /** @description The username of the admin who made it, or the principal as recorded when that is not an account */
+            createdBy: string;
+            /** @description True while the token enrols nobody, until the next rotation */
+            disabled: boolean;
+            /**
+             * Format: int64
+             * @description Which token this is for the environment, from 1
+             */
+            generation: number;
+        };
+        UpdateAgentsBody: {
+            /**
+             * Format: int64
+             * @description How many updates were sent: one for a swarm, whose agent service rolls every node, otherwise one per agent that was behind. 0 when none was needed, or one was already running
+             */
+            started: number;
+        };
+        UpdateEnvironmentInputBody: {
+            /** @description Switch automatic agent updates on or off for an agent environment */
+            autoUpdate?: boolean;
+            /** @description The new name, 1 to 64 characters */
+            name?: string;
+        };
         UpdateSettingsInputBody: {
+            /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while BAYPLAN_AGENT_URL is set. An http agent URL for a host that is not this machine is refused with 422 insecure_agent_url unless BAYPLAN_AGENT_ALLOW_INSECURE is on */
+            agentUrl?: string;
             /** @description New instance name, 1 to 64 characters */
             instanceName?: string;
             /** @description New public URL, an absolute http or https URL. Refused with 409 public_url_locked while BAYPLAN_PUBLIC_URL is set */
             publicUrl?: string;
+        };
+        UpdateStateBody: {
+            /** @description Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, insecure_session, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed */
+            reason?: string;
+            /**
+             * @description idle: nothing is running. updating: an update was sent and the agent has not yet come back on the new version. failed: the last update did not finish, and reason says why, until the agent runs the server's version or another update is started
+             * @enum {string}
+             */
+            state: "idle" | "updating" | "failed";
         };
         UserBody: {
             /** @description The user's ID */
@@ -1055,10 +1717,16 @@ export interface components {
             created?: string;
             driver: string;
             name: string;
+            /** @description The node that holds the volume */
+            node: string;
         };
         VolumeListBody: {
             /** @description At most 500 rows */
             items: components["schemas"]["VolumeItem"][] | null;
+            /** @description The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown */
+            nodes: string[] | null;
+            /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
+            notReporting: string[] | null;
             /**
              * Format: int64
              * @description How many there are, whatever the cap
@@ -1068,15 +1736,23 @@ export interface components {
             truncated: boolean;
         };
         WarningBody: {
+            /** @description For proxy_url_mismatch: the host the newest request was for */
+            host?: string;
             /**
              * @description Which warning this is
              * @enum {string}
              */
-            id: "data_not_persisted" | "key_backup";
+            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing";
+            /** @description For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from */
+            ip?: string;
             /** @description For key_backup: where the generated encryption key is stored */
             keyPath?: string;
             /** @description For data_not_persisted: why the data directory is not persisted */
             reason?: string;
+            /** @description For proxy_url_mismatch: the scheme the newest request effectively used, http or https */
+            scheme?: string;
+            /** @description For proxy_url_mismatch: the public URL the request should have matched */
+            url?: string;
         };
         WarningsBody: {
             /** @description Only the warnings that apply; empty when there are none */
@@ -1270,9 +1946,45 @@ export interface operations {
             };
         };
     };
-    listContainers: {
+    listEnvironmentAgents: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listContainers: {
+        parameters: {
+            query?: {
+                /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
+                node?: string;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */
@@ -1292,7 +2004,7 @@ export interface operations {
                     "application/json": components["schemas"]["ContainerListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1301,7 +2013,16 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
-            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            /** @description agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1347,7 +2068,10 @@ export interface operations {
     };
     listImages: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
+                node?: string;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */
@@ -1367,7 +2091,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImageListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1376,7 +2100,16 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
-            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            /** @description agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1389,7 +2122,10 @@ export interface operations {
     };
     listNetworks: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
+                node?: string;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */
@@ -1409,7 +2145,7 @@ export interface operations {
                     "application/json": components["schemas"]["NetworkListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1418,7 +2154,16 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
-            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            /** @description agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1484,7 +2229,7 @@ export interface operations {
                     "application/json": components["schemas"]["EnvironmentSummaryBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1493,7 +2238,16 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
-            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            /** @description agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1506,7 +2260,10 @@ export interface operations {
     };
     listVolumes: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
+                node?: string;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */
@@ -1526,7 +2283,7 @@ export interface operations {
                     "application/json": components["schemas"]["VolumeListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the engine and reason. */
+            /** @description environment_unsupported: the engine answers but Bayplan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1535,7 +2292,16 @@ export interface operations {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
                 };
             };
-            /** @description environment_offline: the engine does not answer. Carries since and reason. */
+            /** @description agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+            /** @description environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1596,7 +2362,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EnvironmentBody"];
+                    "application/json": components["schemas"]["AddEnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvironmentWarnings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvWarningsBody"];
                 };
             };
             /** @description Error */
@@ -1611,6 +2407,308 @@ export interface operations {
         };
     };
     removeEnvironment: {
+        parameters: {
+            query?: {
+                /** @description Also tell every online agent of the environment to remove itself from its host before the environment is removed */
+                uninstallAgents?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEnvironmentInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    adoptEnvironmentCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptClusterBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RevokeAgentBody"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unblockEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    foldLocalHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getEnvironmentToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rotateEnvironmentToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateTokenBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableEnvironmentToken: {
         parameters: {
             query?: never;
             header?: never;
@@ -1640,7 +2738,7 @@ export interface operations {
             };
         };
     };
-    renameEnvironment: {
+    updateEnvironmentAgents: {
         parameters: {
             query?: never;
             header?: never;
@@ -1650,20 +2748,16 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RenameEnvironmentInputBody"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description OK */
-            200: {
+            /** @description Accepted */
+            202: {
                 headers: {
                     "Cache-Control"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EnvironmentBody"];
+                    "application/json": components["schemas"]["UpdateAgentsBody"];
                 };
             };
             /** @description Error */
@@ -1789,6 +2883,66 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ChangePasswordBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listRecentEnvironments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecentEnvironmentsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    recordRecentEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

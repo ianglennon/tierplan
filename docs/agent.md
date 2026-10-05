@@ -1,0 +1,347 @@
+# Connecting a remote host or swarm: the Bayplan agent
+
+A remote Docker host or swarm is managed through a small agent that you install on it. This page is for the person who runs those hosts: how to install the agent, what each flag does, how to rotate the join token, how to run it behind a proxy with its own certificate, what every connection problem means, and how to remove it again.
+
+- [What the agent is](#what-the-agent-is)
+- [Before you install](#before-you-install)
+- [Install on a swarm](#install-on-a-swarm)
+- [Install on a standalone host](#install-on-a-standalone-host)
+- [Rotate or disable the join token](#rotate-or-disable-the-join-token)
+- [Settings on the host: read-only and self-update](#settings-on-the-host-read-only-and-self-update)
+- [A proxy with its own certificate: BAYPLAN_AGENT_PIN](#a-proxy-with-its-own-certificate-bayplan_agent_pin)
+- [Troubleshooting](#troubleshooting)
+- [Cloned machines and the engine ID](#cloned-machines-and-the-engine-id)
+- [Revoke, unblock and enrol again](#revoke-unblock-and-enrol-again)
+- [Updates](#updates)
+- [Uninstall and manual cleanup](#uninstall-and-manual-cleanup)
+- [Development only: plain ws://](#development-only-plain-ws)
+
+## What the agent is
+
+The agent is one container, `ghcr.io/ianglennon/bayplan-agent`, that runs next to the Docker socket of a host. **It dials out to Bayplan.** The host opens no inbound port and needs no Docker TCP socket, no TLS client certificates and no SSH key. Bayplan sends its Docker requests back over the connection the agent opened.
+
+- On a swarm the agent is a global service, one task per node, so Bayplan can reach node-local data on every node and cluster data through any manager.
+- On a standalone host it is a single container.
+- The agent allows only a short list of read-only Docker calls (the lists the dashboard shows, events, the swarm lists, and the inspect of one container) and refuses everything else, whatever Bayplan asks. Docker write endpoints are not part of the agent in this release. The only changes it makes are to itself, when Bayplan asks it to update or uninstall (see [Updates](#updates)).
+- An agent is identified by its own key. The join token only lets a host enrol the first time; after that the agent proves possession of its key and the token is no longer needed (see [Rotate or disable the join token](#rotate-or-disable-the-join-token)).
+
+Bayplan's own host does not need an agent: it uses the Docker socket directly.
+
+## Before you install
+
+1. **Bayplan must be reachable from the host.** The agent dials `<agent URL>/agent/connect` over `wss://`. The agent URL is `BAYPLAN_AGENT_URL`, or the public URL (`BAYPLAN_PUBLIC_URL`) when it is not set. The install command shows the exact address under **Connects to**. If Bayplan is behind a reverse proxy, the proxy has to pass WebSocket upgrades and Bayplan has to trust its `X-Forwarded-Proto` header: see [Running Bayplan behind a reverse proxy](reverse-proxy.md).
+2. **Bayplan must have a certificate the agent can check.** Either a certificate from a public CA, Bayplan's own self-signed certificate (the install command carries its pin), or a proxy's private certificate (add `BAYPLAN_AGENT_PIN`, see below). On `wss://` the agent always checks the certificate, and no setting skips the check. It does not dial plain `ws://` to another host unless `BAYPLAN_AGENT_ALLOW_INSECURE=true` is set on the agent, which is for development only (see [Development only](#development-only-plain-ws)). Bayplan holds itself to the same rule. Without its own `BAYPLAN_AGENT_ALLOW_INSECURE=true` it refuses plain connections to an agent address on another host, and it refuses to add an agent environment or rotate a join token for one (`insecure_agent_url`). Settings, General says so under the Agent URL field. So a Bayplan reached over plain `http`, such as a plain `docker run` install, can connect agents only on its own machine. For other hosts, give it a certificate or put a TLS proxy in front.
+3. **Docker Engine 24 to 29** on every host. Older engines are shown as unsupported.
+4. **The host's clock must be right** to within five minutes (use NTP). Bayplan refuses an agent beyond that.
+
+Add the host in Bayplan with **Environments, Add environment**. The dialog shows the install command once, with the join token in it. The command starts with a space, so shells that ignore space-prefixed commands keep the token out of their history.
+
+## Install on a swarm
+
+Run the command on **any manager** node. It creates the join token as a Docker secret and starts the agent as a global service:
+
+```sh
+ printf %s '<join token>' | docker secret create bayplan-agent-token-g1 - && docker service create --name bayplan-agent \
+   --mode global --constraint node.platform.os==linux \
+   --secret source=bayplan-agent-token-g1,target=bayplan-agent-token,mode=0400 \
+   --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
+   --mount type=volume,src=bayplan-agent,dst=/var/lib/bayplan-agent \
+   --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID \
+   --update-parallelism 1 --update-delay 10s \
+   --label bayplan.agent=true --container-label bayplan.agent=true \
+   --env 'BAYPLAN_AGENT_URL=wss://bayplan.example.com/agent/connect' \
+   [--env 'BAYPLAN_AGENT_PIN=sha256/...'] \
+   --env 'BAYPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/bayplan-agent-token' \
+   ghcr.io/ianglennon/bayplan-agent:<version>
+```
+
+(The dialog gives it as one line. The line breaks above are only for reading.)
+
+| Part | What it does |
+|------|--------------|
+| `docker secret create bayplan-agent-token-g1` | Keeps the join token in a Docker secret instead of in the service definition. `g1` is the token's generation; every rotation creates the next name. |
+| `--mode global`, `--constraint node.platform.os==linux` | One agent on every Linux node. A node you add to the swarm later enrols by itself: the service starts an agent there and the secret is already in place. |
+| `--secret source=…,target=bayplan-agent-token,mode=0400` | Mounts the token at `/run/secrets/bayplan-agent-token`, readable by root only. |
+| `--mount …docker.sock` | Gives the agent the Docker socket. This is root-equivalent on the host, which is why the agent is small, read-only and drops its privileges. |
+| `--mount type=volume,src=bayplan-agent` | The agent's key, certificate, pins and the addresses it dials. It is what lets the agent keep its identity across restarts and updates. |
+| `--read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID` | The agent's root file system is read-only and it has no Linux capabilities except the two it needs to drop from root to an unprivileged user at start. |
+| `--update-parallelism 1 --update-delay 10s` | A rolling update changes one node at a time with a ten-second pause. |
+| `--label` and `--container-label bayplan.agent=true` | How Bayplan finds the agent's service and containers, whatever the service is called. |
+| `BAYPLAN_AGENT_URL` | Where to dial. |
+| `BAYPLAN_AGENT_PIN` | Present only when Bayplan serves its own self-signed certificate: the pin that certificate is checked against. |
+| `BAYPLAN_AGENT_JOIN_TOKEN_FILE` | The secret file the token is read from. |
+
+**As a stack file.** The dialog's **Compose file** view gives the same service as a stack file. A stack file cannot create a secret from text, so its first line is the one-line command that creates the secret; run it first, then `docker stack deploy -c bayplan-agent.yml <stack>`. The service is then called `<stack>_bayplan-agent`, not `bayplan-agent`: the rotate, update and cleanup commands on this page name `bayplan-agent`, so change the name in them to match.
+
+To see the agents on every node:
+
+```sh
+docker service ps bayplan-agent
+docker service logs bayplan-agent
+```
+
+## Install on a standalone host
+
+Run the command on the host:
+
+```sh
+ docker run -d --name bayplan-agent --restart unless-stopped \
+   --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges \
+   -v /var/run/docker.sock:/var/run/docker.sock -v bayplan-agent:/var/lib/bayplan-agent \
+   --label bayplan.agent=true \
+   -e 'BAYPLAN_AGENT_URL=wss://bayplan.example.com/agent/connect' \
+   [-e 'BAYPLAN_AGENT_PIN=sha256/...'] \
+   -e 'BAYPLAN_AGENT_JOIN_TOKEN=<join token>' \
+   ghcr.io/ianglennon/bayplan-agent:<version>
+```
+
+The flags mean what they do on a swarm, with these differences:
+
+- `--restart unless-stopped` brings the agent back after a reboot or a Docker restart.
+- `--security-opt no-new-privileges` stops anything inside the container from gaining privileges.
+- The join token is an environment variable here, so it stays visible in `docker inspect bayplan-agent` until you rotate the token (see below). Once the agent has enrolled the token is not needed again, so rotating it afterwards removes the exposure.
+
+The **Compose file** view gives the same container for `docker compose -f bayplan-agent.yml up -d`.
+
+```sh
+docker logs bayplan-agent
+```
+
+shows what the agent is doing.
+
+## Rotate or disable the join token
+
+Settings, Environments, the environment, **Join token**:
+
+- **Show install command** generates a new token and shows its command. **The old command stops working at once.** Agents that are already enrolled keep working: they use their own key, not the token.
+- **Disable token** lets no new host enrol until you generate a new token.
+
+For a swarm that already has agents, **Show install command** gives one command that swaps the secret instead of the install command: Docker secrets cannot be edited, so it creates the next secret, points the service at it and removes the old one:
+
+```sh
+ OLD=$(docker service inspect -f '{{(index .Spec.TaskTemplate.ContainerSpec.Secrets 0).SecretName}}' bayplan-agent) \
+   && printf %s '<new token>' | docker secret create bayplan-agent-token-g2 - \
+   && docker service update --secret-rm "$OLD" --secret-add source=bayplan-agent-token-g2,target=bayplan-agent-token,mode=0400 bayplan-agent \
+   && docker secret rm "$OLD"
+```
+
+The swarm agents restart one at a time and reconnect.
+
+A standalone agent keeps the token in its container's environment. To remove it from `docker inspect`, rotate the token in Bayplan and recreate the container with the new command (the `bayplan-agent` volume keeps the agent's identity, so the environment keeps its history).
+
+### Run enrolled agents without the join token
+
+Once the agents have enrolled (the node list shows them connected) the join token can come off the host. An enrolled agent proves who it is with its own key, so it keeps running, restarting and updating as the same agent without it.
+
+On a swarm, on a manager, take the secret and the variable that points to it off the service, then delete the secret. `<N>` is the generation in the secret's name; `docker service inspect bayplan-agent` shows it:
+
+```sh
+ docker service update --secret-rm bayplan-agent-token-g<N> --env-rm BAYPLAN_AGENT_JOIN_TOKEN_FILE bayplan-agent
+ docker secret rm bayplan-agent-token-g<N>
+```
+
+On a standalone host, recreate the container with the same flags and the same `bayplan-agent` volume, but without the `BAYPLAN_AGENT_JOIN_TOKEN` line. The manual update command the node list shows is exactly that: see [Updating and removing agents by hand](agent-updates.md).
+
+What an agent without the token cannot do:
+
+- A node that joins the swarm later cannot enrol. Its agent stops with "no join token".
+- An agent that was revoked and then unblocked, or whose certificate expired, cannot enrol again by itself.
+
+To put the token back on a swarm, take a new token from **Show install command** and add it to the service. Do not use the rotate command for this: it reads the current secret from the service and fails when there is none.
+
+```sh
+ printf %s '<join token>' | docker secret create bayplan-agent-token-g<N> - \
+   && docker service update --secret-add source=bayplan-agent-token-g<N>,target=bayplan-agent-token,mode=0400 --env-add BAYPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/bayplan-agent-token bayplan-agent
+```
+
+## Settings on the host: read-only and self-update
+
+These two are set by whoever owns the host, in the agent's environment (`-e` on a standalone host, `--env` on a swarm service). Bayplan cannot change them.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `BAYPLAN_AGENT_READ_ONLY` | `false` | The agent refuses every Docker request that is not a `GET` or `HEAD`, whatever the allowlist says. The node list shows **Read-only (set on host)**. Today the allowlist is read-only anyway; the flag keeps a host read-only when a later release adds changes. |
+| `BAYPLAN_AGENT_SELF_UPDATE` | `true` | Whether the agent may update or uninstall itself when Bayplan asks. With `false` the node list gives you the update command to run by hand and removing the environment leaves the agent in place (see [Updates](#updates) and [Uninstall and manual cleanup](#uninstall-and-manual-cleanup)). |
+
+Smaller settings, rarely needed: `BAYPLAN_AGENT_SOCKET` (default `/var/run/docker.sock`), `BAYPLAN_AGENT_STATE_DIR` (default `/var/lib/bayplan-agent`), `BAYPLAN_AGENT_DOCKER_GID` (the group of the socket, when it cannot be detected), `BAYPLAN_AGENT_BACKOFF_MIN` and `BAYPLAN_AGENT_BACKOFF_MAX` (reconnect delay, 1 s to 60 s by default), and `BAYPLAN_AGENT_ALLOW_INSECURE` (development only, see [Development only](#development-only-plain-ws)).
+
+## A proxy with its own certificate: BAYPLAN_AGENT_PIN
+
+These three ways apply to `wss://`, the only scheme a real install uses. The agent checks Bayplan's certificate in one of them and never skips the check:
+
+1. **A certificate from a public CA** (Let's Encrypt, a commercial CA): nothing to configure.
+2. **Bayplan's own self-signed certificate** (`BAYPLAN_TLS_SELF_SIGNED=true`): the install command carries `BAYPLAN_AGENT_PIN`, the pin of Bayplan's key. The key survives renewals, so the pin does not change.
+3. **A proxy with a certificate of its own CA** (a corporate CA, Caddy's internal CA, a self-signed certificate on the proxy): Bayplan cannot know that certificate, so the command it shows has no pin and the agent answers `tls_untrusted`. Add the pin yourself.
+
+A pin is `sha256/` and the base64 SHA-256 of a certificate's public key (its SPKI). Compute it from the certificate file:
+
+```sh
+openssl x509 -in cert.pem -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
+```
+
+Put `sha256/` in front of the result and give it to the agent:
+
+```sh
+# standalone host: add before the image name
+-e 'BAYPLAN_AGENT_PIN=sha256/<pin>'
+# swarm: add to the service
+docker service update --env-add 'BAYPLAN_AGENT_PIN=sha256/<pin>' bayplan-agent
+```
+
+Which certificate to pin:
+
+- **The proxy's own certificate**, when it is a self-signed one: the agent accepts the server whose key matches.
+- **A certificate authority that signed the proxy's certificate**, so a renewal of the proxy's leaf does not strand the agents. The agent accepts it only if the certificate the proxy presents really chains to the pinned authority for the address it dialled, and only certificates the proxy **sends** can be pinned. A proxy usually sends its leaf and its intermediate, not the root, so pin the **intermediate**. Caddy's internal CA works this way: pin `intermediate.crt` from `/data/caddy/pki/authorities/local/`, not `root.crt`.
+- Several pins can be given, separated by commas, for the move from one certificate to the next.
+
+A pin only adds trust. A certificate that a public CA signed is still accepted. A wrong pin and an unknown CA are refused with `tls_untrusted` and the agent's log shows the pin of the certificate it saw, so you can compare it with the one you meant:
+
+```sh
+docker logs bayplan-agent        # standalone
+docker service logs bayplan-agent   # swarm
+```
+
+If the agent connects by an IP address (for example the proxy's address on a Docker network, because a host cannot resolve container names), the certificate must list that IP as a subject alternative name.
+
+**Do not use `BAYPLAN_AGENT_ALLOW_INSECURE` to get around a certificate problem.** It exists for local development only (see [Development only](#development-only-plain-ws)).
+
+## Change Bayplan's agent address
+
+Agents dial the agent URL (`BAYPLAN_AGENT_URL`, or the public URL when it is not set) with `/agent/connect` added. Bayplan accepts an agent only when the host and port it dialled are the current ones. A change of path only (for example a new base path) keeps them.
+
+When you change the address in Settings, General:
+
+- Every agent that is connected over `wss://` is sent the new address over its tunnel straight away, keeps its current connection, and dials the new address from its next connection. A move to a plain `http` agent URL is not sent this way.
+- Agents on plain `ws://` are not told, and neither are agents that are offline. The confirmation counts the offline ones.
+- From then on Bayplan refuses any agent that dials a different host or port, with `auth_rejected` and the audit reason `audience`. There is no fallback period. The agent keeps the previous address in its list for 30 days, but that helps only if you change the address back.
+
+To get a refused agent back, either change the address back in Settings (the agent reconnects by itself), or start it again with the new address on its existing `bayplan-agent` volume, so it keeps its identity and needs no join token:
+
+```sh
+# swarm, on a manager
+docker service update --env-add 'BAYPLAN_AGENT_URL=wss://<new address>/agent/connect' bayplan-agent
+# standalone: remove the container, then run it again with the same flags and the same bayplan-agent volume,
+# the new BAYPLAN_AGENT_URL and no join token (see "Run enrolled agents without the join token")
+docker rm -f bayplan-agent
+```
+
+Show install command also works, but it makes a new join token and stops the old command, because it is a rotation. See [Run enrolled agents without the join token](#run-enrolled-agents-without-the-join-token) for how an enrolled agent starts without one.
+
+The agent notices that `BAYPLAN_AGENT_URL` differs from the one it last started with and dials the new address first, also when it followed an earlier address change and was offline for a later one. An agent that last ran a version before this one notices from its first start on this version.
+
+## Troubleshooting
+
+Start with the agent's own log. It says what it tried and why it stopped, in one line per event, and it never prints the join token:
+
+```sh
+docker logs bayplan-agent               # standalone host
+docker service logs bayplan-agent       # swarm, every node (add --tail 50, or look at one node with docker service ps)
+```
+
+Bayplan shows the same reason on the environment, in the overview's tooltip, in the environment's Connection card, and in the bell. Each reason has a code:
+
+| Code | What it means | What to do |
+|------|---------------|------------|
+| `agent_offline` | The agent on a node is not connected. | Check that it is running (`docker ps` on a standalone host, `docker service ps bayplan-agent` on a swarm) and look at its log. It reconnects by itself when it can reach Bayplan. |
+| `tls_untrusted` | The agent does not trust Bayplan's certificate. | Use a certificate from a public CA, or give the agent the pin: see [BAYPLAN_AGENT_PIN](#a-proxy-with-its-own-certificate-bayplan_agent_pin). With Bayplan's own certificate, reinstall with the command from Show install command, which carries the pin. |
+| `auth_rejected` | Bayplan rejected the agent's credentials: a wrong, replaced or disabled join token, or an unknown agent. Every token problem looks like this to the agent, on purpose. It is also what an agent gets when it dials an address that is no longer Bayplan's agent URL, because it was offline or on plain `ws://` when the address changed. | For a token problem, generate a new join token and reinstall the agent with the new command. The audit log entry's reason tells which it was: `audience` means the address, and [Change Bayplan's agent address](#change-bayplans-agent-address) says how to get the agent back. |
+| `cert_expired` | The agent's certificate expired before it could renew (the host was off or cut off for a month). | Reinstall the agent with a fresh join token. It enrols again with a new certificate. While it can reach Bayplan an agent renews by itself, two thirds of the way through the certificate's life. |
+| `revoked` | An admin revoked the node. | Remove the agent from the host. To let it back in, see [Revoke, unblock and enrol again](#revoke-unblock-and-enrol-again). |
+| `blocked` | The node is blocked from enrolling. | Unblock it in Settings, Environments, in the nodes list. |
+| `version_incompatible` | The agent and Bayplan are too far apart in version. | Update the agent by hand; the node list shows the command. See [Updates](#updates). |
+| `clock_skew` | The node's clock is more than five minutes from Bayplan's. | Sync the host's clock (NTP). |
+| `timeout` | The node stopped answering. | Check the network between the host and Bayplan. The agent reconnects by itself. |
+| `not_a_manager` | Only worker nodes are connected, so Bayplan cannot read cluster data. | Check the agent on a manager node and that the manager is running. |
+| `no_quorum` | The swarm has lost quorum. | Bring a manager back online. Node-local data keeps working. |
+| `cluster_changed` | The agents now report a different swarm (it was re-initialised, or the host joined another one). Bayplan refused them and changed nothing. | Adopt the new cluster to keep the environment, or remove it. |
+| `engine_unreachable` | The agent cannot reach Docker. | Check that `/var/run/docker.sock` is mounted into the agent and that the Docker daemon is running. |
+| `unsupported_engine` | Docker on the node is older than Engine 24. | Upgrade Docker on that node. Its data is left out until then. |
+| `agent_policy_denied` | The agent refused a request because it is not on its allowlist, or the host is set read-only. | The refusal is recorded in the audit log. If you did not expect it, check the Bayplan server and the agent's settings. |
+
+An agent that is refused when it first connects also gets one of these. They appear in the waiting panel while you install, with the address the attempt came from, and in the audit log as `agent.enrol_refused`:
+
+| Refusal | What it means | What to do |
+|---------|---------------|------------|
+| `duplicate_environment` | The host already belongs to another environment. | Open that environment, or remove it first, then enrol again. |
+| `type_mismatch` | A swarm manager used a standalone environment's command, or the other way round. | Add the host as its own environment. |
+| `host_mismatch` | A standalone environment already manages a different host. | Add this host as its own environment. |
+| `insecure_transport` (agent log: HTTP 403 "did not arrive over TLS") | Two causes. Bayplan's agent address is `https`, but the agent's connection reached it as plain HTTP: usually a proxy that does not send `X-Forwarded-Proto: https`, or Bayplan does not list the proxy in `BAYPLAN_TRUSTED_PROXIES`. Or the agent address is plain `http` for another host and Bayplan's own `BAYPLAN_AGENT_ALLOW_INSECURE` is off. | For the first, fix the proxy as described in [Running Bayplan behind a reverse proxy](reverse-proxy.md); the bell shows "Forwarded headers from an untrusted address" when this is the cause. For the second, give Bayplan an `https` public URL or agent URL; the switch on Bayplan is for development only. Bayplan logs "agents cannot connect" at start when this is the case. |
+| `rate_limited` | Too many connection attempts from one address, too many handshakes at once, or more than 16 handshakes at once from one address (an IPv6 /64 counts as one address). | The agent waits as long as Bayplan asks and tries again. |
+| `internal_error` | Bayplan failed while handling a valid request. | The agent retries. Look at Bayplan's log. |
+
+A few things that are not codes:
+
+- **The environment stays "Waiting for the first agent" and no refusal is listed.** The agent never reached Bayplan's handshake. Look at the agent's log: a DNS problem (see the next item) or a routing problem, a proxy that does not pass the upgrade (Bayplan warns in the bell: "WebSocket connections are failing"), or an `insecure_transport` refusal that has no environment to show it under.
+- **The agent cannot resolve Bayplan's host name, but the host can.** The agent runs on Docker's default bridge (the install commands set no network). Containers there get the host's `resolv.conf` without its loopback servers. When the host lists only loopback resolvers (Pi-hole, dnsmasq or unbound on `127.0.0.1`, or a Docker that itself runs in a container), nothing is left and Docker silently uses `8.8.8.8` and `8.8.4.4`, which cannot resolve LAN names. (systemd-resolved's `127.0.0.53` is handled: Docker reads `/run/systemd/resolve/resolv.conf` instead.) To tell: the agent's log shows a lookup failing "on 8.8.8.8:53", and the Docker daemon's log says "No non-localhost DNS nameservers are left in resolv.conf. Using default external servers". The agent image has no shell, so read the file on the host that `docker inspect -f '{{.ResolvConfPath}}' bayplan-agent` names. Fixes: on a standalone host, run the agent again with `--dns <your DNS server>`; on a swarm, `docker service update --dns-add <your DNS server> bayplan-agent`; or set `"dns": ["<your DNS server>"]` in `/etc/docker/daemon.json` and restart Docker; or give the agent an IP address as Bayplan's URL (with a certificate that lists that IP).
+- **Add environment or Rotate token answers that agents cannot connect to this Bayplan (`insecure_agent_url`).** The address agents would dial is plain `ws://` for another host, which agents refuse and so does Bayplan. Set an `https` agent URL or public URL. Settings, General shows the same warning under the Agent URL field, and refuses to save such an agent URL.
+- **The agent stops at start and its log names `BAYPLAN_AGENT_ALLOW_INSECURE`.** `BAYPLAN_AGENT_URL` is a plain `ws://` address for another host, and the agent will not dial it unencrypted. Use `wss://` with a certificate the agent checks: the command from **Show install command** on a Bayplan that has a certificate. The switch exists only for the development swarm.
+- **The agent exits and Docker restarts it again and again.** It exits on a refusal and Docker's restart policy brings it back after a longer pause each time, up to about a minute. Fix the cause in the table; the loop stops by itself.
+- **An update or an uninstall answers `insecure_session`.** Both are accepted only on a session that checked Bayplan's certificate, and this agent is on plain `ws://`. Use `wss://` with a certificate the agent checks.
+- **The agent cannot reach Docker** (the socket is not mounted, Docker is stopped, or the socket file is left over from a Docker that is no longer running). The agent cannot say anything to Bayplan before it has read its engine, so the environment stays pending with no reason of its own, and after two minutes the waiting panel adds the line that points you to the agent's log. The log says "the Docker engine did not answer on its socket"; start Docker, or mount `/var/run/docker.sock` into the agent, and it connects by itself.
+
+## Cloned machines and the engine ID
+
+Bayplan recognises a host by its Docker **engine ID**, which Docker stores in `/var/lib/docker`. A virtual machine cloned from another one **shares that ID**, so Bayplan sees the clone as the same host and refuses it as `duplicate_environment` (or, in a swarm, as a node it already has).
+
+On the clone, give the Docker engine a new identity before you install the agent:
+
+```sh
+sudo systemctl stop docker
+sudo rm -rf /var/lib/docker      # this removes every image, container and volume on the host
+sudo systemctl start docker
+```
+
+If you cannot wipe `/var/lib/docker`, give the clone a clean Docker data directory. Swarm nodes cloned from one another also share a node ID and need `docker swarm leave --force` and a fresh join after the engine has its new ID.
+
+## Revoke, unblock and enrol again
+
+Settings, Environments, the environment, the nodes list, **Actions, Revoke node**:
+
+- The node is disconnected at once and its certificate is rejected for good. An admin revoke also **blocks** the node: it cannot enrol again until you unblock it. It is a good time to rotate the join token if the host may be compromised.
+- **Unblock node** lets the host enrol again. The agent that was revoked is not revived. If it still has its join token (a standalone agent keeps it in its environment, a swarm agent in its secret), it discards its old identity and enrols again by itself, within about a minute, as a **new** entry. If it does not have the token, install the agent on the host again.
+- A node that leaves a swarm (`docker node rm`) is revoked automatically after two checks, without a block, so it can enrol again if it comes back.
+
+## Updates
+
+Bayplan updates agents itself after a server upgrade, within a compatibility window (the agent's minor version is the server's or the one before), unless you switch it off for the environment or the host sets `BAYPLAN_AGENT_SELF_UPDATE=false`. A swarm updates one node at a time through a manager; a standalone host updates through a short-lived helper container and keeps its identity. The whole story, including what to do when an update does not finish, is in [Updating and removing agents by hand](agent-updates.md).
+
+Two things to know about a swarm update:
+
+- A swarm rolls with Docker's own rolling update, and Docker's default when a task fails is to **pause**, not to roll back. If an agent image is broken, the first node's agent stops, the update pauses, and the other nodes keep the old agent. Put the service back with `docker service rollback bayplan-agent` (or `<stack>_bayplan-agent`). Bayplan shows the node as disconnected until you do, and after fifteen minutes lists "the agent never came back on the new version".
+- A standalone update that cannot start the new agent leaves the old one running. The node list says "Docker refused the update" and the agent's log says why.
+
+Update and uninstall work only over a verified `wss://` session.
+
+## Uninstall and manual cleanup
+
+Removing an environment (Settings, Environments, the environment, **Remove environment**) revokes its agents and disables its token. Tick **Also uninstall the agent from the hosts** to have the agents that are online remove themselves: the service, its secret and the `bayplan-agent` volume on a swarm, the container and the volume on a standalone host. A swarm installed from a stack file leaves the stack's network behind (`<stack>_default`); remove it with `docker network rm`. Removal waits up to thirty seconds for the agents to answer, so a proxy in front of Bayplan must allow a response that takes that long.
+
+Containers, images, volumes and networks of your own are never touched.
+
+For an agent that was offline, or when you did not tick the box, run on each host:
+
+Swarm, on a manager (the secret is named for the join token's current generation, which the environment's **Manual cleanup command** shows), then on every node that ran the agent:
+
+```sh
+docker service rm bayplan-agent && docker secret rm bayplan-agent-token-g1
+docker volume rm bayplan-agent
+```
+
+Standalone host:
+
+```sh
+docker rm -f bayplan-agent && docker volume rm bayplan-agent
+```
+
+A stack-file install: `docker stack rm <stack>`, then remove the stack's network and the `bayplan-agent` volume if they are left behind.
+
+## Development only: plain ws://
+
+There are two switches with the same name, and plain `ws://` needs both.
+
+- **On Bayplan**, `BAYPLAN_AGENT_ALLOW_INSECURE=true` lets agents connect over plain `ws://` to an agent address that is not this machine: an `https` address, or an `http` one for another host. Without it Bayplan refuses those connections (`insecure_transport`), refuses to add an agent environment, rotate a join token or save such an agent URL (`insecure_agent_url`), and logs a warning at start. While it is on, the install commands and files for a `ws://` address also set `BAYPLAN_AGENT_ALLOW_INSECURE=true` on the agent.
+- **On the agent**, `BAYPLAN_AGENT_ALLOW_INSECURE=true` lets it dial plain `ws://` to another host. Without it the agent stops at start with a message naming the switch, and it never dials a stored plain address for another host. `ws://` to `127.0.0.1`, `::1` or `localhost` needs no switch. Addresses Bayplan pushes to a connected agent are taken only as `wss://`.
+
+A plain address on Bayplan's own machine (`127.0.0.1`, `::1`, `localhost`) needs no switch on either end.
+
+Join tokens and every Docker answer then cross the network unencrypted, and update and uninstall are refused on such a session (`insecure_session`). It exists for the development swarm (`make dev-swarm`) and for nothing else: never set it on a Bayplan you use for real, and never use it to get past a certificate problem. Fix the certificate instead (see [BAYPLAN_AGENT_PIN](#a-proxy-with-its-own-certificate-bayplan_agent_pin)).

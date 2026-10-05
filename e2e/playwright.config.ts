@@ -3,7 +3,7 @@
 
 import { defineConfig, devices } from "@playwright/test";
 
-import { BASE_URL as baseURL } from "./tests/env";
+import { ORIGIN as baseURL } from "./tests/env";
 
 // The specs share one instance and depend on each other's state: the first
 // claims it, the rest use that account. Playwright orders files alphabetically
@@ -11,7 +11,9 @@ import { BASE_URL as baseURL } from "./tests/env";
 // one before it. A failure early on skips the rest, which is what a broken
 // setup deserves.
 const chromium = { ...devices["Desktop Chrome"], baseURL };
-const order = ["setup-and-login", "dashboard", "audit", "version", "settings"] as const;
+// The agent project runs last: it adds a second environment and revokes it, and
+// the rest of the suite assumes the one it started with.
+const order = ["setup-and-login", "dashboard", "audit", "version", "settings", "agent"] as const;
 
 export default defineConfig({
   testDir: "./tests",
@@ -26,6 +28,12 @@ export default defineConfig({
   outputDir: "../.devdata/playwright-results",
   use: {
     baseURL,
+    // The proxy's certificate is the harness's own, made by scripts/e2e-cert.go.
+    ignoreHTTPSErrors: true,
+    // A click that cannot find its target fails in seconds, not at the end of the
+    // test's own timeout.
+    actionTimeout: 15_000,
+    navigationTimeout: 30_000,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     // A pinned timezone and locale keep date text stable between machines.
@@ -36,7 +44,9 @@ export default defineConfig({
   projects: order.map((name, i) => ({
     name,
     testMatch: `${name}.spec.ts`,
-    use: chromium,
+    // The golden path keeps its trace even when it passes: the release check
+    // looks at the waiting panel going live in it.
+    use: name === "agent" ? { ...chromium, trace: "on" } : chromium,
     dependencies: i === 0 ? [] : [order[i - 1] as string],
   })),
 });

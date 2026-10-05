@@ -16,6 +16,10 @@ import (
 	"github.com/ianglennon/bayplan/internal/store/storetest"
 )
 
+// retiredEnvironmentsWrite is the permission D-49 split up. It is spelled out
+// only here, so no production code can name it without this test noticing.
+const retiredEnvironmentsWrite = "environments" + ".write"
+
 func perms(t *testing.T) map[rbac.Perm]rbac.Permission {
 	t.Helper()
 	m := map[rbac.Perm]rbac.Permission{}
@@ -31,19 +35,23 @@ func perms(t *testing.T) map[rbac.Perm]rbac.Permission {
 func TestRegistryHoldsThePhase1Permissions(t *testing.T) {
 	m := perms(t)
 	want := map[rbac.Perm]rbac.Scope{
-		"environments.read":  rbac.ScopeEnvironment,
-		"environments.write": rbac.ScopeGlobal,
-		"containers.read":    rbac.ScopeEnvironment,
-		"images.read":        rbac.ScopeEnvironment,
-		"volumes.read":       rbac.ScopeEnvironment,
-		"networks.read":      rbac.ScopeEnvironment,
-		"audit.read":         rbac.ScopeGlobal,
-		"settings.read":      rbac.ScopeGlobal,
-		"settings.write":     rbac.ScopeGlobal,
-		"containers.exec":    rbac.ScopeEnvironment,
-		"secrets.reveal":     rbac.ScopeEnvironment,
-		"volumes.delete":     rbac.ScopeEnvironment,
-		"janitor.policy":     rbac.ScopeEnvironment,
+		"environments.read":   rbac.ScopeEnvironment,
+		"environments.create": rbac.ScopeGlobal,
+		"environments.manage": rbac.ScopeGlobal,
+		"environments.token":  rbac.ScopeGlobal,
+		"environments.revoke": rbac.ScopeGlobal,
+		"environments.delete": rbac.ScopeGlobal,
+		"containers.read":     rbac.ScopeEnvironment,
+		"images.read":         rbac.ScopeEnvironment,
+		"volumes.read":        rbac.ScopeEnvironment,
+		"networks.read":       rbac.ScopeEnvironment,
+		"audit.read":          rbac.ScopeGlobal,
+		"settings.read":       rbac.ScopeGlobal,
+		"settings.write":      rbac.ScopeGlobal,
+		"containers.exec":     rbac.ScopeEnvironment,
+		"secrets.reveal":      rbac.ScopeEnvironment,
+		"volumes.delete":      rbac.ScopeEnvironment,
+		"janitor.policy":      rbac.ScopeEnvironment,
 	}
 	for name, scope := range want {
 		p, ok := m[name]
@@ -66,7 +74,13 @@ func TestRegistryHoldsThePhase1Permissions(t *testing.T) {
 	}
 }
 
-func TestExactlyTheFourDangerousPermissionsAreFlagged(t *testing.T) {
+func TestTheRetiredEnvironmentsWritePermissionIsNoLongerRegistered(t *testing.T) {
+	if _, found := rbac.Lookup(retiredEnvironmentsWrite); found {
+		t.Fatal("environments.write is still registered; D-49 split it into create, manage, token, revoke and delete")
+	}
+}
+
+func TestExactlyTheDangerousPermissionsAreFlagged(t *testing.T) {
 	var got []string
 	for _, p := range rbac.All() {
 		if p.Dangerous {
@@ -74,7 +88,7 @@ func TestExactlyTheFourDangerousPermissionsAreFlagged(t *testing.T) {
 		}
 	}
 	slices.Sort(got)
-	want := []string{"containers.exec", "janitor.policy", "secrets.reveal", "volumes.delete"}
+	want := []string{"containers.exec", "environments.delete", "environments.token", "janitor.policy", "secrets.reveal", "volumes.delete"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("dangerous = %v, want %v", got, want)
 	}
@@ -157,6 +171,33 @@ func TestSeedAdminRoleRemovesAPermissionThatIsNoLongerRegistered(t *testing.T) {
 	}
 }
 
+func TestSeedAdminRoleUpgradesAnAdminThatHoldsTheRetiredEnvironmentsWriteGrant(t *testing.T) {
+	ctx := context.Background()
+	s, _ := seeded(t)
+	// An upgraded database: the admin role still holds environments.write and
+	// none of the D-49 names.
+	for _, name := range []string{"environments.create", "environments.manage", "environments.token", "environments.revoke", "environments.delete"} {
+		if err := s.Q.DeleteRolePermission(ctx, sqlc.DeleteRolePermissionParams{RoleID: "admin", Permission: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Q.InsertRolePermission(ctx, sqlc.InsertRolePermissionParams{RoleID: "admin", Permission: retiredEnvironmentsWrite}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbac.SeedAdminRole(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	got := rolePerms(t, s, "admin")
+	if slices.Contains(got, retiredEnvironmentsWrite) {
+		t.Error("the retired environments.write grant survived the re-seed")
+	}
+	for _, name := range []string{"environments.create", "environments.manage", "environments.token", "environments.revoke", "environments.delete"} {
+		if !slices.Contains(got, name) {
+			t.Errorf("admin lacks %s after the upgrade", name)
+		}
+	}
+}
+
 func user(id string) *rbac.Principal {
 	return &rbac.Principal{Type: rbac.PrincipalUser, ID: id, Name: id}
 }
@@ -233,14 +274,17 @@ func TestCheckDeniesAPermissionThatIsNotRegistered(t *testing.T) {
 }
 
 func TestSystemPrincipalsHaveExplicitEmptySets(t *testing.T) {
-	for _, name := range []string{"system:cli", "system:janitor", "system:gitsync", "system:webhook"} {
+	for _, name := range []string{
+		"system:cli", "system:janitor", "system:gitsync", "system:webhook",
+		"system:agent-enrol", "system:agent-update", "system:agent-reaper", "system:agent-hub",
+	} {
 		perms, ok := rbac.SystemPrincipals[name]
 		if !ok {
 			t.Errorf("%s has no explicit permission set", name)
 			continue
 		}
 		if len(perms) != 0 {
-			t.Errorf("%s holds %v, want none in Phase 1", name, perms)
+			t.Errorf("%s holds %v, want none", name, perms)
 		}
 		p := rbac.System(name)
 		if p == nil || p.Type != rbac.PrincipalSystem || p.ID != name || p.Name != name {

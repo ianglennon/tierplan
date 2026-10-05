@@ -7,7 +7,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type ImageRow, imagesQuery } from "@/api/resources";
 import { NoPermission } from "@/components/full-page-state";
 import { RelativeTime } from "@/components/relative-time";
+import { NodesBanner } from "@/features/environments/nodes-banner";
 import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
+import {
+  nodeRowKey,
+  nodeSearchSchema,
+  useEnvIsSwarm,
+  useNodeColumn,
+} from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -22,7 +29,11 @@ function Images() {
   const key = "dashboard.lists.images";
   useDocumentTitle(t(`${key}.title`));
   const allowed = usePermission("images.read", envId);
-  const query = useQuery({ ...imagesQuery(envId), enabled: allowed });
+  const { node } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const swarm = useEnvIsSwarm(envId);
+  const nodeColumn = useNodeColumn<ImageRow>();
+  const query = useQuery({ ...imagesQuery(envId, swarm ? node : undefined), enabled: allowed });
   const envName = useEnvName(envId);
   const missing = t("dashboard.time.missing");
 
@@ -67,11 +78,22 @@ function Images() {
       columns={columns}
       query={query}
       envName={envName}
-      getRowKey={(i) => i.id}
+      nodeColumn={swarm ? nodeColumn : undefined}
+      nodeFilter={
+        swarm
+          ? {
+              value: node,
+              onChange: (n) => void navigate({ search: { node: n }, replace: true }),
+            }
+          : undefined
+      }
+      banner={swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : undefined}
+      getRowKey={(i) => nodeRowKey(i.node, i.id)}
     />
   );
 }
 
 export const Route = createFileRoute("/_app/env/$envId/images")({
+  validateSearch: nodeSearchSchema,
   component: Images,
 });

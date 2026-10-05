@@ -165,7 +165,7 @@ func RegisterAuth(r *httpx.Router, d AuthDeps) {
 			return nil, internal("look up role", err)
 		}
 		return &LoginOutput{
-			SetCookie:    d.Sessions.Cookie(res.RawSessionID, in.Body.Remember, d.Instance.Secure()),
+			SetCookie:    d.Sessions.Cookie(res.RawSessionID, in.Body.Remember, d.Instance.CookieScope()),
 			CacheControl: "no-store",
 			Body: LoginBody{
 				User:      UserBody{ID: res.User.ID, Username: res.User.Username, Role: role},
@@ -190,7 +190,7 @@ func RegisterAuth(r *httpx.Router, d AuthDeps) {
 		if err := d.Login.Logout(ctx, p, httpx.ClientIP(ctx), in.UserAgent); err != nil {
 			return nil, internal("sign out", err)
 		}
-		return &LogoutOutput{SetCookie: auth.ClearCookie(d.Instance.Secure()), CacheControl: "no-store"}, nil
+		return &LogoutOutput{SetCookie: auth.ClearCookie(d.Instance.CookieScope()), CacheControl: "no-store"}, nil
 	})
 
 	httpx.Register(r, huma.Operation{

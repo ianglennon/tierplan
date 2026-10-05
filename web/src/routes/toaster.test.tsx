@@ -14,7 +14,7 @@ import "@/i18n";
 const ME = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: ["environments.write"], environments: {} },
+  permissions: { global: ["environments.create"], environments: { "*": ["environments.read"] } },
 };
 
 const DETECTED = {

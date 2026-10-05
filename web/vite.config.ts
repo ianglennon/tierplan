@@ -6,7 +6,25 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+// Development only. make dev passes DEV_PUBLIC_URL here so the host name a remote
+// browser uses gets past Vite's host check, which otherwise answers only
+// localhost and IP addresses (G-02-1b). Unset or unparsable leaves Vite's default.
+function devAllowedHosts(): string[] | undefined {
+  const raw = process.env.BAYPLAN_DEV_PUBLIC_URL;
+  if (!raw) return undefined;
+  try {
+    return [new URL(raw).hostname];
+  } catch {
+    return undefined;
+  }
+}
+
 export default defineConfig({
+  // Relative asset URLs: the built index.html and chunk loading carry no
+  // absolute /assets/ or /theme-init.js. The Go server rewrites every "./"
+  // src/href to the public URL's base path when it serves the page (plan 02-03,
+  // D-50), so one build serves any subpath. The dev server treats "./" as "/".
+  base: "./",
   plugins: [
     // The router plugin must come before the React plugin (RESEARCH Pitfall 21).
     tanstackRouter({
@@ -35,6 +53,7 @@ export default defineConfig({
     assetsInlineLimit: 0,
   },
   server: {
+    allowedHosts: devAllowedHosts(),
     // Dev loop: the SPA runs on Vite, the API on the Go server (make dev).
     // changeOrigin stays false so the browser's Origin header
     // (http://localhost:5173) reaches the Go Origin check unchanged (Pitfall 20).

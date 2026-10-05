@@ -16,6 +16,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
+	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/vault"
 )
 
@@ -270,6 +271,10 @@ type warningsResp struct {
 		ID      string `json:"id"`
 		Reason  string `json:"reason"`
 		KeyPath string `json:"keyPath"`
+		IP      string `json:"ip"`
+		Host    string `json:"host"`
+		Scheme  string `json:"scheme"`
+		URL     string `json:"url"`
 	} `json:"items"`
 }
 
@@ -382,5 +387,86 @@ func TestWarningsAndTheirAcknowledgementNeedSettingsPermissions(t *testing.T) {
 	}
 	if code, _ := f.warnings(t, ""); code != http.StatusUnauthorized {
 		t.Fatalf("GET /api/warnings anonymously: %d, want 401", code)
+	}
+}
+
+// --- proxy items in GET /api/warnings (plan 02-25, D-53) -------------------
+
+const proxyPublicURL = "https://bayplan.example.com"
+
+// withProxyObserver gives the fixture a proxy observer on the fixture's clock and a
+// public URL, and rebuilds the router.
+func (f *authFixture) withProxyObserver(t *testing.T) {
+	t.Helper()
+	f.proxy = httpx.NewProxyObserver(f.inst.PublicURL, f.clk.now)
+	f.inst.Apply("Bayplan", proxyPublicURL)
+	f.h = f.build(t)
+}
+
+func TestWarningsListEachProxyProblemWithItsParametersWhileItIsFresh(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.withProxyObserver(t)
+	cookie, _ := f.signIn(t, "admin", false)
+
+	// A request through an untrusted peer with forwarded headers, one for another host over
+	// plain http, and one failed upgrade.
+	ok := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	h := httpx.ClientIPMiddleware(nil)(f.proxy.Observe(ok))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "198.51.100.7:4000"
+	req.Host = "other.example.com"
+	req.Header.Set("X-Forwarded-For", "203.0.113.9")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	f.proxy.RecordUpgradeFailure("203.0.113.9")
+
+	code, w := f.warnings(t, cookie)
+	if code != http.StatusOK || len(w.Items) != 3 {
+		t.Fatalf("got %d %+v, want the three proxy warnings", code, w)
+	}
+	byID := map[string]int{}
+	for i, it := range w.Items {
+		byID[it.ID] = i
+	}
+	if i, ok := byID["proxy_untrusted_forwarded"]; !ok || w.Items[i].IP != "198.51.100.7" {
+		t.Errorf("proxy_untrusted_forwarded = %+v, want ip 198.51.100.7", w.Items)
+	}
+	if i, ok := byID["proxy_url_mismatch"]; !ok || w.Items[i].Host != "other.example.com" || w.Items[i].Scheme != "http" || w.Items[i].URL != proxyPublicURL {
+		t.Errorf("proxy_url_mismatch = %+v, want host other.example.com, scheme http and the public URL", w.Items)
+	}
+	if _, ok := byID["proxy_websocket_failing"]; !ok {
+		t.Errorf("no proxy_websocket_failing in %+v", w.Items)
+	}
+
+	f.clk.t = f.clk.t.Add(59 * time.Minute)
+	if _, w := f.warnings(t, cookie); len(w.Items) != 3 {
+		t.Errorf("59 minutes later: %+v, want the three still", w.Items)
+	}
+	f.clk.t = f.clk.t.Add(2 * time.Minute)
+	if _, w := f.warnings(t, cookie); len(w.Items) != 0 {
+		t.Errorf("an hour after the last sighting: %+v, want none", w.Items)
+	}
+}
+
+func TestWarningsShowTheNewestSignalOfAKindOnly(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.withProxyObserver(t)
+	cookie, _ := f.signIn(t, "admin", false)
+	f.proxy.RecordUpgradeFailure("203.0.113.1")
+	f.clk.t = f.clk.t.Add(time.Second)
+	f.proxy.RecordUpgradeFailure("203.0.113.2")
+	_, w := f.warnings(t, cookie)
+	if len(w.Items) != 1 || w.Items[0].ID != "proxy_websocket_failing" || w.Items[0].IP != "203.0.113.2" {
+		t.Fatalf("got %+v, want one proxy_websocket_failing naming the newest address", w.Items)
+	}
+}
+
+func TestProxyWarningsNeedSettingsRead(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.withProxyObserver(t)
+	f.proxy.RecordUpgradeFailure("203.0.113.1")
+	f.addUser(t, "viewer", false)
+	cookie, _ := f.signIn(t, "viewer", false)
+	if code, _ := f.warnings(t, cookie); code != http.StatusForbidden {
+		t.Fatalf("GET /api/warnings without settings.read: %d, want 403", code)
 	}
 }

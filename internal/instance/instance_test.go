@@ -149,3 +149,162 @@ func TestStoredURLIsUsedWhenTheEnvironmentIsUnset(t *testing.T) {
 		t.Fatalf("locked=%v url=%q origin=%q", again.Locked(), again.PublicURL(), again.PublicOrigin())
 	}
 }
+
+func TestBasePathIsThePathOfThePublicURL(t *testing.T) {
+	cases := []struct{ url, want string }{
+		{"", ""},
+		{"https://example.com", ""},
+		{"https://example.com/bayplan", "/bayplan"},
+		{"https://example.com/tools/bayplan", "/tools/bayplan"},
+		{"http://localhost:8080", ""},
+		{"https://example.com/a%20b", "/a%20b"},
+	}
+	for _, tc := range cases {
+		i, _ := load(t, config.Config{PublicURL: tc.url})
+		if got := i.BasePath(); got != tc.want {
+			t.Errorf("BasePath for %q = %q, want %q", tc.url, got, tc.want)
+		}
+	}
+}
+
+func TestBasePathFollowsApply(t *testing.T) {
+	i, _ := load(t, config.Config{})
+	i.Apply("x", "https://example.com/bayplan")
+	if got := i.BasePath(); got != "/bayplan" {
+		t.Fatalf("after Apply, BasePath = %q", got)
+	}
+	i.Apply("x", "")
+	if got := i.BasePath(); got != "" {
+		t.Fatalf("after clearing the URL, BasePath = %q", got)
+	}
+}
+
+func setAgentURL(t *testing.T, i *instance.Instance, st *store.Store, url string) error {
+	t.Helper()
+	tx, err := st.Write.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := i.SetAgentURLTx(context.Background(), tx, st.Q, url); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return nil
+}
+
+func TestAgentEndpointFollowsThePublicURLAndItsBasePath(t *testing.T) {
+	for _, tc := range []struct{ public, want string }{
+		{"", ""},
+		{"https://example.com", "wss://example.com/agent/connect"},
+		{"https://example.com/bayplan", "wss://example.com/bayplan/agent/connect"},
+		{"http://10.0.0.5:7480", "ws://10.0.0.5:7480/agent/connect"},
+	} {
+		i, _ := load(t, config.Config{})
+		i.Apply("x", tc.public)
+		if got := i.AgentEndpoint(); got != tc.want {
+			t.Errorf("AgentEndpoint for public URL %q = %q, want %q", tc.public, got, tc.want)
+		}
+		if i.AgentURL() != "" || i.AgentURLLocked() {
+			t.Errorf("a fresh instance has agent URL %q locked=%v", i.AgentURL(), i.AgentURLLocked())
+		}
+	}
+}
+
+func TestAgentURLReplacesThePublicURLForTheEndpoint(t *testing.T) {
+	i, st := load(t, config.Config{})
+	i.Apply("x", "https://example.com/bayplan")
+	if err := setAgentURL(t, i, st, "https://bayplan.lan:7480"); err != nil {
+		t.Fatal(err)
+	}
+	i.ApplyAgentURL("https://bayplan.lan:7480")
+	if got, want := i.AgentEndpoint(), "wss://bayplan.lan:7480/agent/connect"; got != want {
+		t.Errorf("AgentEndpoint = %q, want %q", got, want)
+	}
+	if got := i.AgentBase(); got != "https://bayplan.lan:7480" {
+		t.Errorf("AgentBase = %q, want the agent URL", got)
+	}
+	// The browser-facing URL and base path are untouched.
+	if i.PublicURL() != "https://example.com/bayplan" || i.BasePath() != "/bayplan" {
+		t.Errorf("public URL %q base %q changed", i.PublicURL(), i.BasePath())
+	}
+
+	// With the agent URL cleared the endpoint is the public one again.
+	if err := setAgentURL(t, i, st, ""); err != nil {
+		t.Fatal(err)
+	}
+	i.ApplyAgentURL("")
+	if got, want := i.AgentEndpoint(), "wss://example.com/bayplan/agent/connect"; got != want {
+		t.Errorf("AgentEndpoint after clearing = %q, want %q", got, want)
+	}
+	if got := i.AgentBase(); got != "https://example.com/bayplan" {
+		t.Errorf("AgentBase after clearing = %q, want the public URL", got)
+	}
+}
+
+func TestAgentURLIsStoredAndReadBackButNotBeforeApply(t *testing.T) {
+	i, st := load(t, config.Config{})
+	if err := setAgentURL(t, i, st, "https://bayplan.lan:7480"); err != nil {
+		t.Fatal(err)
+	}
+	if i.AgentURL() != "" {
+		t.Fatal("SetAgentURLTx changed the cache before Apply")
+	}
+	var stored string
+	if err := st.Read.QueryRow(`SELECT value FROM settings WHERE key = 'agent_url'`).Scan(&stored); err != nil || stored != "https://bayplan.lan:7480" {
+		t.Fatalf("stored = %q, %v; want the agent_url setting", stored, err)
+	}
+	again, err := instance.Load(context.Background(), st, config.Config{})
+	if err != nil || again.AgentURL() != "https://bayplan.lan:7480" || again.AgentURLLocked() {
+		t.Fatalf("reloaded: %q locked=%v, %v", again.AgentURL(), again.AgentURLLocked(), err)
+	}
+}
+
+func TestEnvironmentAgentURLWinsLocksAndIsNeverCopiedIntoTheSettingsTable(t *testing.T) {
+	cfg := config.Config{AgentURL: "https://env.internal:7480"}
+	i, st := load(t, cfg)
+	if !i.AgentURLLocked() || i.AgentURL() != "https://env.internal:7480" {
+		t.Fatalf("locked=%v url=%q", i.AgentURLLocked(), i.AgentURL())
+	}
+	if i.Locked() {
+		t.Error("an agent URL lock must not lock the public URL")
+	}
+	if err := setAgentURL(t, i, st, "https://attacker.example"); !errors.Is(err, instance.ErrAgentURLLocked) {
+		t.Fatalf("SetAgentURLTx with a different URL while locked = %v, want ErrAgentURLLocked", err)
+	}
+	if err := setAgentURL(t, i, st, "https://env.internal:7480"); err != nil {
+		t.Fatalf("SetAgentURLTx with the locked URL itself: %v", err)
+	}
+	i.ApplyAgentURL("https://attacker.example")
+	if i.AgentURL() != "https://env.internal:7480" {
+		t.Fatalf("ApplyAgentURL changed a locked URL to %q", i.AgentURL())
+	}
+	var n int
+	if err := st.Read.QueryRow(`SELECT COUNT(*) FROM settings WHERE key = 'agent_url'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d agent_url rows (%v): a locked value must not be copied into the table", n, err)
+	}
+
+	// Removing the variable later falls back to what was stored before.
+	if err := setAgentURL(t, mustLoad(t, st, config.Config{}), st, "https://stored.example"); err != nil {
+		t.Fatal(err)
+	}
+	again, err := instance.Load(context.Background(), st, cfg)
+	if err != nil || again.AgentURL() != "https://env.internal:7480" {
+		t.Fatalf("with the variable: %q, %v", again.AgentURL(), err)
+	}
+	unlocked, err := instance.Load(context.Background(), st, config.Config{})
+	if err != nil || unlocked.AgentURL() != "https://stored.example" {
+		t.Fatalf("without the variable: %q, %v", unlocked.AgentURL(), err)
+	}
+}
+
+func mustLoad(t *testing.T, st *store.Store, cfg config.Config) *instance.Instance {
+	t.Helper()
+	i, err := instance.Load(context.Background(), st, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return i
+}

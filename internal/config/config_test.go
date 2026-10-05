@@ -177,6 +177,45 @@ func TestPublicURL(t *testing.T) {
 	}
 }
 
+func TestPublicURLRejectsAFirstSegmentBayplanServesItself(t *testing.T) {
+	for _, seg := range []string{"api", "assets", "agent", "healthz", "readyz", "setup", "openapi", "docs", "schemas", "env", "environments", "settings", "audit", "login", "welcome"} {
+		for _, in := range []string{"https://example.com/" + seg, "https://example.com/" + seg + "/x", "https://example.com/" + seg + "/"} {
+			_, err := load(t, nil, envMap{"BAYPLAN_PUBLIC_URL": in}, files{})
+			if err == nil {
+				t.Errorf("%q should be rejected", in)
+				continue
+			}
+			if !strings.Contains(err.Error(), "BAYPLAN_PUBLIC_URL") || !strings.Contains(err.Error(), "must not start with /"+seg+", which Bayplan serves itself") {
+				t.Errorf("%q: error %q does not name the reserved segment", in, err)
+			}
+		}
+	}
+	// NormalisePublicURL is what the setup wizard and Settings call.
+	if _, err := config.NormalisePublicURL("https://example.com/api"); err == nil || !strings.Contains(err.Error(), "/api") {
+		t.Errorf("NormalisePublicURL(/api) = %v", err)
+	}
+}
+
+func TestPublicURLAcceptsAPathThatDoesNotCollide(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://example.com/bayplan":       "https://example.com/bayplan",
+		"https://example.com/tools/bayplan": "https://example.com/tools/bayplan",
+		// Only the FIRST segment is Bayplan's to claim.
+		"https://example.com/tools/api": "https://example.com/tools/api",
+		"https://example.com/apis":      "https://example.com/apis",
+		"https://example.com/API":       "https://example.com/API",
+	} {
+		c, err := load(t, nil, envMap{"BAYPLAN_PUBLIC_URL": in}, files{})
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+		if c.PublicURL != want {
+			t.Errorf("%q normalised to %q, want %q", in, c.PublicURL, want)
+		}
+	}
+}
+
 func TestTrustedProxies(t *testing.T) {
 	c, err := load(t, nil, envMap{"BAYPLAN_TRUSTED_PROXIES": "10.0.0.0/8, 192.168.1.5"}, files{})
 	if err != nil {
@@ -295,5 +334,185 @@ func TestSecretSettingsHaveNoFlag(t *testing.T) {
 func TestLoadWithNilFlagsAndReadFileError(t *testing.T) {
 	if _, err := config.Load(nil, envMap{}.get, func(string) ([]byte, error) { return nil, errors.New("boom") }); err != nil {
 		t.Errorf("nil flag set with defaults only should load: %v", err)
+	}
+}
+
+func TestNamesListsTheAgentTimingSettings(t *testing.T) {
+	names := strings.Join(config.Names(), " ")
+	for _, want := range []string{"BAYPLAN_AGENT_HEARTBEAT_INTERVAL", "BAYPLAN_AGENT_OFFLINE_AFTER", "BAYPLAN_AGENT_RECONNECT_GRACE"} {
+		if !strings.Contains(names, want) {
+			t.Errorf("Names() does not list %s", want)
+		}
+	}
+}
+
+func TestTheAgentTimingDefaultsAreTenThirtyAndSixtySeconds(t *testing.T) {
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AgentHeartbeatInterval != 10*time.Second || c.AgentOfflineAfter != 30*time.Second || c.AgentReconnectGrace != 60*time.Second {
+		t.Fatalf("heartbeat %v, offline after %v, grace %v; want 10s, 30s, 60s", c.AgentHeartbeatInterval, c.AgentOfflineAfter, c.AgentReconnectGrace)
+	}
+}
+
+func TestTheAgentTimingSettingsCanBeOverridden(t *testing.T) {
+	c, err := load(t, nil, envMap{
+		"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "5s", "BAYPLAN_AGENT_OFFLINE_AFTER": "20s", "BAYPLAN_AGENT_RECONNECT_GRACE": "2m",
+	}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AgentHeartbeatInterval != 5*time.Second || c.AgentOfflineAfter != 20*time.Second || c.AgentReconnectGrace != 2*time.Minute {
+		t.Fatalf("heartbeat %v, offline after %v, grace %v", c.AgentHeartbeatInterval, c.AgentOfflineAfter, c.AgentReconnectGrace)
+	}
+}
+
+func TestTheOfflineWindowMustBeAtLeastTwiceTheHeartbeatInterval(t *testing.T) {
+	for name, vars := range map[string]envMap{
+		"offline window equal to the interval":             {"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "10s", "BAYPLAN_AGENT_OFFLINE_AFTER": "10s"},
+		"offline window under twice the interval":          {"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "10s", "BAYPLAN_AGENT_OFFLINE_AFTER": "19s"},
+		"an interval that leaves the default window short": {"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "20s"},
+		"not a duration":   {"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "often"},
+		"a zero window":    {"BAYPLAN_AGENT_OFFLINE_AFTER": "0s"},
+		"a negative grace": {"BAYPLAN_AGENT_RECONNECT_GRACE": "-1m"},
+	} {
+		_, err := load(t, nil, vars, files{})
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_") {
+			t.Errorf("%s: error = %v, want one naming a BAYPLAN_AGENT_ variable", name, err)
+		}
+	}
+	// Exactly twice is allowed.
+	if _, err := load(t, nil, envMap{"BAYPLAN_AGENT_HEARTBEAT_INTERVAL": "10s", "BAYPLAN_AGENT_OFFLINE_AFTER": "20s"}, files{}); err != nil {
+		t.Errorf("a window of exactly twice the interval was refused: %v", err)
+	}
+}
+
+func TestNamesListsTheAgentEndpointSettings(t *testing.T) {
+	names := strings.Join(config.Names(), " ")
+	for _, want := range []string{"BAYPLAN_AGENT_ALLOW_INSECURE", "BAYPLAN_AGENT_CONNECT_BURST"} {
+		if !strings.Contains(names, want) {
+			t.Errorf("Names() does not list %s", want)
+		}
+	}
+}
+
+func TestTheAgentEndpointDefaultsAreSecureAndTwoHundred(t *testing.T) {
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AgentAllowInsecure || c.AgentConnectBurst != 200 {
+		t.Fatalf("allow insecure %v, burst %d; want false and 200", c.AgentAllowInsecure, c.AgentConnectBurst)
+	}
+}
+
+func TestTheAgentEndpointSettingsCanBeOverriddenAndBadValuesAreRefused(t *testing.T) {
+	c, err := load(t, nil, envMap{"BAYPLAN_AGENT_ALLOW_INSECURE": "true", "BAYPLAN_AGENT_CONNECT_BURST": "500"}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.AgentAllowInsecure || c.AgentConnectBurst != 500 {
+		t.Fatalf("allow insecure %v, burst %d; want true and 500", c.AgentAllowInsecure, c.AgentConnectBurst)
+	}
+	for name, vars := range map[string]envMap{
+		"a zero burst":      {"BAYPLAN_AGENT_CONNECT_BURST": "0"},
+		"a negative burst":  {"BAYPLAN_AGENT_CONNECT_BURST": "-5"},
+		"a burst of text":   {"BAYPLAN_AGENT_CONNECT_BURST": "many"},
+		"insecure not bool": {"BAYPLAN_AGENT_ALLOW_INSECURE": "sometimes"},
+	} {
+		if _, err := load(t, nil, vars, files{}); err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_") {
+			t.Errorf("%s: error = %v, want one naming a BAYPLAN_AGENT_ variable", name, err)
+		}
+	}
+}
+
+func TestAgentURLIsNormalisedLikeThePublicURL(t *testing.T) {
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil || c.AgentURL != "" {
+		t.Fatalf("unset: %q, %v; want empty", c.AgentURL, err)
+	}
+	for in, want := range map[string]string{
+		"https://bayplan.internal:7480":  "https://bayplan.internal:7480",
+		"HTTPS://Bayplan.Internal:7480/": "https://bayplan.internal:7480",
+		"http://192.168.1.10:7480":       "http://192.168.1.10:7480",
+		"https://example.com/bayplan/":   "https://example.com/bayplan",
+	} {
+		c, err := load(t, nil, envMap{"BAYPLAN_AGENT_URL": in}, files{})
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+		if c.AgentURL != want {
+			t.Errorf("%q normalised to %q, want %q", in, c.AgentURL, want)
+		}
+	}
+	for _, bad := range []string{"example.com", "ftp://example.com", "https://", "https://u:p@example.com", "https://example.com/?a=b", "https://example.com/api"} {
+		_, err := load(t, nil, envMap{"BAYPLAN_AGENT_URL": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_AGENT_URL") {
+			t.Errorf("%q: error = %v, want one naming BAYPLAN_AGENT_URL", bad, err)
+		}
+	}
+}
+
+func TestAgentURLHasAFlagAndTheEnvironmentWinsOverNothingElse(t *testing.T) {
+	c, err := load(t, []string{"--agent-url", "https://flag.example:7480/"}, envMap{}, files{})
+	if err != nil || c.AgentURL != "https://flag.example:7480" {
+		t.Fatalf("flag: %q, %v", c.AgentURL, err)
+	}
+	// The public URL is a separate setting.
+	c, err = load(t, nil, envMap{"BAYPLAN_PUBLIC_URL": "https://pub.example", "BAYPLAN_AGENT_URL": "https://agent.example"}, files{})
+	if err != nil || c.PublicURL != "https://pub.example" || c.AgentURL != "https://agent.example" {
+		t.Fatalf("both: %q %q, %v", c.PublicURL, c.AgentURL, err)
+	}
+}
+
+func TestAgentEndpointIsTheWebSocketAddressAgentsDial(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://example.com":               "wss://example.com/agent/connect",
+		"https://example.com/bayplan":       "wss://example.com/bayplan/agent/connect",
+		"https://example.com/bayplan/":      "wss://example.com/bayplan/agent/connect",
+		"https://bayplan.lan:7480":          "wss://bayplan.lan:7480/agent/connect",
+		"http://192.168.1.10:7480":          "ws://192.168.1.10:7480/agent/connect",
+		"https://u:p@bayplan.example/x?q=1": "wss://bayplan.example/x/agent/connect",
+	} {
+		got, err := config.AgentEndpoint(in)
+		if err != nil || got != want {
+			t.Errorf("AgentEndpoint(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "ftp://x", "not a url", "https://"} {
+		if got, err := config.AgentEndpoint(bad); err == nil {
+			t.Errorf("AgentEndpoint(%q) = %q, want an error", bad, got)
+		}
+	}
+}
+
+func TestTheFailingServiceGraceDefaultsToTwoMinutesAndIsListed(t *testing.T) {
+	if !strings.Contains(strings.Join(config.Names(), " "), "BAYPLAN_FAILING_SERVICE_GRACE") {
+		t.Error("Names() does not list BAYPLAN_FAILING_SERVICE_GRACE")
+	}
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FailingServiceGrace != 2*time.Minute {
+		t.Fatalf("FailingServiceGrace = %v, want 2m", c.FailingServiceGrace)
+	}
+}
+
+func TestTheFailingServiceGraceCanBeOverriddenAndMustBeAPositiveDuration(t *testing.T) {
+	c, err := load(t, nil, envMap{"BAYPLAN_FAILING_SERVICE_GRACE": "5m"}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FailingServiceGrace != 5*time.Minute {
+		t.Fatalf("FailingServiceGrace = %v, want 5m", c.FailingServiceGrace)
+	}
+	for name, v := range map[string]string{"not a duration": "soon", "zero": "0s", "negative": "-1m"} {
+		_, err := load(t, nil, envMap{"BAYPLAN_FAILING_SERVICE_GRACE": v}, files{})
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_FAILING_SERVICE_GRACE") {
+			t.Errorf("%s: error = %v, want one naming BAYPLAN_FAILING_SERVICE_GRACE", name, err)
+		}
 	}
 }

@@ -118,6 +118,19 @@ export const instanceSchema = z.object({
 export type InstanceInput = z.input<typeof instanceSchema>;
 export type InstanceValues = z.output<typeof instanceSchema>;
 
+// The settings form is the instance form plus the agent URL (plan 02-26, D-18).
+// An agent URL is checked like the public URL, and an empty one is valid: it
+// means agents dial the public URL.
+export const settingsSchema = instanceSchema.extend({
+  agentUrl: z
+    .string()
+    .trim()
+    .refine((s) => s === "" || isPublicUrl(s), { error: KEY.publicUrl }),
+});
+
+export type SettingsInput = z.input<typeof settingsSchema>;
+export type SettingsValues = z.output<typeof settingsSchema>;
+
 // Which step owns which field. The key order is the order the fields appear on
 // screen, which routeServerFieldErrors sorts by.
 const FIELD_STEP: Record<SetupField, 1 | 2 | 3> = {

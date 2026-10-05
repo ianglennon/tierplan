@@ -3,6 +3,8 @@
 
 import { z } from "zod";
 
+import { apiUrl } from "@/lib/base-path";
+
 // The audit log's filters live in the URL (D-43), so a filtered view is
 // linkable and survives a refresh. This file is the one place that knows how
 // the URL maps to the API's query parameters: the list and the export both go
@@ -30,6 +32,23 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "environment.added",
   "environment.renamed",
   "environment.removed",
+  "agent.enrolled",
+  "agent.enrol_refused",
+  "agent.cert_renewed",
+  "agent.revoked",
+  "agent.blocked",
+  "agent.unblocked",
+  "agent.auto_revoked",
+  "agent.updated",
+  "agent.update_failed",
+  "agent.uninstalled",
+  "agent.policy_denied",
+  "environment.token_rotated",
+  "environment.token_disabled",
+  "environment.failover",
+  "environment.cluster_adopted",
+  "environment.local_folded",
+  "environment.auto_update_changed",
   "warning.acknowledged",
   "audit.pruned",
   "permission.denied",
@@ -160,5 +179,5 @@ export function listParams(search: AuditSearch, now: Date): URLSearchParams {
 export function exportUrl(format: "csv" | "json", search: AuditSearch, now: Date): string {
   const params = new URLSearchParams({ format });
   for (const [key, value] of listParams(search, now)) params.append(key, value);
-  return `/api/audit/export?${params.toString()}`;
+  return apiUrl(`/api/audit/export?${params.toString()}`);
 }

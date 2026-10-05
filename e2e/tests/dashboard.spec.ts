@@ -7,8 +7,8 @@
 
 import type { Page } from "@playwright/test";
 
-import { AUTH_STATE } from "./env";
-import { compose, dind, dindCount, docker, expect, test } from "./helpers";
+import { AUTH_STATE, at } from "./env";
+import { compose, dind, dindCount, docker, expect, openFirstEnvironment, test } from "./helpers";
 
 test.use({ storageState: AUTH_STATE });
 
@@ -30,13 +30,7 @@ function countText(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-async function envIdOf(page: Page): Promise<string> {
-  await page.goto("/");
-  await expect(page).toHaveURL(/\/env\/[^/]+$/);
-  const id = new URL(page.url()).pathname.split("/")[2];
-  if (!id) throw new Error(`no environment id in ${page.url()}`);
-  return id;
-}
+const envIdOf = openFirstEnvironment;
 
 test("the tiles equal the engine's counts and a new network appears live", async ({ page }) => {
   // Something in every list, with no registry to reach: an image imported from
@@ -92,7 +86,7 @@ test("the tiles equal the engine's counts and a new network appears live", async
     { path: "networks", title: "Networks", noun: "network", n: counts.networks + 1 },
   ];
   for (const list of lists) {
-    await page.goto(`/env/${envId}/${list.path}`);
+    await page.goto(at(`/env/${envId}/${list.path}`));
     await expect(page.getByRole("heading", { name: list.title, level: 1 })).toBeVisible();
     await expect(page.getByText(countText(list.n, list.noun), { exact: true })).toBeVisible();
   }
@@ -100,7 +94,7 @@ test("the tiles equal the engine's counts and a new network appears live", async
 
 test("Bayplan reads its own container ID from inside the container", async ({ page }) => {
   const envId = await envIdOf(page);
-  const res = await page.request.get(`/api/env/${envId}/summary`);
+  const res = await page.request.get(at(`/api/env/${envId}/summary`));
   expect(res.ok()).toBe(true);
   const summary = (await res.json()) as { selfContainerId?: string };
 

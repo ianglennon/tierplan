@@ -76,7 +76,7 @@ func newRoot() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return server.Healthcheck(cmd.Context(), cfg.Listen, server.TLSEnabled(cfg))
+				return server.Healthcheck(cmd.Context(), cfg.Listen, server.HealthcheckCertFile(cfg))
 			},
 		},
 		&cobra.Command{
@@ -106,7 +106,7 @@ func loadConfig(cmd *cobra.Command) (config.Config, error) {
 // writeOpenAPI needs no configuration, data directory or socket: it builds the
 // router with no dependencies.
 func writeOpenAPI(w io.Writer) error {
-	doc, err := json.MarshalIndent(server.NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.AuditDeps{}, api.SettingsDeps{}).API().OpenAPI(), "", "  ")
+	doc, err := json.MarshalIndent(server.NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.AgentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.EnvStreamDeps{}, api.RecentDeps{}, api.AuditDeps{}, api.SettingsDeps{}, nil).API().OpenAPI(), "", "  ")
 	if err != nil {
 		return err
 	}

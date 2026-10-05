@@ -7,6 +7,7 @@ package sqlc
 
 import (
 	"context"
+	"database/sql"
 )
 
 const countEnvironmentsOfKind = `-- name: CountEnvironmentsOfKind :one
@@ -15,6 +16,17 @@ SELECT COUNT(*) FROM environments WHERE kind = ?
 
 func (q *Queries) CountEnvironmentsOfKind(ctx context.Context, kind string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countEnvironmentsOfKind, kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countFoldedEnvironments = `-- name: CountFoldedEnvironments :one
+SELECT COUNT(*) FROM environments WHERE kind = 'agent' AND local_node_id IS NOT NULL
+`
+
+func (q *Queries) CountFoldedEnvironments(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countFoldedEnvironments)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -32,8 +44,36 @@ func (q *Queries) DeleteEnvironment(ctx context.Context, id string) (int64, erro
 	return result.RowsAffected()
 }
 
+const foldLocalHost = `-- name: FoldLocalHost :execrows
+UPDATE environments
+SET local_node_id = ?, local_socket_path = ?, updated_at = ?
+WHERE id = ? AND kind = 'agent' AND env_type = 'swarm' AND swarm_cluster_id = ? AND local_node_id IS NULL
+`
+
+type FoldLocalHostParams struct {
+	LocalNodeID     sql.NullString
+	LocalSocketPath sql.NullString
+	UpdatedAt       int64
+	ID              string
+	SwarmClusterID  sql.NullString
+}
+
+func (q *Queries) FoldLocalHost(ctx context.Context, arg FoldLocalHostParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, foldLocalHost,
+		arg.LocalNodeID,
+		arg.LocalSocketPath,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.SwarmClusterID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getEnvironment = `-- name: GetEnvironment :one
-SELECT id, kind, name, socket_path, enabled, created_at, updated_at FROM environments WHERE id = ?
+SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto, local_node_id, local_socket_path FROM environments WHERE id = ?
 `
 
 func (q *Queries) GetEnvironment(ctx context.Context, id string) (Environment, error) {
@@ -47,6 +87,15 @@ func (q *Queries) GetEnvironment(ctx context.Context, id string) (Environment, e
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EnvType,
+		&i.SwarmClusterID,
+		&i.EngineID,
+		&i.ClusterChangedAt,
+		&i.AutoUpdate,
+		&i.PendingClusterID,
+		&i.NameAuto,
+		&i.LocalNodeID,
+		&i.LocalSocketPath,
 	)
 	return i, err
 }
@@ -81,7 +130,7 @@ const listEnvironments = `-- name: ListEnvironments :many
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The Bayplan Authors */
 
-SELECT id, kind, name, socket_path, enabled, created_at, updated_at FROM environments ORDER BY created_at, id
+SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto, local_node_id, local_socket_path FROM environments ORDER BY created_at, id
 `
 
 func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
@@ -101,6 +150,15 @@ func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
 			&i.Enabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.EnvType,
+			&i.SwarmClusterID,
+			&i.EngineID,
+			&i.ClusterChangedAt,
+			&i.AutoUpdate,
+			&i.PendingClusterID,
+			&i.NameAuto,
+			&i.LocalNodeID,
+			&i.LocalSocketPath,
 		); err != nil {
 			return nil, err
 		}
@@ -116,7 +174,7 @@ func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
 }
 
 const renameEnvironment = `-- name: RenameEnvironment :execrows
-UPDATE environments SET name = ?, updated_at = ? WHERE id = ?
+UPDATE environments SET name = ?, name_auto = 0, updated_at = ? WHERE id = ?
 `
 
 type RenameEnvironmentParams struct {
@@ -127,6 +185,24 @@ type RenameEnvironmentParams struct {
 
 func (q *Queries) RenameEnvironment(ctx context.Context, arg RenameEnvironmentParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, renameEnvironment, arg.Name, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setEnvironmentAutoUpdate = `-- name: SetEnvironmentAutoUpdate :execrows
+UPDATE environments SET auto_update = ?, updated_at = ? WHERE id = ?
+`
+
+type SetEnvironmentAutoUpdateParams struct {
+	AutoUpdate int64
+	UpdatedAt  int64
+	ID         string
+}
+
+func (q *Queries) SetEnvironmentAutoUpdate(ctx context.Context, arg SetEnvironmentAutoUpdateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setEnvironmentAutoUpdate, arg.AutoUpdate, arg.UpdatedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}

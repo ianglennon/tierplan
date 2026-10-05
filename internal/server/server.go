@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
@@ -29,6 +30,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/vault"
 	"github.com/ianglennon/bayplan/internal/webui"
 	"github.com/ianglennon/bayplan/web"
@@ -81,8 +83,22 @@ type Server struct {
 	snapshots *envs.Snapshots
 	// hub holds one Docker events stream per online environment and fans it
 	// out to the browsers watching (plan 21).
-	hub    *envs.Hub
-	router *httpx.Router
+	hub *envs.Hub
+	// clusters reads each swarm's managers on a timer and decides which one a
+	// cluster read goes to.
+	clusters *envs.Clusters
+	// aggregator is the one read path to an environment's Docker data; it holds
+	// the merged event feeds (plan 02-21).
+	aggregator *envs.Aggregator
+	// broker turns agent connections and health changes into the global
+	// environments stream (plan 02-12).
+	broker *envs.Broker
+	// tunnel holds the live agent connections; agents creates agent
+	// environments and enrols agents.
+	tunnel  *tunnel.Hub
+	agents  *agents.Service
+	updater *agents.Updater
+	router  *httpx.Router
 	// tlsConfig is nil when the server speaks plain HTTP (D-12).
 	tlsConfig *tls.Config
 
@@ -95,8 +111,18 @@ type Server struct {
 // NewRouter wires every operation. It takes plain dependencies so the
 // `openapi` subcommand can build the same handlers without a database or a
 // socket.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, auditDeps api.AuditDeps, settings api.SettingsDeps) *httpx.Router {
+//
+// agentConnect serves the agent WebSocket at /agent/connect. It is the one route
+// outside the policy besides the probes and the setup page, because the handshake
+// inside it is its own authentication. Nil mounts a handler that answers 404,
+// which is what the `openapi` subcommand and the router-walk tests pass: the route
+// exists in every router, so its exemption is always checked.
+func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, agentsDeps api.AgentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, envStream api.EnvStreamDeps, recent api.RecentDeps, auditDeps api.AuditDeps, settings api.SettingsDeps, agentConnect http.Handler) *httpx.Router {
 	r := httpx.New(opts)
+	if agentConnect == nil {
+		agentConnect = http.NotFoundHandler()
+	}
+	r.AgentConnect(agentConnect)
 	api.RegisterSystem(r, sys)
 	api.RegisterSetup(r, setup)
 	api.RegisterAuth(r, authDeps)
@@ -104,8 +130,12 @@ func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, auth
 	api.RegisterSettings(r, settings)
 	api.RegisterLocalHost(r, localHost)
 	api.RegisterEnvironments(r, environments)
+	api.RegisterAgents(r, agentsDeps)
+	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: environments.Envs, Checker: environments.Checker, Agents: agentsDeps, Log: environments.Log})
 	api.RegisterDashboard(r, dashboard)
 	api.RegisterEvents(r, events)
+	api.RegisterEnvStream(r, envStream)
+	api.RegisterRecent(r, recent)
 	api.RegisterAudit(r, auditDeps)
 	return r
 }
@@ -224,7 +254,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 
 	// HTTPS comes from a supplied pair or a generated self-signed certificate
 	// (D-12). It is prepared here so a bad pair stops startup before listening.
-	tlsCfg, err := TLSConfig(cfg, inst.PublicURL(), nil)
+	tlsCfg, err := TLSConfig(cfg, inst.PublicURL(), inst.AgentURL(), nil)
 	if err != nil {
 		_ = st.Close()
 		return nil, err
@@ -234,7 +264,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		log.Info("serving plain HTTP; set BAYPLAN_TLS_CERT_FILE and BAYPLAN_TLS_KEY_FILE, BAYPLAN_TLS_SELF_SIGNED=true, or put a TLS-terminating proxy in front")
 	case cfg.TLSSelfSigned:
 		log.Info("serving HTTPS with a self-signed certificate; compare this fingerprint in your browser",
-			"sha256", fingerprint(tlsCfg), "certificate", filepath.Join(info.Path, selfSignedDir, selfSignedCertFile))
+			"sha256", fingerprint(tlsCfg), "tls_pin", spkiPin(tlsCfg),
+			"certificate", filepath.Join(info.Path, selfSignedDir, selfSignedCertFile))
 	default:
 		log.Info("serving HTTPS", "certificate_file", cfg.TLSCertFile, "sha256", fingerprint(tlsCfg))
 	}
@@ -272,15 +303,112 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// and needs no wiring in the environment service.
 	hub := envs.NewHub(monitor, snapshots, log, time.Now)
 
-	spa := webui.Handler(web.FS())
+	// Agents dial in over /agent/connect. Enrolment checks the join token and
+	// issues a certificate from the environment's own CA (D-01, D-07); the hub
+	// holds the live sessions and tells the environment registry about each, so
+	// a connected agent becomes a monitor target (RESEARCH Pattern 5).
+	agentSvc := agents.NewService(st, vlt, aud, nil)
+	// Agents heartbeat at cfg.AgentHeartbeatInterval, which the welcome tells
+	// them, and a session silent for cfg.AgentOfflineAfter is closed (D-41).
+	// Heartbeats stay in memory; last_seen_at is written at most once a minute.
+	// Refused handshakes are anonymous and cost an audit row each, so they go
+	// through a throttle of their own: 20 rows at once per address, then one every
+	// 6 seconds, with the rest counted into one summary row a minute (RESEARCH
+	// Pitfall 8, D-13). It is separate from anonAudit so that agents behind one
+	// address and people signing in do not spend each other's budget.
+	agentAudit := auth.NewAuditThrottle(aud, auth.NewIPLimiter(6*time.Second, 20, 10*time.Minute, nil), log, nil)
+	// The pin an install command carries, and the hint a refused agent gets, are
+	// both read when asked: the pin changes only if the self-signed key is
+	// replaced, and the endpoint follows Settings.
+	tlsPin := func() string { return firstSelfSignedPin(cfg, tlsCfg) }
+	// The health broker is told what the tunnel hub sees, and recomputes every
+	// environment's health on a tick, so one stream per tab can say what changed.
+	broker := envs.NewBroker(envSvc, nil)
+	// The proxy observer notices a reverse proxy that is misconfigured from the
+	// requests it carries and from agent endpoint requests that are not upgrades,
+	// remembers it for an hour and tells the open bells when a kind appears (D-53).
+	proxyObs := httpx.NewProxyObserver(inst.PublicURL, nil).OnNew(broker.PublishProxyWarning)
+	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
+		WithNotifier(broker).
+		OnUpgradeFailure(proxyObs.RecordUpgradeFailure).
+		// The hub checks each handshake against the address agents are told to dial:
+		// the agent URL when one is set, else the public URL (D-18).
+		WithPublicURL(inst.AgentBase).
+		// Every welcome, and every push when an address changes, carries the
+		// endpoint agents are told to dial (D-19).
+		WithEndpoint(inst.AgentEndpoint).
+		WithPins(func() []string { return selfSignedPins(cfg, tlsCfg) }).
+		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
+		WithLastSeen(agentSvc).
+		WithServerVersion(buildinfo.Get().Version).
+		// An agent outside the version window is told the manual command that
+		// updates it, for its kind of environment (D-25).
+		WithUpdateHint(func(tooOld bool, envType string) string {
+			return agents.UpdateHint(tooOld, envType, agents.InstallParams{
+				Endpoint: inst.AgentEndpoint(), Pin: tlsPin(), ServerVersion: buildinfo.Get().Version,
+				AllowInsecure: cfg.AgentAllowInsecure,
+			})
+		}).
+		WithAllowInsecure(cfg.AgentAllowInsecure).
+		WithConnectLimit(cfg.AgentConnectBurst).
+		WithRefusalAudit(agentAudit)
+	// Agents refuse a plain ws:// address for another host, and so does the hub,
+	// unless the development switch is on. Say so at start, because nothing could
+	// connect. The address is read at start only; the hub's own refusal line covers
+	// a later change in Settings (G-02-R4-3).
+	if base := inst.AgentBase(); tunnel.PlainAddressRefused(base, cfg.AgentAllowInsecure) {
+		log.Warn("agents cannot connect: the address they are given is plain http for a host that is not this machine, so agents refuse it and so does Bayplan. Set an https BAYPLAN_PUBLIC_URL or BAYPLAN_AGENT_URL (or change it in Settings); BAYPLAN_AGENT_ALLOW_INSECURE=true allows it, for development only",
+			"agent_base", base)
+	}
+	// A revoke commits first and then closes the agent's live session through the hub.
+	agentSvc.WithKicker(tunnelHub)
+	// A re-initialised swarm that is recorded, or adopted, reaches every open
+	// overview at once instead of at the next tick.
+	agentSvc.WithNotifier(broker)
+
+	// The registry rolls an environment's health up from its agents, so it reads
+	// the live ones from the hub and uses the configured windows (D-41); every
+	// Docker read of an environment goes through the aggregator over the registry,
+	// the snapshot cache and the events hub (D-47).
+	envSvc.WithAgents(tunnelHub).WithHealth(envs.HealthConfig{
+		OfflineAfter: cfg.AgentOfflineAfter, Grace: cfg.AgentReconnectGrace,
+		// An agent older than this server shows an update badge in the overview.
+		ServerVersion: buildinfo.Get().Version,
+	})
+	// The cluster reader keeps what a swarm's managers say about it: which manager
+	// leads, the nodes, the failing services. It retries a read once on another
+	// manager and says so, and it feeds the rollup and the overview (D-43).
+	// Each node list it reads is shown to the reaper, which revokes the agent of a
+	// node that has left the swarm (D-10).
+	clusters := envs.NewClusters(envSvc, snapshots, envs.ClusterOptions{
+		Publisher: broker, Events: hub, Reaper: agents.NewReaper(agentSvc),
+		Grace: cfg.FailingServiceGrace, Log: log,
+	})
+	envSvc.WithClusters(clusters)
+	// After a server upgrade the updater brings agents of an older release up to date
+	// through the tunnel, one message per swarm through its leading manager, one per
+	// standalone host, unless the environment or the host switched it off (D-24, D-28).
+	// It hears of each agent's control stream and each update_result from the hub.
+	updater := agents.NewUpdater(agentSvc, agents.HubSource(tunnelHub), func(envID string) (string, bool) {
+		id := clusters.LeaderAgent(envID)
+		return id, id != ""
+	}, buildinfo.Get().Version, nil).WithLogger(log)
+	tunnelHub.WithUpdateObserver(updater)
+	// Removing an environment can first have its online agents uninstall themselves,
+	// through the same control streams, and hears their answers the same way (D-30).
+	envSvc.WithUninstaller(updater)
+	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
+
+	spa := webui.Handler(web.FS(), inst.BasePath)
 	router := NewRouter(httpx.Options{
 		Fallback:       spa,
 		Checker:        checker,
-		Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, inst.Secure, nil),
+		Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, inst.CookieScope, nil),
 		EnvResolver:    envSvc,
 		Auditor:        anonAudit,
 		MutationGuard:  auth.NewCSRFGuard(sessions),
 		TrustedProxies: cfg.TrustedProxies,
+		Proxy:          proxyObs,
 		PublicOrigin:   inst.PublicOrigin,
 		Logger:         log,
 		// Strict-Transport-Security when the request came over TLS or the
@@ -319,39 +447,51 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Audit:    aud,
 		DataDir:  info,
 		Vault:    vlt,
+		Proxy:    proxyObs,
 		// Five password-change attempts per user at once, then one every 12
 		// seconds (T-01-60): ample for a person, slow for a guesser.
 		Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
 		Log:     log,
 	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		api.EnvironmentsDeps{Envs: envSvc, Checker: checker, Log: log},
-		api.DashboardDeps{Snapshots: snapshots, SelfContainerID: selfID, Log: log},
-		api.EventsDeps{Hub: hub, Log: log},
+		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
+		api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
+		api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
+		api.EventsDeps{Aggregator: aggregator, Log: log},
+		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
+		api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
 		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
-		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Log: log})
+		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log}, tunnelHub.Handler())
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
+		tunnelHub.Close()
+		aggregator.Close()
 		hub.Close()
 		monitor.StopAll()
 		_ = st.Close()
 		return nil, err
 	}
 	srv := &Server{
-		cfg:       cfg,
-		log:       log,
-		dataDir:   info,
-		store:     st,
-		vault:     vlt,
-		audit:     aud,
-		setup:     gate,
-		inst:      inst,
-		session:   sessions,
-		envs:      envSvc,
-		monitor:   monitor,
-		snapshots: snapshots,
-		hub:       hub,
-		router:    router,
-		tlsConfig: tlsCfg,
+		cfg:        cfg,
+		log:        log,
+		dataDir:    info,
+		store:      st,
+		vault:      vlt,
+		audit:      aud,
+		setup:      gate,
+		inst:       inst,
+		session:    sessions,
+		envs:       envSvc,
+		monitor:    monitor,
+		snapshots:  snapshots,
+		hub:        hub,
+		clusters:   clusters,
+		aggregator: aggregator,
+		broker:     broker,
+		tunnel:     tunnelHub,
+		agents:     agentSvc,
+		updater:    updater,
+		router:     router,
+		tlsConfig:  tlsCfg,
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
@@ -363,11 +503,16 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// Suppressed anonymous refusals are written every minute, and once more when
 	// bg ends, which is before Close shuts the database.
 	srv.background.Go(func() { anonAudit.Run(bg, time.Minute) })
+	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
+	srv.background.Go(func() { broker.Run(bg) })
+	srv.background.Go(func() { clusters.Run(bg) })
 	// Monitoring resumes for the environments an admin already added. The
 	// monitors live as long as bg, and Close waits for them.
 	if err := envSvc.StartAll(bg); err != nil {
 		stop()
 		srv.background.Wait()
+		tunnelHub.Close()
+		aggregator.Close()
 		hub.Close()
 		monitor.StopAll()
 		_ = st.Close()
@@ -405,12 +550,54 @@ func (s *Server) Snapshots() *envs.Snapshots { return s.snapshots }
 // Hub is the per-environment Docker events hub.
 func (s *Server) Hub() *envs.Hub { return s.hub }
 
+// Clusters is the cluster reader of swarm environments. The server reads every
+// environment itself every 15 seconds; a test that needs a read at a given moment
+// calls Refresh.
+func (s *Server) Clusters() *envs.Clusters { return s.clusters }
+
+// TLSPin is the SPKI pin ("sha256/" and base64) of the certificate Bayplan
+// generated for itself, which an install command carries so the agent can trust
+// it (D-06). It is empty when Bayplan serves a supplied certificate or plain
+// HTTP: the first is the operator's to pin, the second has nothing to pin.
+func (s *Server) TLSPin() string { return firstSelfSignedPin(s.cfg, s.tlsConfig) }
+
+// firstSelfSignedPin is the pin an install command carries: the generated
+// certificate's, and "" when there is none.
+func firstSelfSignedPin(cfg config.Config, tlsCfg *tls.Config) string {
+	if p := selfSignedPins(cfg, tlsCfg); len(p) > 0 {
+		return p[0]
+	}
+	return ""
+}
+
+// selfSignedPins is the pin list a welcome carries: the generated certificate's
+// pin, and nothing for a supplied certificate or plain HTTP.
+func selfSignedPins(cfg config.Config, tlsCfg *tls.Config) []string {
+	if !cfg.TLSSelfSigned {
+		return nil
+	}
+	if p := spkiPin(tlsCfg); p != "" {
+		return []string{p}
+	}
+	return nil
+}
+
+// Tunnel holds the live agent connections.
+func (s *Server) Tunnel() *tunnel.Hub { return s.tunnel }
+
+// Agents creates agent environments and enrols agents.
+func (s *Server) Agents() *agents.Service { return s.agents }
+
 // Close stops background work, including the events streams and the
 // environment monitors, and releases the database. Run calls it on exit; it is
 // safe to call again.
 func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
+	s.broker.Close()
+	s.updater.Close()
+	s.tunnel.Close()
+	s.aggregator.Close()
 	s.hub.Close()
 	s.monitor.StopAll()
 	return s.store.Close()
@@ -419,8 +606,12 @@ func (s *Server) Close() error {
 // DataDir reports the prepared data directory, for the admin banner (plan 14).
 func (s *Server) DataDir() datadir.Info { return s.dataDir }
 
-// Handler is the root HTTP handler.
-func (s *Server) Handler() http.Handler { return s.router.Handler() }
+// Handler is the root HTTP handler: the router behind StripBasePath, so a
+// request under the public URL's path reaches the same routes whether or not a
+// proxy stripped the prefix. It runs before chi and every middleware (D-50).
+func (s *Server) Handler() http.Handler {
+	return httpx.StripBasePath(s.inst.BasePath)(s.router.Handler())
+}
 
 // Run serves until ctx is cancelled, then shuts down gracefully within 10s.
 func (s *Server) Run(ctx context.Context) error {
@@ -437,7 +628,14 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	// Shutdown waits for open requests, and an events stream never ends by
 	// itself. Closing the hub ends every stream, so a restart is not held up for
 	// the whole shutdown timeout by a browser that has the feed open.
+	srv.RegisterOnShutdown(s.aggregator.Close)
 	srv.RegisterOnShutdown(s.hub.Close)
+	// The health stream is open as long as a tab is, so it ends the same way.
+	srv.RegisterOnShutdown(s.broker.Close)
+	// http.Server.Shutdown ignores hijacked connections, and every agent
+	// tunnel is one. Closing the hub sends each a close frame so the agents
+	// reconnect with backoff instead of waiting on a dead session (Pitfall 5).
+	srv.RegisterOnShutdown(s.tunnel.Close)
 	errc := make(chan error, 1)
 	// With a TLS config the certificate is already in it, so the file names are empty.
 	scheme := "http"
@@ -464,3 +662,20 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 		return nil
 	}
 }
+
+// settingsAgents gives the settings routes what they know of agents: the agents
+// service counts the enrolled ones, and the hub says which are connected and tells
+// them a new address (D-19).
+type settingsAgents struct {
+	svc *agents.Service
+	hub *tunnel.Hub
+}
+
+func (a settingsAgents) EnrolledAgentIDs(ctx context.Context) ([]string, error) {
+	return a.svc.EnrolledAgentIDs(ctx)
+}
+func (a settingsAgents) Connected(agentID string) bool    { return a.hub.Session(agentID) != nil }
+func (a settingsAgents) PushURLs(urls, pins []string) int { return a.hub.PushURLs(urls, pins) }
+func (a settingsAgents) Pins() []string                   { return a.hub.Pins() }
+
+var _ api.SettingsAgents = settingsAgents{}

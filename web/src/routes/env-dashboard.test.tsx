@@ -15,7 +15,7 @@ import "@/i18n";
 const ME = {
   user: { id: "u1", username: "admin", role: "admin" },
   csrfToken: "csrf-1",
-  permissions: { global: [], environments: {} },
+  permissions: { global: [], environments: { "*": ["environments.read"] } },
 };
 
 const LAB = {
@@ -58,6 +58,8 @@ const SUMMARY = {
 let sent: string[] = [];
 let environments: () => Response | Promise<Response>;
 let summary: () => Response | Promise<Response>;
+let recent: string[] = [];
+let me: unknown = ME;
 
 function stubApi() {
   vi.stubGlobal(
@@ -68,7 +70,7 @@ function stubApi() {
       if (path === "/api/instance") {
         return Response.json({ instanceName: "Lab", needsSetup: false, rememberDays: 30 });
       }
-      if (path === "/api/me") return Response.json(ME);
+      if (path === "/api/me") return Response.json(me);
       if (path === "/api/version") {
         return Response.json({
           commit: "",
@@ -79,6 +81,9 @@ function stubApi() {
         });
       }
       if (path === "/api/environments") return environments();
+      if (path === "/api/me/recent-environments") {
+        return Response.json({ environmentIds: recent });
+      }
       if (path === "/api/env/e1/summary") return summary();
       if (path === "/api/env/e1/events") return Response.json({ items: [] });
       return Response.json({}, { status: 404 });
@@ -101,7 +106,9 @@ function renderAt(path: string) {
 
 // tile finds a count tile by its label and returns the tile element.
 function tile(label: string): HTMLElement {
-  const el = screen.getByText(label, { selector: "span" }).parentElement;
+  // Inside the tiles, since a nav item of the same name is a span as well.
+  const tiles = screen.getByRole("region", { name: "Dashboard" });
+  const el = within(tiles).getByText(label, { selector: "span" }).parentElement;
   if (!el) throw new Error(`no tile ${label}`);
   return el;
 }
@@ -111,6 +118,8 @@ beforeEach(() => {
   setCsrfToken(null);
   environments = () => Response.json({ items: [LAB] });
   summary = () => Response.json(SUMMARY);
+  recent = [];
+  me = ME;
   stubApi();
 });
 
@@ -123,44 +132,48 @@ afterEach(() => {
 });
 
 describe("home redirect", () => {
-  it("sends / to the first environment's dashboard (ENV-07)", async () => {
+  it("sends / to the last-used environment's dashboard (ENV-07, D-31)", async () => {
+    recent = ["e1"];
     const router = renderAt("/");
     await screen.findByRole("heading", { name: "Lab host" });
     expect(router.state.location.pathname).toBe("/env/e1");
   });
 
-  it("goes to the dashboard when the first environment appears while the empty page is open", async () => {
-    environments = () => Response.json({ items: [] });
+  it("sends / to the overview when there is no last-used environment", async () => {
     const router = renderAt("/");
-    await screen.findByText("No environments yet");
-    environments = () => Response.json({ items: [LAB] });
-    await queryClient.invalidateQueries({ queryKey: ["environments"] });
-    await screen.findByRole("heading", { name: "Lab host" });
-    expect(router.state.location.pathname).toBe("/env/e1");
+    await screen.findByRole("heading", { level: 1, name: "Environments" });
+    expect(router.state.location.pathname).toBe("/environments");
   });
 
-  it("stays on the empty page when no environment exists", async () => {
+  it("ends on the overview's empty state when no environment exists", async () => {
     environments = () => Response.json({ items: [] });
     const router = renderAt("/");
     expect(await screen.findByText("No environments yet")).toBeTruthy();
-    expect(router.state.location.pathname).toBe("/");
+    expect(router.state.location.pathname).toBe("/environments");
   });
 
-  it("shows the landing's own error when the list cannot be read", async () => {
+  it("ends on the overview, which says so, when the list cannot be read", async () => {
     environments = () => new Response("boom", { status: 500 });
     const router = renderAt("/");
     expect(
-      await screen.findByText(
-        "Can't reach Bayplan. Check your connection and try again.",
-        {},
-        { timeout: 4000 },
-      ),
+      await screen.findByText("Couldn't load environments.", {}, { timeout: 6000 }),
     ).toBeTruthy();
-    expect(router.state.location.pathname).toBe("/");
-  }, 8000);
+    expect(router.state.location.pathname).toBe("/environments");
+  }, 10000);
 });
 
 describe("dashboard", () => {
+  it("holds a 64-character name to two lines and keeps the whole name in a title", async () => {
+    const long = "n".repeat(64);
+    environments = () => Response.json({ items: [{ ...LAB, name: long }] });
+    summary = () =>
+      Response.json({ ...SUMMARY, environment: { ...SUMMARY.environment, name: long } });
+    renderAt("/env/e1");
+    const heading = await screen.findByRole("heading", { name: long });
+    expect(heading.className).toContain("line-clamp-2");
+    expect(heading.getAttribute("title")).toBe(long);
+  });
+
   it("shows the header, the four tiles and the engine card from one summary request", async () => {
     renderAt("/env/e1");
     const heading = await screen.findByRole("heading", { name: "Lab host" });
@@ -285,6 +298,11 @@ describe("dashboard", () => {
   });
 });
 
+// The signed-in layout opens the app's one health stream as well, so the
+// environment's own events stream is found by its address.
+const feedStream = () =>
+  FakeEventSource.instances.find((s) => s.url === "/api/env/e1/events/stream");
+
 describe("events feed (ENV-07, D-57)", () => {
   beforeEach(() => {
     FakeEventSource.reset();
@@ -296,8 +314,8 @@ describe("events feed (ENV-07, D-57)", () => {
     await screen.findByRole("heading", { name: "Lab host" });
     expect(await screen.findByText("Recent events")).toBeTruthy();
     expect(screen.getByText("Docker engine")).toBeTruthy();
-    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-    expect(FakeEventSource.instances[0]?.url).toBe("/api/env/e1/events/stream");
+    await waitFor(() => expect(feedStream()).toBeTruthy());
+    expect(FakeEventSource.instances.map((s) => s.url)).toContain("/api/environments/stream");
     expect(within(tile("Containers")).getByText("7")).toBeTruthy();
 
     summary = () =>
@@ -306,9 +324,10 @@ describe("events feed (ENV-07, D-57)", () => {
         counts: { ...SUMMARY.counts, containers: 8, containersRunning: 6 },
       });
     const before = sent.filter((p) => p === "/api/env/e1/summary").length;
-    FakeEventSource.instances[0]?.open();
-    FakeEventSource.instances[0]?.send({
+    feedStream()?.open();
+    feedStream()?.send({
       id: "ev1",
+      node: "node-1",
       time: "2026-10-02T10:00:00Z",
       type: "container",
       action: "start",
@@ -331,6 +350,279 @@ describe("events feed (ENV-07, D-57)", () => {
       );
     renderAt("/env/e1");
     await screen.findByText("Docker isn't reachable");
-    expect(FakeEventSource.instances).toHaveLength(0);
+    expect(feedStream()).toBeUndefined();
+  });
+});
+
+// A swarm's dashboard (plan 22, ENV-02, ENV-06, D-44, D-46): cluster totals with
+// each node's share, the banner for nodes that did not report, manager tiles
+// that say when no manager is connected, and the agent rows on the engine card.
+describe("swarm dashboard", () => {
+  const SWARM = {
+    ...LAB,
+    name: "Prod swarm",
+    kind: "agent",
+    type: "swarm",
+    envType: "swarm",
+    isSelfHost: false,
+    isLocalSocket: false,
+    status: { state: "online" },
+    nodes: { ready: 3, total: 4 },
+    agents: { connected: 3, expected: 4 },
+    agentVersion: "0.2.0",
+  };
+
+  const byNode = [
+    { node: "n1", containers: 4, images: 3, volumes: 0, networks: 1 },
+    { node: "n2", containers: 2, images: 3, volumes: 0, networks: 1 },
+    { node: "n3", containers: 1, images: 2, volumes: 0, networks: 0 },
+  ];
+
+  const SWARM_SUMMARY = {
+    ...SUMMARY,
+    environment: {
+      id: "e1",
+      name: "Prod swarm",
+      type: "swarm-manager",
+      status: { state: "online" },
+    },
+    counts: { ...SUMMARY.counts, nodes: 4, services: 6 },
+    byNode,
+    notReporting: [],
+  };
+
+  beforeEach(() => {
+    me = {
+      ...ME,
+      permissions: {
+        global: [],
+        environments: {
+          "*": [
+            "environments.read",
+            "containers.read",
+            "images.read",
+            "volumes.read",
+            "networks.read",
+          ],
+        },
+      },
+    };
+    environments = () => Response.json({ items: [SWARM] });
+    summary = () => Response.json(SWARM_SUMMARY);
+  });
+
+  // The tiles' own links; the sidebar has links of the same names.
+  const tiles = () => within(screen.getByRole("region", { name: "Dashboard" }));
+
+  async function showTooltip(label: string) {
+    await screen.findByRole("region", { name: "Dashboard" });
+    const link = await tiles().findByRole("link", { name: new RegExp(label) });
+    fireEvent.focus(link);
+    return screen.findByRole("tooltip");
+  }
+
+  it("shows the Swarm badge and how many nodes are ready in the header", async () => {
+    renderAt("/env/e1");
+    const heading = await screen.findByRole("heading", { name: "Prod swarm" });
+    const header = heading.parentElement as HTMLElement;
+    expect(within(header).getByText("Swarm")).toBeTruthy();
+    expect(within(header).getByText("3 of 4 nodes ready")).toBeTruthy();
+  });
+
+  it("has no nodes-ready line on a standalone host", async () => {
+    environments = () => Response.json({ items: [LAB] });
+    summary = () => Response.json(SUMMARY);
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "Lab host" });
+    expect(screen.queryByText(/nodes ready/)).toBeNull();
+  });
+
+  it("names the nodes that did not report above the tiles, with no error", async () => {
+    summary = () => Response.json({ ...SWARM_SUMMARY, notReporting: ["n4", "n5"] });
+    renderAt("/env/e1");
+    const banner = await screen.findByText(
+      "2 nodes aren't reporting: n4, n5. The totals below leave them out.",
+    );
+    const tiles = screen.getByRole("region", { name: "Dashboard" });
+    expect(banner.compareDocumentPosition(tiles) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("Couldn't load the dashboard.")).toBeNull();
+  });
+
+  it("shows no banner when every node reports", async () => {
+    renderAt("/env/e1");
+    await waitFor(() => expect(within(tile("Containers")).getByText("7")).toBeTruthy());
+    expect(screen.queryByText(/isn't reporting|aren't reporting/)).toBeNull();
+  });
+
+  it("lists each node's containers in a tooltip on the containers tile", async () => {
+    renderAt("/env/e1");
+    const tip = await showTooltip("Containers");
+    expect(tip.textContent).toBe("n1: 4n2: 2n3: 1");
+  });
+
+  it("gives the images and volumes tiles their node breakdown too", async () => {
+    renderAt("/env/e1");
+    const tip = await showTooltip("Images");
+    expect(tip.textContent).toBe("n1: 3n2: 3n3: 2");
+  });
+
+  it("shows the swarm-wide networks as Cluster next to each node's local ones", async () => {
+    summary = () =>
+      Response.json({ ...SWARM_SUMMARY, counts: { ...SWARM_SUMMARY.counts, networks: 5 } });
+    renderAt("/env/e1");
+    const tip = await showTooltip("Networks");
+    // 1 + 1 + 0 local, so 3 of the 5 are swarm-wide.
+    expect(tip.textContent).toBe("n1: 1n2: 1n3: 0Cluster: 3");
+  });
+
+  it("caps the breakdown at eight nodes and counts the rest", async () => {
+    summary = () =>
+      Response.json({
+        ...SWARM_SUMMARY,
+        byNode: Array.from({ length: 10 }, (_, i) => ({
+          node: `n${i + 1}`,
+          containers: 1,
+          images: 1,
+          volumes: 0,
+          networks: 0,
+        })),
+        counts: { ...SWARM_SUMMARY.counts, containers: 10 },
+      });
+    renderAt("/env/e1");
+    const tip = await showTooltip("Containers");
+    expect(tip.textContent).toContain("n8: 1");
+    expect(tip.textContent).not.toContain("n9: 1");
+    expect(tip.textContent).toContain("and 2 more nodes");
+  });
+
+  it("has no breakdown on a standalone host", async () => {
+    environments = () => Response.json({ items: [LAB] });
+    summary = () => Response.json(SUMMARY);
+    renderAt("/env/e1");
+    await waitFor(() => expect(within(tile("Containers")).getByText("7")).toBeTruthy());
+    const link = tiles().getByRole("link", { name: /Containers/ });
+    fireEvent.focus(link);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("shows '—' and 'No manager connected' on Nodes and Services while node-local tiles keep working", async () => {
+    summary = () =>
+      Response.json({
+        ...SWARM_SUMMARY,
+        counts: { ...SUMMARY.counts },
+        environment: {
+          ...SWARM_SUMMARY.environment,
+          status: { state: "degraded", reason: "not_a_manager" },
+        },
+      });
+    renderAt("/env/e1");
+    await waitFor(() => expect(within(tile("Containers")).getByText("7")).toBeTruthy());
+    expect(within(tile("Nodes")).getByText("—")).toBeTruthy();
+    expect(within(tile("Nodes")).getByText("No manager connected")).toBeTruthy();
+    expect(within(tile("Services")).getByText("—")).toBeTruthy();
+    expect(within(tile("Services")).getByText("No manager connected")).toBeTruthy();
+    // They are not links.
+    expect(tiles().queryByRole("link", { name: /Nodes|Services/ })).toBeNull();
+    // The node-local tiles still link to their lists.
+    expect(
+      tiles()
+        .getByRole("link", { name: /Containers/ })
+        .getAttribute("href"),
+    ).toBe("/env/e1/containers");
+  });
+
+  it("says the managers have no quorum, not that none is connected, when the quorum is lost", async () => {
+    summary = () =>
+      Response.json({
+        ...SWARM_SUMMARY,
+        counts: { ...SUMMARY.counts },
+        environment: {
+          ...SWARM_SUMMARY.environment,
+          status: {
+            state: "degraded",
+            reason: "no_quorum",
+            issues: [{ code: "no_quorum" }],
+          },
+        },
+      });
+    renderAt("/env/e1");
+    await waitFor(() => expect(within(tile("Nodes")).getByText("—")).toBeTruthy());
+    expect(within(tile("Nodes")).getByText("The managers have no quorum")).toBeTruthy();
+    expect(screen.queryByText("No manager connected")).toBeNull();
+  });
+
+  it("does not show Nodes and Services tiles on a swarm worker, which has the worker notice", async () => {
+    summary = () =>
+      Response.json({
+        ...SWARM_SUMMARY,
+        isWorker: true,
+        counts: { ...SUMMARY.counts },
+        environment: { ...SWARM_SUMMARY.environment, type: "swarm-worker" },
+      });
+    renderAt("/env/e1");
+    await screen.findByText(/This host is a swarm worker/);
+    expect(screen.queryByText("Nodes", { selector: "span" })).toBeNull();
+    expect(screen.queryByText("No manager connected")).toBeNull();
+  });
+
+  it("shows the agents and the agent version on the engine card of a swarm", async () => {
+    renderAt("/env/e1");
+    const card = (await screen.findByText("Docker engine")).closest(
+      "[data-slot=card]",
+    ) as HTMLElement;
+    await waitFor(() => expect(within(card).getByText("3 of 4 connected")).toBeTruthy());
+    expect(within(card).getByText("Agents")).toBeTruthy();
+    expect(within(card).getByText("Agent version")).toBeTruthy();
+    expect(within(card).getByText("0.2.0")).toBeTruthy();
+  });
+
+  it("shows the agent version, without an agent count, for a standalone agent host", async () => {
+    environments = () =>
+      Response.json({
+        items: [{ ...SWARM, type: "standalone", envType: "standalone", agents: null }],
+      });
+    summary = () =>
+      Response.json({
+        ...SUMMARY,
+        environment: { ...SUMMARY.environment, type: "standalone" },
+      });
+    renderAt("/env/e1");
+    const card = (await screen.findByText("Docker engine")).closest(
+      "[data-slot=card]",
+    ) as HTMLElement;
+    await waitFor(() => expect(within(card).getByText("0.2.0")).toBeTruthy());
+    expect(within(card).getByText("Agent version")).toBeTruthy();
+    expect(within(card).queryByText("Agents")).toBeNull();
+  });
+
+  it("shows neither agent row on the local socket environment", async () => {
+    environments = () => Response.json({ items: [{ ...LAB, isLocalSocket: true }] });
+    renderAt("/env/e1");
+    const card = (await screen.findByText("Docker engine")).closest(
+      "[data-slot=card]",
+    ) as HTMLElement;
+    await waitFor(() => expect(within(card).getByText("29.8.2")).toBeTruthy());
+    expect(within(card).queryByText("Agents")).toBeNull();
+    expect(within(card).queryByText("Agent version")).toBeNull();
+  });
+
+  it("shows each event's node in the feed of a swarm", async () => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "Prod swarm" });
+    await waitFor(() => expect(feedStream()).toBeTruthy());
+    feedStream()?.open();
+    feedStream()?.send({
+      id: "ev1",
+      node: "worker-7",
+      time: "2026-10-02T10:00:00Z",
+      type: "container",
+      action: "start",
+      actorId: "abc",
+      name: "web-1",
+      attributes: {},
+    });
+    expect(await screen.findByText("worker-7")).toBeTruthy();
   });
 });

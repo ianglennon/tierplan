@@ -2,91 +2,53 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Navigate, redirect } from "@tanstack/react-router";
-import { Server } from "lucide-react";
+import { createFileRoute, Navigate } from "@tanstack/react-router";
 
-import { environmentsQuery } from "@/api/environments";
-import { queryClient } from "@/api/query-client";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
-import { LocalHostPanel } from "@/features/environments/local-host-panel";
-import { useDocumentTitle, usePermission } from "@/hooks/use-me";
+import { environmentsQuery, recentQuery } from "@/api/environments";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/use-t";
 
-// The signed-in landing page. With no environment there is nothing to show but
-// where to start (D-08): the opt-in for this host, or the command that mounts
-// the Docker socket. With one, the user goes to its dashboard: the route's
-// beforeLoad does it on arrival, and the Navigate below does it when the list
-// fills while this page is open (the opt-in just added the host).
+// A short staleTime: both lists are read again when they are older than this,
+// so an environment that was removed does not send the user to a missing
+// dashboard, and the one just opened (which invalidates the recent list) comes
+// first. Neither read is retried: the overview is the fallback and says what
+// went wrong.
+const FRESH_MS = 5_000;
+
+// Home is the signed-in landing page (D-31): the environment this user last
+// opened, on any device, else the overview. The server keeps the last three per
+// user and leaves out what was removed or can no longer be read; the list is
+// checked as well, so the first recent one still in it wins. Any failure falls
+// to /environments, which shows its own error with Retry.
+//
+// It is a page and not a beforeLoad redirect so there is something to show
+// while the answer loads: the router renders nothing for a route whose
+// beforeLoad is pending. That something is a skeleton, never the empty state,
+// which lives on /environments.
 function Home() {
   const t = useT();
-  useDocumentTitle(t("shell.home.tabTitle"));
-  const canAdd = usePermission("environments.write");
-  const environments = useQuery(environmentsQuery);
+  const recent = useQuery({ ...recentQuery, staleTime: FRESH_MS, retry: false });
+  const list = useQuery({ ...environmentsQuery, staleTime: FRESH_MS, retry: false });
 
-  if (environments.isError) {
-    return (
-      <Alert variant="destructive">
-        <AlertDescription>{t("common.errors.unreachable")}</AlertDescription>
-      </Alert>
-    );
+  const settled = [recent, list].every((q) => !q.isPending && !q.isFetching);
+  if (settled) {
+    const readable = new Set((list.data?.items ?? []).map((e) => e.id));
+    const target = (recent.data ?? []).find((id) => readable.has(id));
+    if (target) return <Navigate to="/env/$envId" params={{ envId: target }} replace />;
+    return <Navigate to="/environments" replace />;
   }
-  // Nothing until the list has answered, so the empty state never flashes up
-  // for someone who has environments.
-  if (!environments.data) return null;
-  const first = (environments.data.items ?? [])[0];
-  if (first) return <Navigate to="/env/$envId" params={{ envId: first.id }} replace />;
 
   return (
-    <div className="mx-auto flex w-full max-w-120 flex-col gap-6">
-      <Empty>
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <Server aria-hidden="true" />
-          </EmptyMedia>
-          <EmptyTitle>{t("env.empty.heading")}</EmptyTitle>
-          <EmptyDescription>{t("env.empty.body")}</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-      {canAdd ? (
-        <Card className="py-6">
-          <CardContent className="px-6">
-            <LocalHostPanel mode="settings" />
-          </CardContent>
-        </Card>
-      ) : (
-        <p className="text-center text-sm text-muted-foreground">{t("env.empty.noPermission")}</p>
-      )}
-    </div>
+    <output
+      aria-label={t("overview.loading")}
+      className="mx-auto flex w-full max-w-7xl flex-col gap-4"
+    >
+      <Skeleton className="h-8 w-48" aria-hidden="true" />
+      <Skeleton className="h-48 w-full" aria-hidden="true" />
+    </output>
   );
 }
 
 export const Route = createFileRoute("/_app/")({
-  // A signed-in user with an environment lands on its dashboard (ENV-07). A
-  // list that cannot be read falls through to the page, which says so.
-  beforeLoad: async () => {
-    let first: string | undefined;
-    try {
-      // A short staleTime: the list is read again when it is older than that,
-      // so a host that was removed does not send the user back to a missing
-      // dashboard.
-      const list = await queryClient.fetchQuery({
-        ...environmentsQuery,
-        staleTime: 5_000,
-        retry: false,
-      });
-      first = list.items?.[0]?.id;
-    } catch {
-      return;
-    }
-    if (first) throw redirect({ to: "/env/$envId", params: { envId: first } });
-  },
   component: Home,
 });

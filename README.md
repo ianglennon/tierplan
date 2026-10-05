@@ -96,6 +96,7 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `BAYPLAN_LISTEN` | `:7480` | no | Address to listen on, as `host:port` or `:port`. |
 | `BAYPLAN_DATA_DIR` | `/data` | no | Directory for the database, the encryption key and the TLS certificate. |
 | `BAYPLAN_PUBLIC_URL` | unset | no | Externally visible base URL, for example `https://bayplan.example.com`. Locks the stored value (see [Public URL](#public-url)). |
+| `BAYPLAN_AGENT_URL` | unset | no | Address agents dial when it differs from the public URL, for example an internal host name or a LAN address such as `https://bayplan.internal:7480`. Locks the stored value; the API answers `409 agent_url_locked`. Unset means agents dial the public URL. |
 | `BAYPLAN_ENCRYPTION_KEY` | generated | yes | Key for secrets at rest and the audit chain: 32 random bytes as standard base64. When unset, a key is generated in `/data/bayplan.key`. |
 | `BAYPLAN_TRUSTED_PROXIES` | unset | no | Comma-separated IPs or CIDRs of reverse proxies whose forwarded headers are believed. |
 | `BAYPLAN_LOGIN_MAX_FAILURES` | `5` | no | Failed sign-ins before an account locks. |
@@ -108,6 +109,12 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `BAYPLAN_TLS_KEY_FILE` | unset | no | Path to the TLS private key in PEM form. Needs `BAYPLAN_TLS_CERT_FILE`. |
 | `BAYPLAN_TLS_SELF_SIGNED` | `false` | no | Serve a generated self-signed certificate. Cannot be combined with the two file settings. |
 | `BAYPLAN_DOCKER_GID` | detected | no | Group ID of the Docker socket, overriding detection. |
+| `BAYPLAN_AGENT_HEARTBEAT_INTERVAL` | `10s` | no | How often each agent sends a heartbeat; the value is sent to the agent when it connects. |
+| `BAYPLAN_AGENT_OFFLINE_AFTER` | `30s` | no | Silence after which an agent connection is closed and the agent counts as offline. At least twice the heartbeat interval. |
+| `BAYPLAN_AGENT_RECONNECT_GRACE` | `60s` | no | After Bayplan starts, how long an environment shows "Reconnecting" instead of offline while its agents come back. |
+| `BAYPLAN_FAILING_SERVICE_GRACE` | `2m` | no | How long after a swarm service was updated it is not counted as failing, so a rolling update does not show as a failure. |
+| `BAYPLAN_AGENT_ALLOW_INSECURE` | `false` | no | Development only. Lets agents connect over plain `ws://` to an agent address that is not this machine (an `https` public or agent URL, or an `http` one for another host), which sends join tokens and Docker answers unencrypted. Without it Bayplan refuses those connections and refuses to hand out such an address (`insecure_agent_url`); a plain address on this machine needs no switch. While it is on, the install commands for a plain `ws://` address also set `BAYPLAN_AGENT_ALLOW_INSECURE=true` on the agent, which otherwise refuses plain `ws://` to another host. Agents on such a session refuse remote update and uninstall (`insecure_session`). |
+| `BAYPLAN_AGENT_CONNECT_BURST` | `200` | no | How many connection attempts one client address may make at once on the agent endpoint, then one more every 100 ms. Sized so a whole swarm behind one NAT can reconnect together. At most 16 handshakes from one address run at once, and an agent must answer the challenge within 3 s. |
 | `BAYPLAN_LOG_LEVEL` | `info` | no | `debug`, `info`, `warn` or `error`. Logs are JSON on standard error. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | no | Docker daemon address; `unix://` only. Pointing it at a different daemon still shows the "Bayplan (this instance)" badge on the one Bayplan runs in. |
 
@@ -137,7 +144,15 @@ Set `BAYPLAN_PUBLIC_URL` to the address people type, and list the proxy in `BAYP
 - compression of `text/event-stream` holds events back (Bayplan itself never compresses it);
 - the proxy must pass `Origin` and `Host` through unchanged.
 
-This build ships no proxy-specific configuration; treat the notes above as the contract.
+[docs/reverse-proxy.md](docs/reverse-proxy.md) has working Caddy, nginx and Traefik configurations at the root of a host and at a subpath, says which forwarded headers Bayplan believes and which it ignores, and explains the proxy warnings that appear in the bell. `make proxy-smoke` tests all three.
+
+## Add a remote host or swarm
+
+Bayplan reaches a remote Docker host or swarm through a small agent that you install there with one command. The agent dials out to Bayplan, so the host opens no inbound port and exposes no Docker socket on the network. In **Environments**, choose **Add environment**, copy the swarm or standalone command it shows, and run it on a swarm manager or on the host. The page watches for the agent and opens the environment when it connects.
+
+Bayplan needs to be reachable from the host over `wss://` with a certificate the agent can check: a certificate from a public CA, Bayplan's own self-signed certificate (the command carries its pin), or a proxy's private certificate (give the agent `BAYPLAN_AGENT_PIN`). Behind a reverse proxy the proxy must pass WebSocket upgrades on `/agent/connect` and be listed in `BAYPLAN_TRUSTED_PROXIES`; see [docs/reverse-proxy.md](docs/reverse-proxy.md).
+
+[docs/agent.md](docs/agent.md) is the operator's guide: the swarm and standalone installs and what each flag does, rotating the join token, the read-only and self-update settings, private-CA proxies, what every connection problem means and how to fix it, cloned machines, revoking a node, and removing the agent again.
 
 ## Data and backups
 
@@ -175,5 +190,8 @@ The source code, version and commit are linked from **Settings > About**, as the
 
 - [SECURITY.md](SECURITY.md): reporting a vulnerability, privately.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and sending changes.
+- [docs/reverse-proxy.md](docs/reverse-proxy.md): running Bayplan behind Caddy, nginx or Traefik, at the root or a subpath.
+- [docs/agent.md](docs/agent.md): installing, securing, troubleshooting and removing the agent on a remote host or swarm.
+- [docs/agent-updates.md](docs/agent-updates.md): updating and removing agents by hand.
 - [docs/threat-model.md](docs/threat-model.md): what Bayplan protects, what it does not, and the risks that remain.
 - [docs/release-checklist.md](docs/release-checklist.md): how a release is cut.

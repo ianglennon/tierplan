@@ -14,7 +14,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 )
@@ -35,18 +35,19 @@ const (
 	recentEventsLimit = 50
 )
 
-// EventsSource is what the events routes read. *envs.Hub implements it.
+// EventsSource is what the events routes read: the events of an environment,
+// whichever target they come from. *envs.Aggregator implements it.
 type EventsSource interface {
-	// Subscribe returns the buffered events, oldest first, and the channel of
-	// the ones that follow; see envs.Hub.Subscribe.
-	Subscribe(ctx context.Context, envID string) (backlog []dockerx.EventRow, ch <-chan dockerx.EventRow, cancel func())
+	// Events returns the buffered events, oldest first, and the channel of the
+	// ones that follow; see envs.Aggregator.Events.
+	Events(ctx context.Context, envID string) (backlog []envs.NodeEvent, ch <-chan envs.NodeEvent, cancel func())
 	// Recent returns up to n buffered events, newest first.
-	Recent(envID string, n int) []dockerx.EventRow
+	Recent(ctx context.Context, envID string, n int) []envs.NodeEvent
 }
 
 // EventsDeps are the dependencies of the events routes.
 type EventsDeps struct {
-	Hub EventsSource
+	Aggregator EventsSource
 	// Heartbeat is how often an idle stream gets a comment line. Zero means 15
 	// seconds; tests shorten it.
 	Heartbeat time.Duration
@@ -64,9 +65,10 @@ type EventsDeps struct {
 // environment: only name, image and exit code survive from Docker's attributes
 // (T-01-88).
 type EventDTO struct {
+	Node       string            `json:"node" doc:"The node the event happened on; for a row of Bayplan's own, the node it concerns, such as the manager that took over"`
 	ID         string            `json:"id" doc:"A stable ID for the event; the SSE frame id, and what a repeated event is recognised by"`
 	Time       string            `json:"time" format:"date-time" doc:"When it happened, in UTC, with sub-second precision"`
-	Type       string            `json:"type" enum:"container,image,network,volume" doc:"What kind of object it is about"`
+	Type       string            `json:"type" enum:"container,image,network,volume,bayplan" doc:"What kind of object it is about. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event"`
 	Action     string            `json:"action" doc:"What happened, for example start, die, pull, connect or create"`
 	ActorID    string            `json:"actorId" doc:"The ID of the container, image, network or volume"`
 	Name       string            `json:"name" doc:"The container, image, network or volume name; empty when Docker gave none"`
@@ -84,13 +86,13 @@ type EventListOutput struct {
 	Body         EventListBody
 }
 
-func eventDTO(r dockerx.EventRow) EventDTO {
+func eventDTO(r envs.NodeEvent) EventDTO {
 	attrs := r.Attributes
 	if attrs == nil {
 		attrs = map[string]string{}
 	}
 	return EventDTO{
-		ID: r.ID, Time: r.Time.UTC().Format(time.RFC3339Nano), Type: r.Type, Action: r.Action,
+		Node: r.Node, ID: r.ID, Time: r.Time.UTC().Format(time.RFC3339Nano), Type: r.Type, Action: r.Action,
 		ActorID: r.ActorID, Name: r.Name, Attributes: attrs,
 	}
 }
@@ -153,8 +155,8 @@ func RegisterEvents(r *httpx.Router, d EventsDeps) {
 			"empty after a restart until Docker reports something, apart from what the daemon still remembers from " +
 			"the last hour. The live version of this list is a server-sent events stream with the same event data.",
 		Tags: []string{"environments"},
-	}, need, func(_ context.Context, in *EnvironmentPathInput) (*EventListOutput, error) {
-		rows := d.Hub.Recent(in.EnvID, recentEventsLimit)
+	}, need, func(ctx context.Context, in *EnvironmentPathInput) (*EventListOutput, error) {
+		rows := d.Aggregator.Recent(ctx, in.EnvID, recentEventsLimit)
 		items := make([]EventDTO, 0, len(rows))
 		for _, row := range rows {
 			items = append(items, eventDTO(row))
@@ -195,7 +197,7 @@ func serveEventStream(w http.ResponseWriter, req *http.Request, d EventsDeps, li
 	}
 	defer release()
 
-	backlog, ch, cancel := d.Hub.Subscribe(ctx, env.ID)
+	backlog, ch, cancel := d.Aggregator.Events(ctx, env.ID)
 	defer cancel()
 	if last := req.Header.Get("Last-Event-ID"); last != "" {
 		// Only what the browser has not seen. An ID the buffer no longer holds
@@ -226,7 +228,7 @@ func serveEventStream(w http.ResponseWriter, req *http.Request, d EventsDeps, li
 		return
 	}
 
-	send := func(row dockerx.EventRow) bool {
+	send := func(row envs.NodeEvent) bool {
 		data, err := json.Marshal(eventDTO(row))
 		if err != nil {
 			d.Log.Error("encode an event", "error", err)

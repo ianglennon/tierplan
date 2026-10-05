@@ -94,7 +94,7 @@ func newSetupFixtureThrottled(t *testing.T, cfg config.Config, wrap func(*audit.
 
 	clk := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	site := fstest.MapFS{"index.html": {Data: []byte(indexHTML)}}
-	spa := webui.Handler(site)
+	spa := webui.Handler(site, nil)
 	r := httpx.New(httpx.Options{Fallback: spa, Auditor: aud, Logger: log, PublicOrigin: inst.PublicOrigin})
 	var throttle *auth.AuditThrottle
 	var anonAudit httpx.Auditor
@@ -317,6 +317,27 @@ func TestSetupTokenSixthAttemptInAMinuteIsRateLimitedAndAudited(t *testing.T) {
 	f.clk.t = f.clk.t.Add(13 * time.Second)
 	if rec := f.postToken(t, f.token); rec.Code != http.StatusOK {
 		t.Fatalf("after the refill = %d, want 200", rec.Code)
+	}
+}
+
+// Behind a subpath the browser follows the redirect literally, so it must carry
+// the base: a Location of "/login" leaves the application and lands on whatever
+// the proxy serves at the root (found by the plan 02-32 end-to-end run behind
+// Caddy at /bayplan, where it showed a blank page).
+func TestSetupPageRedirectsToTheLoginPageUnderTheBasePath(t *testing.T) {
+	for name, tc := range map[string]struct{ url, want string }{
+		"no public url":   {url: "", want: "/login"},
+		"root":            {url: "https://bayplan.example.com", want: "/login"},
+		"under a subpath": {url: "https://example.com/bayplan", want: "/bayplan/login"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSetupFixture(t, config.Config{PublicURL: tc.url})
+			f.addUser(t)
+			rec := f.get(t, "/setup")
+			if rec.Code != http.StatusFound || rec.Header().Get("Location") != tc.want {
+				t.Fatalf("GET /setup = %d Location %q, want 302 %s", rec.Code, rec.Header().Get("Location"), tc.want)
+			}
+		})
 	}
 }
 

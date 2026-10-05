@@ -152,3 +152,21 @@ func TestIPLimiterCapRefusesNewKeysWhenFullAndSweepsIdleOnes(t *testing.T) {
 		t.Fatalf("Len after the sweep = %d, want 1", got)
 	}
 }
+
+func TestAddrKeyNormalisesLikeTheLimiter(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"an IPv6 address becomes its /64 prefix", "2001:db8:1:2::ffff", "2001:db8:1:2::/64"},
+		{"another address of the same /64 gives the same key", "2001:db8:1:2:a:b:c:d", "2001:db8:1:2::/64"},
+		{"an IPv4-mapped address becomes its IPv4 text", "::ffff:198.51.100.9", "198.51.100.9"},
+		{"an IPv4 address is unchanged", "198.51.100.9", "198.51.100.9"},
+		{"a zone is dropped", "fe80::1%eth0", "fe80::/64"},
+		{"a text that is not an address is unchanged", "id-admin", "id-admin"},
+		{"an empty text is unchanged", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := auth.AddrKey(tc.in); got != tc.want {
+				t.Errorf("AddrKey(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

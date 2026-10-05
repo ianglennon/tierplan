@@ -58,7 +58,12 @@ func NewSnapshots(m *Monitor, ttl time.Duration, now func() time.Time) *Snapshot
 	if now == nil {
 		now = time.Now
 	}
-	return &Snapshots{mon: m, ttl: ttl, now: now, entries: map[string]*snapEntry{}}
+	s := &Snapshots{mon: m, ttl: ttl, now: now, entries: map[string]*snapEntry{}}
+	// A target that stops being monitored (an agent that left, a replaced session,
+	// a removed environment) must not leave its snapshot behind: the cache is keyed
+	// by target and would otherwise grow with every agent that ever connected.
+	m.watch(func(string) {}, s.Invalidate)
+	return s
 }
 
 // Get returns the snapshot of envID together with its status. A cached

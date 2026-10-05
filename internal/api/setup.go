@@ -236,7 +236,9 @@ func RegisterSetup(r *httpx.Router, d SetupDeps) {
 		}
 		if !needs {
 			w.Header().Set("Cache-Control", "no-store")
-			http.Redirect(w, req, "/login", http.StatusFound)
+			// The browser follows this literally, so under a subpath it must carry
+			// the base or it leaves the application (D-50).
+			http.Redirect(w, req, d.Instance.BasePath()+"/login", http.StatusFound)
 			return
 		}
 		if d.SPA == nil {
@@ -416,7 +418,7 @@ func (d SetupDeps) complete(ctx context.Context, in *CompleteSetupInput) (*Compl
 	d.Instance.Apply(c.instanceName, c.publicURL)
 
 	return &CompleteSetupOutput{
-		SetCookie:    d.Sessions.Cookie(rawSession, false, d.Instance.Secure()),
+		SetCookie:    d.Sessions.Cookie(rawSession, false, d.Instance.CookieScope()),
 		CacheControl: "no-store",
 		Body: CompleteSetupBody{
 			User:            SetupUserBody{ID: id, Username: c.username, Role: rbac.AdminRoleID},

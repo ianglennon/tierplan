@@ -2,8 +2,10 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Link, type LinkProps } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -21,15 +23,32 @@ interface CountTileProps {
   loading?: boolean;
   // The value shows "—" when the count could not be read.
   error?: boolean;
+  // A swarm's per-node share of the value, for a tooltip on desktop. Radix
+  // tooltips ignore touch, and the trigger is the tile itself, so this adds no
+  // tap target and no second tab stop (UI-SPEC: per-node breakdown on touch).
+  breakdown?: { node: string; value: number }[];
 }
+
+// How many nodes the tooltip lists before it counts the rest.
+const BREAKDOWN_LINES = 8;
 
 const FRAME =
   "flex flex-col gap-1 rounded-xl bg-card p-4 text-card-foreground ring-1 ring-foreground/10";
 
 // CountTile is one number on the dashboard: label, value and an optional
 // sub-line.
-export function CountTile({ label, value, subline, to, params, loading, error }: CountTileProps) {
+export function CountTile({
+  label,
+  value,
+  subline,
+  to,
+  params,
+  loading,
+  error,
+  breakdown,
+}: CountTileProps) {
   const t = useT();
+  const [open, setOpen] = useState(false);
   const shown =
     error || value === undefined
       ? t("dashboard.engine.missing")
@@ -48,24 +67,42 @@ export function CountTile({ label, value, subline, to, params, loading, error }:
     </>
   );
 
-  if (to) {
-    return (
-      <Link
-        to={to}
-        params={params}
-        aria-busy={loading || undefined}
-        className={cn(
-          FRAME,
-          "transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-        )}
-      >
-        {body}
-      </Link>
-    );
-  }
-  return (
+  const tile = to ? (
+    <Link
+      to={to}
+      params={params}
+      aria-busy={loading || undefined}
+      className={cn(
+        FRAME,
+        "transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+      )}
+    >
+      {body}
+    </Link>
+  ) : (
     <div aria-busy={loading || undefined} className={FRAME}>
       {body}
     </div>
+  );
+
+  // The tile is always inside the Tooltip, open only when there is something to
+  // list, so it keeps its place in the tree (and the focus a keyboard user gave
+  // it) when the counts arrive after the first render.
+  const lines = loading || error ? [] : (breakdown ?? []);
+  const listed = lines.slice(0, BREAKDOWN_LINES);
+  const rest = lines.length - listed.length;
+  // Node names come from agents and are placed as text (T-02-75).
+  return (
+    <Tooltip open={lines.length > 0 && open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>{tile}</TooltipTrigger>
+      <TooltipContent className="max-w-80 flex-col items-start gap-0.5 break-words">
+        {listed.map((b) => (
+          <span key={b.node}>
+            {t("aggregate.tiles.breakdownLine", { node: b.node, count: b.value })}
+          </span>
+        ))}
+        {rest > 0 ? <span>{t("aggregate.tiles.breakdownMore", { count: rest })}</span> : null}
+      </TooltipContent>
+    </Tooltip>
   );
 }

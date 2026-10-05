@@ -5,7 +5,12 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { type Column, type ListQuery, ResourceTable } from "@/features/resources/resource-table";
+import {
+  type Column,
+  type ListQuery,
+  ResourceTable,
+  TruncatedText,
+} from "@/features/resources/resource-table";
 import "@/i18n";
 
 interface Row {
@@ -148,5 +153,164 @@ describe("ResourceTable", () => {
   it("does not mention a cap when the list is complete", () => {
     show(query({ data: { items: [{ id: "a", name: "alpha" }], total: 1, truncated: false } }));
     expect(screen.queryByText(/Showing the first/)).toBeNull();
+  });
+});
+
+// The swarm lists (plan 22, D-46): a Node column after Name, the Node select,
+// the caption across nodes and the banner slot.
+describe("ResourceTable on a swarm", () => {
+  const NODE: Column<Row> = { id: "node", header: "Node", cell: (r) => `host-of-${r.id}` };
+
+  function swarm(
+    q: ListQuery<Row>,
+    over: Partial<{
+      value: string;
+      onChange: (n: string | undefined) => void;
+      banner: React.ReactNode;
+      envName: string;
+    }> = {},
+  ) {
+    render(
+      <TooltipProvider>
+        <ResourceTable
+          resource="containers"
+          columns={COLUMNS}
+          query={q}
+          envName={over.envName ?? "Lab swarm"}
+          getRowKey={(r) => r.id}
+          nodeColumn={NODE}
+          nodeFilter={{ value: over.value, onChange: over.onChange ?? (() => undefined) }}
+          banner={over.banner}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  const rows = (n: number): Row[] =>
+    Array.from({ length: n }, (_, i) => ({ id: `r${i}`, name: `c${i}` }));
+
+  function openNodeSelect() {
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Node" }), { key: "Enter" });
+  }
+
+  it("puts the Node column right after the first column", () => {
+    swarm(query({ data: { items: rows(2), total: 2, truncated: false, nodes: ["a", "b"] } }));
+    const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(headers).toEqual(["Name", "Node", "ID"]);
+    const first = within(screen.getAllByRole("row")[1] as HTMLElement)
+      .getAllByRole("cell")
+      .map((c) => c.textContent);
+    expect(first).toEqual(["c0", "host-of-r0", "r0"]);
+  });
+
+  it("counts across the nodes that reported, in the singular and the plural", () => {
+    swarm(query({ data: { items: rows(1), total: 12, truncated: false, nodes: ["a", "b", "c"] } }));
+    expect(screen.getByText("12 containers across 3 nodes")).toBeTruthy();
+    cleanup();
+    swarm(query({ data: { items: rows(1), total: 1, truncated: false, nodes: ["a"] } }));
+    expect(screen.getByText("1 container across 1 node")).toBeTruthy();
+  });
+
+  it("does not count the swarm-wide Cluster entry as a node", () => {
+    swarm(
+      query({ data: { items: rows(1), total: 5, truncated: false, nodes: ["Cluster", "a", "b"] } }),
+    );
+    expect(screen.getByText("5 containers across 2 nodes")).toBeTruthy();
+  });
+
+  it("says the count is on one node while a node is chosen", () => {
+    swarm(query({ data: { items: rows(2), total: 4, truncated: false, nodes: ["n1", "n2"] } }), {
+      value: "n2",
+    });
+    expect(screen.getByText("4 containers on n2")).toBeTruthy();
+    expect(screen.queryByText(/across/)).toBeNull();
+  });
+
+  it("falls back to the plain count when no node reported", () => {
+    swarm(query({ data: { items: [], total: 0, truncated: false, nodes: [] } }));
+    expect(screen.getByText("0 containers")).toBeTruthy();
+  });
+
+  it("offers All nodes and each node, and reports the choice", () => {
+    const onChange = vi.fn();
+    swarm(
+      query({ data: { items: rows(1), total: 1, truncated: false, nodes: ["n1", "n2", "n3"] } }),
+      { onChange },
+    );
+    expect(screen.getByRole("combobox", { name: "Node" }).textContent).toContain("All nodes");
+    openNodeSelect();
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["All nodes", "n1", "n2", "n3"]);
+    fireEvent.keyDown(screen.getByRole("option", { name: "n2" }), { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("n2");
+  });
+
+  it("goes back to all nodes with undefined", () => {
+    const onChange = vi.fn();
+    swarm(query({ data: { items: rows(1), total: 1, truncated: false, nodes: ["n1", "n2"] } }), {
+      value: "n2",
+      onChange,
+    });
+    expect(screen.getByRole("combobox", { name: "Node" }).textContent).toContain("n2");
+    openNodeSelect();
+    fireEvent.keyDown(screen.getByRole("option", { name: "All nodes" }), { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith(undefined);
+  });
+
+  it("keeps a node that is in the URL but not reported as the chosen one", () => {
+    swarm(query({ data: { items: [], total: 0, truncated: false, nodes: ["n1"] } }), {
+      value: "gone",
+    });
+    expect(screen.getByRole("combobox", { name: "Node" }).textContent).toContain("gone");
+  });
+
+  it("names the node in the empty state and keeps the filter", () => {
+    swarm(query({ data: { items: [], total: 0, truncated: false, nodes: ["n1", "n2"] } }), {
+      value: "n2",
+    });
+    expect(screen.getByText("No containers")).toBeTruthy();
+    expect(screen.getByText("Nothing to show on n2 right now.")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Node" })).toBeTruthy();
+  });
+
+  it("keeps the Node column and the filter while loading, with 8 skeleton rows", () => {
+    swarm(query({ isPending: true }));
+    expect(screen.getAllByRole("row")).toHaveLength(9);
+    expect(screen.getByRole("columnheader", { name: "Node" })).toBeTruthy();
+    const filter = screen.getByRole("combobox", { name: "Node" }) as HTMLButtonElement;
+    expect(filter.disabled).toBe(false);
+  });
+
+  it("shows the banner above the filter and the table", () => {
+    swarm(query({ data: { items: rows(1), total: 1, truncated: false, nodes: ["n1"] } }), {
+      banner: <p>banner here</p>,
+    });
+    const banner = screen.getByText("banner here");
+    const filter = screen.getByRole("combobox", { name: "Node" });
+    const table = screen.getByRole("table");
+    expect(banner.compareDocumentPosition(filter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(filter.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("truncates a long node name in the column through TruncatedText", () => {
+    const long = "a-very-long-node-host-name.example.internal".repeat(3);
+    render(
+      <TooltipProvider>
+        <ResourceTable
+          resource="containers"
+          columns={COLUMNS}
+          query={query({ data: { items: rows(1), total: 1, truncated: false, nodes: [long] } })}
+          envName="Lab"
+          getRowKey={(r) => r.id}
+          nodeColumn={{
+            id: "node",
+            header: "Node",
+            cell: () => <TruncatedText>{long}</TruncatedText>,
+          }}
+          nodeFilter={{ onChange: () => undefined }}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText(long).className).toContain("truncate");
   });
 });

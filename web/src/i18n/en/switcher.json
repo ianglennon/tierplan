@@ -1,0 +1,18 @@
+{
+  "switcher": {
+    "filter": "Find an environment…",
+    "recent": "Recent",
+    "environments": "Environments",
+    "all": "All environments",
+    "manage": "Manage environments",
+    "noMatch": "No environments match “{{query}}”.",
+    "loadFailed": "Couldn't load environments",
+    "loading": "Loading environments",
+    "shortcut": "Shortcut",
+    "palette": {
+      "title": "Switch environment",
+      "description": "Choose an environment to open. Type to filter the list.",
+      "placeholder": "Jump to an environment…"
+    }
+  }
+}

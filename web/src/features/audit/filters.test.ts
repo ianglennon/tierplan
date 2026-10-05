@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import audit from "@/i18n/en/audit.json";
+import { resetBasePathForTests } from "@/lib/base-path";
 import {
   actionLabel,
   auditSearchSchema,
@@ -117,6 +118,41 @@ describe("actionLabel", () => {
   });
 });
 
+describe("the agent and environment lifecycle actions (D-13)", () => {
+  const D13 = [
+    "agent.enrolled",
+    "agent.enrol_refused",
+    "agent.cert_renewed",
+    "agent.revoked",
+    "agent.blocked",
+    "agent.unblocked",
+    "agent.auto_revoked",
+    "agent.updated",
+    "agent.update_failed",
+    "agent.uninstalled",
+    "agent.policy_denied",
+    "environment.token_rotated",
+    "environment.token_disabled",
+    "environment.failover",
+    "environment.cluster_adopted",
+    "environment.local_folded",
+    "environment.auto_update_changed",
+  ];
+
+  it("lists every one in the Action filter", () => {
+    for (const key of D13) expect(KNOWN_ACTIONS, key).toContain(key);
+  });
+
+  it("names every one with its own audit.json label, not the raw key", () => {
+    const labels = audit.audit.actions as Record<string, Record<string, string>>;
+    for (const key of D13) {
+      const [area, name] = key.split(".") as [string, string];
+      expect(labels[area]?.[name], key).toBeTruthy();
+      expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);
+    }
+  });
+});
+
 describe("exportUrl and listParams", () => {
   it("builds the export URL with exactly the filters the list uses", () => {
     const search = auditSearchSchema.parse({ user: "admin", action: ["auth.login"], range: "1h" });
@@ -128,6 +164,24 @@ describe("exportUrl and listParams", () => {
     filters.delete("format");
     expect([...filters.entries()].sort()).toEqual([...list.entries()].sort());
     expect(filters.get("from")).toBe("2026-10-02T11:00:00.000Z");
+  });
+
+  it("puts the served base path in front of the export URL", () => {
+    const meta = document.createElement("meta");
+    meta.name = "bayplan-base";
+    meta.content = "/bayplan";
+    document.head.append(meta);
+    resetBasePathForTests();
+    try {
+      const search = auditSearchSchema.parse({ user: "admin", range: "1h" });
+      const url = new URL(exportUrl("csv", search, NOW), "http://bayplan.test");
+      expect(url.pathname).toBe("/bayplan/api/audit/export");
+      expect(url.searchParams.get("format")).toBe("csv");
+      expect(url.searchParams.get("user")).toBe("admin");
+    } finally {
+      meta.remove();
+      resetBasePathForTests();
+    }
   });
 
   it("asks for JSON and sends no filters when there are none", () => {
