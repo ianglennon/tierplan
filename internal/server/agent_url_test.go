@@ -4,7 +4,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
@@ -179,6 +181,45 @@ func TestAPlainAgentURLForAnotherHostIsRefusedUnlessTheSwitchIsOn(t *testing.T) 
 			body, _ := io.ReadAll(resp.Body)
 			if resp.StatusCode != http.StatusForbidden || !strings.HasPrefix(string(body), wire.RefuseInsecureTransport) {
 				t.Fatalf("plain upgrade = %d %q, want 403 starting %s", resp.StatusCode, body, wire.RefuseInsecureTransport)
+			}
+		})
+	}
+}
+
+// Bayplan says at start when the address agents are given is plain http for a
+// host that is not this machine and its switch is off: agents refuse such an
+// address and so does Bayplan, so nothing could connect (G-02-R4-3).
+func TestBuildWarnsWhenAgentsWouldBeGivenAPlainAddressForAnotherHost(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want int
+	}{
+		{"plain public URL for another host, switch off", map[string]string{"BAYPLAN_PUBLIC_URL": "http://bayplan.test"}, 1},
+		{"plain public URL for another host, switch on", map[string]string{"BAYPLAN_PUBLIC_URL": "http://bayplan.test", "BAYPLAN_AGENT_ALLOW_INSECURE": "true"}, 0},
+		{"https public URL", map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.test"}, 0},
+		{"https public URL, plain agent URL on this machine", map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.test", "BAYPLAN_AGENT_URL": "http://127.0.0.1:7480"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+			var logs bytes.Buffer
+			srv, err := Build(context.Background(), testConfig(t, tc.env), slog.New(slog.NewJSONHandler(&logs, nil)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = srv.Close() })
+			got := 0
+			for _, line := range bytes.Split(logs.Bytes(), []byte("\n")) {
+				var rec struct {
+					Level string `json:"level"`
+					Msg   string `json:"msg"`
+				}
+				if json.Unmarshal(line, &rec) == nil && rec.Level == "WARN" && strings.HasPrefix(rec.Msg, "agents cannot connect") {
+					got++
+				}
+			}
+			if got != tc.want {
+				t.Fatalf("%d warnings starting %q, want %d; log:\n%s", got, "agents cannot connect", tc.want, logs.String())
 			}
 		})
 	}

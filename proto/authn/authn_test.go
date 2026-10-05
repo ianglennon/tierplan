@@ -177,3 +177,20 @@ func TestTheExporterLabelAndLengthAreFixedByTheProtocol(t *testing.T) {
 		t.Fatalf("EKMLabel %q, EKMLength %d", EKMLabel, EKMLength)
 	}
 }
+
+func TestLoopbackHostIsTheMachinesOwnAddressOnly(t *testing.T) {
+	for _, c := range []struct {
+		host string
+		want bool
+	}{
+		{"localhost", true}, {"LOCALHOST", true}, {"127.0.0.1", true}, {"127.1.2.3", true},
+		{"::1", true}, {"::ffff:127.0.0.1", true},
+		{"localhost.example", false}, {"127.0.0.1.example", false}, {"127.1", false}, {"0.0.0.0", false},
+		{"10.0.0.5", false}, {"192.168.1.10", false}, {"::ffff:192.168.1.10", false}, {"2001:db8::1", false},
+		{"", false},
+	} {
+		if got := LoopbackHost(c.host); got != c.want {
+			t.Errorf("LoopbackHost(%q) = %v, want %v", c.host, got, c.want)
+		}
+	}
+}

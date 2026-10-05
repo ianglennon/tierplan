@@ -127,10 +127,21 @@ type fixture struct {
 // the hub believes Bayplan's public URL is: a function of the server's address.
 func newFixture(t *testing.T, tlsOn bool, publicURL func(addr string) string) *fixture {
 	t.Helper()
+	return newConfiguredFixture(t, tlsOn, publicURL, slog.New(slog.DiscardHandler), nil)
+}
+
+// newConfiguredFixture is newFixture with the hub's logger chosen by the test and
+// a configure function applied to the hub before it serves, for the options that
+// must be set before the hub serves (WithAllowInsecure).
+func newConfiguredFixture(t *testing.T, tlsOn bool, publicURL func(addr string) string, log *slog.Logger, configure func(*tunnel.Hub) *tunnel.Hub) *fixture {
+	t.Helper()
 	f := &fixture{v: &fakeVerifier{}, o: newObserver()}
 	f.ts = httptest.NewUnstartedServer(nil)
 	addr := f.ts.Listener.Addr().String()
-	f.hub = tunnel.NewHub(f.v, f.o, slog.New(slog.DiscardHandler), nil).WithPublicURL(func() string { return publicURL(addr) })
+	f.hub = tunnel.NewHub(f.v, f.o, log, nil).WithPublicURL(func() string { return publicURL(addr) })
+	if configure != nil {
+		f.hub = configure(f.hub)
+	}
 	f.ts.Config.Handler = f.hub.Handler()
 	if tlsOn {
 		f.ts.StartTLS()
@@ -477,11 +488,67 @@ func TestPlainTransportIsRefusedWhenThePublicURLIsHTTPS(t *testing.T) {
 	}
 }
 
-func TestPlainTransportIsAcceptedWhenThePublicURLIsHTTP(t *testing.T) {
+// The httptest address is 127.0.0.1, so an http base on it is plain http on this
+// machine and needs no switch.
+func TestPlainTransportIsAcceptedWhenTheAgentAddressIsPlainHTTPOnThisMachine(t *testing.T) {
 	f := newFixture(t, false, sameAddr("http"))
 	ac := f.dial(t, hs{noEKM: true})
 	if ac.welcome == nil {
 		t.Fatalf("refused: %+v", ac.refuse)
+	}
+}
+
+// A plain http agent address for another host does not make plain transport
+// acceptable; only the development switch does (G-02-R4-3, T-02-139).
+func TestPlainTransportIsRefusedWhenTheAgentAddressIsPlainHTTPForAnotherHost(t *testing.T) {
+	log, rec := newRecordingLogger()
+	f := newConfiguredFixture(t, false, func(string) string { return "http://10.0.0.5:7480" }, log, nil)
+	_, resp, err := websocket.Dial(context.Background(), f.wsURL(), &websocket.DialOptions{Subprotocols: []string{wire.Subprotocol}}) //nolint:bodyclose // coder/websocket reads and closes the body of a refused upgrade itself
+	if err == nil {
+		t.Fatal("a plain ws:// connection was accepted for an agent address on another host")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("response = %v, want 403", resp)
+	}
+	if f.v.callCount() != 0 {
+		t.Error("the verifier was asked about a refused connection")
+	}
+	if got := rec.containing("BAYPLAN_AGENT_ALLOW_INSECURE"); len(got) != 1 || got[0].level != slog.LevelWarn {
+		t.Errorf("records naming the switch = %+v, want exactly one Warn", got)
+	}
+}
+
+func TestPlainTransportToAnotherHostIsAcceptedWithTheSwitch(t *testing.T) {
+	f := newConfiguredFixture(t, false, func(string) string { return "http://10.0.0.5:7480" }, slog.New(slog.DiscardHandler),
+		func(h *tunnel.Hub) *tunnel.Hub { return h.WithAllowInsecure(true) })
+	ac := f.dial(t, hs{aud: "10.0.0.5:7480", noEKM: true})
+	if ac.welcome == nil {
+		t.Fatalf("refused: %+v", ac.refuse)
+	}
+}
+
+func TestPlainAddressRefusedOnlyForPlainAddressesToAnotherHostWithoutTheSwitch(t *testing.T) {
+	for _, c := range []struct {
+		raw   string
+		allow bool
+		want  bool
+	}{
+		{"http://10.0.0.5:7480", false, true},
+		{"http://10.0.0.5:7480", true, false},
+		{"ws://10.0.0.5:7480/agent/connect", false, true},
+		{"HTTP://Bayplan.Example", false, true},
+		{"http://localhost.example", false, true},
+		{"http://127.0.0.1:7480", false, false},
+		{"ws://[::1]:7480/agent/connect", false, false},
+		{"http://localhost:5173", false, false},
+		{"https://bayplan.example", false, false},
+		{"wss://bayplan.example/agent/connect", false, false},
+		{"", false, false},
+		{"http://[::1", false, false}, // url.Parse refuses it
+	} {
+		if got := tunnel.PlainAddressRefused(c.raw, c.allow); got != c.want {
+			t.Errorf("PlainAddressRefused(%q, %v) = %v, want %v", c.raw, c.allow, got, c.want)
+		}
 	}
 }
 
