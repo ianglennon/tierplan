@@ -297,6 +297,61 @@ describe("InstallDialog add flow, step 1", () => {
   });
 });
 
+const insecureAgentUrlProblem = () =>
+  Response.json(
+    { status: 409, type: "insecure_agent_url", title: "Conflict" },
+    { status: 409, headers: { "Content-Type": "application/problem+json" } },
+  );
+
+// G-02-R4-3: a plain ws:// address for another host is refused by Bayplan and
+// by agents. The dialog says why, in its own words, and where to fix it.
+describe("InstallDialog insecure agent address", () => {
+  const generic = {
+    create:
+      "Couldn't create the environment. Try again, and check the Bayplan logs if it keeps happening.",
+    rotate:
+      "Couldn't generate a new token. Try again, and check the Bayplan logs if it keeps happening.",
+  };
+
+  it("explains the refusal when adding an environment, with a Settings link and no generic failure", async () => {
+    createResponse = insecureAgentUrlProblem;
+    await mount({ mode: "add" });
+    fireEvent.change(nameField(), { target: { value: "edge" } });
+    submit();
+    const alert = await screen.findByRole("alert");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(alert.textContent).toContain("plain ws://");
+    expect(alert.textContent).toContain("BAYPLAN_AGENT_ALLOW_INSECURE");
+    expect(alert.textContent).not.toContain(generic.create);
+    const link = within(alert).getByRole("link", { name: "Settings" });
+    expect(link.getAttribute("href")).toBe("/settings/general");
+    expect(screen.queryByRole("heading", { name: "Install the agent" })).toBeNull();
+    expect(nameField().matches(":disabled")).toBe(false);
+    expect(nameField().value).toBe("edge");
+  });
+
+  it("explains the refusal when rotating a token, without the generic rotate failure", async () => {
+    rotateResponse = insecureAgentUrlProblem;
+    await mount({ mode: "rotate", envId: "e1" });
+    fireEvent.click(screen.getByRole("button", { name: "Generate new token" }));
+    // The confirm step has its own notice, so pick the failure by its content.
+    const alert = await screen.findByText(/plain ws:\/\//, { selector: "[role=alert] *" });
+    const failure = alert.closest("[role=alert]") as HTMLElement;
+    expect(
+      screen.getAllByRole("alert").filter((a) => a.textContent?.includes("plain ws://")),
+    ).toHaveLength(1);
+    expect(failure.textContent).toContain("BAYPLAN_AGENT_ALLOW_INSECURE");
+    expect(
+      screen
+        .getAllByRole("alert")
+        .map((a) => a.textContent)
+        .join("|"),
+    ).not.toContain(generic.rotate);
+    expect(within(failure).getByRole("link", { name: "Settings" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Install the agent" })).toBeNull();
+  });
+});
+
 describe("InstallDialog step 2", () => {
   it("selects Swarm first and masks the token in the command", async () => {
     await mount({ mode: "add" });
