@@ -266,7 +266,14 @@ func hostOf(raw string) string {
 // dropped user can write there (the image smoke checks the file), and the
 // connected marker of a later plan lives beside it. It never creates the
 // directory: the image provides it with the right owner.
+// touchState makes the state directory private and writes the start marker.
+// The image creates the directory 0700, but a builder that keeps the mode of
+// the checkout (git stores none) leaves it 0755, so the agent, which owns it,
+// tightens it itself. It never creates the directory.
 func touchState(dir string) error {
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a directory needs its search bit; 0700 is owner-only
+		return err
+	}
 	return os.WriteFile(filepath.Join(dir, "started"), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
 }
 

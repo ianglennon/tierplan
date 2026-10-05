@@ -305,6 +305,26 @@ func TestTheStartMarkerLandsInTheStateDirectory(t *testing.T) {
 	}
 }
 
+// The image asks for a private state directory, but a builder or a release
+// tool may keep the mode of the checkout (git stores none), so the agent makes
+// its own directory private when it starts.
+func TestTheStateDirectoryIsMadePrivateAtStart(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // the test widens its own temporary directory on purpose
+		t.Fatal(err)
+	}
+	if err := touchState(dir); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Fatalf("state directory mode %v, want 0700", fi.Mode().Perm())
+	}
+}
+
 func TestTheStateDirectoryAndBackoffReachTheConnection(t *testing.T) {
 	h := &harness{}
 	d := h.deps(map[string]string{
