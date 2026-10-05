@@ -4077,7 +4077,7 @@
         ]
       },
       "post": {
-        "description": "Makes a new join token and retires the current one in the same transaction. The old install command stops enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents it carries the one-line rotate command. 404 environment_not_found; 409 public_url_required when Bayplan has no address to give agents. Needs environments.token. Audited as environment.token_rotated with the new generation.",
+        "description": "Makes a new join token and retires the current one in the same transaction. The old install command stops enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents it carries the one-line rotate command. 404 environment_not_found; 409 public_url_required when Bayplan has no address to give agents, and 409 insecure_agent_url when that address is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off; the current token stays in both cases. Needs environments.token. Audited as environment.token_rotated with the new generation.",
         "operationId": "rotateEnvironmentToken",
         "parameters": [
           {

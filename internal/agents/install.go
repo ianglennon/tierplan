@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
 // The names an installed agent identifies itself by. The self-update and uninstall
@@ -52,7 +54,10 @@ type InstallParams struct {
 	// only). With it on and a ws:// Endpoint, every install text also sets
 	// BAYPLAN_AGENT_ALLOW_INSECURE=true on the agent, which otherwise refuses to dial
 	// plain ws:// to another host (T-02-31). Nothing else may set it, and it never
-	// appears for a wss:// Endpoint.
+	// appears for a wss:// Endpoint. With it off, a ws:// Endpoint for a host that is
+	// not this machine is one agents refuse, so no install, manual update command or
+	// hint is built for it (ErrPlainEndpointRefused); a ws:// Endpoint on this machine
+	// needs no switch.
 	AllowInsecure bool
 }
 
@@ -116,10 +121,18 @@ func AgentImage(serverVersion string) string {
 // SecretName is the Docker secret that holds generation g of the join token.
 func SecretName(g int) string { return SecretPrefix + strconv.Itoa(g) }
 
+// ErrPlainEndpointRefused is returned by BuildInstall for an endpoint that is plain
+// ws:// for a host that is not this machine while the server's switch is off: agents
+// refuse such an address at start (plan 02-41), so no text may point them at it
+// (G-02-R4-3). The API checks first and answers 409 insecure_agent_url, so reaching
+// this error from there is a server bug.
+var ErrPlainEndpointRefused = errors.New("the agent endpoint is plain ws:// for a host that is not this machine, which agents refuse")
+
 // BuildInstall builds every install text for one join token. It refuses a token,
 // endpoint or pin that holds a quote, a control character or a space: they are
 // generated or normalised values and never contain one, so this is only a guard
-// against a shell or YAML injection if that ever changes (T-02-36).
+// against a shell or YAML injection if that ever changes (T-02-36). It also refuses
+// an endpoint agents would not dial (ErrPlainEndpointRefused).
 func BuildInstall(p InstallParams) (Install, error) {
 	if p.Generation < 1 {
 		return Install{}, fmt.Errorf("%w: the token generation starts at 1", ErrInstallValue)
@@ -131,6 +144,9 @@ func BuildInstall(p InstallParams) (Install, error) {
 		if !safeValue(v) {
 			return Install{}, fmt.Errorf("%w: the %s", ErrInstallValue, name)
 		}
+	}
+	if tunnel.PlainAddressRefused(p.Endpoint, p.AllowInsecure) {
+		return Install{}, ErrPlainEndpointRefused
 	}
 
 	image := AgentImage(p.ServerVersion)
@@ -199,7 +215,9 @@ func CleanupCommands(generation int) (swarm, standalone string) {
 // BAYPLAN_AGENT_ALLOW_INSECURE when the install had it (a development server and a
 // plain address, T-02-31), so a recreated dev agent keeps dialing; its state
 // volume already holds the agent's identity, so no join token goes in. An
-// unknown type, or a value that could escape its quotes, answers "".
+// unknown type, a value that could escape its quotes, or a standalone endpoint
+// agents refuse (plain ws:// for another host without the server's switch, see
+// ErrPlainEndpointRefused) answers "".
 func ManualUpdateCommand(envType, image string, p InstallParams) string {
 	if !safeValue(image) || !safeValue(p.Endpoint) || !safeValue(p.Pin) || strings.ContainsAny(image, "'\"$`\\ ") {
 		return ""
@@ -210,6 +228,9 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 	case "standalone":
 		if p.Endpoint == "" {
 			return "" // a recreated container with no address to dial would never connect
+		}
+		if tunnel.PlainAddressRefused(p.Endpoint, p.AllowInsecure) {
+			return "" // the recreated agent would refuse the address and exit at start
 		}
 		return " docker pull " + image + " && docker rm -f " + ServiceName +
 			" && docker run -d --name " + ServiceName + " --restart unless-stopped" +
@@ -227,7 +248,8 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 // UpdateHint is the sentence a version_incompatible refusal appends for an agent
 // that is too old: the manual command for the agent's environment type (D-25). An
 // agent that is too new needs the server updated, which no agent command fixes,
-// and an unknown type has no command, so both answer "". It carries no join
+// and an unknown type has no command, so both answer "", as does a standalone
+// agent whose address agents refuse (it follows ManualUpdateCommand). It carries no join
 // token: the refused agent either has its identity already or enrols again with
 // the token it was installed with.
 func UpdateHint(tooOld bool, envType string, p InstallParams) string {

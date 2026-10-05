@@ -317,7 +317,10 @@ type updateView struct {
 	command       func(role string) string
 }
 
-// updates builds the view the node list uses from the route's dependencies.
+// updates builds the view the node list uses from the route's dependencies. A
+// standalone agent's manual update command is empty (and the SPA shows none) when
+// the address agents are given is plain ws:// for another host with the switch off:
+// agents.ManualUpdateCommand answers "" there, so nothing is checked here.
 func (d AgentsDeps) updates() updateView {
 	version := cmpOr(d.ServerVersion, buildinfo.Get().Version)
 	v := updateView{serverVersion: version, command: func(role string) string {
@@ -417,7 +420,8 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 			"enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the " +
 			"install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents " +
 			"it carries the one-line rotate command. 404 environment_not_found; 409 " + problemPublicURLRequired + " when Bayplan has no " +
-			"address to give agents. Needs environments.token. Audited as environment.token_rotated with the new generation.",
+			"address to give agents, and 409 " + problemInsecureAgentURL + " when that address is plain ws:// for a host that is not this machine " +
+			"and BAYPLAN_AGENT_ALLOW_INSECURE is off; the current token stays in both cases. Needs environments.token. Audited as environment.token_rotated with the new generation.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsToken, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *TokenMutationInput) (*RotateTokenOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -436,6 +440,9 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		if endpoint == "" {
 			return nil, httpx.Problem(http.StatusConflict, problemPublicURLRequired,
 				"Bayplan has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with BAYPLAN_PUBLIC_URL or BAYPLAN_AGENT_URL.")
+		}
+		if tunnel.PlainAddressRefused(endpoint, d.AgentAllowInsecure) {
+			return nil, insecureAgentURLProblem()
 		}
 		rot, err := d.Agents.RotateToken(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent)
 		if err != nil {
