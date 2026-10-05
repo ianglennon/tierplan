@@ -381,9 +381,11 @@ func TestFirstStartEnrolsWithTheTokenAndKeepsItsIdentityOnTheVolume(t *testing.T
 	if got.AgentID != "agent-7" || got.EnvID != "env-7" || string(got.Cert) != "issued-cert-der" || !bytes.Equal(publicOf(got.Key), a.Pub) {
 		t.Fatalf("saved state = %+v; want the welcome's IDs and certificate and the key the handshake proved", got)
 	}
-	if _, err := os.Stat(filepath.Join(dir, state.ConnectedFile)); err != nil {
-		t.Errorf("no connected marker after the handshake: %v", err)
-	}
+	// The marker is written after the identity is saved, so wait for it too.
+	waitUntil(t, "the connected marker after the handshake", func() bool {
+		_, err := os.Stat(filepath.Join(dir, state.ConnectedFile))
+		return err == nil
+	})
 }
 
 func TestARestartReconnectsInHelloModeWithItsCertificateAndNoToken(t *testing.T) {
