@@ -4,6 +4,7 @@
 package agents_test
 
 import (
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -469,6 +470,7 @@ func TestCleanupCommandsAreTheOnesTheInstallGivesAndNameTheGivenSecretGeneration
 // (wss://, or no server switch) is free of it, the manual update included.
 func TestInstallCommandCarriesTheAgentSwitchOnlyForAPlainEndpointWithTheServerSwitch(t *testing.T) {
 	const plain = "ws://10.0.0.5:7480/agent/connect"
+	const loopback = "ws://127.0.0.1:7480/agent/connect"
 	const name = "BAYPLAN_AGENT_ALLOW_INSECURE"
 	cases := []struct {
 		label    string
@@ -478,7 +480,7 @@ func TestInstallCommandCarriesTheAgentSwitchOnlyForAPlainEndpointWithTheServerSw
 	}{
 		{"production: wss, no server switch", false, goldenEndpoint, false},
 		{"wss whatever the server switch", true, goldenEndpoint, false},
-		{"plain endpoint without the server switch", false, plain, false},
+		{"plain loopback endpoint without the server switch", false, loopback, false},
 		{"development: plain endpoint with the server switch", true, plain, true},
 	}
 	for _, tc := range cases {
@@ -550,6 +552,59 @@ func TestInstallCommandCarriesTheAgentSwitchOnlyForAPlainEndpointWithTheServerSw
 	for label, text := range allInstallText(mustBuild(t, goldenParams())) {
 		if strings.Contains(text, name) {
 			t.Errorf("golden %s carries %s", label, name)
+		}
+	}
+}
+
+// A plain ws:// endpoint for a host that is not this machine is one agents refuse at
+// start (plan 02-41) unless the server's development switch is on, so Bayplan builds
+// no text for it: BuildInstall refuses, and the standalone manual update and the
+// update hint built on it are empty. The swarm manual update carries no address (a
+// service update keeps the service's environment), so it stays. G-02-R4-3, T-02-144.
+func TestBuildInstallRefusesAPlainEndpointForAnotherHostWithoutTheServerSwitch(t *testing.T) {
+	const plain = "ws://10.0.0.5:7480/agent/connect"
+	p := goldenParams()
+	p.Endpoint, p.AllowInsecure = plain, false
+
+	if _, err := agents.BuildInstall(p); !errors.Is(err, agents.ErrPlainEndpointRefused) {
+		t.Fatalf("BuildInstall = %v, want ErrPlainEndpointRefused", err)
+	}
+	image := agents.AgentImage(p.ServerVersion)
+	if got := agents.ManualUpdateCommand("standalone", image, p); got != "" {
+		t.Errorf("the standalone manual update for a refused endpoint = %q, want none", got)
+	}
+	if got := agents.UpdateHint(true, "standalone", p); got != "" {
+		t.Errorf("the update hint for a refused endpoint = %q, want none", got)
+	}
+	if got := agents.ManualUpdateCommand("swarm", image, p); got != " docker service update --image "+image+" bayplan-agent" {
+		t.Errorf("the swarm manual update = %q, want the service update", got)
+	}
+	if got := agents.UpdateHint(true, "swarm", p); !strings.Contains(got, "docker service update") {
+		t.Errorf("the swarm update hint = %q, want the service update", got)
+	}
+
+	// The same endpoint builds with the development switch, and carries the agent's.
+	p.AllowInsecure = true
+	in := mustBuild(t, p)
+	if !strings.Contains(in.StandaloneCommand, "-e 'BAYPLAN_AGENT_ALLOW_INSECURE=true'") {
+		t.Errorf("the development install lacks the agent's switch:\n%s", in.StandaloneCommand)
+	}
+	if got := agents.ManualUpdateCommand("standalone", image, p); !strings.Contains(got, "docker run") {
+		t.Errorf("the development standalone manual update = %q, want a docker run", got)
+	}
+
+	// A plain endpoint on this machine builds without the switch, and so does https.
+	for _, endpoint := range []string{"ws://127.0.0.1:7480/agent/connect", "ws://localhost:7480/agent/connect", "ws://[::1]:7480/agent/connect", goldenEndpoint} {
+		p := goldenParams()
+		p.Endpoint = endpoint
+		in := mustBuild(t, p)
+		for label, text := range allInstallText(in) {
+			if strings.Contains(text, "BAYPLAN_AGENT_ALLOW_INSECURE") {
+				t.Errorf("%s for %s carries the agent's switch", label, endpoint)
+			}
+		}
+		if got := agents.ManualUpdateCommand("standalone", agents.AgentImage(p.ServerVersion), p); !strings.Contains(got, "docker run") {
+			t.Errorf("the standalone manual update for %s = %q, want a docker run", endpoint, got)
 		}
 	}
 }
