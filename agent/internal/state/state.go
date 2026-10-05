@@ -18,12 +18,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ianglennon/bayplan/proto/authn"
 )
 
 // File names inside the state directory.
@@ -261,7 +262,9 @@ func ValidPin(s string) bool {
 // is true. A plain address sends the join token, the proof and every Docker answer
 // unencrypted to a peer that was never authenticated, so it is dialed only on the
 // same machine or when the operator set BAYPLAN_AGENT_ALLOW_INSECURE on the agent
-// itself (T-02-31).
+// itself (T-02-31). The loopback rule is authn.LoopbackHost in proto/authn, the
+// same one Bayplan applies to the address it tells agents to dial, so the two ends
+// cannot disagree about which plain address is local.
 func DialableURL(s string, allowPlain bool) bool {
 	if !ValidURL(s) {
 		return false
@@ -270,18 +273,7 @@ func DialableURL(s string, allowPlain bool) bool {
 	if err != nil {
 		return false
 	}
-	return u.Scheme == "wss" || allowPlain || loopbackHost(u.Hostname())
-}
-
-// loopbackHost reports whether host (as url.URL.Hostname gives it, without IPv6
-// brackets) names this machine's loopback: localhost, 127.0.0.0/8, ::1 or an
-// IPv4-mapped loopback address.
-func loopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip, err := netip.ParseAddr(host)
-	return err == nil && ip.Unmap().IsLoopback()
+	return u.Scheme == "wss" || allowPlain || authn.LoopbackHost(u.Hostname())
 }
 
 // live reports whether e still counts at now.
