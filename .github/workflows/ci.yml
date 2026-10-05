@@ -76,6 +76,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm -C web install --frozen-lockfile
+      # The server tests serve the embedded SPA (TestBasePathInvariant checks the
+      # index under a base path), so web/dist must be built first.
+      - run: pnpm -C web build
       - run: make test
 
   gen-check:

@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/web"
 )
 
 // TestBasePathInvariant runs the same assertions at the root and under a base
@@ -31,6 +33,8 @@ func TestBasePathInvariant(t *testing.T) {
 		{"base over http", "http://bayplan.test/bayplan", "/bayplan", "bayplan_session", "/bayplan"},
 		{"base over https", "https://bayplan.test/bayplan", "/bayplan", "__Secure-bayplan_session", "/bayplan"},
 	}
+	_, err := fs.Stat(web.FS(), "index.html")
+	spaBuilt := err == nil
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := map[string]string{
@@ -64,23 +68,30 @@ func TestBasePathInvariant(t *testing.T) {
 				return rec
 			}
 
-			// A proxy that does not strip: the index is served under the base.
-			rec := do(http.MethodGet, tc.base+"/", "")
-			if rec.Code != http.StatusOK {
-				t.Fatalf("GET %s/ = %d", tc.base, rec.Code)
-			}
-			if want := `<meta name="bayplan-base" content="` + tc.base + `">`; !strings.Contains(rec.Body.String(), want) {
-				t.Errorf("index lacks %s:\n%s", want, rec.Body)
-			}
-			// A proxy that strips: the same index at the root.
-			if rec := do(http.MethodGet, "/", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bayplan-base") {
-				t.Errorf("GET / = %d", rec.Code)
-			}
-			// The base with no trailing slash.
-			if tc.base != "" {
-				if rec := do(http.MethodGet, tc.base, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bayplan-base") {
-					t.Errorf("GET %s = %d", tc.base, rec.Code)
+			// The index checks need the built SPA embedded from web/dist. A checkout
+			// without `make web` (the integration jobs) embeds only .gitkeep, so they
+			// are skipped there; the base path of the API and cookies is still checked.
+			if spaBuilt {
+				// A proxy that does not strip: the index is served under the base.
+				rec := do(http.MethodGet, tc.base+"/", "")
+				if rec.Code != http.StatusOK {
+					t.Fatalf("GET %s/ = %d", tc.base, rec.Code)
 				}
+				if want := `<meta name="bayplan-base" content="` + tc.base + `">`; !strings.Contains(rec.Body.String(), want) {
+					t.Errorf("index lacks %s:\n%s", want, rec.Body)
+				}
+				// A proxy that strips: the same index at the root.
+				if rec := do(http.MethodGet, "/", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bayplan-base") {
+					t.Errorf("GET / = %d", rec.Code)
+				}
+				// The base with no trailing slash.
+				if tc.base != "" {
+					if rec := do(http.MethodGet, tc.base, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bayplan-base") {
+						t.Errorf("GET %s = %d", tc.base, rec.Code)
+					}
+				}
+			} else {
+				t.Log("web/dist is not built (run make web); the SPA index checks are skipped")
 			}
 
 			// The API answers with and without the base.
@@ -95,7 +106,7 @@ func TestBasePathInvariant(t *testing.T) {
 			}
 
 			// Sign-in sets the cookie of the scope, scoped to the base.
-			rec = do(http.MethodPost, tc.base+"/api/auth/login", `{"username":"admin","password":"`+password+`"}`)
+			rec := do(http.MethodPost, tc.base+"/api/auth/login", `{"username":"admin","password":"`+password+`"}`)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("login = %d %s", rec.Code, rec.Body)
 			}
