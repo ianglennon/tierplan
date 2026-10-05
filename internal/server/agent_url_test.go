@@ -5,10 +5,18 @@ package server
 
 import (
 	"context"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"github.com/ianglennon/bayplan/proto/wire"
 )
 
 // The tunnel judges every agent connection against the address agents are told
@@ -74,5 +82,92 @@ func TestTheHubTellsAgentsTheEndpointFromTheAgentURLElseThePublicURL(t *testing.
 	}
 	if got := build(map[string]string{}).tunnel.URLs(); len(got) != 0 {
 		t.Errorf("no URL set: %v, want no address to hand out", got)
+	}
+}
+
+// Bayplan accepts plain ws:// for an agent address that is not this machine only
+// while its own development switch is on, the rule the agent applies to itself
+// since 02-41. Loopback is exempt on both ends, and an http public URL stays
+// legal for the UI: the refusal is keyed on the address agents are told to dial
+// (the agent URL, else the public URL), not on the scheme of the public URL
+// (G-02-R4-3, review WR-02).
+func TestAPlainAgentURLForAnotherHostIsRefusedUnlessTheSwitchIsOn(t *testing.T) {
+	cases := []struct {
+		name string
+		// env is added to the data dir and a public URL on the listener's address.
+		env      map[string]string
+		admitted bool
+	}{
+		{name: "plain to another host, switch off", env: map[string]string{"BAYPLAN_AGENT_URL": "http://10.0.0.5:7480"}},
+		{name: "plain to another host, switch on", env: map[string]string{"BAYPLAN_AGENT_URL": "http://10.0.0.5:7480", "BAYPLAN_AGENT_ALLOW_INSECURE": "true"}, admitted: true},
+		{name: "plain on this machine by address", env: map[string]string{}, admitted: true},
+		{name: "plain on this machine by name", env: map[string]string{"BAYPLAN_AGENT_URL": "http://localhost:7480"}, admitted: true},
+		{name: "https agent address, switch off", env: map[string]string{"BAYPLAN_AGENT_URL": "https://bayplan.test"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Skipf("cannot listen on loopback: %v", err)
+			}
+			ts := httptest.NewUnstartedServer(nil)
+			_ = ts.Listener.Close()
+			ts.Listener = ln
+			addr := ln.Addr().String()
+			env := map[string]string{
+				"BAYPLAN_DATA_DIR":   t.TempDir() + "/data",
+				"BAYPLAN_PUBLIC_URL": "http://" + addr,
+			}
+			for k, v := range tc.env {
+				env[k] = v
+			}
+			srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ts.Config.Handler = srv.Handler()
+			ts.Start()
+			t.Cleanup(func() {
+				ts.Close()
+				_ = srv.Close()
+			})
+
+			if tc.admitted {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				c, resp, err := websocket.Dial(ctx, "ws://"+addr+"/agent/connect", &websocket.DialOptions{Subprotocols: []string{wire.Subprotocol}})
+				if err != nil {
+					code := 0
+					if resp != nil {
+						code = resp.StatusCode
+					}
+					t.Fatalf("dial = %v (status %d), want the upgrade admitted", err, code)
+				}
+				defer func() { _ = c.CloseNow() }()
+				if got := c.Subprotocol(); got != wire.Subprotocol {
+					t.Fatalf("subprotocol = %q, want %q", got, wire.Subprotocol)
+				}
+				return
+			}
+
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/agent/connect", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Connection", "Upgrade")
+			req.Header.Set("Upgrade", "websocket")
+			req.Header.Set("Sec-WebSocket-Version", "13")
+			req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+			req.Header.Set("Sec-WebSocket-Protocol", wire.Subprotocol)
+			resp, err := ts.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusForbidden || !strings.HasPrefix(string(body), wire.RefuseInsecureTransport) {
+				t.Fatalf("plain upgrade = %d %q, want 403 starting %s", resp.StatusCode, body, wire.RefuseInsecureTransport)
+			}
+		})
 	}
 }
