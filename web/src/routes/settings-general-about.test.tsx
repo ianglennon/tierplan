@@ -683,6 +683,28 @@ describe("General tab: agent URL", () => {
     expect(agentField().getAttribute("aria-invalid")).toBe("true");
   });
 
+  it("maps the server's insecure_agent_url to its own inline error", async () => {
+    patchAnswer = () =>
+      Response.json(
+        {
+          type: "validation_failed",
+          status: 422,
+          errors: [{ location: "body.agentUrl", message: "insecure_agent_url" }],
+        },
+        { status: 422, headers: { "Content-Type": "application/problem+json" } },
+      );
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "http://10.0.0.5:7480" } });
+    fireEvent.click(saveButton());
+    expect(
+      await screen.findByText(/Agents refuse a plain http address for another host/),
+    ).toBeTruthy();
+    expect(agentField().getAttribute("aria-invalid")).toBe("true");
+    expect(
+      screen.queryByText("Enter a full address such as https://bayplan.example.com."),
+    ).toBeNull();
+  });
+
   it("shows the lock as a field error when the server says the agent URL is now fixed", async () => {
     patchAnswer = () =>
       Response.json(

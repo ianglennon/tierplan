@@ -101,8 +101,8 @@ type authFixture struct {
 	// means it serves none (plan 02-09).
 	tlsPin string
 	// agentAllowInsecure is the server's BAYPLAN_AGENT_ALLOW_INSECURE as the
-	// environment and agent routes see it; false unless a test sets it before build
-	// (plan 02-42).
+	// environment, agent and settings routes see it; false unless a test sets it
+	// before build (plans 02-42, 02-45).
 	agentAllowInsecure bool
 	// agentSvc and liveAgents, when set, replace the agents service the agent routes
 	// use and say which tunnel hub the node list reads live state from (plan 02-15).
@@ -172,7 +172,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
 		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
 	})
-	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, Log: log})
+	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, AgentAllowInsecure: f.agentAllowInsecure, Log: log})
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{
 		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,

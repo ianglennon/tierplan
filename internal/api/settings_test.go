@@ -27,6 +27,8 @@ type settingsResp struct {
 	AgentEndpoint   string `json:"agentEndpoint"`
 	EnrolledAgents  int    `json:"enrolledAgents"`
 	OfflineAgents   int    `json:"offlineAgents"`
+
+	AgentEndpointRefused bool `json:"agentEndpointRefused"`
 }
 
 func (f *authFixture) getSettings(t *testing.T, cookie string) (int, settingsResp) {
@@ -574,5 +576,121 @@ func TestAChangeWithNoAgentSourceStillSaves(t *testing.T) {
 	cookie, csrf := f.signIn(t, "admin", false)
 	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://bayplan.lan:7480"}); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+}
+
+// The agent address agents refuse (G-02-R4-3, plan 02-45): a plain address for a
+// host that is not this machine, with the development switch off.
+
+func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
+	cases := []struct {
+		label      string
+		publicURL  string
+		agentURL   string
+		allow      bool
+		wantRefuse bool
+	}{
+		{"plain agent URL for another host, switch off", "", "http://10.0.0.5:7480", false, true},
+		{"plain agent URL for another host, switch on", "", "http://10.0.0.5:7480", true, false},
+		{"plain public URL for another host, no agent URL, switch off", "http://10.0.0.5:7480", "", false, true},
+		{"plain public URL for another host, no agent URL, switch on", "http://10.0.0.5:7480", "", true, false},
+		{"plain agent URL on this machine", "https://pub.example", "http://127.0.0.1:7480", false, false},
+		{"https agent URL under a plain public URL", "http://10.0.0.5:7480", "https://10.0.0.5:7480", false, false},
+		{"https public URL, no agent URL", "https://pub.example", "", false, false},
+		{"no address at all", "", "", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			f := newAuthFixture(t, config.Config{})
+			f.agentAllowInsecure = tc.allow
+			f.h = f.build(t)
+			if tc.publicURL != "" {
+				f.inst.Apply(f.inst.Name(), tc.publicURL)
+			}
+			if tc.agentURL != "" {
+				f.inst.ApplyAgentURL(tc.agentURL)
+			}
+			cookie, _ := f.signIn(t, "admin", false)
+			code, s := f.getSettings(t, cookie)
+			if code != http.StatusOK {
+				t.Fatalf("GET /api/settings = %d", code)
+			}
+			if s.AgentEndpointRefused != tc.wantRefuse {
+				t.Errorf("agentEndpointRefused = %v for endpoint %q, want %v", s.AgentEndpointRefused, s.AgentEndpoint, tc.wantRefuse)
+			}
+		})
+	}
+}
+
+func TestPatchSettingsRefusesAPlainAgentURLForAnotherHostWithoutTheSwitch(t *testing.T) {
+	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
+	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://agent.internal:7480"}); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body)
+	}
+	audits, pushes := len(f.audits(t, "settings.updated")), len(fake.pushed())
+
+	for _, bad := range []string{"http://10.0.0.5:7480", "http://bayplan.lan:7480", "http://[2001:db8::1]:7480"} {
+		rec := f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Changed", "agentUrl": bad})
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%q: status = %d: %s, want 422", bad, rec.Code, rec.Body)
+		}
+		p := decodeProblem(t, rec)
+		if p.Type != "validation_failed" || len(p.Errors) != 1 || p.Errors[0].Location != "body.agentUrl" || p.Errors[0].Message != "insecure_agent_url" {
+			t.Fatalf("%q: problem = %+v, want insecure_agent_url at body.agentUrl", bad, p)
+		}
+	}
+	if _, s := f.getSettings(t, cookie); s.AgentURL != "https://agent.internal:7480" || s.InstanceName == "Changed" {
+		t.Fatalf("a refused change stored agent URL %q name %q", s.AgentURL, s.InstanceName)
+	}
+	if n := len(f.audits(t, "settings.updated")); n != audits {
+		t.Fatalf("%d settings.updated entries after refusals, want %d", n, audits)
+	}
+	if got := fake.pushed(); len(got) != pushes {
+		t.Fatalf("pushes = %v after refused changes", got[pushes:])
+	}
+}
+
+func TestPatchSettingsAcceptsAPlainAgentURLOnlyOnThisMachineOrWithTheSwitch(t *testing.T) {
+	cases := []struct {
+		label     string
+		allow     bool
+		publicURL string // applied before the request, "" for none
+		agentURL  string // applied before the request, "" for none
+		body      map[string]string
+		// wantRefused is agentEndpointRefused in the answer.
+		wantRefused bool
+	}{
+		{"loopback address, switch off", false, "", "", map[string]string{"agentUrl": "http://127.0.0.1:7480"}, false},
+		{"localhost, switch off", false, "", "", map[string]string{"agentUrl": "http://localhost:7480"}, false},
+		{"another host, switch on", true, "", "", map[string]string{"agentUrl": "http://10.0.0.5:7480"}, false},
+		{"https for another host, switch off", false, "", "", map[string]string{"agentUrl": "https://10.0.0.5:7480"}, false},
+		{"clearing it under a plain public URL", false, "http://10.0.0.5:7480", "https://agent.example", map[string]string{"agentUrl": ""}, true},
+		{"a plain public URL with no agent URL", false, "", "", map[string]string{"publicUrl": "http://10.0.0.5:7480"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			f := newAuthFixture(t, config.Config{})
+			f.agentAllowInsecure = tc.allow
+			f.h = f.build(t)
+			if tc.publicURL != "" {
+				f.inst.Apply(f.inst.Name(), tc.publicURL)
+			}
+			if tc.agentURL != "" {
+				f.inst.ApplyAgentURL(tc.agentURL)
+			}
+			cookie, csrf := f.signIn(t, "admin", false)
+			rec := f.patchSettings(t, cookie, csrf, tc.body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s, want 200", rec.Code, rec.Body)
+			}
+			var s settingsResp
+			if err := json.Unmarshal(rec.Body.Bytes(), &s); err != nil {
+				t.Fatal(err)
+			}
+			if s.AgentEndpointRefused != tc.wantRefused {
+				t.Errorf("agentEndpointRefused = %v in the answer (endpoint %q), want %v", s.AgentEndpointRefused, s.AgentEndpoint, tc.wantRefused)
+			}
+		})
 	}
 }
