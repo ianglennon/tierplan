@@ -80,10 +80,13 @@ interface FlowProps {
 }
 
 // failureKey picks the sentence for a failed call, as a key under
-// install.errors. A missing address is the one failure an admin can fix from
-// here, so it says so.
+// install.errors. A missing address and an address agents would refuse are the
+// failures an admin can fix from here, so each says so.
 function failureKey(error: unknown, fallback: "create" | "rotate"): string {
-  if (error instanceof InstallRequestError && error.publicUrlRequired) return "publicUrlRequired";
+  if (error instanceof InstallRequestError) {
+    if (error.publicUrlRequired) return "publicUrlRequired";
+    if (error.insecureAgentUrl) return "insecureAgentUrl";
+  }
   return fallback;
 }
 
@@ -322,15 +325,15 @@ function NameForm({ pending, formError, onSubmit, onCancel }: NameFormProps) {
 // Considerations: install dialog creation or rotation fails).
 function FormFailure({ error }: { error: string }) {
   const t = useT();
-  if (error === "publicUrlRequired") {
+  if (error === "publicUrlRequired" || error === "insecureAgentUrl") {
     return (
       <Alert variant="destructive" role="alert">
         <AlertDescription>
-          {t("install.errors.publicUrlRequired.before")}{" "}
+          {t(`install.errors.${error}.before`)}{" "}
           <Link to="/settings/general" className="underline underline-offset-3">
-            {t("install.errors.publicUrlRequired.link")}
+            {t(`install.errors.${error}.link`)}
           </Link>
-          {t("install.errors.publicUrlRequired.after")}
+          {t(`install.errors.${error}.after`)}
         </AlertDescription>
       </Alert>
     );

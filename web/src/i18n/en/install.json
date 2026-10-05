@@ -69,6 +69,11 @@
         "before": "Bayplan doesn't know what address to give the agent. Set the public URL or the agent URL in",
         "link": "Settings",
         "after": ", then try again."
+      },
+      "insecureAgentUrl": {
+        "before": "Agents can't connect to this Bayplan: the address they'd dial is plain ws:// for another host, and agents refuse it. Set an https public URL or agent URL in",
+        "link": "Settings",
+        "after": ", then try again. BAYPLAN_AGENT_ALLOW_INSECURE=true on Bayplan allows a plain address for development only."
       }
     },
     "waiting": {

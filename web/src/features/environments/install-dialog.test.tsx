@@ -297,9 +297,9 @@ describe("InstallDialog add flow, step 1", () => {
   });
 });
 
-const insecureAgentUrlProblem = () =>
+const conflict = (type: string) =>
   Response.json(
-    { status: 409, type: "insecure_agent_url", title: "Conflict" },
+    { status: 409, type, title: "Conflict" },
     { status: 409, headers: { "Content-Type": "application/problem+json" } },
   );
 
@@ -314,7 +314,7 @@ describe("InstallDialog insecure agent address", () => {
   };
 
   it("explains the refusal when adding an environment, with a Settings link and no generic failure", async () => {
-    createResponse = insecureAgentUrlProblem;
+    createResponse = () => conflict("insecure_agent_url");
     await mount({ mode: "add" });
     fireEvent.change(nameField(), { target: { value: "edge" } });
     submit();
@@ -331,7 +331,7 @@ describe("InstallDialog insecure agent address", () => {
   });
 
   it("explains the refusal when rotating a token, without the generic rotate failure", async () => {
-    rotateResponse = insecureAgentUrlProblem;
+    rotateResponse = () => conflict("insecure_agent_url");
     await mount({ mode: "rotate", envId: "e1" });
     fireEvent.click(screen.getByRole("button", { name: "Generate new token" }));
     // The confirm step has its own notice, so pick the failure by its content.
