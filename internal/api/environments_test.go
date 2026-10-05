@@ -856,6 +856,19 @@ func (f *agentFix) connect(t *testing.T, env tunneltest.Environment, cfg dockert
 	c.ProxyDocker(t, fake.SocketPath())
 	control := c.OpenControl(t)
 	tunneltest.SendHeartbeat(t, control, true, f.tclk.Now().UnixMilli())
+	// The server takes the control stream asynchronously. Its first heartbeat is
+	// read only after the stream is registered, so once it is seen the server can
+	// send this agent control messages (an uninstall, an update) without racing.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if s := f.srv.Hub.Session(c.Identity.AgentID); s != nil && !s.Status().LastHeartbeat.IsZero() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the server never read the agent's first heartbeat on its control stream")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	return &agentConn{conn: c, fake: fake, control: control, id: c.Identity.AgentID}
 }
 
