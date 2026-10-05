@@ -1080,7 +1080,7 @@ func TestRotateAndManualUpdateCarryTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t 
 		url   string
 		want  bool
 	}{
-		{"switch off, http agent URL", false, "http://10.0.0.5:7480", false},
+		{"switch off, http agent URL on this machine", false, "http://127.0.0.1:7480", false},
 		{"switch on, http agent URL", true, "http://10.0.0.5:7480", true},
 		{"switch on, https agent URL", true, "https://bayplan.example.com", false},
 	}

@@ -684,10 +684,47 @@ func TestEnvironmentAddAgentUsesTheAgentURLWhenOneIsSet(t *testing.T) {
 
 func TestEnvironmentAddAgentWithOnlyAnAgentURLIsAllowed(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.inst.ApplyAgentURL("http://10.0.0.5:7480")
+	f.inst.ApplyAgentURL("https://10.0.0.5:7480")
 	got, rec := f.addAgent(t)
-	if rec.code != http.StatusCreated || got.Install == nil || got.Install.AgentURL != "ws://10.0.0.5:7480/agent/connect" {
+	if rec.code != http.StatusCreated || got.Install == nil || got.Install.AgentURL != "wss://10.0.0.5:7480/agent/connect" {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+}
+
+// With the development switch off, an address that is plain ws:// for a host that
+// is not this machine is one agents refuse at start (plan 02-41), so Bayplan hands
+// out no install for it: 409 insecure_agent_url, before any state changes
+// (G-02-R4-3, T-02-144, T-02-145). The agent URL and the public URL are both
+// judged, whichever supplies the address.
+func TestEnvironmentAddAgentRefusesAPlainAddressForAnotherHostWithoutTheSwitch(t *testing.T) {
+	cases := []struct {
+		label string
+		apply func(f *envFix)
+	}{
+		{"only an agent URL", func(f *envFix) { f.inst.ApplyAgentURL("http://10.0.0.5:7480") }},
+		{"only a public URL", func(f *envFix) { f.inst.Apply("Bayplan", "http://10.0.0.5:7480") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			f := newEnvFix(t, dockertest.FakeConfig{})
+			tc.apply(f)
+			_, rec := f.addAgent(t)
+			if rec.code != http.StatusConflict || rec.ptyp != "insecure_agent_url" {
+				t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
+			}
+			if strings.Contains(string(rec.body), "10.0.0.5") {
+				t.Errorf("the refusal repeats the address: %s", rec.body)
+			}
+			for _, table := range []string{"environments", "env_join_tokens", "env_cas"} {
+				var n int
+				if err := f.st.Read.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); err != nil || n != 0 {
+					t.Errorf("%s holds %d rows after a refused add (%v), want none", table, n, err)
+				}
+			}
+			if n := len(f.audits(t, audit.ActionEnvironmentAdded)); n != 0 {
+				t.Errorf("%d environment.added entries after a refused add", n)
+			}
+		})
 	}
 }
 
@@ -1239,7 +1276,7 @@ func TestEnvironmentAddAgentCarriesTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t 
 		url   string
 		want  bool
 	}{
-		{"switch off, http agent URL", false, "http://10.0.0.5:7480", false},
+		{"switch off, http agent URL on this machine", false, "http://127.0.0.1:7480", false},
 		{"switch on, http agent URL", true, "http://10.0.0.5:7480", true},
 		{"switch on, https agent URL", true, "https://bayplan.example.com", false},
 	}

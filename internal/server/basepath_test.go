@@ -33,10 +33,17 @@ func TestBasePathInvariant(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, err := Build(context.Background(), testConfig(t, map[string]string{
+			env := map[string]string{
 				"BAYPLAN_DATA_DIR":   t.TempDir() + "/data",
 				"BAYPLAN_PUBLIC_URL": tc.publicURL,
-			}), slog.New(slog.DiscardHandler))
+			}
+			if strings.HasPrefix(tc.publicURL, "http://") {
+				// An http public URL for another host is a plain agent address that
+				// only the development switch hands out (G-02-R4-3), and this test is
+				// about the base path, so the http cases turn the switch on.
+				env["BAYPLAN_AGENT_ALLOW_INSECURE"] = "true"
+			}
+			srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 			if err != nil {
 				t.Fatal(err)
 			}
