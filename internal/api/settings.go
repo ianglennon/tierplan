@@ -20,6 +20,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
 // problemPublicURLLocked is the 409 returned when BAYPLAN_PUBLIC_URL fixes the
@@ -61,20 +62,25 @@ type SettingsDeps struct {
 	// Agents counts enrolled agents and tells connected ones a new address. Nil
 	// means none: the counts are 0 and nothing is pushed.
 	Agents SettingsAgents
+	// AgentAllowInsecure is the server's development switch,
+	// BAYPLAN_AGENT_ALLOW_INSECURE. Settings uses it only to say whether agents can
+	// use the address they are given, and to refuse an agent URL they cannot.
+	AgentAllowInsecure bool
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
 
 // SettingsBody is the instance's editable settings.
 type SettingsBody struct {
-	InstanceName    string `json:"instanceName" doc:"The name shown in the header, tab titles and the sign-in page"`
-	PublicURL       string `json:"publicUrl" doc:"The URL users reach Bayplan at; drives the Origin check and the cookie Secure flag"`
-	PublicURLLocked bool   `json:"publicUrlLocked" doc:"True when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL"`
-	AgentURL        string `json:"agentUrl" doc:"The address agents dial when it differs from the public URL; empty means they dial the public URL"`
-	AgentURLLocked  bool   `json:"agentUrlLocked" doc:"True when the BAYPLAN_AGENT_URL environment variable fixes the agent URL"`
-	AgentEndpoint   string `json:"agentEndpoint" doc:"The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set"`
-	EnrolledAgents  int    `json:"enrolledAgents" doc:"How many agents are enrolled and not revoked, across all environments. A change of the public URL or the agent URL needs a confirmation while this is above 0"`
-	OfflineAgents   int    `json:"offlineAgents" doc:"How many of the enrolled agents have no connection now. They cannot be sent a new address, so after a change of the host or port agents dial they are refused until they are reinstalled with the new address or the change is reverted"`
+	InstanceName         string `json:"instanceName" doc:"The name shown in the header, tab titles and the sign-in page"`
+	PublicURL            string `json:"publicUrl" doc:"The URL users reach Bayplan at; drives the Origin check and the cookie Secure flag"`
+	PublicURLLocked      bool   `json:"publicUrlLocked" doc:"True when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL"`
+	AgentURL             string `json:"agentUrl" doc:"The address agents dial when it differs from the public URL; empty means they dial the public URL"`
+	AgentURLLocked       bool   `json:"agentUrlLocked" doc:"True when the BAYPLAN_AGENT_URL environment variable fixes the agent URL"`
+	AgentEndpoint        string `json:"agentEndpoint" doc:"The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set"`
+	AgentEndpointRefused bool   `json:"agentEndpointRefused" doc:"True when agentEndpoint is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off. Agents refuse such an address and Bayplan refuses their plain connections, and adding an agent environment or rotating a join token answers 409 insecure_agent_url until the agent URL or the public URL is https"`
+	EnrolledAgents       int    `json:"enrolledAgents" doc:"How many agents are enrolled and not revoked, across all environments. A change of the public URL or the agent URL needs a confirmation while this is above 0"`
+	OfflineAgents        int    `json:"offlineAgents" doc:"How many of the enrolled agents have no connection now. They cannot be sent a new address, so after a change of the host or port agents dial they are refused until they are reinstalled with the new address or the change is reverted"`
 }
 
 // SettingsOutput wraps SettingsBody for huma.
@@ -106,13 +112,15 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		return huma.Error500InternalServerError("internal error")
 	}
 	current := func() SettingsBody {
+		endpoint := d.Instance.AgentEndpoint()
 		return SettingsBody{
-			InstanceName:    d.Instance.Name(),
-			PublicURL:       d.Instance.PublicURL(),
-			PublicURLLocked: d.Instance.Locked(),
-			AgentURL:        d.Instance.AgentURL(),
-			AgentURLLocked:  d.Instance.AgentURLLocked(),
-			AgentEndpoint:   d.Instance.AgentEndpoint(),
+			InstanceName:         d.Instance.Name(),
+			PublicURL:            d.Instance.PublicURL(),
+			PublicURLLocked:      d.Instance.Locked(),
+			AgentURL:             d.Instance.AgentURL(),
+			AgentURLLocked:       d.Instance.AgentURLLocked(),
+			AgentEndpoint:        endpoint,
+			AgentEndpointRefused: tunnel.PlainAddressRefused(endpoint, d.AgentAllowInsecure),
 		}
 	}
 	// withAgents adds how many agents are enrolled and how many of those have no
@@ -147,7 +155,9 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		Description: "publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), " +
 			"agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: " +
 			"the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are " +
-			"not revoked and offlineAgents those of them with no connection now (D-19).",
+			"not revoked and offlineAgents those of them with no connection now (D-19). agentEndpointRefused is true when " +
+			"agentEndpoint is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off: agents " +
+			"cannot connect to it (G-02-R4-3).",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*SettingsOutput, error) {
 		return &SettingsOutput{CacheControl: "no-store", Body: withAgents(ctx, current())}, nil

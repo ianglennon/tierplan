@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Lock } from "lucide-react";
+import { Lock, TriangleAlert } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -368,6 +368,14 @@ function SettingsForm({ settings }: { settings: Settings }) {
                 </InputGroup>
               )}
             </FieldShell>
+            {settings.agentEndpointRefused ? (
+              <Alert variant="warning">
+                <TriangleAlert aria-hidden="true" />
+                <AlertDescription className="text-foreground break-words">
+                  {t("settings.general.agentUrl.refused", { endpoint: settings.agentEndpoint })}
+                </AlertDescription>
+              </Alert>
+            ) : null}
             {readOnly ? null : (
               <div>
                 <Button type="submit" className={TOUCH_HEIGHT} disabled={!dirty || pending}>

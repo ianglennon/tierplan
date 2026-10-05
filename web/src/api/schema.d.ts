@@ -603,7 +603,7 @@ export interface paths {
         };
         /**
          * Get the instance name, public URL and agent URL
-         * @description publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19).
+         * @description publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19). agentEndpointRefused is true when agentEndpoint is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off: agents cannot connect to it (G-02-R4-3).
          */
         get: operations["getSettings"];
         put?: never;
@@ -1534,6 +1534,8 @@ export interface components {
         SettingsBody: {
             /** @description The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set */
             agentEndpoint: string;
+            /** @description True when agentEndpoint is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off. Agents refuse such an address and Bayplan refuses their plain connections, and adding an agent environment or rotating a join token answers 409 insecure_agent_url until the agent URL or the public URL is https */
+            agentEndpointRefused: boolean;
             /** @description The address agents dial when it differs from the public URL; empty means they dial the public URL */
             agentUrl: string;
             /** @description True when the BAYPLAN_AGENT_URL environment variable fixes the agent URL */

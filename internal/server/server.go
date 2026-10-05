@@ -460,7 +460,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
 		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
-		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log}, tunnelHub.Handler())
+		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log}, tunnelHub.Handler())
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		tunnelHub.Close()
