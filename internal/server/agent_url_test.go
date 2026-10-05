@@ -149,7 +149,7 @@ func TestAPlainAgentURLForAnotherHostIsRefusedUnlessTheSwitchIsOn(t *testing.T) 
 			if tc.admitted {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				c, resp, err := websocket.Dial(ctx, "ws://"+addr+"/agent/connect", &websocket.DialOptions{Subprotocols: []string{wire.Subprotocol}})
+				c, resp, err := websocket.Dial(ctx, "ws://"+addr+"/agent/connect", &websocket.DialOptions{Subprotocols: []string{wire.Subprotocol}}) //nolint:bodyclose // a WebSocket upgrade response has no body to close
 				if err != nil {
 					code := 0
 					if resp != nil {
