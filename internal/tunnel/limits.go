@@ -87,10 +87,11 @@ const (
 	refusedNotUpgrade = "not_upgrade"
 )
 
-// WithAllowInsecure lets agents connect over plain ws:// although the public URL
-// is https. It is for development only (BAYPLAN_AGENT_ALLOW_INSECURE): the join
-// token and every Docker answer then cross the network in the clear. Call it
-// before the hub serves.
+// WithAllowInsecure lets agents connect over plain ws:// to an agent address that
+// is not this machine: an https address, or an http one for another host. A plain
+// address on this machine needs no switch. It is for development only
+// (BAYPLAN_AGENT_ALLOW_INSECURE): the join token and every Docker answer then
+// cross the network in the clear. Call it before the hub serves.
 func (h *Hub) WithAllowInsecure(allow bool) *Hub {
 	h.allowInsecure = allow
 	if allow {
@@ -205,7 +206,11 @@ func (h *Hub) preflight(r *http.Request, ip string) (aud string, ref *preflightR
 	}
 	if !secureTransport(r) {
 		if !plainOK && !h.allowInsecure {
-			h.logBeforeAdmission(slog.LevelWarn, ip, "agent connection refused: it did not arrive over TLS")
+			if base := h.publicURL(); PlainAddressRefused(base, false) {
+				h.logBeforeAdmission(slog.LevelWarn, ip, "agent connection refused: the agent address is plain http for a host that is not this machine; it needs an https public URL or agent URL (BAYPLAN_AGENT_ALLOW_INSECURE=true allows it, for development only)")
+			} else {
+				h.logBeforeAdmission(slog.LevelWarn, ip, "agent connection refused: it did not arrive over TLS")
+			}
 			return "", &preflightRefusal{
 				status: http.StatusForbidden, code: wire.RefuseInsecureTransport, audit: true,
 				msg: wire.RefuseInsecureTransport + ": agents must connect over wss://",

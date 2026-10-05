@@ -133,8 +133,11 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	h.log.Info("agent disconnected", "agent_id", s.AgentID, "environment_id", s.EnvID, "reason", s.Reason())
 }
 
-// audience is the host the agent must have dialed, from the public URL, and
-// whether plain transport is acceptable because that URL is itself plain http.
+// audience is the host the agent must have dialed, from the agent base the hub
+// was given, and whether plain transport is acceptable without the development
+// switch: only when that base is plain http for this machine (authn.LoopbackHost).
+// An http base for any other host does not make plain transport acceptable, only
+// the switch does (G-02-R4-3).
 func (h *Hub) audience() (aud string, plainOK bool, err error) {
 	if h.publicURL == nil {
 		return "", false, errors.New("the hub was given no public URL")
@@ -151,7 +154,29 @@ func (h *Hub) audience() (aud string, plainOK bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
-	return aud, strings.EqualFold(u.Scheme, "http"), nil
+	return aud, strings.EqualFold(u.Scheme, "http") && !PlainAddressRefused(raw, false), nil
+}
+
+// PlainAddressRefused reports whether raw is an address Bayplan refuses to have
+// agents dial: it is plain (scheme http or ws, any case) for a host that
+// authn.LoopbackHost does not accept, and allowInsecure (BAYPLAN_AGENT_ALLOW_INSECURE)
+// is false. raw is an address agents are told to dial, the agent base or the
+// endpoint built from it. An https or wss address, an empty value and one that does
+// not parse are not refused here; the caller deals with a missing address. This is
+// the one server-side rule for plain agent addresses (G-02-R4-3): the hub refuses
+// plain connections for such an address, and Bayplan does not hand it out.
+func PlainAddressRefused(raw string, allowInsecure bool) bool {
+	if allowInsecure {
+		return false
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "ws") {
+		return false
+	}
+	return !authn.LoopbackHost(u.Hostname())
 }
 
 // secureTransport reports whether the connection reached Bayplan over TLS, either

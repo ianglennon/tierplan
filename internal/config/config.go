@@ -79,9 +79,12 @@ type Config struct {
 	// FailingServiceGrace is how long after a swarm service was updated it is not
 	// counted as failing (D-34).
 	FailingServiceGrace time.Duration
-	// AgentAllowInsecure lets agents connect over plain ws:// although the public
-	// URL is https; for development only. AgentConnectBurst is how many
-	// connection attempts one client address may make at once.
+	// AgentAllowInsecure lets agents connect over plain ws:// to an agent address
+	// that is not this machine; for development only. Join tokens and Docker
+	// answers then travel unencrypted, and install commands for a plain address
+	// also set it on the agent. A plain address on this machine needs no switch.
+	// AgentConnectBurst is how many connection attempts one client address may
+	// make at once.
 	AgentAllowInsecure bool
 	AgentConnectBurst  int
 
@@ -172,7 +175,7 @@ var settings = []setting{
 		apply: func(c *Config, raw string) (err error) { c.AgentReconnectGrace, err = parseDuration(raw); return err }},
 	{env: "BAYPLAN_FAILING_SERVICE_GRACE", flag: "failing-service-grace", def: "2m", desc: "how long after a swarm service was updated it is not counted as failing",
 		apply: func(c *Config, raw string) (err error) { c.FailingServiceGrace, err = parseDuration(raw); return err }},
-	{env: "BAYPLAN_AGENT_ALLOW_INSECURE", flag: "agent-allow-insecure", def: "false", desc: "development only: let agents connect over plain ws:// although the public URL is https, which sends join tokens and Docker answers unencrypted",
+	{env: "BAYPLAN_AGENT_ALLOW_INSECURE", flag: "agent-allow-insecure", def: "false", desc: "development only: let agents connect over plain ws:// to an agent address that is not this machine, which sends join tokens and Docker answers unencrypted; install commands for a plain address then set it on the agent too",
 		apply: func(c *Config, raw string) (err error) {
 			c.AgentAllowInsecure, err = strconv.ParseBool(raw)
 			return err

@@ -20,9 +20,12 @@ import (
 )
 
 // The tunnel judges every agent connection against the address agents are told
-// to dial: the agent URL when one is set, else the public URL (D-18). Plain
-// transport is accepted only when that address is itself http, so an http agent
-// URL on an https instance is the case that tells the two apart.
+// to dial: the agent URL when one is set, else the public URL (D-18). The agent
+// URL, not the public URL, decides, so the same request is admitted or refused
+// depending only on it: an https public URL with a plain agent URL on this
+// machine admits plain transport, an http public URL on this machine with an
+// https agent URL refuses it (a plain agent URL for another host is the subject of
+// TestAPlainAgentURLForAnotherHostIsRefusedUnlessTheSwitchIsOn).
 func TestTunnelFollowsTheAgentURLNotThePublicURL(t *testing.T) {
 	upgrade := func(srv *Server) int {
 		req := httptest.NewRequest(http.MethodGet, "/agent/connect", nil)
@@ -50,13 +53,22 @@ func TestTunnelFollowsTheAgentURLNotThePublicURL(t *testing.T) {
 	if code := upgrade(build(map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.test"})); code != http.StatusForbidden {
 		t.Fatalf("a plain connection with an https public URL = %d, want 403", code)
 	}
-	// An http agent URL is where agents dial, so plain transport is acceptable
-	// there and the request gets past the preflight to the WebSocket accept.
+	// A plain agent URL on this machine is where agents dial, so plain transport
+	// is acceptable there and the request gets past the preflight to the
+	// WebSocket accept, although the public URL is https.
 	if code := upgrade(build(map[string]string{
 		"BAYPLAN_PUBLIC_URL": "https://bayplan.test",
-		"BAYPLAN_AGENT_URL":  "http://10.0.0.5:7480",
+		"BAYPLAN_AGENT_URL":  "http://127.0.0.1:7480",
 	})); code == http.StatusForbidden || code == http.StatusServiceUnavailable {
-		t.Fatalf("a plain connection with an http agent URL = %d, want it past the preflight", code)
+		t.Fatalf("a plain connection with an http agent URL on this machine = %d, want it past the preflight", code)
+	}
+	// An https agent URL is where agents dial, so a plain connection is refused
+	// although the public URL is plain http on this machine.
+	if code := upgrade(build(map[string]string{
+		"BAYPLAN_PUBLIC_URL": "http://127.0.0.1:7480",
+		"BAYPLAN_AGENT_URL":  "https://bayplan.test",
+	})); code != http.StatusForbidden {
+		t.Fatalf("a plain connection with an https agent URL = %d, want 403", code)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -140,4 +141,20 @@ func Audience(raw string) (string, error) {
 		host += ":" + port
 	}
 	return host, nil
+}
+
+// LoopbackHost reports whether host names this machine's own loopback. host is
+// what url.URL.Hostname gives (no IPv6 brackets, possibly a zone). It is true for
+// the name localhost in any case, or for an IP literal that is loopback once an
+// IPv4-mapped address is unmapped (127.0.0.0/8, ::1, ::ffff:127.0.0.1). Anything
+// else is false, including localhost.example, the short form 127.1, 0.0.0.0 and
+// the empty string. The agent decides with it which plain ws:// address it may
+// dial and Bayplan decides with it which plain address it admits, so the two ends
+// cannot disagree about which plain address never leaves the machine (T-02-140).
+func LoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.Unmap().IsLoopback()
 }
