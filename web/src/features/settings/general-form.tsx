@@ -63,6 +63,7 @@ const KEY = {
   locked: "setup.instance.url.locked",
   agentLocked: "settings.general.agentUrl.locked",
   invalidUrl: "setup.errors.publicUrl",
+  insecureAgentUrl: "settings.general.agentUrl.insecure",
 } as const;
 
 // Where the fields sit on screen, which is where focus goes first on an error.
@@ -236,7 +237,12 @@ function SettingsForm({ settings }: { settings: Settings }) {
         (f) => f.location === "body.agentUrl" || f.message === "invalid_agent_url",
       )
     ) {
-      routed.push({ field: "agentUrl", messageKey: KEY.invalidUrl });
+      // An address agents refuse is not a malformed one: say why, in its own words.
+      const insecure = problem.fields.some((f) => f.message === "insecure_agent_url");
+      routed.push({
+        field: "agentUrl",
+        messageKey: insecure ? KEY.insecureAgentUrl : KEY.invalidUrl,
+      });
     }
     if (routed.length === 0) {
       setFormError(KEY.server);

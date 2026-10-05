@@ -24,6 +24,7 @@
         "helper": "Leave empty to use the public URL. Set it if your hosts reach Bayplan at a different address, such as an internal hostname.",
         "placeholder": "https://bayplan.internal:7480",
         "locked": "Set by the BAYPLAN_AGENT_URL environment variable.",
+        "insecure": "Agents refuse a plain http address for another host. Use an https address. For development only, start Bayplan with BAYPLAN_AGENT_ALLOW_INSECURE=true.",
         "refused": "Agents can't connect to this Bayplan. They would dial {{endpoint}}, a plain ws:// address for another host, which agents refuse, and so does Bayplan. Set an https agent URL above, or give Bayplan an https public URL. For development only, BAYPLAN_AGENT_ALLOW_INSECURE=true on Bayplan allows it."
       },
       "confirm": {

@@ -35,6 +35,12 @@ const problemAgentURLLocked = "agent_url_locked"
 // maps it to the same "Enter a full address" copy as invalid_public_url.
 const codeInvalidAgentURL = "invalid_agent_url"
 
+// codeInsecureAgentURL is the field error code of an agent URL that is plain http
+// for a host that is not this machine while BAYPLAN_AGENT_ALLOW_INSECURE is off:
+// agents refuse such an address. It is the same word as the 409 problem type of
+// add and rotate (G-02-R4-3), defined once.
+const codeInsecureAgentURL = problemInsecureAgentURL
+
 // targetSettings is the audit target of a settings change.
 const targetSettings = "settings"
 
@@ -96,7 +102,7 @@ type UpdateSettingsInput struct {
 	Body      struct {
 		InstanceName *string `json:"instanceName,omitempty" doc:"New instance name, 1 to 64 characters"`
 		PublicURL    *string `json:"publicUrl,omitempty" doc:"New public URL, an absolute http or https URL. Refused with 409 public_url_locked while BAYPLAN_PUBLIC_URL is set"`
-		AgentURL     *string `json:"agentUrl,omitempty" doc:"New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while BAYPLAN_AGENT_URL is set"`
+		AgentURL     *string `json:"agentUrl,omitempty" doc:"New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while BAYPLAN_AGENT_URL is set. An http agent URL for a host that is not this machine is refused with 422 insecure_agent_url unless BAYPLAN_AGENT_ALLOW_INSECURE is on"`
 	}
 }
 
@@ -169,7 +175,10 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		Path:        "/api/settings",
 		Summary:     "Change the instance name, the public URL or the agent URL",
 		Description: "Only the fields sent are changed. Invalid fields answer 422 with a stable code per field " +
-			"(instance_name_required, instance_name_too_long, invalid_public_url, " + codeInvalidAgentURL + "). A different public URL while " +
+			"(instance_name_required, instance_name_too_long, invalid_public_url, " + codeInvalidAgentURL + ", " + codeInsecureAgentURL + "). " +
+			"An agent URL that is plain http for a host that is not this machine answers 422 " + codeInsecureAgentURL + " unless " +
+			"BAYPLAN_AGENT_ALLOW_INSECURE is on, because agents refuse such an address; a loopback or https agent URL, clearing it, " +
+			"and an http public URL are accepted. A different public URL while " +
 			"BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set " +
 			"answers 409 " + problemAgentURLLocked + "; both change nothing. An empty agentUrl clears it. A change takes effect at once: " +
 			"the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents " +
@@ -239,6 +248,10 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 				}
 			case err != nil:
 				add("body.agentUrl", codeInvalidAgentURL)
+			case u != agentURL && u != "" && tunnel.PlainAddressRefused(u, d.AgentAllowInsecure):
+				// Agents refuse this address and so does Bayplan; saving it would
+				// only hand them one they cannot dial (G-02-R4-3, T-02-148).
+				add("body.agentUrl", codeInsecureAgentURL)
 			case u != agentURL:
 				details["agent_url_from"], details["agent_url_to"] = agentURL, u
 				agentURL = u
