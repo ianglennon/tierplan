@@ -265,6 +265,13 @@ func TestEnvStreamAllowsFourPerUserAndRefusesTheFifthWith429(t *testing.T) {
 		conns = append(conns, c)
 	}
 	fifth := f.openEnvStream(t, f.cookie, "")
+	// openSSE returns once the status is written; the problem body follows, so
+	// wait for the refused handler to return before reading it.
+	select {
+	case <-fifth.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a refused stream stayed open")
+	}
 	if fifth.status0() != http.StatusTooManyRequests || !strings.Contains(fifth.bodyString(), `"type":"rate_limited"`) {
 		t.Fatalf("the 5th stream = %d %s, want 429 rate_limited", fifth.status0(), fifth.bodyString())
 	}
