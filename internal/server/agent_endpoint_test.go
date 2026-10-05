@@ -186,3 +186,102 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 		})
 	}
 }
+
+// TestTheSettingsSayWhenAgentsCannotUseTheirAddress is the operator's side of
+// G-02-R4-3 (review WR-02), end to end through a real server. GET /api/settings
+// says agentEndpointRefused exactly when the address agents are told to dial is
+// plain ws:// for a host that is not this machine and the development switch is
+// off: the same rule as the hub and the install.
+func TestTheSettingsSayWhenAgentsCannotUseTheirAddress(t *testing.T) {
+	cases := []struct {
+		name string
+		// env is extra server environment; the public URL is the listener's own address.
+		env          map[string]string
+		wantEndpoint string // %ADDR% is the listener's address
+		wantRefused  bool
+	}{
+		{
+			name:         "plain to another host, switch off",
+			env:          map[string]string{"BAYPLAN_AGENT_URL": "http://10.0.0.5:7480"},
+			wantEndpoint: "ws://10.0.0.5:7480/agent/connect",
+			wantRefused:  true,
+		},
+		{
+			name:         "plain to another host, switch on",
+			env:          map[string]string{"BAYPLAN_AGENT_URL": "http://10.0.0.5:7480", "BAYPLAN_AGENT_ALLOW_INSECURE": "true"},
+			wantEndpoint: "ws://10.0.0.5:7480/agent/connect",
+		},
+		{
+			name:         "no agent URL, public URL on this machine",
+			env:          map[string]string{},
+			wantEndpoint: "ws://%ADDR%/agent/connect",
+		},
+		{
+			name:         "https agent URL",
+			env:          map[string]string{"BAYPLAN_AGENT_URL": "https://bayplan.test"},
+			wantEndpoint: "wss://bayplan.test/agent/connect",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Skipf("cannot listen on 127.0.0.1: %v", err)
+			}
+			ts := httptest.NewUnstartedServer(nil)
+			_ = ts.Listener.Close()
+			ts.Listener = ln
+			addr := ln.Addr().String()
+
+			env := map[string]string{
+				"BAYPLAN_DATA_DIR":   t.TempDir() + "/data",
+				"BAYPLAN_PUBLIC_URL": "http://" + addr,
+			}
+			for k, v := range tc.env {
+				env[k] = v
+			}
+			srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ts.Config.Handler = srv.Handler()
+			ts.Start()
+			t.Cleanup(func() {
+				ts.Close()
+				_ = srv.Close()
+			})
+
+			cookie, _ := signInAdmin(t, srv, ts)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/settings", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.AddCookie(cookie)
+			resp, err := ts.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("GET /api/settings = %d %s", resp.StatusCode, body)
+			}
+			var got struct {
+				AgentEndpoint        string `json:"agentEndpoint"`
+				AgentEndpointRefused *bool  `json:"agentEndpointRefused"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if want := strings.ReplaceAll(tc.wantEndpoint, "%ADDR%", addr); got.AgentEndpoint != want {
+				t.Errorf("agentEndpoint = %q, want %q", got.AgentEndpoint, want)
+			}
+			if got.AgentEndpointRefused == nil {
+				t.Fatalf("GET /api/settings has no agentEndpointRefused field: %s", body)
+			}
+			if *got.AgentEndpointRefused != tc.wantRefused {
+				t.Errorf("agentEndpointRefused = %v, want %v", *got.AgentEndpointRefused, tc.wantRefused)
+			}
+		})
+	}
+}

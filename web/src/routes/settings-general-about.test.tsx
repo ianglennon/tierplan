@@ -66,6 +66,7 @@ interface SettingsState {
   agentUrl: string;
   agentUrlLocked: boolean;
   agentEndpoint: string;
+  agentEndpointRefused: boolean;
   enrolledAgents: number;
   offlineAgents: number;
 }
@@ -80,6 +81,7 @@ function settingsState(over: Partial<SettingsState> = {}): SettingsState {
     agentUrl: "",
     agentUrlLocked: false,
     agentEndpoint: "",
+    agentEndpointRefused: false,
     enrolledAgents: 0,
     offlineAgents: 0,
     ...over,
@@ -642,6 +644,24 @@ describe("General tab: agent URL", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Change agent URL" }));
     expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
     expect(patches()[0]?.body).toEqual({ agentUrl: "" });
+  });
+
+  it("warns under the Agent URL field when agents cannot use the address, naming it and the switch", async () => {
+    settings = settingsState({
+      agentEndpoint: "ws://10.0.0.5:7480/agent/connect",
+      agentEndpointRefused: true,
+    });
+    await openGeneral();
+    const note = await screen.findByText(/ws:\/\/10\.0\.0\.5:7480\/agent\/connect/);
+    expect(note.textContent).toContain("BAYPLAN_AGENT_ALLOW_INSECURE");
+    expect(note.closest('[role="alert"]')).not.toBeNull();
+  });
+
+  it("shows no refused-address warning when agents can use the address", async () => {
+    settings = settingsState({ agentEndpoint: "wss://bayplan.test/agent/connect" });
+    await openGeneral();
+    expect(screen.queryByText(/BAYPLAN_AGENT_ALLOW_INSECURE/)).toBeNull();
+    expect(screen.queryByText(/Agents can't connect to this Bayplan/)).toBeNull();
   });
 
   it("maps the server's invalid_agent_url to the same inline error", async () => {
