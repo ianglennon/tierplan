@@ -19,12 +19,22 @@
 # without the two Upgrade header lines the agent endpoint answers 426 and the
 # websocket_failing warning appears; without the Host line the url_mismatch
 # warning appears; with Bayplan not told to trust the proxy the
-# untrusted_forwarded warning appears.
+# untrusted_forwarded warning appears. A fourth deliberate check, no_agent_switch,
+# leaves Bayplan's development switch off and expects the plain agent upgrade to be
+# refused 403 insecure_transport through the proxy.
 #
 # The proxies listen on plain HTTP, so Bayplan's public URL is http://. The Caddy
 # file reads BAYPLAN_SCHEME, which this script sets to "http://" so that Caddy does
 # not look for a certificate. Requests go to the proxy's published port with the
 # Host header of the site, so no DNS entry is needed.
+#
+# That makes the agent address plain ws:// for a host that is not loopback
+# (bayplan.example.com), which Bayplan accepts only with
+# BAYPLAN_AGENT_ALLOW_INSECURE=true, a development-only switch. This script sets it
+# on Bayplan so that it can test that each proxy passes the upgrade, and only the
+# no_agent_switch variant leaves it off to check the refusal through a real proxy.
+# The throwaway containers run on a private Docker network with ports published on
+# 127.0.0.1 only and hold no secrets.
 #
 # Environment: IMAGE (default bayplan:e2e), CADDY_IMAGE (caddy:2), NGINX_IMAGE
 # (nginx:stable-alpine), TRAEFIK_IMAGE (traefik:v3). Needs Docker, curl and jq.
@@ -169,7 +179,7 @@ sign_in() {
 # run_scenario KIND SITE VARIANT: KIND is caddy, nginx or traefik, SITE is root or
 # subpath, VARIANT is ok for the documented file or the name of a deliberate break.
 run_scenario() {
-  local kind="$1" site="$2" variant="${3:-ok}" conf trust
+  local kind="$1" site="$2" variant="${3:-ok}" conf trust agent_switch
   case "${site}" in
     root) HOST="bayplan.example.com" BASE="" ;;
     subpath) HOST="example.com" BASE="/bayplan" ;;
@@ -198,8 +208,13 @@ run_scenario() {
   trust="${SUBNET}"
   [ "${variant}" = untrusted_proxy ] && trust=""
 
+  # The proxies are plain HTTP for a host that is not loopback, the development-only
+  # case, so every variant but no_agent_switch sets Bayplan's development switch.
+  agent_switch=1
+  [ "${variant}" = no_agent_switch ] && agent_switch=""
   start_container "${BAYPLAN_NAME}" --network-alias bayplan --tmpfs /data \
     -e "BAYPLAN_PUBLIC_URL=${PUBLIC}" ${trust:+-e "BAYPLAN_TRUSTED_PROXIES=${trust}"} \
+    ${agent_switch:+-e "BAYPLAN_AGENT_ALLOW_INSECURE=true"} \
     --health-interval 2s --health-start-period 0s --health-retries 10 "${IMAGE}"
   if ! wait_bayplan; then
     fail "${LABEL}: Bayplan did not become healthy"
@@ -230,6 +245,7 @@ run_scenario() {
   # The WebSocket upgrade of the agent endpoint.
   local status want="101"
   [ "${variant}" = no_upgrade_headers ] && want="426"
+  [ "${variant}" = no_agent_switch ] && want="403"
   status="$(upgrade_request)"
   case "${status}" in
     *" ${want} "*)
@@ -238,6 +254,12 @@ run_scenario() {
           pass "${LABEL}: ${BASE}/agent/connect upgrades to a WebSocket with bayplan.agent.v1 (${status})"
         else
           fail "${LABEL}: the upgrade was accepted without the bayplan.agent.v1 subprotocol"
+        fi
+      elif [ "${want}" = 403 ]; then
+        if grep -qa 'insecure_transport' "${WORK}/upgrade.out"; then
+          pass "${LABEL}: a plain agent upgrade without BAYPLAN_AGENT_ALLOW_INSECURE is refused with ${status} insecure_transport"
+        else
+          fail "${LABEL}: ${BASE}/agent/connect answered ${status} without insecure_transport in the body"
         fi
       else
         pass "${LABEL}: a proxy that drops the Upgrade headers gets ${status} from ${BASE}/agent/connect"
@@ -265,7 +287,7 @@ run_scenario() {
     local seen
     seen="$(warnings || true)"
     case "${variant}" in
-      ok)
+      ok | no_agent_switch)
         if [ -z "${seen}" ]; then pass "${LABEL}: Bayplan shows no proxy warning"; else fail "${LABEL}: Bayplan shows proxy warnings: ${seen}"; fi ;;
       no_upgrade_headers)
         if [ "${seen}" = proxy_websocket_failing ]; then pass "${LABEL}: Bayplan shows proxy_websocket_failing"; else fail "${LABEL}: warnings are '${seen}', want proxy_websocket_failing"; fi ;;
@@ -303,6 +325,7 @@ done
 run_scenario nginx root no_upgrade_headers
 run_scenario nginx root no_host_header
 run_scenario nginx root untrusted_proxy
+run_scenario nginx root no_agent_switch
 
 if [ "${FAILS}" -ne 0 ]; then
   echo "FAIL: ${FAILS} proxy smoke check(s) failed"
