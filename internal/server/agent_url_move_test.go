@@ -201,19 +201,24 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 			t.Fatalf("PATCH /api/settings agentUrl %s: %d %s", u, code, body)
 		}
 	}
+	// The server shows the environment online once it has welcomed the agent,
+	// and the agent saves identity.json just after, so wait for the file.
 	agentID := func() string {
 		t.Helper()
-		raw, err := os.ReadFile(filepath.Join(stateDir, "identity.json")) //nolint:gosec // the test's own temporary directory
-		if err != nil {
-			t.Fatal(err)
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			raw, err := os.ReadFile(filepath.Join(stateDir, "identity.json")) //nolint:gosec // the test's own temporary directory
+			var id struct {
+				AgentID string `json:"agentId"`
+			}
+			if err == nil && json.Unmarshal(raw, &id) == nil && id.AgentID != "" {
+				return id.AgentID
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("identity.json never held an agent ID: %q, %v", raw, err)
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
-		var id struct {
-			AgentID string `json:"agentId"`
-		}
-		if err := json.Unmarshal(raw, &id); err != nil || id.AgentID == "" {
-			t.Fatalf("identity.json = %q, %v", raw, err)
-		}
-		return id.AgentID
 	}
 
 	// The agent enrols at the install address.
