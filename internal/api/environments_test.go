@@ -354,8 +354,14 @@ func TestEnvironmentMutationsNeedAPermissionAndASession(t *testing.T) {
 		{http.MethodDelete, "/api/environments/" + e.ID, ""},
 		{http.MethodPost, "/api/env/" + e.ID + "/reconnect", ""},
 	} {
-		if rec := f.call(t, authReq{method: c.method, path: c.path, body: c.body, cookie: cookie, csrf: csrf}); rec.Code != http.StatusForbidden {
-			t.Errorf("%s %s as a user with no permissions: %d, want 403", c.method, c.path, rec.Code)
+		// A global route refuses with 403; an environment the user has no grant on
+		// is not visible to them at all, so its route answers 404 (D-08).
+		want := http.StatusForbidden
+		if strings.HasPrefix(c.path, "/api/env/") {
+			want = http.StatusNotFound
+		}
+		if rec := f.call(t, authReq{method: c.method, path: c.path, body: c.body, cookie: cookie, csrf: csrf}); rec.Code != want {
+			t.Errorf("%s %s as a user with no permissions: %d, want %d", c.method, c.path, rec.Code, want)
 		}
 		if rec := f.call(t, authReq{method: c.method, path: c.path, body: c.body}); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s anonymous: %d, want 401", c.method, c.path, rec.Code)

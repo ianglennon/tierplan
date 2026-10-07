@@ -456,7 +456,7 @@ func TestAgentListReportsTheClockOffsetOfAConnectedAgent(t *testing.T) {
 	}
 }
 
-func TestAgentListOfAnEnvironmentTheCallerCannotReadIsRefusedWithNothingOfItAndAnUnknownOneIs404(t *testing.T) {
+func TestAgentListOfAnEnvironmentTheCallerHasNoGrantOnIs404WithNothingOfItLikeAnUnknownOne(t *testing.T) {
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "A")
 	b := f.srv.NewEnvironment(t, "B")
@@ -466,13 +466,13 @@ func TestAgentListOfAnEnvironmentTheCallerCannotReadIsRefusedWithNothingOfItAndA
 	cookie, csrf := f.signIn(t, "viewer", false)
 
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + b.ID + "/agents", cookie: cookie, csrf: csrf})
-	// Every /api/env route answers an environment the caller may not read with the
-	// platform's 403 and a permission.denied entry (an unknown one is a 404): the
-	// answer carries nothing of the environment's agents.
-	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "b-node") || strings.Contains(rec.Body.String(), b.ID) {
-		t.Fatalf("an environment the viewer may not read: %d %s, want 403 and nothing of it", rec.Code, rec.Body)
+	// Every /api/env route answers an environment the caller has no grant on with
+	// the 404 of a missing one and a permission.denied entry (D-08): the answer
+	// carries nothing of the environment's agents.
+	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "b-node") || strings.Contains(rec.Body.String(), b.ID) {
+		t.Fatalf("an environment the viewer may not read: %d %s, want 404 and nothing of it", rec.Code, rec.Body)
 	}
-	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-viewer" {
+	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-viewer" || denied[0].Reason != "environment_not_visible" {
 		t.Errorf("permission.denied entries = %+v", denied)
 	}
 	rec = f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + a.ID + "/agents", cookie: cookie, csrf: csrf})

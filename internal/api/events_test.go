@@ -485,12 +485,12 @@ func TestEventRoutesNeedEnvironmentsReadAndAKnownEnvironment(t *testing.T) {
 	cookie, _ := f.signIn(t, "nobody", false)
 
 	c := f.openStream(t, cookie, "")
-	if c.status0() != http.StatusForbidden {
-		t.Errorf("the stream for a user without environments.read = %d, want 403", c.status0())
+	if c.status0() != http.StatusNotFound {
+		t.Errorf("the stream for a user with no grant on the environment = %d, want 404 (D-08)", c.status0())
 	}
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + f.env.ID + "/events", cookie: cookie})
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("recent events for a user without environments.read = %d, want 403", rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("recent events for a user with no grant on the environment = %d, want 404 (D-08)", rec.Code)
 	}
 
 	rec = f.call(t, authReq{method: http.MethodGet, path: "/api/env/no-such-env/events", cookie: f.cookie})
