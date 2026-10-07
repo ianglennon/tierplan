@@ -1,0 +1,6 @@
+services:
+  web:
+    image: nginx:1.27
+    privileged: true
+    ports:
+      - "8080:80"
