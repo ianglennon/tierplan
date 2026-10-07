@@ -328,6 +328,100 @@ describe("expanding a row", () => {
   });
 });
 
+describe("refused requests", () => {
+  const FIRST = "2026-10-01T04:30:05Z";
+  const LAST = "2026-10-01T04:30:58Z";
+
+  function refusal(over: Record<string, unknown> = {}) {
+    return entry({
+      action: "permission.denied",
+      result: "denied",
+      actor: "mallory",
+      targetType: "route",
+      target: "GET /api/audit",
+      reason: "forbidden",
+      ...over,
+    });
+  }
+
+  it("shows a coalesced refusal as one row with a x11 badge and the first time", async () => {
+    answer = () =>
+      Response.json({
+        items: [
+          refusal({
+            time: "2026-10-01T04:31:10Z",
+            details: { coalesced: "true", count: "11", first: FIRST, last: LAST },
+          }),
+        ],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    const row = (await screen.findByText("Permission denied")).closest("tr") as HTMLElement;
+    const badge = within(row).getByText("×11");
+    expect(badge.className).toContain("tabular-nums");
+    expect(badge.className).toContain("text-xs");
+    // The Time column shows the first refusal's time, not the summary's.
+    expect(within(row).getByRole("time").getAttribute("datetime")).toBe(FIRST);
+  });
+
+  it("expands to First refused, Last refused and Count without the raw coalesced keys", async () => {
+    answer = () =>
+      Response.json({
+        items: [
+          refusal({
+            details: { coalesced: "true", count: "11", first: FIRST, last: LAST, other: "kept" },
+          }),
+        ],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show details for Permission denied" }),
+    );
+    const hide = await screen.findByRole("button", { name: "Hide details for Permission denied" });
+    const view = within(
+      document.getElementById(hide.getAttribute("aria-controls") as string) as HTMLElement,
+    );
+    expect(view.getByText("First refused").nextElementSibling?.textContent).toContain("04:30:05");
+    expect(view.getByText("Last refused").nextElementSibling?.textContent).toContain("04:30:58");
+    expect(view.getByText("Count").nextElementSibling?.textContent).toBe("11");
+    expect(view.queryByText("coalesced: true")).toBeNull();
+    expect(view.queryByText("count: 11")).toBeNull();
+    expect(view.queryByText("first: " + FIRST)).toBeNull();
+    // A detail that is not part of the burst is still listed.
+    expect(view.getByText("other: kept")).toBeTruthy();
+  });
+
+  it("explains an environment the user cannot see as answered as not found", async () => {
+    answer = () =>
+      Response.json({
+        items: [refusal({ reason: "environment_not_visible", environment: "env-1" })],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show details for Permission denied" }),
+    );
+    expect(
+      await screen.findByText("Environment not visible to this user (answered as not found)."),
+    ).toBeTruthy();
+  });
+
+  it("shows an ordinary refusal with no badge and its reason as recorded", async () => {
+    answer = () => Response.json({ items: [refusal()], nextCursor: null, retentionDays: 90 });
+    renderAt("/audit");
+    const row = (await screen.findByText("Permission denied")).closest("tr") as HTMLElement;
+    expect(within(row).queryByText(/^×/)).toBeNull();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show details for Permission denied" }),
+    );
+    expect(await screen.findByText("forbidden")).toBeTruthy();
+  });
+});
+
 describe("Load more", () => {
   it("fetches the next 50 with the cursor and appends them until there is no cursor", async () => {
     answer = (call) =>

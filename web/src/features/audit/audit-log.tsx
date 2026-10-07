@@ -24,6 +24,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { useT } from "@/i18n/use-t";
 import { formatAbsolute, formatAbsoluteUtc } from "@/lib/format";
@@ -37,6 +38,13 @@ const route = getRouteApi("/_app/audit");
 const COLUMNS = ["time", "user", "action", "target", "environment", "result", "ip"] as const;
 // The expand column plus the seven above: the width a detail row spans.
 const COLUMN_COUNT = COLUMNS.length + 1;
+
+// Refusal reasons the log has a sentence for; any other reason is shown as recorded.
+const KNOWN_REASONS: readonly string[] = ["environment_not_visible"];
+
+// The detail keys a coalesced refusal carries (D-20). They are shown as labelled
+// rows, so they are not repeated in the raw details list.
+const COALESCED_KEYS: readonly string[] = ["coalesced", "count", "first", "last"];
 
 const SKELETON_ROWS = 8;
 const ROW = "h-9 max-md:h-11";
@@ -80,6 +88,43 @@ interface DetailProps {
   wrap?: boolean;
 }
 
+// coalescedRefusal reads the burst a coalesced entry stands for: how many refusals
+// came after the first, and when the first and the last were. It is undefined for
+// every other entry. The server writes these as text, so a value that does not
+// parse leaves the entry an ordinary one.
+function coalescedRefusal(
+  entry: AuditEntry,
+): { count: string; first: string; last: string } | undefined {
+  const d = entry.details ?? {};
+  if (d.coalesced !== "true" || !/^\d+$/.test(d.count ?? "")) return undefined;
+  return { count: d.count ?? "", first: d.first ?? entry.time, last: d.last ?? entry.time };
+}
+
+// TimeDetail is a time in the browser's zone with the same moment in UTC behind
+// a tooltip, reachable by keyboard.
+function TimeDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <dt className="text-xs font-semibold text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-sm">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <time
+              dateTime={value}
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: the tooltip must open on keyboard focus (UI-SPEC D-66)
+              tabIndex={0}
+              className="rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              {formatAbsolute(value)}
+            </time>
+          </TooltipTrigger>
+          <TooltipContent>{formatAbsoluteUtc(value)}</TooltipContent>
+        </Tooltip>
+      </dd>
+    </div>
+  );
+}
+
 function Detail({ label, children, mono, wrap }: DetailProps) {
   const t = useT();
   return (
@@ -103,7 +148,13 @@ function Detail({ label, children, mono, wrap }: DetailProps) {
 // reason, any extra details, and the entry ID. Everything is rendered as text.
 function EntryDetails({ entry }: { entry: AuditEntry }) {
   const t = useT();
-  const extra = Object.entries(entry.details ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const coalesced = coalescedRefusal(entry);
+  const extra = Object.entries(entry.details ?? {})
+    .filter(([key]) => !(coalesced && COALESCED_KEYS.includes(key)))
+    .sort(([a], [b]) => a.localeCompare(b));
+  const reason = KNOWN_REASONS.includes(entry.reason)
+    ? t(`audit.reasons.${entry.reason}`)
+    : entry.reason;
   return (
     // w-0 min-w-full: the panel takes the width the other rows gave the table
     // and adds none of its own, so a long user agent wraps instead of widening
@@ -122,8 +173,15 @@ function EntryDetails({ entry }: { entry: AuditEntry }) {
           {entry.ip}
         </Detail>
         <Detail label={t("audit.details.reason")} wrap>
-          {entry.reason}
+          {reason}
         </Detail>
+        {coalesced ? (
+          <>
+            <TimeDetail label={t("audit.coalesced.first")} value={coalesced.first} />
+            <TimeDetail label={t("audit.coalesced.last")} value={coalesced.last} />
+            <Detail label={t("audit.coalesced.count")}>{coalesced.count}</Detail>
+          </>
+        ) : null}
         <div className="md:col-span-2">
           <Detail label={t("audit.details.userAgent")} wrap>
             {entry.userAgent}
@@ -164,6 +222,7 @@ function EntryRow({ entry, environmentName }: EntryRowProps) {
   const [open, setOpen] = useState(false);
   const label = actionLabel(entry.action, t);
   const none = t("audit.none");
+  const coalesced = coalescedRefusal(entry);
   const environment = entry.environment ? (environmentName ?? entry.environment) : none;
 
   return (
@@ -186,12 +245,23 @@ function EntryRow({ entry, environmentName }: EntryRowProps) {
             </CollapsibleTrigger>
           </TableCell>
           <TableCell className={cn(CELL, "whitespace-nowrap")}>
-            <RelativeTime value={entry.time} />
+            <RelativeTime value={coalesced ? coalesced.first : entry.time} />
           </TableCell>
           <TableCell className={CELL}>
             <Actor entry={entry} />
           </TableCell>
-          <TableCell className={cn(CELL, "whitespace-nowrap")}>{label}</TableCell>
+          <TableCell className={cn(CELL, "whitespace-nowrap")}>
+            {coalesced ? (
+              <span className="inline-flex items-center gap-2">
+                {label}
+                <Badge variant="outline" className="px-2 text-xs tabular-nums">
+                  {t("audit.coalesced.badge", { count: coalesced.count })}
+                </Badge>
+              </span>
+            ) : (
+              label
+            )}
+          </TableCell>
           <TableCell className={CELL}>
             {entry.target ? <TruncatedText>{entry.target}</TruncatedText> : none}
           </TableCell>

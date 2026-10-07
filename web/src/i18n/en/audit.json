@@ -111,6 +111,15 @@
         "denied": "Permission denied"
       }
     },
+    "coalesced": {
+      "badge": "×{{count}}",
+      "first": "First refused",
+      "last": "Last refused",
+      "count": "Count"
+    },
+    "reasons": {
+      "environment_not_visible": "Environment not visible to this user (answered as not found)."
+    },
     "anonymous": "Anonymous",
     "none": "—",
     "empty": {
