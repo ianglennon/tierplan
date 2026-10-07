@@ -301,6 +301,7 @@ describe("/settings/environments/$envId", () => {
       expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
       expect(screen.queryByRole("heading", { name: "General" })).toBeNull();
       cleanup();
+      queryClient.clear();
     }
   });
 

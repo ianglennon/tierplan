@@ -48,6 +48,7 @@ import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from "@/componen
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { LocalHostPanel, localHostQuery } from "@/features/environments/local-host-panel";
+import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
 
@@ -233,10 +234,13 @@ export function RenameDialog({ environment, onClose, returnFocusRef }: RenameDia
 // version and, for the host Bayplan itself runs on, the own-instance badge.
 function EnvironmentRow({
   environment,
+  canRemove,
   onRename,
   onRemove,
 }: {
   environment: EnvironmentItem;
+  // Removing the host is environments.delete, which an env Admin does not hold.
+  canRemove: boolean;
   onRename: (trigger: HTMLElement) => void;
   onRemove: (trigger: HTMLElement) => void;
 }) {
@@ -291,15 +295,17 @@ function EnvironmentRow({
             >
               {t("settings.environments.rename")}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className={`${TOUCH_HEIGHT} border-destructive/40 text-status-offline-text hover:text-status-offline-text max-md:flex-1`}
-              aria-label={t("settings.environments.removeAria", { name: environment.name })}
-              onClick={(e) => onRemove(e.currentTarget)}
-            >
-              {t("settings.environments.remove")}
-            </Button>
+            {canRemove ? (
+              <Button
+                type="button"
+                variant="outline"
+                className={`${TOUCH_HEIGHT} border-destructive/40 text-status-offline-text hover:text-status-offline-text max-md:flex-1`}
+                aria-label={t("settings.environments.removeAria", { name: environment.name })}
+                onClick={(e) => onRemove(e.currentTarget)}
+              >
+                {t("settings.environments.remove")}
+              </Button>
+            ) : null}
           </>
         ) : (
           <Button asChild variant="outline" className={`${TOUCH_HEIGHT} max-md:flex-1`}>
@@ -319,11 +325,17 @@ function EnvironmentRow({
 
 // EnvironmentsSettings is Settings > Environments (D-20, D-60): the rows with
 // Rename and Remove host, and, while the local host is not an environment, the
-// same opt-in the wizard offers. Every change is audited by the server.
+// same opt-in the wizard offers. The rows are the environments the user
+// administers (environments.configure on each, D-07); Remove host and the opt-in
+// are for those who hold environments.delete and environments.create, which an
+// env Admin does not. Every change is audited by the server.
 export function EnvironmentsSettings() {
   const t = useT();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { data: me } = useMe();
+  const canCreate = hasPermission(me, "environments.create");
+  const canDelete = hasPermission(me, "environments.delete");
   const environments = useQuery(environmentsQuery);
   const [renaming, setRenaming] = useState<EnvironmentItem | null>(null);
   const [removing, setRemoving] = useState<EnvironmentItem | null>(null);
@@ -386,10 +398,12 @@ export function EnvironmentsSettings() {
     );
   }
 
-  const items = environments.data.items ?? [];
+  const all = environments.data.items ?? [];
+  // The server lists what the user may read; this narrows it to what they administer.
+  const items = all.filter((e) => hasPermission(me, "environments.configure", e.id));
   // Only the local host exists as an environment kind for now, so the opt-in is
-  // for when none of the rows is it.
-  const hasLocal = items.some((e) => e.kind === "local");
+  // for when none of the environments is it, whoever may see it.
+  const hasLocal = all.some((e) => e.kind === "local");
 
   return (
     <div ref={listRef} tabIndex={-1} className="flex flex-col gap-6 outline-none">
@@ -399,6 +413,7 @@ export function EnvironmentsSettings() {
             <EnvironmentRow
               key={environment.id}
               environment={environment}
+              canRemove={canDelete}
               onRename={(button) => {
                 trigger.current = button;
                 setRenaming(environment);
@@ -422,7 +437,7 @@ export function EnvironmentsSettings() {
         </Empty>
       )}
 
-      {hasLocal ? null : (
+      {hasLocal || !canCreate ? null : (
         <Card className="py-6">
           <CardContent className="px-6">
             {/* No onDone: in Settings the panel invalidates what it changed and

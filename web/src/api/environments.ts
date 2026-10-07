@@ -249,7 +249,7 @@ export class AdoptClusterError extends Error {
 // ["environments"] list again afterwards, which is what takes the environment out
 // of cluster_changed on every page.
 export async function adoptCluster(envId: string): Promise<void> {
-  const { error, response } = await api.POST("/api/environments/{envId}/adopt-cluster", {
+  const { error, response } = await api.POST("/api/env/{envId}/adopt-cluster", {
     params: { path: { envId } },
   });
   if (!response.ok) throw new AdoptClusterError(error, response);

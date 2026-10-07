@@ -34,8 +34,8 @@ const SHA = "0123456789abcdef0123456789abcdef01234567";
 const ADMIN = makeMe({
   instanceAdmin: true,
   permissions: {
-    global: ["settings.read", "settings.write", "environments.manage"],
-    environments: {},
+    global: ["settings.read", "settings.write"],
+    environments: { "*": ["environments.configure"] },
   },
 });
 const READER = { ...ADMIN, permissions: { global: ["settings.read"], environments: {} } };

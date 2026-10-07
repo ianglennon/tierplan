@@ -28,7 +28,8 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { VersionFooter } from "@/components/version-footer";
-import { useAnyEnvironmentPermission, usePermission } from "@/hooks/use-me";
+import { visibleSettingsTabs } from "@/features/settings/tabs";
+import { useAnyEnvironmentPermission, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // AppSidebar is the left navigation (D-53): the environment switcher on top,
@@ -76,11 +77,11 @@ export function AppSidebar() {
   const footerHere = isMobile || state === "expanded";
   // The selected environment's sections show while a route has one.
   const { envId } = useParams({ strict: false });
-  // Settings is for admins: the settings pages and the environment registry
-  // are what it leads to (D-53). The server checks each of them again.
-  const canReadSettings = usePermission("settings.read");
-  const canManageEnvironments = usePermission("environments.manage");
-  const canSettings = canReadSettings || canManageEnvironments;
+  // Settings shows when any of its tabs does: an instance admin's pages and the
+  // environment list, which an env Admin opens for their own environments alone
+  // (D-53, D-07). The server checks each of them again.
+  const { data: me } = useMe();
+  const canSettings = visibleSettingsTabs(me).length > 0;
   // Audit is global and admin only in this phase (D-43).
   const canAudit = usePermission("audit.read");
   // The overview is global. environments.read is held per environment, so it

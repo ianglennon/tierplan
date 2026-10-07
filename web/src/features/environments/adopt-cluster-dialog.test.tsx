@@ -28,6 +28,7 @@ beforeEach(() => {
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
       if (req.method === "POST") posts.push({ path, csrf: req.headers.get("X-CSRF-Token") });
+      if (path === "/api/me") return Response.json(me);
       if (path === "/api/env/e2/adopt-cluster") return answer();
       return Response.json({ items: [] });
     }),

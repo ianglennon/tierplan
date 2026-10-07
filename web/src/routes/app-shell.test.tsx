@@ -119,6 +119,7 @@ describe("Settings in the sidebar", () => {
   it("shows Settings to an env Admin who holds no installation-wide permission, and not to a Viewer", async () => {
     account = makeMe({ envs: { e1: "admin" } });
     renderAt("/");
+    await screen.findByText("No environments yet");
     expect(await within(sidebar()).findByRole("link", { name: "Settings" })).toBeTruthy();
     cleanup();
     queryClient.clear();

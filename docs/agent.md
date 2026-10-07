@@ -11,6 +11,7 @@ A remote Docker host or swarm is managed through a small agent that you install 
 - [A proxy with its own certificate: BAYPLAN_AGENT_PIN](#a-proxy-with-its-own-certificate-bayplan_agent_pin)
 - [Troubleshooting](#troubleshooting)
 - [Cloned machines and the engine ID](#cloned-machines-and-the-engine-id)
+- [Who can manage an environment's agents](#who-can-manage-an-environments-agents)
 - [Revoke, unblock and enrol again](#revoke-unblock-and-enrol-again)
 - [Updates](#updates)
 - [Uninstall and manual cleanup](#uninstall-and-manual-cleanup)
@@ -292,6 +293,12 @@ sudo systemctl start docker
 ```
 
 If you cannot wipe `/var/lib/docker`, give the clone a clean Docker data directory. Swarm nodes cloned from one another also share a node ID and need `docker swarm leave --force` and a fresh join after the engine has its new ID.
+
+## Who can manage an environment's agents
+
+An **Admin** of an environment, and an instance admin, can rename it, switch its automatic agent updates, update agents, revoke, block and unblock its nodes and adopt a changed cluster. Those actions live under `/api/env/{envId}/...`, so an Admin of environment A is told nothing about environment B: it answers `404`, as if B did not exist. An Admin sees Settings with only the Environments tab, listing the environments they administer, and on each page the General, Connection, Nodes and agents and Agent updates cards.
+
+Adding an environment, removing one, showing or rotating its join token and folding the local host into a swarm stay with instance admins. An Admin does not see the Join token, Local host or Remove environment cards. The full list is in [Permissions](permissions.md).
 
 ## Revoke, unblock and enrol again
 

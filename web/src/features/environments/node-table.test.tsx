@@ -503,6 +503,7 @@ describe("NodeTable row actions", () => {
     await openMenu("mgr-1");
     expect(await screen.findByRole("menuitem", { name: "Revoke node" })).toBeTruthy();
     cleanup();
+    client.clear();
 
     for (const other of [makeMe({ envs: { e2: "viewer" } }), makeMe({ envs: { e9: "admin" } })]) {
       account = other;
@@ -510,6 +511,7 @@ describe("NodeTable row actions", () => {
       await screen.findByText("mgr-1");
       expect(screen.queryByRole("button", { name: /^Actions for/ })).toBeNull();
       cleanup();
+      client.clear();
     }
   });
 

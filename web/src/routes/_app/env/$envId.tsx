@@ -160,7 +160,7 @@ interface ProblemLinks {
   envId: string;
   // Whether this state offers the node list at all (a revoked environment does).
   settings: boolean;
-  canManage: boolean;
+  canConfigure: boolean;
   canDelete: boolean;
   t: ReturnType<typeof useT>;
 }
@@ -170,9 +170,9 @@ interface ProblemLinks {
 // there. The Remove card is /settings/environments/$envId#remove (plan 29 builds
 // it; until then the link lands on the page). Undefined when the caller may do
 // neither, so the page has no empty row of actions.
-function problemActions({ envId, settings, canManage, canDelete, t }: ProblemLinks) {
+function problemActions({ envId, settings, canConfigure, canDelete, t }: ProblemLinks) {
   const links: ReactNode[] = [];
-  if (settings && canManage) {
+  if (settings && canConfigure) {
     links.push(
       <Button key="settings" asChild variant="secondary">
         <Link to="/settings/environments/$envId" params={{ envId }}>
@@ -196,7 +196,7 @@ function problemActions({ envId, settings, canManage, canDelete, t }: ProblemLin
 interface ClusterChangedProps extends StateProps {
   // The environment as the list knows it, for the cluster ID the dialog names.
   item: EnvironmentItem | undefined;
-  canManage: boolean;
+  canConfigure: boolean;
   canDelete: boolean;
 }
 
@@ -204,12 +204,12 @@ interface ClusterChangedProps extends StateProps {
 // different cluster, so Bayplan refused them and changed nothing. Someone who may
 // manage the environment can adopt the new cluster (the primary action); someone
 // who may delete it can remove it instead (D-14).
-function ClusterChangedPage({ envId, name, item, canManage, canDelete }: ClusterChangedProps) {
+function ClusterChangedPage({ envId, name, item, canConfigure, canDelete }: ClusterChangedProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const heading = t("fullpage.clusterChanged.heading");
-  const links = problemActions({ envId, settings: false, canManage, canDelete, t }) ?? [];
+  const links = problemActions({ envId, settings: false, canConfigure, canDelete, t }) ?? [];
   return (
     <>
       <PageTitle page={heading} />
@@ -219,9 +219,9 @@ function ClusterChangedPage({ envId, name, item, canManage, canDelete }: Cluster
         heading={heading}
         body={t("fullpage.clusterChanged.body", { name })}
         action={
-          canManage || links.length > 0 ? (
+          canConfigure || links.length > 0 ? (
             <>
-              {canManage ? (
+              {canConfigure ? (
                 <Button ref={trigger} type="button" onClick={() => setOpen(true)}>
                   {t("fullpage.clusterChanged.adopt")}
                 </Button>
@@ -231,7 +231,7 @@ function ClusterChangedPage({ envId, name, item, canManage, canDelete }: Cluster
           ) : undefined
         }
       />
-      {canManage ? (
+      {canConfigure ? (
         <AdoptClusterDialog
           environment={{ id: envId, name, pendingClusterId: item?.pendingClusterId }}
           open={open}
@@ -262,7 +262,9 @@ function EnvironmentLayout() {
 
   const item = environments.data?.items?.find((e) => e.id === envId);
   const name = item?.name ?? t("dashboard.environmentFallback");
-  const canManage = usePermission("environments.manage");
+  // Adopting a changed cluster and opening the environment's settings need
+  // environments.configure on it (D-07).
+  const canConfigure = usePermission("environments.configure", envId);
   const canDelete = usePermission("environments.delete");
 
   const retry = useMutation({
@@ -361,7 +363,7 @@ function EnvironmentLayout() {
           tone="offline"
           heading={heading}
           body={t("fullpage.revoked.body", { name })}
-          action={problemActions({ envId, settings: true, canManage, canDelete, t })}
+          action={problemActions({ envId, settings: true, canConfigure, canDelete, t })}
         />
       </>
     );
@@ -372,7 +374,7 @@ function EnvironmentLayout() {
         envId={envId}
         name={name}
         item={item}
-        canManage={canManage}
+        canConfigure={canConfigure}
         canDelete={canDelete}
       />
     );

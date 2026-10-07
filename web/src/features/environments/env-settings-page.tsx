@@ -130,11 +130,11 @@ function GeneralCard({ env }: { env: EnvironmentItem }) {
 function ConnectionCard({
   env,
   canSettings,
-  canManage,
+  canConfigure,
 }: {
   env: EnvironmentItem;
   canSettings: boolean;
-  canManage: boolean;
+  canConfigure: boolean;
 }) {
   const t = useT();
   const [adopting, setAdopting] = useState(false);
@@ -185,7 +185,7 @@ function ConnectionCard({
           ) : null}
         </div>
       ) : null}
-      {env.status.state === "cluster_changed" && canManage ? (
+      {env.status.state === "cluster_changed" && canConfigure ? (
         <>
           <div>
             <Button
@@ -215,8 +215,13 @@ interface EnvSettingsPageProps {
 
 // EnvSettingsPage is Settings > Environments > {env} (D-38): the breadcrumb and
 // the cards General, Connection, Nodes and agents, Join token and Agent updates,
-// and Remove environment last (D-30), each shown only to someone who holds its
-// permission. The Connection card offers Adopt new cluster while the swarm was
+// and Remove environment last (D-30). The page is for someone who holds
+// environments.configure on this environment, an env Admin or an instance admin
+// (D-07). General, Connection, Nodes and agents and Agent updates are theirs;
+// Join token, Local host and Remove environment need the installation-wide
+// environments.token, environments.manage and environments.delete, so an env
+// Admin never sees those cards (D-19: a card with no usable action is hidden whole).
+// The Connection card offers Adopt new cluster while the swarm was
 // re-initialised (plan 19); the Local host card (plan 30) comes between Agent updates and
 // Remove, only while the server offers the fold. Hiding a card is not access control; the server answers 403.
 export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
@@ -234,18 +239,20 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   const env = items.find((e) => e.id === envId);
   useDocumentTitle(env?.name);
 
-  const canManage = hasPermission(me, "environments.manage");
-  // Rename and the auto-update switch need configure on this environment (D-07), so an
-  // env Admin has the General card without holding any installation-wide permission.
+  // Rename, the auto-update switch, agent updates and adopting a changed cluster need
+  // configure on this environment (D-07), so an env Admin has them without holding any
+  // installation-wide permission. Revoke is held per environment too.
   const canConfigure = hasPermission(me, "environments.configure", envId);
-  const canToken = hasPermission(me, "environments.token");
-  const canRevoke = hasPermission(me, "environments.revoke");
+  const canRevoke = hasPermission(me, "environments.revoke", envId);
   const canRead = hasPermission(me, "environments.read", envId);
+  // The rest is installation-wide: the join token, the local-host fold, removal and
+  // the settings that hold the address agents dial.
+  const canToken = hasPermission(me, "environments.token");
+  const canFold = hasPermission(me, "environments.manage");
   const canSettings = hasPermission(me, "settings.read");
   const canDelete = hasPermission(me, "environments.delete");
 
-  if (!(canManage || canConfigure || canToken || canRevoke || canSettings || canDelete))
-    return <NoPermission />;
+  if (!canConfigure) return <NoPermission />;
 
   if (environments.isPending) {
     return (
@@ -320,9 +327,9 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
       </header>
       {canConfigure ? <GeneralCard env={env} /> : null}
       {canRead ? (
-        <ConnectionCard env={env} canSettings={canSettings} canManage={canManage} />
+        <ConnectionCard env={env} canSettings={canSettings} canConfigure={canConfigure} />
       ) : null}
-      {canRead ? (
+      {canRead && (canConfigure || canRevoke) ? (
         <SettingsCard title={t("envsettings.sections.nodes")}>
           <NodeTable
             envId={env.id}
@@ -331,7 +338,7 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
         </SettingsCard>
       ) : null}
       {canToken && env.kind === "agent" ? <JoinTokenCard envId={env.id} /> : null}
-      {canManage && canRead && env.kind === "agent" ? <AgentUpdatesCard env={env} /> : null}
+      {canConfigure && canRead && env.kind === "agent" ? <AgentUpdatesCard env={env} /> : null}
       {canToken && env.kind === "agent" ? (
         <InstallDialog
           open={rotating}
@@ -345,7 +352,7 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
           }}
         />
       ) : null}
-      {canManage && env.foldOffered ? (
+      {canFold && env.foldOffered ? (
         <FoldCard
           env={env}
           // The card and its dialog are gone with the offer, so focus would fall to the

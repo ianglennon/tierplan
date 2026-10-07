@@ -180,6 +180,7 @@ describe("Settings layout", () => {
     ];
     me = makeMe({ envs: { e1: "admin", e2: "viewer", e3: "operator" } });
     renderAt("/settings/environments");
+    await screen.findByRole("tab", { name: "Environments" });
     await main().findByText("lab-1");
     expect(main().queryByText("edge")).toBeNull();
     expect(main().queryByText("build")).toBeNull();
@@ -192,6 +193,7 @@ describe("Settings layout", () => {
     host = localHost({ managed: false });
     me = makeMe({ envs: { e2: "admin" } });
     renderAt("/settings/environments");
+    await screen.findByRole("tab", { name: "Environments" });
     await main().findByText("edge");
     expect(main().queryByRole("button", { name: "Manage this host" })).toBeNull();
     cleanup();
@@ -199,6 +201,7 @@ describe("Settings layout", () => {
 
     me = ADMIN;
     renderAt("/settings/environments");
+    await screen.findByRole("tab", { name: "Environments" });
     expect(await main().findByRole("button", { name: "Manage this host" })).toBeTruthy();
   });
 
@@ -210,6 +213,7 @@ describe("Settings layout", () => {
     ];
     me = makeMe({ envs: { e1: "admin", e2: "admin", e3: "viewer" } });
     renderAt("/settings/environments");
+    await screen.findByRole("tab", { name: "Environments" });
     await main().findByText("alpha");
     expect(main().getByText("beta")).toBeTruthy();
     expect(main().queryByText("gamma")).toBeNull();

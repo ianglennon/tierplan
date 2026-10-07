@@ -4,8 +4,8 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { SETTINGS_TABS } from "@/features/settings/tabs";
-import { hasPermission, useMe } from "@/hooks/use-me";
+import { SETTINGS_TABS, visibleSettingsTabs } from "@/features/settings/tabs";
+import { useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // SettingsLayout is the Settings area: the page title and a tab bar driven by
@@ -16,7 +16,7 @@ function SettingsLayout() {
   const t = useT();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { data: me } = useMe();
-  const tabs = SETTINGS_TABS.filter((tab) => hasPermission(me, tab.perm));
+  const tabs = visibleSettingsTabs(me);
   const active = SETTINGS_TABS.find(
     (tab) => pathname === tab.to || pathname.startsWith(`${tab.to}/`),
   )?.key;

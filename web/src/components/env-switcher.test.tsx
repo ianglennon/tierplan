@@ -375,6 +375,7 @@ describe("EnvSwitcher (D-35)", () => {
         expect(screen.getByRole("option", { name: "All environments" })).toBeTruthy();
         expect(screen.queryByRole("option", { name: "Manage environments" })).toBeNull();
         cleanup();
+        queryClient.clear();
       }
     });
 
