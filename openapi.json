@@ -114,7 +114,7 @@
             ]
           },
           "pendingClusterId": {
-            "description": "Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to",
+            "description": "Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to",
             "type": "string"
           },
           "status": {
@@ -968,7 +968,7 @@
             ]
           },
           "pendingClusterId": {
-            "description": "Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to",
+            "description": "Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to",
             "type": "string"
           },
           "status": {
@@ -3147,6 +3147,57 @@
         ]
       }
     },
+    "/api/env/{envId}/adopt-cluster": {
+      "post": {
+        "description": "A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.configure on the environment (env Admin or instance admin).",
+        "operationId": "adoptEnvironmentCluster",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdoptClusterBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Adopt the new cluster of a re-initialised swarm",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/agents": {
       "get": {
         "description": "Every enrolled agent with its node name, role, status, whether its host is blocked, whether it is connected, versions, the full certificate fingerprint and expiry, clock offset, when it was last seen, the policy flags the host owner set and the last request it refused. Problems come first: revoked agents, then agents that are not connected, then the rest by node name. A local-socket environment has none, and an empty manualCleanup. Never carries a key, a token or a serial. 404 environment_not_found when the environment does not exist or the caller may not read it. Needs environments.read on the environment.",
@@ -3193,6 +3244,156 @@
           }
         },
         "summary": "List the agents of an environment's nodes",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/agents/{agentId}/revoke": {
+      "post": {
+        "description": "The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked when it was revoked already, by this admin or another. Needs environments.revoke on the environment (env Admin or instance admin). Audited as agent.revoked and agent.blocked.",
+        "operationId": "revokeEnvironmentAgent",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeAgentBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Revoke a node's agent",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/agents/{agentId}/unblock": {
+      "post": {
+        "description": "Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. An agent that still has its join token drops its revoked identity and enrols again by itself at its next try, within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke on the environment (env Admin or instance admin). Audited as agent.unblocked.",
+        "operationId": "unblockEnvironmentAgent",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Let a revoked node's host enrol again",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/agents/{agentId}/update": {
+      "post": {
+        "description": "Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled (the host owner refused), agent_up_to_date or update_in_progress. Needs environments.configure on the environment (env Admin or instance admin). Audited as agent.updated, or agent.update_failed with its reason when the update does not finish.",
+        "operationId": "updateEnvironmentAgent",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Update an agent to this server's version",
         "tags": [
           "environments"
         ]
@@ -3617,6 +3818,57 @@
         ]
       }
     },
+    "/api/env/{envId}/update-agents": {
+      "post": {
+        "description": "Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.configure on the environment (env Admin or instance admin). Audited like an update of one agent.",
+        "operationId": "updateEnvironmentAgents",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateAgentsBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Update every agent of an environment that is behind",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/volumes": {
       "get": {
         "description": "By name. On a swarm every node's volumes, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
@@ -3872,207 +4124,6 @@
         ]
       }
     },
-    "/api/environments/{envId}/adopt-cluster": {
-      "post": {
-        "description": "A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.manage.",
-        "operationId": "adoptEnvironmentCluster",
-        "parameters": [
-          {
-            "description": "The environment ID",
-            "in": "path",
-            "name": "envId",
-            "required": true,
-            "schema": {
-              "description": "The environment ID",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdoptClusterBody"
-                }
-              }
-            },
-            "description": "OK",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Adopt the new cluster of a re-initialised swarm",
-        "tags": [
-          "environments"
-        ]
-      }
-    },
-    "/api/environments/{envId}/agents/{agentId}/revoke": {
-      "post": {
-        "description": "The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked when it was revoked already, by this admin or another. Needs environments.revoke. Audited as agent.revoked and agent.blocked.",
-        "operationId": "revokeEnvironmentAgent",
-        "parameters": [
-          {
-            "description": "The environment ID",
-            "in": "path",
-            "name": "envId",
-            "required": true,
-            "schema": {
-              "description": "The environment ID",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
-            "in": "path",
-            "name": "agentId",
-            "required": true,
-            "schema": {
-              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RevokeAgentBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "No Content"
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Revoke a node's agent",
-        "tags": [
-          "environments"
-        ]
-      }
-    },
-    "/api/environments/{envId}/agents/{agentId}/unblock": {
-      "post": {
-        "description": "Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. An agent that still has its join token drops its revoked identity and enrols again by itself at its next try, within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. Audited as agent.unblocked.",
-        "operationId": "unblockEnvironmentAgent",
-        "parameters": [
-          {
-            "description": "The environment ID",
-            "in": "path",
-            "name": "envId",
-            "required": true,
-            "schema": {
-              "description": "The environment ID",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
-            "in": "path",
-            "name": "agentId",
-            "required": true,
-            "schema": {
-              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "No Content"
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Let a revoked node's host enrol again",
-        "tags": [
-          "environments"
-        ]
-      }
-    },
-    "/api/environments/{envId}/agents/{agentId}/update": {
-      "post": {
-        "description": "Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled (the host owner refused), agent_up_to_date or update_in_progress. Needs environments.manage. Audited as agent.updated, or agent.update_failed with its reason when the update does not finish.",
-        "operationId": "updateEnvironmentAgent",
-        "parameters": [
-          {
-            "description": "The environment ID",
-            "in": "path",
-            "name": "envId",
-            "required": true,
-            "schema": {
-              "description": "The environment ID",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
-            "in": "path",
-            "name": "agentId",
-            "required": true,
-            "schema": {
-              "description": "The agent ID, as listed by GET /api/env/{envId}/agents",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Accepted"
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Update an agent to this server's version",
-        "tags": [
-          "environments"
-        ]
-      }
-    },
     "/api/environments/{envId}/fold-local": {
       "post": {
         "description": "Offered when the Docker host Bayplan runs on is a manager of a swarm that is enrolled through agents: the local socket's own /info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. 404 environment_not_found; 409 fold_not_offered when the host is not a manager of that swarm, or was folded already. Needs environments.manage. Audited as environment.local_folded.",
@@ -4254,57 +4305,6 @@
           }
         },
         "summary": "Rotate an environment's join token",
-        "tags": [
-          "environments"
-        ]
-      }
-    },
-    "/api/environments/{envId}/update-agents": {
-      "post": {
-        "description": "Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.manage. Audited like an update of one agent.",
-        "operationId": "updateEnvironmentAgents",
-        "parameters": [
-          {
-            "description": "The environment ID",
-            "in": "path",
-            "name": "envId",
-            "required": true,
-            "schema": {
-              "description": "The environment ID",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UpdateAgentsBody"
-                }
-              }
-            },
-            "description": "Accepted",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Update every agent of an environment that is behind",
         "tags": [
           "environments"
         ]

@@ -124,6 +124,26 @@ export interface paths {
         patch: operations["updateEnvironment"];
         trace?: never;
     };
+    "/api/env/{envId}/adopt-cluster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt the new cluster of a re-initialised swarm
+         * @description A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.configure on the environment (env Admin or instance admin).
+         */
+        post: operations["adoptEnvironmentCluster"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/agents": {
         parameters: {
             query?: never;
@@ -138,6 +158,66 @@ export interface paths {
         get: operations["listEnvironmentAgents"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/agents/{agentId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a node's agent
+         * @description The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked when it was revoked already, by this admin or another. Needs environments.revoke on the environment (env Admin or instance admin). Audited as agent.revoked and agent.blocked.
+         */
+        post: operations["revokeEnvironmentAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/agents/{agentId}/unblock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Let a revoked node's host enrol again
+         * @description Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. An agent that still has its join token drops its revoked identity and enrols again by itself at its next try, within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke on the environment (env Admin or instance admin). Audited as agent.unblocked.
+         */
+        post: operations["unblockEnvironmentAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/agents/{agentId}/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update an agent to this server's version
+         * @description Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled (the host owner refused), agent_up_to_date or update_in_progress. Needs environments.configure on the environment (env Admin or instance admin). Audited as agent.updated, or agent.update_failed with its reason when the update does not finish.
+         */
+        post: operations["updateEnvironmentAgent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -264,6 +344,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/update-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update every agent of an environment that is behind
+         * @description Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.configure on the environment (env Admin or instance admin). Audited like an update of one agent.
+         */
+        post: operations["updateEnvironmentAgents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/volumes": {
         parameters: {
             query?: never;
@@ -348,86 +448,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/environments/{envId}/adopt-cluster": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Adopt the new cluster of a re-initialised swarm
-         * @description A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.manage.
-         */
-        post: operations["adoptEnvironmentCluster"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/environments/{envId}/agents/{agentId}/revoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Revoke a node's agent
-         * @description The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked when it was revoked already, by this admin or another. Needs environments.revoke. Audited as agent.revoked and agent.blocked.
-         */
-        post: operations["revokeEnvironmentAgent"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/environments/{envId}/agents/{agentId}/unblock": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Let a revoked node's host enrol again
-         * @description Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. An agent that still has its join token drops its revoked identity and enrols again by itself at its next try, within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. Audited as agent.unblocked.
-         */
-        post: operations["unblockEnvironmentAgent"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/environments/{envId}/agents/{agentId}/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Update an agent to this server's version
-         * @description Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled (the host owner refused), agent_up_to_date or update_in_progress. Needs environments.manage. Audited as agent.updated, or agent.update_failed with its reason when the update does not finish.
-         */
-        post: operations["updateEnvironmentAgent"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/environments/{envId}/fold-local": {
         parameters: {
             query?: never;
@@ -471,26 +491,6 @@ export interface paths {
          * @description The current join token enrols nobody from now on. Agents that are already enrolled keep working. Rotating the token makes a new one and enables enrolment again. Disabling a disabled token changes nothing. 404 environment_not_found. Needs environments.token. Audited as environment.token_disabled.
          */
         delete: operations["disableEnvironmentToken"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/environments/{envId}/update-agents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Update every agent of an environment that is behind
-         * @description Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.manage. Audited like an update of one agent.
-         */
-        post: operations["updateEnvironmentAgents"];
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -776,7 +776,7 @@ export interface components {
             name: string;
             /** @description Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster */
             nodes: components["schemas"]["EnvironmentNodesBody"] | null;
-            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to */
+            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to */
             pendingClusterId?: string;
             status: components["schemas"]["EnvironmentStatusBody"];
             /**
@@ -1114,7 +1114,7 @@ export interface components {
             name: string;
             /** @description Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster */
             nodes: components["schemas"]["EnvironmentNodesBody"] | null;
-            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to */
+            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to */
             pendingClusterId?: string;
             status: components["schemas"]["EnvironmentStatusBody"];
             /**
@@ -2045,6 +2045,39 @@ export interface operations {
             };
         };
     };
+    adoptEnvironmentCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptClusterBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listEnvironmentAgents: {
         parameters: {
             query?: never;
@@ -2066,6 +2099,106 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AgentListBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RevokeAgentBody"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unblockEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {
@@ -2357,6 +2490,39 @@ export interface operations {
             };
         };
     };
+    updateEnvironmentAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateAgentsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listVolumes: {
         parameters: {
             query?: {
@@ -2538,139 +2704,6 @@ export interface operations {
             };
         };
     };
-    adoptEnvironmentCluster: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "Cache-Control"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdoptClusterBody"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
-    revokeEnvironmentAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
-                agentId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["RevokeAgentBody"];
-            };
-        };
-        responses: {
-            /** @description No Content */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
-    unblockEnvironmentAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
-                agentId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description No Content */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
-    updateEnvironmentAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
-                agentId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Accepted */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
     foldLocalHost: {
         parameters: {
             query?: never;
@@ -2788,39 +2821,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
-    updateEnvironmentAgents: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Accepted */
-            202: {
-                headers: {
-                    "Cache-Control"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UpdateAgentsBody"];
-                };
             };
             /** @description Error */
             default: {

@@ -560,15 +560,15 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID:   "revokeEnvironmentAgent",
 		Method:        http.MethodPost,
-		Path:          "/api/environments/{envId}/agents/{agentId}/revoke",
+		Path:          "/api/env/{envId}/agents/{agentId}/revoke",
 		Summary:       "Revoke a node's agent",
 		DefaultStatus: http.StatusNoContent,
 		Description: "The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm " +
 			"node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host " +
 			"is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked " +
-			"when it was revoked already, by this admin or another. Needs environments.revoke. Audited as agent.revoked and agent.blocked.",
+			"when it was revoked already, by this admin or another. Needs environments.revoke on the environment (env Admin or instance admin). Audited as agent.revoked and agent.blocked.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRevoke, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RevokeAgentInput) (*struct{}, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRevoke, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *RevokeAgentInput) (*struct{}, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
@@ -589,15 +589,15 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID:   "unblockEnvironmentAgent",
 		Method:        http.MethodPost,
-		Path:          "/api/environments/{envId}/agents/{agentId}/unblock",
+		Path:          "/api/env/{envId}/agents/{agentId}/unblock",
 		Summary:       "Let a revoked node's host enrol again",
 		DefaultStatus: http.StatusNoContent,
 		Description: "Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The " +
 			"revoked agent stays revoked. An agent that still has its join token drops its revoked identity and enrols again by itself at its next try, " +
-			"within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. " +
+			"within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke on the environment (env Admin or instance admin). " +
 			"Audited as agent.unblocked.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRevoke, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UnblockAgentInput) (*struct{}, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRevoke, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *UnblockAgentInput) (*struct{}, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
@@ -614,15 +614,15 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "adoptEnvironmentCluster",
 		Method:      http.MethodPost,
-		Path:        "/api/environments/{envId}/adopt-cluster",
+		Path:        "/api/env/{envId}/adopt-cluster",
 		Summary:     "Adopt the new cluster of a re-initialised swarm",
 		Description: "A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is " +
 			"cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears " +
 			"cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not " +
 			"changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or " + problemClusterInUse + " when another " +
-			"environment manages the new cluster. Needs environments.manage.",
+			"environment manages the new cluster. Needs environments.configure on the environment (env Admin or instance admin).",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *TokenMutationInput) (*AdoptClusterOutput, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsConfigure, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *TokenMutationInput) (*AdoptClusterOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
@@ -640,17 +640,17 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID:   "updateEnvironmentAgent",
 		Method:        http.MethodPost,
-		Path:          "/api/environments/{envId}/agents/{agentId}/update",
+		Path:          "/api/env/{envId}/agents/{agentId}/update",
 		Summary:       "Update an agent to this server's version",
 		DefaultStatus: http.StatusAccepted,
 		Description: "Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is " +
 			"started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates " +
 			"its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever " +
 			"the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled " +
-			"(the host owner refused), agent_up_to_date or update_in_progress. Needs environments.manage. Audited as agent.updated, or agent.update_failed with " +
+			"(the host owner refused), agent_up_to_date or update_in_progress. Needs environments.configure on the environment (env Admin or instance admin). Audited as agent.updated, or agent.update_failed with " +
 			"its reason when the update does not finish.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateAgentInput) (*struct{}, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsConfigure, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *UpdateAgentInput) (*struct{}, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
@@ -667,15 +667,15 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID:   "updateEnvironmentAgents",
 		Method:        http.MethodPost,
-		Path:          "/api/environments/{envId}/update-agents",
+		Path:          "/api/env/{envId}/update-agents",
 		Summary:       "Update every agent of an environment that is behind",
 		DefaultStatus: http.StatusAccepted,
 		Description: "Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose " +
 			"host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; " +
 			"409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. " +
-			"Needs environments.manage. Audited like an update of one agent.",
+			"Needs environments.configure on the environment (env Admin or instance admin). Audited like an update of one agent.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateAgentsInput) (*UpdateAgentsOutput, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsConfigure, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *UpdateAgentsInput) (*UpdateAgentsOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")

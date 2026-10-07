@@ -65,9 +65,9 @@ type Registry []Permission
 var defaultRegistry = Registry{
 	{Name: PermEnvironmentsRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View an environment"},
 	{Name: PermEnvironmentsCreate, Scope: ScopeGlobal, Description: "Add environments"},
-	{Name: PermEnvironmentsManage, Scope: ScopeGlobal, Description: "Rename environments and manage their agents"},
+	{Name: PermEnvironmentsManage, Scope: ScopeGlobal, Description: "Fold the local host into an environment"},
 	{Name: PermEnvironmentsToken, Scope: ScopeGlobal, Dangerous: true, Description: "Show or rotate an environment's join token"},
-	{Name: PermEnvironmentsRevoke, Scope: ScopeGlobal, Description: "Revoke, block and unblock agents"},
+	{Name: PermEnvironmentsRevoke, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Revoke, block and unblock this environment's agents"},
 	{Name: PermEnvironmentsDelete, Scope: ScopeGlobal, Dangerous: true, Description: "Remove environments"},
 	{Name: PermEnvironmentsConfigure, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Rename an environment, manage its agents and auto-update, adopt a changed cluster"},
 	{Name: PermEnvironmentsAccess, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "See and change who has access to an environment"},

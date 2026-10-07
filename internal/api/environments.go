@@ -160,7 +160,7 @@ type EnvironmentBody struct {
 	AutoUpdate       *bool                            `json:"autoUpdate,omitempty" doc:"Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent"`
 	EngineVersion    *string                          `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
 	LastSeen         *string                          `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
-	PendingClusterID string                           `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to"`
+	PendingClusterID string                           `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to"`
 	FoldOffered      bool                             `json:"foldOffered,omitempty" doc:"True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice"`
 }
 

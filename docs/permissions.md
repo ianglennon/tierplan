@@ -29,9 +29,9 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `environments.configure` | environment | no | no | yes | yes | no | Rename an environment, manage its agents and auto-update, adopt a changed cluster |
 | `environments.create` | global | no | no | no | yes | no | Add environments |
 | `environments.delete` | global | no | no | no | yes | yes | Remove environments |
-| `environments.manage` | global | no | no | no | yes | no | Rename environments and manage their agents |
+| `environments.manage` | global | no | no | no | yes | no | Fold the local host into an environment |
 | `environments.read` | environment | yes | yes | yes | yes | no | View an environment |
-| `environments.revoke` | global | no | no | no | yes | no | Revoke, block and unblock agents |
+| `environments.revoke` | environment | no | no | yes | yes | no | Revoke, block and unblock this environment's agents |
 | `environments.token` | global | no | no | no | yes | yes | Show or rotate an environment's join token |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |

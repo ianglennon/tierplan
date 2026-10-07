@@ -160,7 +160,8 @@ func classify(rec httpx.RouteRecord) (kind, rbac.Permission) {
 	if !ok || reg.Scope != rec.Req.Scope {
 		return kindUnknown, rbac.Permission{}
 	}
-	envTree := strings.HasPrefix(rec.Path, "/api/env/{envId}/")
+	// The environment's own resource, PATCH /api/env/{envId}, is in the tree too.
+	envTree := rec.Path == "/api/env/{envId}" || strings.HasPrefix(rec.Path, "/api/env/{envId}/")
 	switch {
 	case reg.Scope == rbac.ScopeGlobal && !envTree:
 		return kindGlobal, reg
