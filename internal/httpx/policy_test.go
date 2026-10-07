@@ -892,3 +892,81 @@ func TestStillAuthorizedFollowsTheSessionTheEnvironmentAndThePermission(t *testi
 		t.Fatalf("re-checking audited %d entries, want none", n)
 	}
 }
+
+// TestStillAuthorizedMirrorsTheVisibilityFirstOrder pins each way a long-lived
+// stream stops being authorised: the caller's last grant on the environment goes,
+// the environment is gone or disabled, or the permission check itself fails.
+func TestStillAuthorizedMirrorsTheVisibilityFirstOrder(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(t *testing.T, f *fixture, envs fakeEnvs)
+		want   bool
+	}{
+		{"nothing changes", func(*testing.T, *fixture, fakeEnvs) {}, true},
+		{"the grant on the environment is removed", func(t *testing.T, f *fixture, _ fakeEnvs) {
+			if _, err := f.s.Write.Exec(`DELETE FROM role_assignments WHERE principal_id = 'viewer'`); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+		{"the grant is on another environment", func(t *testing.T, f *fixture, _ fakeEnvs) {
+			if _, err := f.s.Write.Exec(`UPDATE role_assignments SET env_id = 'env-other' WHERE principal_id = 'viewer'`); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+		{"the environment is gone", func(_ *testing.T, _ *fixture, envs fakeEnvs) { delete(envs, "env-on") }, false},
+		{"the environment is disabled", func(_ *testing.T, _ *fixture, envs fakeEnvs) {
+			envs["env-on"] = Env{ID: "env-on", Name: "On", Enabled: false}
+		}, false},
+		{"the user is disabled", func(t *testing.T, f *fixture, _ fakeEnvs) {
+			if _, err := f.s.Write.Exec(`UPDATE users SET disabled = 1 WHERE id = 'viewer'`); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+		{"the access lookup fails", func(t *testing.T, f *fixture, _ fakeEnvs) {
+			if err := f.s.Read.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			envs := fakeEnvs{"env-on": {ID: "env-on", Name: "On", Enabled: true}}
+			f := newFixture(t, func(o *Options) { o.EnvResolver = envs })
+			f.addUser(t, "viewer")
+			f.grant(t, "viewer", "viewer", "env-on")
+			var got []bool
+			f.r.Guarded(http.MethodGet, "/api/env/{envId}/probe", rbac.Require(rbac.PermContainersRead),
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					got = append(got, StillAuthorized(r.Context()))
+					c.change(t, f, envs)
+					got = append(got, StillAuthorized(r.Context()))
+					_, _ = w.Write([]byte("ok"))
+				}))
+			if rec := do(f.r.Handler(), http.MethodGet, "/api/env/env-on/probe", as("viewer")); rec.Code != http.StatusOK {
+				t.Fatalf("probe = %d, want 200: %s", rec.Code, rec.Body)
+			}
+			if len(got) != 2 || !got[0] || got[1] != c.want {
+				t.Fatalf("StillAuthorized = %v, want true then %v", got, c.want)
+			}
+			if n := len(f.audit.all()); n != 0 {
+				t.Errorf("re-checking audited %d entries, want none", n)
+			}
+		})
+	}
+}
+
+func TestStillAuthorizedIsTrueForAnInstanceAdminOnAnExistingEnabledEnvironment(t *testing.T) {
+	f := newFixture(t, nil)
+	var got bool
+	f.r.Guarded(http.MethodGet, "/api/env/{envId}/probe", rbac.Require(rbac.PermContainersRead),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got = StillAuthorized(r.Context())
+			_, _ = w.Write([]byte("ok"))
+		}))
+	if rec := do(f.r.Handler(), http.MethodGet, "/api/env/env-on/probe", as("admin-user")); rec.Code != http.StatusOK {
+		t.Fatalf("probe = %d: %s", rec.Code, rec.Body)
+	}
+	if !got {
+		t.Fatal("StillAuthorized = false for an instance admin")
+	}
+}

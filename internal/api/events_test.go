@@ -667,6 +667,38 @@ func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.
 	})
 }
 
+// TestEventsStreamEndsWithinOneHeartbeatWhenTheViewerLosesTheEnvironment is D-10:
+// a stream authorised by a grant ends when the grant goes, without touching the
+// session, so the rest of the app keeps working.
+func TestEventsStreamEndsWithinOneHeartbeatWhenTheViewerLosesTheEnvironment(t *testing.T) {
+	const heartbeat = 50 * time.Millisecond
+	f := newEventsFix(t, dockertest.FakeConfig{}, heartbeat, 0)
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", f.env.ID, "viewer")
+	cookie, _ := f.signIn(t, "viewer", false)
+
+	c := f.openStream(t, cookie, "")
+	if c.status0() != http.StatusOK {
+		t.Fatalf("the viewer's stream = %d, want 200", c.status0())
+	}
+	if _, err := f.st.Write.Exec(`DELETE FROM role_assignments WHERE principal_id = 'id-viewer'`); err != nil {
+		t.Fatal(err)
+	}
+	// Two heartbeats, plus slack for a loaded machine under the race detector.
+	c.waitEnded(t, 2*heartbeat+400*time.Millisecond, "the viewer's grant on the environment was removed")
+
+	// The session is untouched: the user is still signed in.
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me", cookie: cookie})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/me after the grant went = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	// And a reconnect is told what any other unseen environment is told.
+	rec = f.call(t, authReq{method: http.MethodGet, path: f.streamPath(), cookie: cookie})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("reconnect after the grant went = %d, want 404", rec.Code)
+	}
+}
+
 func TestEventStreamEndsWhenTheSessionIdlesOutWithoutBeingTouched(t *testing.T) {
 	f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
 	c := f.openStream(t, f.cookie, "")
