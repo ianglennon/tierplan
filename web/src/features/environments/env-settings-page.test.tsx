@@ -11,6 +11,7 @@ import { queryClient } from "@/api/query-client";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 
 const ALL = [
@@ -24,11 +25,7 @@ const ALL = [
 // A permission named in either list lands where the server puts it (global scope
 // in `global`), so a test says what the caller holds without caring which list.
 function me(envPerms: string[], globalPerms: string[] = ["settings.read"]) {
-  return {
-    user: { id: "u1", username: "admin", role: "admin" },
-    csrfToken: "csrf-1",
-    permissions: splitPermissions(envPerms, globalPerms),
-  };
+  return makeMe({ instanceAdmin: true, permissions: splitPermissions(envPerms, globalPerms) });
 }
 
 function env(extra: Record<string, unknown>) {

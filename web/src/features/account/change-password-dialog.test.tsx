@@ -11,15 +11,13 @@ import { Toaster } from "@/components/ui/sonner";
 import { ChangePasswordDialog } from "@/features/account/change-password-dialog";
 import { meQueryOptions } from "@/hooks/use-me";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ME = {
-  user: { id: "u1", username: "admin", displayName: "", instanceAdmin: true },
+const ME = makeMe({
+  instanceAdmin: true,
   csrfToken: "csrf-old",
   permissions: { global: [], environments: {} },
-  access: {},
-  requirements: {},
-  administrators: [],
-};
+});
 
 interface Sent {
   path: string;

@@ -16,6 +16,7 @@ import { setCsrfToken } from "@/api/client";
 import type { EnvironmentItem } from "@/api/environments";
 import { EnvDegradedBanner } from "@/features/environments/degraded-banner";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 
 type Issue = { code: string; node?: string; since?: string };
@@ -52,11 +53,7 @@ const MIXED: Issue[] = [
 let permissions: { global: string[]; environments: Record<string, string[]> };
 
 function me() {
-  return {
-    user: { id: "u1", username: "admin", role: "admin" },
-    csrfToken: "csrf-1",
-    permissions,
-  };
+  return makeMe({ instanceAdmin: true, permissions });
 }
 
 beforeEach(() => {

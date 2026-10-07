@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { GLOBAL_PERMISSIONS } from "@/api/permissions.gen";
+
 // The /api/me permissions a test stubs, laid out the way the server lays them
 // out: a permission whose scope is global (internal/rbac registry) is in
 // `global`, never in an environment's list. Stubs that put environments.manage,
@@ -9,17 +11,9 @@
 // real admin has those under `global`, so the Join token card, the Revoke menu and
 // the Remove card never showed.
 
-// The names the registry declares with global scope that the SPA checks.
-const GLOBAL = new Set([
-  "environments.create",
-  "environments.manage",
-  "environments.token",
-  "environments.revoke",
-  "environments.delete",
-  "audit.read",
-  "settings.read",
-  "settings.write",
-]);
+// The names the registry declares with global scope, from the file generated out
+// of it, so this list cannot fall behind the registry.
+const GLOBAL = new Set<string>(GLOBAL_PERMISSIONS);
 
 export interface StubPermissions {
   global: string[];

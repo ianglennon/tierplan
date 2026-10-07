@@ -11,6 +11,7 @@ import { containersQuery, LIST_REFETCH_MS, listKey } from "@/api/resources";
 import { nodeRowKey } from "@/features/resources/swarm-lists";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
 // The four read-only lists behind the dashboard tiles (plan 20, ENV-07, D-56,
 // D-66): the real route tree against stubbed API answers.
@@ -211,11 +212,10 @@ beforeEach(() => {
   sentUrls = [];
   envItem = LAB;
   setCsrfToken(null);
-  me = {
-    user: { id: "u1", username: "admin", role: "admin" },
-    csrfToken: "csrf-1",
+  me = makeMe({
+    instanceAdmin: true,
     permissions: { global: [], environments: { e1: ["environments.read", ...READS] } },
-  };
+  });
   answers = {
     "/api/env/e1/containers": () => Response.json(CONTAINERS),
     "/api/env/e1/images": () => Response.json(IMAGES),
@@ -299,11 +299,10 @@ describe("containers list", () => {
   });
 
   it("shows the no-permission page, and asks the server for nothing, without containers.read", async () => {
-    me = {
-      user: { id: "u1", username: "viewer", role: "user" },
-      csrfToken: "csrf-1",
+    me = makeMe({
+      id: "u1",
       permissions: { global: [], environments: { e1: ["environments.read"] } },
-    };
+    });
     renderAt("/env/e1/containers");
     await screen.findByText("You don't have permission to view this page");
     expect(sent).not.toContain("/api/env/e1/containers");
@@ -414,11 +413,10 @@ describe("dashboard tiles and the Resources nav group", () => {
   });
 
   it("does not link a tile the user may not read", async () => {
-    me = {
-      user: { id: "u1", username: "viewer", role: "user" },
-      csrfToken: "csrf-1",
+    me = makeMe({
+      id: "u1",
       permissions: { global: [], environments: { e1: ["environments.read", "images.read"] } },
-    };
+    });
     renderAt("/env/e1");
     await screen.findByRole("heading", { name: "Lab host" });
     const main = screen.getByRole("region", { name: "Dashboard" });
@@ -444,11 +442,10 @@ describe("dashboard tiles and the Resources nav group", () => {
   });
 
   it("shows only the resources the user may read", async () => {
-    me = {
-      user: { id: "u1", username: "viewer", role: "user" },
-      csrfToken: "csrf-1",
+    me = makeMe({
+      id: "u1",
       permissions: { global: [], environments: { e1: ["environments.read", "networks.read"] } },
-    };
+    });
     renderAt("/env/e1");
     await screen.findByRole("heading", { name: "Lab host" });
     const sidebar = document.querySelector('[data-slot="sidebar"]') as HTMLElement;

@@ -12,15 +12,15 @@ import { queryClient } from "@/api/query-client";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ME = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ME = makeMe({
+  instanceAdmin: true,
   permissions: {
     global: ["settings.read"],
     environments: { "*": ["environments.read", "environments.manage"] },
   },
-};
+});
 
 function env(id: string, name: string, state: EnvironmentItem["status"]["state"], extra = {}) {
   return {

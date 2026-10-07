@@ -11,12 +11,12 @@ import { queryClient } from "@/api/query-client";
 import { resetBasePathForTests } from "@/lib/base-path";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ME = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ME = makeMe({
+  instanceAdmin: true,
   permissions: { global: ["audit.read"], environments: { "*": [] } },
-};
+});
 
 interface Sent {
   path: string;

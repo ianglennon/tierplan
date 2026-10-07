@@ -12,6 +12,8 @@ import {
 import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 
+const ADMIN_ROLE = "admin";
+
 describe("makeMe", () => {
   it("gives an instance admin every permission, the one * entry and the registry's requirements", () => {
     const me = makeMe({ instanceAdmin: true });
@@ -19,7 +21,7 @@ describe("makeMe", () => {
     expect(me.permissions.global).toEqual([...GLOBAL_PERMISSIONS]);
     expect(me.permissions.environments).toEqual({ "*": [...ENVIRONMENT_PERMISSIONS] });
     expect(me.access).toEqual({
-      "*": { role: "admin", extras: [...EXTRA_PERMISSIONS], sources: [{ kind: "instance" }] },
+      "*": { role: ADMIN_ROLE, extras: [...EXTRA_PERMISSIONS], sources: [{ kind: "instance" }] },
     });
     expect(me.requirements).toEqual(PERMISSION_REQUIREMENTS);
     expect(me.administrators).toEqual([]);
@@ -58,7 +60,10 @@ describe("makeMe", () => {
 
   it("lists the administrators for a user with no access at all", () => {
     expect(makeMe({ envs: {} }).administrators).toEqual(["admin"]);
-    expect(makeMe({ envs: {}, administrators: ["ann", "bo"] }).administrators).toEqual(["ann", "bo"]);
+    expect(makeMe({ envs: {}, administrators: ["ann", "bo"] }).administrators).toEqual([
+      "ann",
+      "bo",
+    ]);
   });
 
   it("takes an exact permission list when a test needs one", () => {

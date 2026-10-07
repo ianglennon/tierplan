@@ -10,12 +10,12 @@ import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ADMIN = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ADMIN = makeMe({
+  instanceAdmin: true,
   permissions: { global: ["environments.create"], environments: {} },
-};
+});
 
 const DETECTED = {
   socketPath: "/var/run/docker.sock",

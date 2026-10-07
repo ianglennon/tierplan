@@ -12,13 +12,10 @@ import { queryClient } from "@/api/query-client";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
 function me(global: string[], env: string[]) {
-  return {
-    user: { id: "u1", username: "admin", role: "admin" },
-    csrfToken: "csrf-1",
-    permissions: { global, environments: { "*": env } },
-  };
+  return makeMe({ instanceAdmin: true, permissions: { global, environments: { "*": env } } });
 }
 
 const READER = me([], ["environments.read"]);

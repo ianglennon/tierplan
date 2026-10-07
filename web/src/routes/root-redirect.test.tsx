@@ -10,12 +10,13 @@ import { queryClient } from "@/api/query-client";
 import { recordRecentTiming } from "@/routes/_app/env/$envId";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ME = {
-  user: { id: "u1", username: "admin", role: "admin" },
+const ME = makeMe({
+  instanceAdmin: true,
   csrfToken: "c",
   permissions: { global: [], environments: { "*": ["environments.read"] } },
-};
+});
 
 function env(id: string, name: string) {
   return {

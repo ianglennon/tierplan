@@ -63,7 +63,7 @@ function stubApi(opts: {
       return (
         opts.complete?.() ??
         Response.json({
-          user: { id: "1", username: "admin", role: "admin" },
+          user: { id: "1", username: "admin", instanceAdmin: true },
           csrfToken: "c",
           instanceName: "Lab",
           publicUrl: "https://b.example",
@@ -401,7 +401,7 @@ describe("SetupWizard", () => {
 
     release(
       Response.json({
-        user: { id: "1", username: "admin", role: "admin" },
+        user: { id: "1", username: "admin", instanceAdmin: true },
         csrfToken: "c",
         instanceName: "Lab",
         publicUrl: "https://b.example",

@@ -10,17 +10,13 @@ import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ADMIN = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ADMIN = makeMe({
+  instanceAdmin: true,
   permissions: { global: ["audit.read", "settings.read"], environments: {} },
-};
-const VIEWER = {
-  user: { id: "u2", username: "viewer", role: "" },
-  csrfToken: "csrf-1",
-  permissions: { global: [], environments: {} },
-};
+});
+const VIEWER = makeMe({ permissions: { global: [], environments: {} } });
 
 const LONG_AGENT = `Mozilla/5.0 ${"VeryLongUserAgentToken/1.0.0-".repeat(30)}`;
 

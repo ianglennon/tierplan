@@ -12,6 +12,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { resetBasePathForTests } from "@/lib/base-path";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
 // Settings > General and About (plan 26, D-03, D-04, D-60, D-61, PLAT-05).
 
@@ -30,14 +31,13 @@ function announceBase(base: string | null): void {
 const ORIGIN = window.location.origin;
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
-const ADMIN = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ADMIN = makeMe({
+  instanceAdmin: true,
   permissions: {
     global: ["settings.read", "settings.write", "environments.manage"],
     environments: {},
   },
-};
+});
 const READER = { ...ADMIN, permissions: { global: ["settings.read"], environments: {} } };
 const VIEWER = { ...ADMIN, permissions: { global: [], environments: {} } };
 

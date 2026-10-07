@@ -10,23 +10,13 @@ import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ADMIN = {
-  user: { id: "u1", username: "admin", displayName: "", instanceAdmin: true },
-  csrfToken: "csrf-1",
+const ADMIN = makeMe({
+  instanceAdmin: true,
   permissions: { global: ["settings.read", "settings.write"], environments: {} },
-  access: {},
-  requirements: {},
-  administrators: [],
-};
-const VIEWER = {
-  user: { id: "u2", username: "viewer", displayName: "", instanceAdmin: false },
-  csrfToken: "csrf-2",
-  permissions: { global: [], environments: {} },
-  access: {},
-  requirements: {},
-  administrators: [],
-};
+});
+const VIEWER = makeMe({ csrfToken: "csrf-2", permissions: { global: [], environments: {} } });
 
 let me = ADMIN;
 let warnings: Array<Record<string, string>> = [];
