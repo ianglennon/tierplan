@@ -149,6 +149,9 @@ func RegisterBackup(r *httpx.Router, d BackupDeps) {
 		case errors.Is(err, backup.ErrPassphraseTooShort):
 			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemPassphraseTooShort,
 				"The passphrase must be at least "+strconv.Itoa(backup.MinPassphraseLen)+" characters.")
+		case errors.Is(err, backup.ErrBusy):
+			return nil, httpx.Problem(http.StatusConflict, problemBackupBusy,
+				"Another backup is being prepared. Try again in a moment.")
 		case errors.Is(err, backup.ErrChainBroken):
 			return nil, httpx.Problem(http.StatusConflict, problemAuditChainBroken,
 				"The audit log does not verify, so a backup would carry a log that cannot be trusted. Run bayplan audit verify in the container, or take the backup there with --allow-broken-chain.")

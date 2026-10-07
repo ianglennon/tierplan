@@ -65,6 +65,7 @@ func newRoot() *cobra.Command {
 		newAuditCmd(),
 		newSetupTokenCmd(),
 		newUserCmd(),
+		newBackupCmd(),
 		newPermissionsCmd(),
 		&cobra.Command{
 			Use:   "healthcheck",

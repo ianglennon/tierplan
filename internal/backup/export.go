@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -29,6 +30,14 @@ import (
 // about the instance that made the backup (app version, key rotation, backup
 // status) and means nothing on another.
 const metaKept = "audit_last_pruned_hmac"
+
+// ErrBusy is returned when another export is already running in this process. A
+// backup copies the whole database, so two at once would only compete for the one
+// writer and the disk.
+var ErrBusy = errors.New("another backup is being prepared")
+
+// exportGuard lets one Export run at a time.
+var exportGuard sync.Mutex
 
 // ErrChainBroken is returned when the audit chain does not verify and the
 // export was not told to go on regardless.
@@ -83,6 +92,11 @@ func Export(ctx context.Context, st *store.Store, live *vault.Vault, workDir str
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if !exportGuard.TryLock() {
+		return ExportResult{}, ErrBusy
+	}
+	defer exportGuard.Unlock()
+
 	verified, err := verifyChain(ctx, st, live, o.AllowBrokenChain)
 	if err != nil {
 		return ExportResult{}, err

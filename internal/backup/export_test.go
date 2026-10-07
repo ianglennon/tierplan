@@ -418,7 +418,7 @@ func TestExportLeavesTheLiveDatabaseAsItWas(t *testing.T) {
 	}
 }
 
-func TestExportRefusesABrokenAuditChainUnlessToldNotToAndRecordsIt(t *testing.T) {
+func TestExportChainBrokenIsRefusedUnlessToldNotToAndRecordedInTheManifest(t *testing.T) {
 	f := newExportFixture(t)
 	f.exec(t, `UPDATE audit_log SET action = 'x' || substr(action, 2) WHERE seq = 2`)
 

@@ -72,7 +72,7 @@ func TestBackupWritesAFileThatOpensAndRecordsSystemCLI(t *testing.T) {
 	if strings.Contains(string(stdout)+errOut, cliPass) {
 		t.Fatal("the passphrase was printed")
 	}
-	file, err := os.ReadFile(out)
+	file, err := os.ReadFile(out) //nolint:gosec // a path the test made
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestBackupReadsThePassphraseFromTheFileTheEnvironmentNames(t *testing.T) {
 	if _, errOut, err := runCLIWith(t, dir, "some other passphrase\n", passFile, "backup", "--out", out); err != nil {
 		t.Fatalf("backup = %v, stderr %q", err, errOut)
 	}
-	file, err := os.ReadFile(out)
+	file, err := os.ReadFile(out) //nolint:gosec // a path the test made
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestBackupDefaultsToTheBackupsFolderOfTheDataDirectory(t *testing.T) {
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("backups in the data directory = %v, %v; want one", matches, err)
 	}
-	file, err := os.ReadFile(matches[0])
+	file, err := os.ReadFile(matches[0]) //nolint:gosec // a path the test made
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestBackupRefusesABrokenChainUnlessAllowed(t *testing.T) {
 	if _, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "backup", "--out", out, "--allow-broken-chain"); err != nil {
 		t.Fatalf("backup --allow-broken-chain = %v, stderr %q", err, errOut)
 	}
-	file, err := os.ReadFile(out)
+	file, err := os.ReadFile(out) //nolint:gosec // a path the test made
 	if err != nil {
 		t.Fatal(err)
 	}
