@@ -212,15 +212,15 @@ func TestRemoveEnvironmentWithUninstallAnAgentThatRefusesIsNotRecordedAsUninstal
 	assertEnvironmentGoneAndAgentRefused(t, f, env, a)
 }
 
-func TestRemoveEnvironmentWithUninstallNeedsEnvironmentsDeleteAndTellsNoAgentWithout(t *testing.T) {
+func TestRemoveEnvironmentWithUninstallIsForInstanceAdminsAndTellsNoAgentWithout(t *testing.T) {
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, selfUpdating("alpha"))
 	f.srv.Events.WaitLen(t, 1)
 
-	rec := f.asUser(t, "manager", http.MethodDelete, "/api/environments/"+env.ID+"?uninstallAgents=true", ``, "environments.read", "environments.manage")
+	rec := f.asAllEnvAdmin(t, "manager", http.MethodDelete, "/api/environments/"+env.ID+"?uninstallAgents=true", ``)
 	if rec.code != http.StatusForbidden {
-		t.Fatalf("remove without environments.delete: %d %s, want 403", rec.code, rec.body)
+		t.Fatalf("remove as an admin of every environment: %d %s, want 403", rec.code, rec.body)
 	}
 	got := make(chan string, 1)
 	go func() {

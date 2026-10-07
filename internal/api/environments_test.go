@@ -218,20 +218,9 @@ func TestEnvironmentListShowsEachEnvironmentWithItsStatus(t *testing.T) {
 func TestEnvironmentListHidesEnvironmentsTheCallerCannotRead(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
-	for _, q := range []string{
-		`INSERT INTO roles (id, name, builtin) VALUES ('role-viewer', 'viewer', 0)`,
-		`INSERT INTO role_permissions (role_id, permission) VALUES ('role-viewer', 'environments.read')`,
-	} {
-		if _, err := f.st.Write.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
 	f.addUser(t, "nobody", false)
 	f.addUser(t, "viewer", false)
-	if _, err := f.st.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
-		VALUES ('ra-1', 'user', 'id-viewer', 'role-viewer', ?, 0)`, e.ID); err != nil {
-		t.Fatal(err)
-	}
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
 
 	list := func(user string) string {
 		cookie, _ := f.signIn(t, user, false)
@@ -485,89 +474,95 @@ func TestEnvironmentAddAgentNeedsTheCreatePermission(t *testing.T) {
 	}
 }
 
-// addUserWithGlobalPerms adds a user holding a custom role, assigned
-// everywhere, that grants exactly perms (D-49: the split permissions).
-func (f *authFixture) addUserWithGlobalPerms(t *testing.T, name string, perms ...string) {
+// addInstanceAdmin adds a user who is an instance admin (D-01) and returns the
+// user's ID.
+func (f *authFixture) addInstanceAdmin(t *testing.T, name string) string {
 	t.Helper()
-	f.addUser(t, name, false)
-	role := "role-" + name
-	if _, err := f.st.Write.Exec(`INSERT INTO roles (id, name, builtin) VALUES (?, ?, 0)`, role, name); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range perms {
-		if _, err := f.st.Write.Exec(`INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)`, role, p); err != nil {
-			t.Fatal(err)
-		}
+	return f.addUser(t, name, true)
+}
+
+// addEnvRole gives a user that addUser has made a role ("viewer", "operator" or
+// "admin") on one environment, or on every environment when envID is empty. A
+// subject holds one assignment per scope.
+func (f *authFixture) addEnvRole(t *testing.T, name, envID, role string) {
+	t.Helper()
+	var env any
+	if envID != "" {
+		env = envID
 	}
 	if _, err := f.st.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
-		VALUES (?, 'user', ?, ?, NULL, 0)`, "ra-"+name, "id-"+name, role); err != nil {
+		VALUES (?, 'user', ?, ?, ?, 0)`, "ra-"+name+"-"+envID, "id-"+name, role, env); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestEnvironmentAddNeedsEnvironmentsCreateNotManage(t *testing.T) {
-	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.addUserWithGlobalPerms(t, "manager", "environments.manage", "environments.delete")
-	f.addUserWithGlobalPerms(t, "creator", "environments.create")
+// addAllEnvAdmin adds a user who is Admin on every environment but is not an
+// instance admin: the caller D-01 refuses every global operation.
+func (f *authFixture) addAllEnvAdmin(t *testing.T, name string) {
+	t.Helper()
+	f.addUser(t, name, false)
+	f.addEnvRole(t, name, "", "admin")
+}
 
-	cookie, csrf := f.signIn(t, "manager", false)
+func TestEnvironmentAddIsForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.addAllEnvAdmin(t, "envadmin")
+
+	cookie, csrf := f.signIn(t, "envadmin", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"local"}`, cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("add with environments.manage only: %d %s, want 403", rec.Code, rec.Body)
+		t.Fatalf("add as an admin of every environment: %d %s, want 403", rec.Code, rec.Body)
 	}
 	denied := f.audits(t, audit.ActionPermissionDenied)
-	if len(denied) != 1 || denied[0].ActorID != "id-manager" || denied[0].Result != "denied" || denied[0].TargetID != "POST /api/environments" {
+	if len(denied) != 1 || denied[0].ActorID != "id-envadmin" || denied[0].Result != "denied" || denied[0].TargetID != "POST /api/environments" {
 		t.Fatalf("permission.denied entries = %+v", denied)
 	}
 
-	cookie, csrf = f.signIn(t, "creator", false)
-	rec = f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"local"}`, cookie: cookie, csrf: csrf})
+	f.addInstanceAdmin(t, "owner")
+	ownerCookie, ownerCSRF := f.signIn(t, "owner", false)
+	rec = f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"local"}`, cookie: ownerCookie, csrf: ownerCSRF})
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("add with environments.create: %d %s, want 201", rec.Code, rec.Body)
+		t.Fatalf("add as an instance admin: %d %s, want 201", rec.Code, rec.Body)
 	}
 }
 
-func TestEnvironmentRenameNeedsEnvironmentsManage(t *testing.T) {
+func TestEnvironmentRenameIsForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
-	f.addUserWithGlobalPerms(t, "creator", "environments.create", "environments.delete")
-	f.addUserWithGlobalPerms(t, "manager", "environments.manage")
+	f.addAllEnvAdmin(t, "envadmin")
 
-	cookie, csrf := f.signIn(t, "creator", false)
+	cookie, csrf := f.signIn(t, "envadmin", false)
 	rec := f.call(t, authReq{method: http.MethodPatch, path: "/api/environments/" + e.ID, body: `{"name":"Lab"}`, cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("rename without environments.manage: %d %s, want 403", rec.Code, rec.Body)
+		t.Fatalf("rename as an admin of every environment: %d %s, want 403", rec.Code, rec.Body)
 	}
-	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-creator" {
+	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-envadmin" {
 		t.Fatalf("permission.denied entries = %+v", denied)
 	}
 
-	cookie, csrf = f.signIn(t, "manager", false)
-	rec = f.call(t, authReq{method: http.MethodPatch, path: "/api/environments/" + e.ID, body: `{"name":"Lab"}`, cookie: cookie, csrf: csrf})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("rename with environments.manage: %d %s, want 200", rec.Code, rec.Body)
+	rec2 := f.req(t, http.MethodPatch, "/api/environments/"+e.ID, `{"name":"Lab"}`)
+	if rec2.code != http.StatusOK {
+		t.Fatalf("rename as an instance admin: %d %s, want 200", rec2.code, rec2.body)
 	}
 }
 
-func TestEnvironmentRemoveNeedsEnvironmentsDelete(t *testing.T) {
+func TestEnvironmentRemoveIsForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
-	f.addUserWithGlobalPerms(t, "manager", "environments.create", "environments.manage")
-	f.addUserWithGlobalPerms(t, "deleter", "environments.delete")
+	f.addAllEnvAdmin(t, "envadmin")
 
-	cookie, csrf := f.signIn(t, "manager", false)
+	cookie, csrf := f.signIn(t, "envadmin", false)
 	rec := f.call(t, authReq{method: http.MethodDelete, path: "/api/environments/" + e.ID, cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("remove without environments.delete: %d %s, want 403", rec.Code, rec.Body)
+		t.Fatalf("remove as an admin of every environment: %d %s, want 403", rec.Code, rec.Body)
 	}
-	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-manager" {
+	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-envadmin" {
 		t.Fatalf("permission.denied entries = %+v", denied)
 	}
 
-	cookie, csrf = f.signIn(t, "deleter", false)
-	rec = f.call(t, authReq{method: http.MethodDelete, path: "/api/environments/" + e.ID, cookie: cookie, csrf: csrf})
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("remove with environments.delete: %d %s, want 204", rec.Code, rec.Body)
+	rec2 := f.req(t, http.MethodDelete, "/api/environments/"+e.ID, "")
+	if rec2.code != http.StatusNoContent {
+		t.Fatalf("remove as an instance admin: %d %s, want 204", rec2.code, rec2.body)
 	}
 }
 

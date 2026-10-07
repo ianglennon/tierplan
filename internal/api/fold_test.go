@@ -108,13 +108,13 @@ func TestFoldOfferedIsFalseForAnotherClusterAndFoldingItAnswers409FoldNotOffered
 	}
 }
 
-func TestFoldLocalNeedsEnvironmentsManageThenRetiresTheLocalEnvironmentAndAuditsIt(t *testing.T) {
+func TestFoldLocalIsForInstanceAdminsThenRetiresTheLocalEnvironmentAndAuditsIt(t *testing.T) {
 	f := newFoldFix(t, nil)
 
-	f.addUserWithGlobalPerms(t, "ops", "environments.read", "environments.revoke", "environments.token")
+	f.addAllEnvAdmin(t, "ops")
 	cookie, csrf := f.signIn(t, "ops", false)
 	if rec := f.call(t, authReq{method: http.MethodPost, path: f.foldPath(), cookie: cookie, csrf: csrf}); rec.Code != http.StatusForbidden {
-		t.Fatalf("fold without environments.manage: %d %s, want 403", rec.Code, rec.Body)
+		t.Fatalf("fold as an admin of every environment: %d %s, want 403", rec.Code, rec.Body)
 	}
 	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-ops" {
 		t.Fatalf("permission.denied entries = %+v", denied)

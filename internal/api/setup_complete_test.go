@@ -552,8 +552,8 @@ func TestSetupCompleteConcurrentCompletionsHaveExactlyOneWinner(t *testing.T) {
 	if got := f.userCount(t); got != 1 {
 		t.Fatalf("users = %d, want exactly 1", got)
 	}
-	if got := f.count(t, `SELECT COUNT(*) FROM role_assignments WHERE role_id = 'admin'`); got != 1 {
-		t.Fatalf("admin role assignments = %d, want 1", got)
+	if got := f.count(t, `SELECT COUNT(*) FROM users WHERE instance_admin = 1`); got != 1 {
+		t.Fatalf("instance admins = %d, want 1", got)
 	}
 	if got := f.count(t, `SELECT COUNT(*) FROM sessions`); got != 1 {
 		t.Fatalf("sessions = %d, want 1", got)

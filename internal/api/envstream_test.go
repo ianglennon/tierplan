@@ -87,22 +87,10 @@ func waitPings(t *testing.T, c *sseConn, n int) {
 	waitFor(t, "pings", func() bool { return pings(c) >= want })
 }
 
-// grantRead gives user environments.read on one environment only.
+// grantRead gives user the Viewer role on one environment only.
 func (f *authFixture) grantRead(t *testing.T, user, envID string) {
 	t.Helper()
-	role := "role-read-" + user
-	for _, q := range []string{
-		`INSERT OR IGNORE INTO roles (id, name, builtin) VALUES ('` + role + `', '` + role + `', 0)`,
-		`INSERT OR IGNORE INTO role_permissions (role_id, permission) VALUES ('` + role + `', 'environments.read')`,
-	} {
-		if _, err := f.st.Write.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := f.st.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
-		VALUES (?, 'user', ?, ?, ?, 0)`, "ra-"+user+"-"+envID, "id-"+user, role, envID); err != nil {
-		t.Fatal(err)
-	}
+	f.addEnvRole(t, user, envID, "viewer")
 }
 
 func refused(envID, ip string) envs.HealthEvent {

@@ -660,10 +660,10 @@ func TestEventStreamEndsWhenTheUserIsDisabledOrTheEnvironmentRemoved(t *testing.
 	t.Run("permission withdrawn", func(t *testing.T) {
 		f := newEventsFix(t, dockertest.FakeConfig{}, 20*time.Millisecond, 0)
 		c := f.openStream(t, f.cookie, "")
-		if _, err := f.st.Write.Exec(`DELETE FROM role_assignments`); err != nil {
+		if _, err := f.st.Write.Exec(`UPDATE users SET instance_admin = 0 WHERE id = 'id-admin'`); err != nil {
 			t.Fatal(err)
 		}
-		c.waitEnded(t, time.Second, "the admin role was withdrawn")
+		c.waitEnded(t, time.Second, "the instance admin flag was withdrawn")
 	})
 }
 

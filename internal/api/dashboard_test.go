@@ -448,40 +448,16 @@ func TestListOfAnUnknownEnvironmentIs404(t *testing.T) {
 	}
 }
 
-func TestListEachRequiresItsOwnPermissionOnTheEnvironment(t *testing.T) {
+func TestAViewerReadsTheSummaryAndEveryListAndAUserWithoutAnAssignmentIsRefused(t *testing.T) {
 	f, e := dashEnv(t, richEngine())
-	grants := map[string][]string{
-		"summaryonly": {"environments.read"},
-		"imagesonly":  {"environments.read", "images.read"},
-		"allreads":    {"environments.read", "containers.read", "images.read", "volumes.read", "networks.read"},
-	}
-	n := 0
-	for user, perms := range grants {
-		n++
-		role := "role-" + user
-		if _, err := f.st.Write.Exec(`INSERT INTO roles (id, name, builtin) VALUES (?, ?, 0)`, role, user); err != nil {
-			t.Fatal(err)
-		}
-		for _, p := range perms {
-			if _, err := f.st.Write.Exec(`INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)`, role, p); err != nil {
-				t.Fatal(err)
-			}
-		}
-		f.addUser(t, user, false)
-		if _, err := f.st.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
-			VALUES (?, 'user', ?, ?, ?, 0)`, fmt.Sprintf("ra-%d", n), "id-"+user, role, e.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	f.addUser(t, "nobody", false)
 
-	want := map[string]map[string]int{
-		"summaryonly": {"summary": 200, "containers": 403, "images": 403, "volumes": 403, "networks": 403},
-		"imagesonly":  {"summary": 200, "containers": 403, "images": 200, "volumes": 403, "networks": 403},
-		"allreads":    {"summary": 200, "containers": 200, "images": 200, "volumes": 200, "networks": 200},
-	}
-	for user, byPath := range want {
+	want := map[string]int{"viewer": 200, "nobody": 403}
+	for user, code := range want {
 		cookie, _ := f.signIn(t, user, false)
-		for what, code := range byPath {
+		for _, what := range dataPaths {
 			rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/" + what, cookie: cookie})
 			if rec.Code != code {
 				t.Errorf("%s GET %s = %d, want %d: %s", user, what, rec.Code, code, rec.Body)
@@ -492,7 +468,7 @@ func TestListEachRequiresItsOwnPermissionOnTheEnvironment(t *testing.T) {
 	denied := f.audits(t, audit.ActionPermissionDenied)
 	found := false
 	for _, d := range denied {
-		found = found || (d.ActorID == "id-summaryonly" && d.TargetID == "GET /api/env/{envId}/images" && d.Result == "denied")
+		found = found || (d.ActorID == "id-nobody" && d.TargetID == "GET /api/env/{envId}/images" && d.Result == "denied")
 	}
 	if !found {
 		t.Errorf("a denied read of images was not audited: %+v", denied)
