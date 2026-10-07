@@ -1,0 +1,20 @@
+x-common: &common
+  privileged: true
+  cap_add: [ALL]
+x-caps: &caps
+  - SYS_ADMIN
+services:
+  merged:
+    image: x
+    <<: *common
+  listed:
+    image: x
+    cap_add: *caps
+  overridden:
+    image: x
+    <<: *common
+    privileged: false
+    cap_add: []
+  inline:
+    image: x
+    <<: {network_mode: host}
