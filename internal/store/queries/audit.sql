@@ -14,6 +14,16 @@ RETURNING seq;
 -- name: ListAuditForVerify :many
 SELECT * FROM audit_log WHERE seq > ? ORDER BY seq ASC LIMIT ?;
 
+-- name: ListAuditChain :many
+-- Every field an entry's HMAC covers, plus the chain links, in sequence order and
+-- paged by sequence. audit.Rekey walks the whole chain with it inside one
+-- transaction.
+SELECT * FROM audit_log WHERE seq > ? ORDER BY seq ASC LIMIT ?;
+
+-- name: UpdateAuditChain :exec
+-- Re-signs one entry: the only columns Rekey ever changes.
+UPDATE audit_log SET key_id = ?, prev_hmac = ?, hmac = ? WHERE seq = ?;
+
 -- name: CountAudit :one
 SELECT COUNT(*) FROM audit_log;
 

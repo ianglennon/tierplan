@@ -46,6 +46,8 @@ type Actor struct {
 var (
 	SystemCLI       = Actor{Type: ActorSystem, ID: "system:cli", Name: "system:cli"}
 	SystemRetention = Actor{Type: ActorSystem, ID: "system:audit-retention", Name: "system:audit-retention"}
+	SystemRestore   = Actor{Type: ActorSystem, ID: "system:restore", Name: "system:restore"}
+	SystemBackup    = Actor{Type: ActorSystem, ID: "system:backup", Name: "system:backup"}
 )
 
 // Result is the outcome of an action.
@@ -94,6 +96,7 @@ const (
 
 	ActionWarningAcknowledged = "warning.acknowledged"
 	ActionAuditPruned         = "audit.pruned"
+	ActionAuditReanchored     = "audit.reanchored"
 	ActionPermissionDenied    = "permission.denied"
 )
 

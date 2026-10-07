@@ -19,12 +19,11 @@ import (
 	"github.com/ianglennon/bayplan/internal/vault"
 )
 
+// A sealed CA key is bound to its environment by the context
+// vault.ContextAgentCA + the environment ID: the vault's AEAD authenticates the
+// context, so a sealed key moved into another environment's row fails to open
+// (D-07, D-55). The prefix is shared with vault.SealedColumns, which re-wraps it.
 const (
-	// caContextPrefix binds a sealed CA key to its environment: the vault's AEAD
-	// authenticates the context, so a sealed key moved into another environment's
-	// row fails to open (D-07, D-55).
-	caContextPrefix = "agent-ca/v1/"
-
 	// caLifetime is how long an environment's CA is valid. It is created with the
 	// environment and destroyed with it (D-07).
 	caLifetime = 20 * 365 * 24 * time.Hour
@@ -92,7 +91,7 @@ func (c *ca) seal(v *vault.Vault, envID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sealed, err := v.Seal(caContextPrefix+envID, der)
+	sealed, err := v.Seal(vault.ContextAgentCA+envID, der)
 	if err != nil {
 		return "", fmt.Errorf("seal the CA key: %w", err)
 	}
@@ -102,7 +101,7 @@ func (c *ca) seal(v *vault.Vault, envID string) (string, error) {
 // loadCA opens a stored CA. A sealed key that was moved from another
 // environment fails here with vault.ErrDecrypt.
 func loadCA(v *vault.Vault, envID, certPEM, sealed string) (*ca, error) {
-	der, err := v.Open(caContextPrefix+envID, sealed)
+	der, err := v.Open(vault.ContextAgentCA+envID, sealed)
 	if err != nil {
 		return nil, fmt.Errorf("open the CA key of environment %s: %w", envID, err)
 	}

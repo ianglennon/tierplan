@@ -157,6 +157,60 @@ func (q *Queries) ListAuditActors(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const listAuditChain = `-- name: ListAuditChain :many
+SELECT seq, id, ts, actor_type, actor_id, actor_name, "action", target_type, target_id, env_id, result, reason, ip, user_agent, details, key_id, prev_hmac, hmac FROM audit_log WHERE seq > ? ORDER BY seq ASC LIMIT ?
+`
+
+type ListAuditChainParams struct {
+	Seq   int64
+	Limit int64
+}
+
+// Every field an entry's HMAC covers, plus the chain links, in sequence order and
+// paged by sequence. audit.Rekey walks the whole chain with it inside one
+// transaction.
+func (q *Queries) ListAuditChain(ctx context.Context, arg ListAuditChainParams) ([]AuditLog, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditChain, arg.Seq, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.Seq,
+			&i.ID,
+			&i.Ts,
+			&i.ActorType,
+			&i.ActorID,
+			&i.ActorName,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.EnvID,
+			&i.Result,
+			&i.Reason,
+			&i.Ip,
+			&i.UserAgent,
+			&i.Details,
+			&i.KeyID,
+			&i.PrevHmac,
+			&i.Hmac,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditForVerify = `-- name: ListAuditForVerify :many
 SELECT seq, id, ts, actor_type, actor_id, actor_name, "action", target_type, target_id, env_id, result, reason, ip, user_agent, details, key_id, prev_hmac, hmac FROM audit_log WHERE seq > ? ORDER BY seq ASC LIMIT ?
 `
@@ -289,4 +343,26 @@ func (q *Queries) MaxSeqBefore(ctx context.Context, ts int64) (int64, error) {
 	var seq int64
 	err := row.Scan(&seq)
 	return seq, err
+}
+
+const updateAuditChain = `-- name: UpdateAuditChain :exec
+UPDATE audit_log SET key_id = ?, prev_hmac = ?, hmac = ? WHERE seq = ?
+`
+
+type UpdateAuditChainParams struct {
+	KeyID    string
+	PrevHmac []byte
+	Hmac     []byte
+	Seq      int64
+}
+
+// Re-signs one entry: the only columns Rekey ever changes.
+func (q *Queries) UpdateAuditChain(ctx context.Context, arg UpdateAuditChainParams) error {
+	_, err := q.db.ExecContext(ctx, updateAuditChain,
+		arg.KeyID,
+		arg.PrevHmac,
+		arg.Hmac,
+		arg.Seq,
+	)
+	return err
 }

@@ -52,6 +52,11 @@ var SystemPrincipals = map[string][]Perm{
 	"system:agent-update": {},
 	"system:agent-reaper": {},
 	"system:agent-hub":    {},
+	// system:restore is the actor of a restore and of the audit.reanchored entry
+	// it appends; system:backup is the actor of a scheduled backup. Neither holds
+	// a permission (D-28, D-29).
+	"system:restore": {},
+	"system:backup":  {},
 }
 
 // System returns the named system principal, or nil for a name that is not in
