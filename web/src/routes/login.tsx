@@ -35,12 +35,16 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 interface LoginSearch {
   next?: string;
   expired?: boolean;
+  // password-set: the visitor just chose a password with an invite or reset link,
+  // which does not sign them in (UI-SPEC "Invite and reset page"). It is the only
+  // value; anything else is ignored.
+  notice?: "password-set";
 }
 
 function LoginPage() {
   const t = useT();
   const router = useRouter();
-  const { next, expired } = Route.useSearch();
+  const { next, expired, notice } = Route.useSearch();
   const { data: instance } = useQuery(instanceQuery);
   useDocumentTitle(t("auth.login.tabTitle"));
 
@@ -99,6 +103,12 @@ function LoginPage() {
         <Alert role="status">
           <Info aria-hidden="true" />
           <AlertDescription>{t("auth.login.expired")}</AlertDescription>
+        </Alert>
+      ) : null}
+      {notice === "password-set" ? (
+        <Alert role="status">
+          <Info aria-hidden="true" />
+          <AlertDescription>{t("invite.login.passwordSet")}</AlertDescription>
         </Alert>
       ) : null}
       {errorKey ? (
@@ -182,6 +192,7 @@ export const Route = createFileRoute("/login")({
   validateSearch: (search: Record<string, unknown>): LoginSearch => ({
     next: typeof search.next === "string" ? search.next : undefined,
     expired: search.expired === true || search.expired === "true" ? true : undefined,
+    notice: search.notice === "password-set" ? "password-set" : undefined,
   }),
   beforeLoad: async ({ search }) => {
     const instance = await loadInstance();
