@@ -5,12 +5,16 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/backup"
 	"github.com/ianglennon/bayplan/internal/config"
@@ -155,5 +159,103 @@ func TestBackupDownloadIsAuditedWithoutThePassphrase(t *testing.T) {
 	}
 	if strings.Contains(f.logs.String(), backupPass) {
 		t.Fatal("the passphrase is in the log")
+	}
+}
+
+// leftovers lists what is in the data directory beyond what the fixture put there.
+func (f *authFixture) leftovers(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(f.dataInfo.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func TestBackupDownloadWithAShortPassphraseIsRefusedAndLeavesNoFile(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+
+	rec := f.exportBackup(t, cookie, csrf, "fifteen chars!!") // 15 characters
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "passphrase_too_short" {
+		t.Fatalf("status = %d, type %q: %s", rec.Code, problemType(t, rec), rec.Body)
+	}
+	if left := f.leftovers(t); len(left) != 0 {
+		t.Fatalf("the data directory holds %v after a refused backup", left)
+	}
+	if n := len(f.audits(t, "backup.exported")); n != 0 {
+		t.Fatalf("backup.exported entries = %d, want 0", n)
+	}
+}
+
+func TestBackupDownloadWithABrokenAuditChainIsRefused(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	if _, err := f.st.Write.Exec(`UPDATE audit_log SET action = 'x' || substr(action, 2) WHERE seq = 1`); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := f.exportBackup(t, cookie, csrf, backupPass)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "audit_chain_broken" {
+		t.Fatalf("status = %d, type %q: %s", rec.Code, problemType(t, rec), rec.Body)
+	}
+	if bytes.HasPrefix(rec.Body.Bytes(), []byte(backup.Magic)) {
+		t.Fatal("a refused request still received a backup")
+	}
+	if left := f.leftovers(t); len(left) != 0 {
+		t.Fatalf("the data directory holds %v after a refused backup", left)
+	}
+}
+
+// slowSink holds the first write until released, so an export stays running.
+type slowSink struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *slowSink) Write(p []byte) (int, error) {
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+	return len(p), nil
+}
+
+func TestBackupDownloadWhileAnotherIsBeingPreparedAnswersBusyAndLeavesNoFile(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+
+	sink := &slowSink{started: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		_, err := backup.Export(context.Background(), f.st, f.v, f.dataInfo.Path, sink, []byte(backupPass), backup.ExportOptions{AppVersion: "v9.9.9"})
+		done <- err
+	}()
+	select {
+	case <-sink.started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the first export never started writing")
+	}
+
+	rec := f.exportBackup(t, cookie, csrf, backupPass)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "backup_busy" {
+		t.Fatalf("status = %d, type %q: %s", rec.Code, problemType(t, rec), rec.Body)
+	}
+	close(sink.release)
+	if err := <-done; err != nil {
+		t.Fatalf("the first export: %v", err)
+	}
+	if left := f.leftovers(t); len(left) != 0 {
+		t.Fatalf("the data directory holds %v after the busy refusal", left)
+	}
+	// Once the first has finished the next one goes through, and cleans up after itself.
+	if rec := f.exportBackup(t, cookie, csrf, backupPass); rec.Code != http.StatusOK {
+		t.Fatalf("a backup after the first finished: %d %s", rec.Code, rec.Body)
+	}
+	if left := f.leftovers(t); len(left) != 0 {
+		t.Fatalf("the data directory holds %v after a finished download", left)
 	}
 }
