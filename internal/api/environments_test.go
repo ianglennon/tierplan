@@ -242,17 +242,17 @@ func TestEnvironmentRenameAndRemoveAuditAndAnswer404ForAnUnknownID(t *testing.T)
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	e := f.add(t)
 
-	rec := f.req(t, http.MethodPatch, "/api/environments/"+e.ID, `{"name":" Lab "}`)
+	rec := f.req(t, http.MethodPatch, "/api/env/"+e.ID, `{"name":" Lab "}`)
 	if rec.code != http.StatusOK || rec.env(t).Name != "Lab" {
 		t.Fatalf("rename: %d %s", rec.code, rec.body)
 	}
 	if got := f.audits(t, audit.ActionEnvironmentRenamed); len(got) != 1 || got[0].TargetID != e.ID {
 		t.Errorf("environment.renamed = %+v", got)
 	}
-	if rec := f.req(t, http.MethodPatch, "/api/environments/"+e.ID, `{"name":""}`); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "invalid_name" {
+	if rec := f.req(t, http.MethodPatch, "/api/env/"+e.ID, `{"name":""}`); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "invalid_name" {
 		t.Errorf("empty name: %d %q", rec.code, rec.ptyp)
 	}
-	if rec := f.req(t, http.MethodPatch, "/api/environments/nope", `{"name":"x"}`); rec.code != http.StatusNotFound {
+	if rec := f.req(t, http.MethodPatch, "/api/env/nope", `{"name":"x"}`); rec.code != http.StatusNotFound {
 		t.Errorf("rename unknown: %d %s", rec.code, rec.body)
 	}
 	if rec := f.req(t, http.MethodDelete, "/api/environments/nope", ""); rec.code != http.StatusNotFound {
@@ -329,7 +329,7 @@ func TestEnvironmentMutationsRequireTheCSRFHeader(t *testing.T) {
 	e := f.add(t)
 	for _, c := range []struct{ method, path, body string }{
 		{http.MethodPost, "/api/environments", `{"kind":"local"}`},
-		{http.MethodPatch, "/api/environments/" + e.ID, `{"name":"x"}`},
+		{http.MethodPatch, "/api/env/" + e.ID, `{"name":"x"}`},
 		{http.MethodDelete, "/api/environments/" + e.ID, ""},
 		{http.MethodPost, "/api/env/" + e.ID + "/reconnect", ""},
 	} {
@@ -350,7 +350,7 @@ func TestEnvironmentMutationsNeedAPermissionAndASession(t *testing.T) {
 	cookie, csrf := f.signIn(t, "viewer", false)
 	for _, c := range []struct{ method, path, body string }{
 		{http.MethodPost, "/api/environments", `{"kind":"local"}`},
-		{http.MethodPatch, "/api/environments/" + e.ID, `{"name":"x"}`},
+		{http.MethodPatch, "/api/env/" + e.ID, `{"name":"x"}`},
 		{http.MethodDelete, "/api/environments/" + e.ID, ""},
 		{http.MethodPost, "/api/env/" + e.ID + "/reconnect", ""},
 	} {
@@ -532,23 +532,65 @@ func TestEnvironmentAddIsForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *tes
 	}
 }
 
-func TestEnvironmentRenameIsForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *testing.T) {
-	f := newEnvFix(t, dockertest.FakeConfig{})
-	e := f.add(t)
-	f.addAllEnvAdmin(t, "envadmin")
-
-	cookie, csrf := f.signIn(t, "envadmin", false)
-	rec := f.call(t, authReq{method: http.MethodPatch, path: "/api/environments/" + e.ID, body: `{"name":"Lab"}`, cookie: cookie, csrf: csrf})
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("rename as an admin of every environment: %d %s, want 403", rec.Code, rec.Body)
+// asUser calls a route as an existing user (made by addUser), signing them in first.
+func (f *authFixture) asUser(t *testing.T, name, method, path, body string) *envRec {
+	t.Helper()
+	cookie, csrf := f.signIn(t, name, false)
+	rec := f.call(t, authReq{method: method, path: path, body: body, cookie: cookie, csrf: csrf})
+	ptyp := ""
+	if rec.Code >= 400 {
+		ptyp = problemType(t, rec)
 	}
-	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-envadmin" {
+	return &envRec{rec.Code, rec.Body.Bytes(), ptyp}
+}
+
+// An env Admin renames the environment they administer through the environment-scoped
+// route (D-07), sees no other environment, and cannot go through the old path.
+func TestAnEnvAdminRenamesTheirOwnEnvironmentAndNoOtherThroughTheEnvironmentScopedRoute(t *testing.T) {
+	f := newAgentFix(t)
+	a := f.srv.NewEnvironment(t, "Alpha")
+	b := f.srv.NewEnvironment(t, "Beta")
+	f.addUser(t, "adminone", false)
+	f.addEnvRole(t, "adminone", a.ID, "admin")
+	f.addUser(t, "viewerone", false)
+	f.addEnvRole(t, "viewerone", a.ID, "viewer")
+
+	rec := f.asUser(t, "adminone", http.MethodPatch, "/api/env/"+a.ID, `{"name":"prod"}`)
+	if rec.code != http.StatusOK || rec.env(t).Name != "prod" {
+		t.Fatalf("rename as an env Admin on the environment: %d %s, want 200", rec.code, rec.body)
+	}
+	renamed := f.audits(t, audit.ActionEnvironmentRenamed)
+	if len(renamed) != 1 || renamed[0].TargetID != a.ID || renamed[0].ActorID != "id-adminone" {
+		t.Fatalf("environment.renamed = %+v", renamed)
+	}
+	var envID string
+	if err := f.st.Read.QueryRow(`SELECT env_id FROM audit_log WHERE action = ?`, audit.ActionEnvironmentRenamed).Scan(&envID); err != nil || envID != a.ID {
+		t.Fatalf("environment.renamed env_id = %q (%v), want %s", envID, err, a.ID)
+	}
+
+	rec = f.asUser(t, "adminone", http.MethodPatch, "/api/env/"+b.ID, `{"name":"stolen"}`)
+	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Fatalf("rename of another environment: %d %q %s, want 404 environment_not_found", rec.code, rec.ptyp, rec.body)
+	}
+	if got := f.audits(t, audit.ActionEnvironmentRenamed); len(got) != 1 {
+		t.Fatalf("a refused rename was audited as a rename: %+v", got)
+	}
+
+	rec = f.asUser(t, "viewerone", http.MethodPatch, "/api/env/"+a.ID, `{"name":"nope"}`)
+	if rec.code != http.StatusForbidden {
+		t.Fatalf("rename as a Viewer: %d %s, want 403", rec.code, rec.body)
+	}
+	denied := f.audits(t, audit.ActionPermissionDenied)
+	if len(denied) == 0 || denied[len(denied)-1].ActorID != "id-viewerone" {
 		t.Fatalf("permission.denied entries = %+v", denied)
 	}
 
-	rec2 := f.req(t, http.MethodPatch, "/api/environments/"+e.ID, `{"name":"Lab"}`)
-	if rec2.code != http.StatusOK {
-		t.Fatalf("rename as an instance admin: %d %s, want 200", rec2.code, rec2.body)
+	// An instance admin renames any environment; the old path is gone.
+	if rec := f.req(t, http.MethodPatch, "/api/env/"+b.ID, `{"name":"Beta 2"}`); rec.code != http.StatusOK {
+		t.Fatalf("rename as an instance admin: %d %s, want 200", rec.code, rec.body)
+	}
+	if rec := f.req(t, http.MethodPatch, "/api/environments/"+a.ID, `{"name":"x"}`); rec.code != http.StatusNotFound && rec.code != http.StatusMethodNotAllowed {
+		t.Fatalf("PATCH on the old path: %d %s, want 404 or 405", rec.code, rec.body)
 	}
 }
 

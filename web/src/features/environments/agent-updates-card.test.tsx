@@ -99,7 +99,7 @@ beforeEach(() => {
       if (path === "/api/environments" && req.method === "GET") {
         return Response.json({ items: [environment(autoUpdate, envType)] });
       }
-      if (path === "/api/environments/e2" && req.method === "PATCH") {
+      if (path === "/api/env/e2" && req.method === "PATCH") {
         const res = await patchAnswer();
         if (res.ok) autoUpdate = (body as { autoUpdate: boolean }).autoUpdate;
         return res;

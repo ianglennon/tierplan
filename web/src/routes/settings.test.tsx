@@ -107,10 +107,8 @@ beforeEach(() => {
       if (path === "/api/me") return Response.json(me);
       if (path === "/api/environments") return Response.json({ items: environments });
       if (path === "/api/local-host") return Response.json(host);
-      if (path === "/api/environments/e1") {
-        if (req.method === "PATCH") return patchAnswer(call.body ?? {});
-        if (req.method === "DELETE") return deleteAnswer();
-      }
+      if (path === "/api/env/e1" && req.method === "PATCH") return patchAnswer(call.body ?? {});
+      if (path === "/api/environments/e1" && req.method === "DELETE") return deleteAnswer();
       if (path === "/api/version") {
         return Response.json({
           commit: "",
@@ -275,7 +273,7 @@ describe("rename", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const patch = writes("PATCH");
     expect(patch).toHaveLength(1);
-    expect(patch[0]?.path).toBe("/api/environments/e1");
+    expect(patch[0]?.path).toBe("/api/env/e1");
     expect(patch[0]?.body).toEqual({ name: "production" });
     expect(patch[0]?.csrf).toBe("csrf-1");
     expect(await main().findByText("production")).toBeTruthy();

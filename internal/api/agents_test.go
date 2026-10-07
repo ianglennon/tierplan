@@ -881,17 +881,19 @@ func (f *agentFix) asAllEnvAdmin(t *testing.T, name string, method, path, body s
 	return &envRec{rec.Code, rec.Body.Bytes(), ptyp}
 }
 
-func TestSwitchingAutoUpdateIsForInstanceAdminsStoresItAndIsAudited(t *testing.T) {
+func TestSwitchingAutoUpdateNeedsConfigureOnTheEnvironmentStoresItAndIsAudited(t *testing.T) {
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
-	path := "/api/environments/" + env.ID
+	path := "/api/env/" + env.ID
 
 	if got := f.environmentView(t, env.ID); got.AutoUpdate == nil || !*got.AutoUpdate {
 		t.Fatalf("a new agent environment has autoUpdate %v, want on by default", got.AutoUpdate)
 	}
-	rec := f.asAllEnvAdmin(t, "reader", http.MethodPatch, path, `{"autoUpdate":false}`)
+	f.addUser(t, "reader", false)
+	f.addEnvRole(t, "reader", env.ID, "viewer")
+	rec := f.asUser(t, "reader", http.MethodPatch, path, `{"autoUpdate":false}`)
 	if rec.code != http.StatusForbidden {
-		t.Fatalf("PATCH autoUpdate as an admin of every environment: %d %s, want 403", rec.code, rec.body)
+		t.Fatalf("PATCH autoUpdate as a Viewer: %d %s, want 403", rec.code, rec.body)
 	}
 	if got := f.environmentView(t, env.ID); got.AutoUpdate == nil || !*got.AutoUpdate {
 		t.Fatal("a refused PATCH changed the setting")

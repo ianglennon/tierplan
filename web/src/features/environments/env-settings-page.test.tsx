@@ -17,6 +17,7 @@ import { splitPermissions } from "@/test-permissions";
 const ALL = [
   "environments.read",
   "environments.manage",
+  "environments.configure",
   "environments.token",
   "environments.revoke",
   "environments.delete",
@@ -130,6 +131,9 @@ beforeEach(() => {
           publicUrl: "https://bayplan.example.com",
           publicUrlLocked: false,
         });
+      }
+      if (path === "/api/env/e2" && req.method === "PATCH") {
+        return Response.json({ ...AGENT_ENV, name: "production" });
       }
       if (path === "/api/environments/e2/token") {
         return Response.json({
@@ -390,19 +394,42 @@ describe("/settings/environments/$envId", () => {
   });
 
   it("hides the Join token card and never reads the token without environments.token", async () => {
-    current = me(["environments.read", "environments.manage", "environments.revoke"]);
+    current = me([
+      "environments.read",
+      "environments.manage",
+      "environments.configure",
+      "environments.revoke",
+    ]);
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "General" });
     expect(headings()).toEqual(["General", "Connection", "Nodes and agents", "Agent updates"]);
     expect(seen).not.toContain("GET /api/environments/e2/token");
   });
 
-  it("hides Rename and the General card without environments.manage", async () => {
-    current = me(["environments.read", "environments.token"]);
+  it("hides Rename and the General card without environments.configure on the environment, even with environments.manage", async () => {
+    current = me(["environments.read", "environments.manage", "environments.token"]);
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "Join token" });
-    expect(headings()).toEqual(["Connection", "Nodes and agents", "Join token"]);
+    expect(screen.queryByRole("heading", { level: 3, name: "General" })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Rename/ })).toBeNull();
+  });
+
+  it("shows the General card to an env Admin of that environment only, and renames through PATCH /api/env/{envId}", async () => {
+    current = makeMe({ envs: { e2: "admin" } });
+    renderAt("/settings/environments/e2");
+    fireEvent.click(await screen.findByRole("button", { name: "Rename edge" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "production" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rename environment" }));
+    await waitFor(() => expect(seen).toContain("PATCH /api/env/e2"));
+    expect(seen).not.toContain("PATCH /api/environments/e2");
+  });
+
+  it("shows no General card to a Viewer of the environment", async () => {
+    current = makeMe({ envs: { e2: "viewer" } });
+    renderAt("/settings/environments/e2");
+    await screen.findByText("You don't have permission to view this page");
+    expect(screen.queryByRole("heading", { name: "General" })).toBeNull();
   });
 
   it("leaves out the agent URL, and never reads the settings, without settings.read", async () => {
