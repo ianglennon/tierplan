@@ -516,3 +516,38 @@ func TestTheFailingServiceGraceCanBeOverriddenAndMustBeAPositiveDuration(t *test
 		}
 	}
 }
+
+// BAYPLAN_INVITE_TTL (plan 03-11, D-24): how long an invite or reset link works.
+func TestInviteTTLDefaultsToSeventyTwoHours(t *testing.T) {
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.InviteTTL != 72*time.Hour {
+		t.Fatalf("InviteTTL = %v, want 72h", c.InviteTTL)
+	}
+}
+
+func TestInviteTTLAcceptsFromOneHourToThirtyDays(t *testing.T) {
+	for raw, want := range map[string]time.Duration{
+		"1h": time.Hour, "24h": 24 * time.Hour, "168h": 168 * time.Hour, "720h": 720 * time.Hour, "90m": 90 * time.Minute,
+	} {
+		c, err := load(t, nil, envMap{"BAYPLAN_INVITE_TTL": raw}, files{})
+		if err != nil || c.InviteTTL != want {
+			t.Errorf("%s: %v, %v, want %v", raw, c.InviteTTL, err, want)
+		}
+	}
+}
+
+func TestInviteTTLRefusesAnythingOutsideItsRangeAtStartup(t *testing.T) {
+	for _, raw := range []string{"59m", "30s", "0s", "-72h", "721h", "8760h", "soon", "72"} {
+		_, err := load(t, nil, envMap{"BAYPLAN_INVITE_TTL": raw}, files{})
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_INVITE_TTL") {
+			t.Errorf("%q: error %v, want one naming BAYPLAN_INVITE_TTL", raw, err)
+		}
+	}
+	// The flag is checked the same way.
+	if _, err := load(t, []string{"--invite-ttl=2000h"}, envMap{}, files{}); err == nil {
+		t.Error("--invite-ttl=2000h was accepted")
+	}
+}

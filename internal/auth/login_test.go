@@ -986,3 +986,82 @@ func TestRunSessionCleanupDeletesExpiredSessionsAndStopsWithItsContext(t *testin
 		t.Fatal("RunSessionCleanup did not return after its context was cancelled")
 	}
 }
+
+// --- Invited users and the last sign-in (plan 03-11, AUTH-04) -------------------
+
+// addInvitedUser inserts a user who has not chosen a password yet: the empty hash
+// an invite leaves until the link is accepted.
+func (f *loginFixture) addInvitedUser(t *testing.T, name string) string {
+	t.Helper()
+	n := f.clk.now().UnixNano()
+	id := "id-" + name
+	if err := f.st.Q.InsertInvitedUser(context.Background(), sqlc.InsertInvitedUserParams{
+		ID: id, Username: name, CreatedAt: n, UpdatedAt: n, PasswordChangedAt: n,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestLoginInvitedUserWithNoPasswordIsRefusedLikeAWrongPasswordAndAuditedAsInvitePending(t *testing.T) {
+	f := newLoginFixture(t)
+	f.addInvitedUser(t, "alice")
+	before := f.dummy.Load()
+
+	for i := range maxFailures + 1 {
+		if _, err := f.attempt("alice", "any password at all"); err != auth.ErrInvalidCredentials { //nolint:errorlint // the point is that it is the one sentinel, unwrapped
+			t.Fatalf("attempt %d: %v, want the bare ErrInvalidCredentials", i, err)
+		}
+	}
+	if got := f.dummy.Load() - before; got != int32(maxFailures+1) {
+		t.Fatalf("%d dummy verifications for %d attempts, want one each so the refusal costs what a wrong password does", got, maxFailures+1)
+	}
+	rows := f.audits(t, audit.ActionAuthLoginFailed)
+	if len(rows) != maxFailures+1 {
+		t.Fatalf("auth.login_failed rows = %d, want one per attempt", len(rows))
+	}
+	for _, r := range rows {
+		if r.Reason != "invite_pending" || r.TargetID != "alice" || r.ActorType != "anonymous" || r.IP != loginIP {
+			t.Fatalf("auth.login_failed = %+v, want reason invite_pending against alice", r)
+		}
+	}
+	// Nothing counted toward a lock: an invited user cannot be locked out of an
+	// account they have not yet used.
+	if u := f.user(t, "alice"); u.FailedCount != 0 || u.LockedUntil.Valid {
+		t.Fatalf("invited user = %+v, want no failures counted and no lock", u)
+	}
+	if len(f.audits(t, audit.ActionAuthLocked)) != 0 {
+		t.Fatal("an invited user was locked")
+	}
+	if strings.Contains(f.logs.String(), "unreadable") {
+		t.Fatalf("an empty hash is logged as a data problem: %s", f.logs)
+	}
+	if f.sessionCount(t) != 0 {
+		t.Fatal("a session was created for a user with no password")
+	}
+}
+
+func TestLoginRecordsTheTimeOfTheLastSuccessfulSignIn(t *testing.T) {
+	f := newLoginFixture(t)
+	f.addUser(t, "admin")
+	if u := f.user(t, "admin"); u.LastLoginAt.Valid {
+		t.Fatalf("last_login_at before any sign-in = %+v", u.LastLoginAt)
+	}
+	if _, err := f.attempt("admin", "wrong wrong wrong"); !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatal(err)
+	}
+	if u := f.user(t, "admin"); u.LastLoginAt.Valid {
+		t.Fatalf("a failed sign-in set last_login_at = %+v", u.LastLoginAt)
+	}
+
+	f.mustLogin(t, "admin", false)
+	first := f.clk.now().UnixNano()
+	if u := f.user(t, "admin"); !u.LastLoginAt.Valid || u.LastLoginAt.Int64 != first {
+		t.Fatalf("last_login_at = %+v, want %d", u.LastLoginAt, first)
+	}
+	f.clk.advance(2 * time.Hour)
+	f.mustLogin(t, "admin", false)
+	if u := f.user(t, "admin"); u.LastLoginAt.Int64 != f.clk.now().UnixNano() {
+		t.Fatalf("last_login_at after a second sign-in = %+v, want the new time", u.LastLoginAt)
+	}
+}

@@ -4,12 +4,14 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/config"
 )
@@ -190,5 +192,118 @@ func TestCreateUserThenAcceptTheInviteThenSignIn(t *testing.T) {
 		if got := f.audits(t, action); len(got) != 1 {
 			t.Fatalf("%s rows = %+v, want one", action, got)
 		}
+	}
+}
+
+func TestCreateUserAnswers409ForATakenOrReservedUsernameAndNothingIsCreated(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.invite(t, cookie, csrf, "alice")
+
+	taken := f.createUser(t, cookie, csrf, map[string]any{"username": "Alice"})
+	if taken.Code != http.StatusConflict || problemType(t, taken) != "username_taken" {
+		t.Fatalf("a live username: %d %s, want 409 username_taken", taken.Code, taken.Body)
+	}
+
+	if _, err := f.st.Write.Exec(`UPDATE users SET deleted_at = ? WHERE username = 'alice'`, f.clk.now().UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	reserved := f.createUser(t, cookie, csrf, map[string]any{"username": "alice"})
+	if reserved.Code != http.StatusConflict || problemType(t, reserved) != "username_reserved" {
+		t.Fatalf("a deleted user's username: %d %s, want 409 username_reserved", reserved.Code, reserved.Body)
+	}
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM users WHERE username = 'alice'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("users named alice = %d, %v, want the original only", n, err)
+	}
+	if got := f.audits(t, "user.created"); len(got) != 1 {
+		t.Fatalf("user.created rows = %d, want one: a refused creation is not a creation", len(got))
+	}
+}
+
+func TestCreateUserAnswers422ForEveryBadFieldAtOnce(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+
+	cases := []struct {
+		name string
+		body map[string]any
+		want []string // "location code"
+	}{
+		{"username", map[string]any{"username": "a!"}, []string{"body.username invalid_username"}},
+		{"email", map[string]any{"username": "alice", "email": "not-an-email"}, []string{"body.email invalid_email"}},
+		{"display name", map[string]any{"username": "alice", "displayName": strings.Repeat("x", 65)}, []string{"body.displayName display_name_too_long"}},
+		{"all", map[string]any{"username": "!", "email": "x", "displayName": strings.Repeat("x", 65)},
+			[]string{"body.username invalid_username", "body.displayName display_name_too_long", "body.email invalid_email"}},
+	}
+	for _, c := range cases {
+		rec := f.createUser(t, cookie, csrf, c.body)
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "validation_failed" {
+			t.Fatalf("%s: %d %s, want 422 validation_failed", c.name, rec.Code, rec.Body)
+		}
+		var body struct {
+			Errors []struct{ Location, Message string } `json:"errors"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, e := range body.Errors {
+			got = append(got, e.Location+" "+e.Message)
+		}
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Fatalf("%s: errors %v, want %v", c.name, got, c.want)
+		}
+		if strings.Contains(rec.Body.String(), "not-an-email") {
+			t.Fatalf("%s: the submitted value is echoed: %s", c.name, rec.Body)
+		}
+	}
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("users = %d, %v, want only the admin", n, err)
+	}
+}
+
+func TestAnInvitedUserCannotSignInAndTheAnswerIsByteIdenticalToAWrongPassword(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.invite(t, cookie, csrf, "alice")
+
+	invited := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("alice", goodPassword, false)})
+	wrong := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", "wrong wrong wrong", false)})
+	unknown := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("nobody", goodPassword, false)})
+	for name, rec := range map[string]*httptest.ResponseRecorder{"invited": invited, "wrong": wrong, "unknown": unknown} {
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: %d, want 401", name, rec.Code)
+		}
+	}
+	if invited.Body.String() != wrong.Body.String() || invited.Body.String() != unknown.Body.String() {
+		t.Fatalf("bodies differ:\ninvited: %s\nwrong: %s\nunknown: %s", invited.Body, wrong.Body, unknown.Body)
+	}
+	if got := f.audits(t, "auth.login_failed"); len(got) != 3 || got[0].Reason != "invite_pending" {
+		t.Fatalf("auth.login_failed rows = %+v, want the first to be invite_pending", got)
+	}
+	if invited.Header().Get("Set-Cookie") != "" {
+		t.Fatal("a refused sign-in set a cookie")
+	}
+}
+
+func TestSigningInSetsTheLastSignInTimeShownForTheUser(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	token := f.invite(t, cookie, csrf, "alice")
+	if rec := f.acceptInvite(t, token, "a long chosen passphrase"); rec.Code != http.StatusNoContent {
+		t.Fatalf("accept = %d %s", rec.Code, rec.Body)
+	}
+	if u, err := f.st.RQ.GetUserByUsername(context.Background(), "alice"); err != nil || u.LastLoginAt.Valid {
+		t.Fatalf("before any sign-in: %+v, %v", u.LastLoginAt, err)
+	}
+	f.clk.t = f.clk.t.Add(time.Hour)
+	if rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("alice", "a long chosen passphrase", false)}); rec.Code != http.StatusOK {
+		t.Fatalf("sign-in = %d %s", rec.Code, rec.Body)
+	}
+	u, err := f.st.RQ.GetUserByUsername(context.Background(), "alice")
+	if err != nil || !u.LastLoginAt.Valid || u.LastLoginAt.Int64 != f.clk.now().UnixNano() {
+		t.Fatalf("last_login_at = %+v, %v, want the sign-in time", u.LastLoginAt, err)
 	}
 }
