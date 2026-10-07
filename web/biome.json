@@ -6,7 +6,8 @@
       "!**/node_modules",
       "!**/dist",
       "!src/routeTree.gen.ts",
-      "!src/api/schema.d.ts"
+      "!src/api/schema.d.ts",
+      "!src/api/permissions.gen.ts"
     ]
   },
   "formatter": {

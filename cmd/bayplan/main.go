@@ -67,6 +67,7 @@ func newRoot() *cobra.Command {
 		newAuditCmd(),
 		newSetupTokenCmd(),
 		newUserCmd(),
+		newPermissionsCmd(),
 		&cobra.Command{
 			Use:   "healthcheck",
 			Short: "Exit 0 if the local server answers /healthz, else 1 (for the container HEALTHCHECK)",
@@ -118,7 +119,7 @@ func writeOpenAPI(w io.Writer) error {
 // drop privileges, but Drop neither creates nor chowns /data for them. The
 // healthcheck is among them: the image runs it as root every 30 seconds, and
 // it only probes /healthz (WR-08).
-var noDataDir = map[string]bool{"version": true, "openapi": true, "help": true, "completion": true, "healthcheck": true}
+var noDataDir = map[string]bool{"version": true, "openapi": true, "permissions": true, "help": true, "completion": true, "healthcheck": true}
 
 // dropPrivileges reads Bayplan's own container ID and then, when started as
 // root, joins the Docker socket's group, fixes /data and becomes UID and GID

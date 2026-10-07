@@ -36,12 +36,14 @@ SQLC_VERSION := v1.31.1
 
 gen:
 	go run ./cmd/bayplan openapi > openapi.json
+	go run ./cmd/bayplan permissions --format markdown > docs/permissions.md
+	go run ./cmd/bayplan permissions --format typescript > web/src/api/permissions.gen.ts
 	pnpm -C web exec openapi-typescript ../openapi.json -o src/api/schema.d.ts
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	node scripts/gen-notices.mjs
 
 gen-check: gen tidy-check
-	git diff --exit-code -- openapi.json web/src/api/schema.d.ts internal/store/sqlc web/public/third-party-notices.json
+	git diff --exit-code -- openapi.json web/src/api/schema.d.ts internal/store/sqlc web/public/third-party-notices.json docs/permissions.md web/src/api/permissions.gen.ts
 
 # go.mod and go.sum of every module must already be tidy: `go mod tidy -diff`
 # prints what tidy would change and exits non-zero without touching the files.
