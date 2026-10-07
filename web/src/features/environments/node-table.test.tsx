@@ -103,6 +103,8 @@ const ALL = ["environments.read", "environments.revoke"];
 // The environment's automatic-update setting: absent until a test sets it.
 let autoUpdate: boolean | undefined;
 let perms: string[];
+// A signed-in user built by makeMe, for a test about who holds a role on the environment.
+let account: ReturnType<typeof makeMe> | undefined;
 let sent: Sent[];
 let agents: ReturnType<typeof agent>[];
 let kind: "agent" | "local";
@@ -115,6 +117,7 @@ let writeText: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
 
 beforeEach(() => {
   perms = ALL;
+  account = undefined;
   autoUpdate = undefined;
   kind = "agent";
   sent = [];
@@ -144,13 +147,15 @@ beforeEach(() => {
           : undefined;
       sent.push({ method: req.method, path, body });
       if (path === "/api/me") {
-        return Response.json(makeMe({ instanceAdmin: true, permissions: splitPermissions(perms) }));
+        return Response.json(
+          account ?? makeMe({ instanceAdmin: true, permissions: splitPermissions(perms) }),
+        );
       }
       if (path === "/api/environments") return Response.json({ items: [env(kind)] });
       if (path === "/api/env/e2/agents") return agentsAnswer();
-      if (/\/api\/environments\/e2\/agents\/[^/]+\/revoke$/.test(path)) return revokeAnswer();
-      if (/\/api\/environments\/e2\/agents\/[^/]+\/unblock$/.test(path)) return unblockAnswer();
-      if (/\/api\/environments\/e2\/agents\/[^/]+\/update$/.test(path)) return updateAnswer();
+      if (/\/api\/env\/e2\/agents\/[^/]+\/revoke$/.test(path)) return revokeAnswer();
+      if (/\/api\/env\/e2\/agents\/[^/]+\/unblock$/.test(path)) return unblockAnswer();
+      if (/\/api\/env\/e2\/agents\/[^/]+\/update$/.test(path)) return updateAnswer();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -453,8 +458,8 @@ describe("NodeTable folded local host", () => {
     expect(within(rowFor("mgr-1")).getByRole("button", { name: "Actions for mgr-1" })).toBeTruthy();
   });
 
-  it("offers no Revoke, Unblock or Update even for someone who may manage and revoke, and even when offline", async () => {
-    perms = [...ALL, "environments.manage"];
+  it("offers no Revoke, Unblock or Update even for someone who may configure and revoke, and even when offline", async () => {
+    perms = [...ALL, "environments.configure"];
     autoUpdate = false;
     agents = [
       MGR,
@@ -490,6 +495,22 @@ describe("NodeTable row actions", () => {
     mount();
     await screen.findByText("mgr-1");
     expect(screen.queryByRole("button", { name: /^Actions for/ })).toBeNull();
+  });
+
+  it("follows the role on this environment: an env Admin has Revoke, Unblock and Update, a Viewer or another environment's Admin has none", async () => {
+    account = makeMe({ envs: { e2: "admin" } });
+    await mountLoaded();
+    await openMenu("mgr-1");
+    expect(await screen.findByRole("menuitem", { name: "Revoke node" })).toBeTruthy();
+    cleanup();
+
+    for (const other of [makeMe({ envs: { e2: "viewer" } }), makeMe({ envs: { e9: "admin" } })]) {
+      account = other;
+      mount();
+      await screen.findByText("mgr-1");
+      expect(screen.queryByRole("button", { name: /^Actions for/ })).toBeNull();
+      cleanup();
+    }
   });
 
   it("makes the trigger 44px high under 768px", async () => {
@@ -535,7 +556,7 @@ describe("NodeTable revoke", () => {
     expect(pending.matches(":disabled")).toBe(true);
     expect(within(dialog).getByRole("button", { name: "Cancel" }).matches(":disabled")).toBe(true);
     expect(posts()).toHaveLength(1);
-    expect(posts()[0]?.path).toBe("/api/environments/e2/agents/a1/revoke");
+    expect(posts()[0]?.path).toBe("/api/env/e2/agents/a1/revoke");
 
     await act(async () => release(new Response(null, { status: 204 })));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -660,7 +681,7 @@ describe("NodeTable unblock", () => {
     fireEvent.click(confirm);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(posts()).toHaveLength(1);
-    expect(posts()[0]?.path).toBe("/api/environments/e2/agents/a4/unblock");
+    expect(posts()[0]?.path).toBe("/api/env/e2/agents/a4/unblock");
     expect(await screen.findByText("wrk-3 was unblocked.")).toBeTruthy();
   });
 
@@ -712,7 +733,7 @@ describe("NodeTable agent updates", () => {
   const BEHIND = agent("a9", "old-1", { agentVersion: "0.1.0", updateAvailable: true });
 
   beforeEach(() => {
-    perms = [...ALL, "environments.manage"];
+    perms = [...ALL, "environments.configure"];
     autoUpdate = false;
     agents = [agent("a1", "mgr-1", { role: "manager" }), BEHIND];
   });
@@ -729,7 +750,7 @@ describe("NodeTable agent updates", () => {
     expect(screen.queryByRole("menuitem", { name: "Update agent" })).toBeNull();
   });
 
-  it("offers it with automatic updates on, to nobody without environments.manage, and not for a host that refuses", async () => {
+  it("offers it with automatic updates on, to nobody without environments.configure, and not for a host that refuses", async () => {
     autoUpdate = true;
     await mountLoaded();
     await openMenu("old-1");
@@ -743,7 +764,7 @@ describe("NodeTable agent updates", () => {
     expect(screen.queryByRole("menuitem", { name: "Update agent" })).toBeNull();
     cleanup();
 
-    perms = [...ALL, "environments.manage"];
+    perms = [...ALL, "environments.configure"];
     agents = [agent("a1", "mgr-1", { role: "manager" }), { ...BEHIND, selfUpdate: false }];
     await mountLoaded();
     await openMenu("old-1");
@@ -756,7 +777,7 @@ describe("NodeTable agent updates", () => {
     await openMenu("old-1");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Update agent" }));
     await waitFor(() =>
-      expect(posts().map((p) => p.path)).toEqual(["/api/environments/e2/agents/a9/update"]),
+      expect(posts().map((p) => p.path)).toEqual(["/api/env/e2/agents/a9/update"]),
     );
     expect(screen.queryByRole("alertdialog")).toBeNull();
     await waitFor(() => expect(agentReads().length).toBeGreaterThan(before));

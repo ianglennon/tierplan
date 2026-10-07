@@ -14,13 +14,8 @@ import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 
-const ME = makeMe({
-  instanceAdmin: true,
-  permissions: {
-    global: ["settings.read"],
-    environments: { "*": ["environments.read", "environments.manage"] },
-  },
-});
+const ADMIN = makeMe({ instanceAdmin: true });
+let account: typeof ADMIN = ADMIN;
 
 function env(id: string, name: string, state: EnvironmentItem["status"]["state"], extra = {}) {
   return {
@@ -62,7 +57,7 @@ beforeEach(() => {
       if (path === "/api/instance") {
         return Response.json({ instanceName: "Lab", needsSetup: false, rememberDays: 30 });
       }
-      if (path === "/api/me") return Response.json(ME);
+      if (path === "/api/me") return Response.json(account);
       if (path === "/api/version") {
         return Response.json({
           commit: "",
@@ -87,6 +82,7 @@ const LINUX = "Mozilla/5.0 (X11; Linux x86_64) Chrome/150.0";
 const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
 
 afterEach(() => {
+  account = ADMIN;
   cleanup();
   vi.unstubAllGlobals();
   queryClient.clear();
@@ -140,6 +136,23 @@ describe("EnvPalette (D-35)", () => {
     expect(within(dialog).queryByRole("option", { name: "Manage environments" })).toBeNull();
     // The title is for screen readers only.
     expect(within(dialog).getByText("Switch environment").closest(".sr-only")).toBeTruthy();
+  });
+
+  it("has no Manage environments item for an instance admin, an env Admin or a Viewer: it is for switching", async () => {
+    for (const who of [
+      ADMIN,
+      makeMe({ envs: { a: "admin" } }),
+      makeMe({ envs: { a: "viewer" } }),
+    ]) {
+      account = who;
+      await renderReady("/env/a");
+      press(document.body, { ctrlKey: true });
+      const dialog = await screen.findByRole("dialog", { name: "Switch environment" });
+      expect(within(dialog).getByRole("option", { name: "All environments" })).toBeTruthy();
+      expect(within(dialog).queryByRole("option", { name: "Manage environments" })).toBeNull();
+      cleanup();
+      queryClient.clear();
+    }
   });
 
   it("uses the command key on a Mac and leaves Ctrl alone there", async () => {

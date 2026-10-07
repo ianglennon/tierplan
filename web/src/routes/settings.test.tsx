@@ -15,13 +15,7 @@ import { makeMe } from "@/test-me";
 
 const SOCKET = "/var/run/docker.sock";
 
-const ADMIN = makeMe({
-  instanceAdmin: true,
-  permissions: {
-    global: ["environments.manage", "environments.create", "settings.read"],
-    environments: {},
-  },
-});
+const ADMIN = makeMe({ instanceAdmin: true });
 const VIEWER = makeMe({ permissions: { global: [], environments: {} } });
 
 // A user who may read environments but nothing in Settings.
@@ -168,13 +162,57 @@ describe("Settings layout", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/general"));
   });
 
-  it("opens the Environments tab from /settings for a user with only environments.manage (WR-19)", async () => {
-    me = { ...ADMIN, permissions: { global: ["environments.manage"], environments: {} } };
+  it("opens the Environments tab from /settings for an env Admin who holds no installation-wide permission (WR-19, D-07)", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
     const router = renderAt("/settings");
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/environments"));
     expect(await main().findByText("lab-1")).toBeTruthy();
     expect(screen.queryByText("You don't have permission to view this page")).toBeNull();
-    expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
+    // The one tab is Environments: no General, no About.
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Environments"]);
+  });
+
+  it("gives an env Admin only the environments they administer, with Rename but no Remove host", async () => {
+    environments = [
+      environment(),
+      environment({ id: "e2", name: "edge", kind: "agent", isSelfHost: false }),
+      environment({ id: "e3", name: "build", kind: "agent", isSelfHost: false }),
+    ];
+    me = makeMe({ envs: { e1: "admin", e2: "viewer", e3: "operator" } });
+    renderAt("/settings/environments");
+    await main().findByText("lab-1");
+    expect(main().queryByText("edge")).toBeNull();
+    expect(main().queryByText("build")).toBeNull();
+    expect(main().getByRole("button", { name: "Rename lab-1" })).toBeTruthy();
+    expect(main().queryByRole("button", { name: /^Remove host/ })).toBeNull();
+  });
+
+  it("leaves opting the host in to instance admins: an env Admin is not offered Manage this host", async () => {
+    environments = [environment({ id: "e2", name: "edge", kind: "agent", isSelfHost: false })];
+    host = localHost({ managed: false });
+    me = makeMe({ envs: { e2: "admin" } });
+    renderAt("/settings/environments");
+    await main().findByText("edge");
+    expect(main().queryByRole("button", { name: "Manage this host" })).toBeNull();
+    cleanup();
+    queryClient.clear();
+
+    me = ADMIN;
+    renderAt("/settings/environments");
+    expect(await main().findByRole("button", { name: "Manage this host" })).toBeTruthy();
+  });
+
+  it("shows an env Admin of two of three environments those two", async () => {
+    environments = [
+      environment({ id: "e1", name: "alpha", kind: "agent", isSelfHost: false }),
+      environment({ id: "e2", name: "beta", kind: "agent", isSelfHost: false }),
+      environment({ id: "e3", name: "gamma", kind: "agent", isSelfHost: false }),
+    ];
+    me = makeMe({ envs: { e1: "admin", e2: "admin", e3: "viewer" } });
+    renderAt("/settings/environments");
+    await main().findByText("alpha");
+    expect(main().getByText("beta")).toBeTruthy();
+    expect(main().queryByText("gamma")).toBeNull();
   });
 
   it("sends a user with neither permission from /settings to the home page (WR-19)", async () => {
@@ -183,6 +221,17 @@ describe("Settings layout", () => {
     const router = renderAt("/settings");
     await screen.findByText("No environments yet");
     expect(router.state.location.pathname).toBe("/environments");
+  });
+
+  it("hides the Environments tab, and sends /settings elsewhere, from a Viewer or Operator of every environment", async () => {
+    for (const role of ["viewer", "operator"] as const) {
+      me = makeMe({ allEnvironments: role });
+      renderAt("/settings/environments");
+      expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
+      expect(screen.queryByRole("tab", { name: "Environments" })).toBeNull();
+      cleanup();
+      queryClient.clear();
+    }
   });
 
   it("hides the Environments tab from a user who may add environments but not manage them", async () => {
@@ -195,7 +244,7 @@ describe("Settings layout", () => {
     expect(screen.queryByRole("tab", { name: "Environments" })).toBeNull();
   });
 
-  it("renders no permission without environments.manage, and asks the server for nothing", async () => {
+  it("renders no permission without environments.configure on any environment, and asks the server for nothing", async () => {
     me = VIEWER;
     renderAt("/settings/environments");
     expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();

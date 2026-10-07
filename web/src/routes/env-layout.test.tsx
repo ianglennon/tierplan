@@ -96,7 +96,7 @@ function stubApi() {
       if (path === "/api/environments") return stub.environments();
       if (path === "/api/env/e1/summary") return stub.summary();
       if (path === "/api/env/e1/reconnect") return stub.reconnect();
-      if (path === "/api/environments/e1/adopt-cluster" && stub.adopt) return stub.adopt();
+      if (path === "/api/env/e1/adopt-cluster" && stub.adopt) return stub.adopt();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -441,7 +441,7 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
   });
 
   it("offers Open node settings and Remove environment for a revoked environment, by permission", async () => {
-    grant("environments.read", "environments.manage", "environments.delete");
+    grant("environments.read", "environments.configure", "environments.delete");
     withAgentEnv({ state: "revoked", reason: "revoked" });
     stub.summary = () =>
       problem(503, "environment_offline", { state: "revoked", reason: "revoked" });
@@ -459,7 +459,7 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("leaves out Remove environment without environments.delete, and the settings link without environments.manage", async () => {
+  it("leaves out Remove environment without environments.delete, and the settings link without environments.configure", async () => {
     grant("environments.read");
     withAgentEnv({ state: "revoked", reason: "revoked" });
     stub.summary = () =>
@@ -489,7 +489,7 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
   });
 
   it("offers Adopt new cluster first and Remove environment second, and adopting posts once and brings the page back", async () => {
-    grant("environments.read", "environments.manage", "environments.delete");
+    grant("environments.read", "environments.configure", "environments.delete");
     withAgentEnv(
       { state: "cluster_changed", reason: "cluster_changed" },
       { pendingClusterId: "x3k2m9t0q4w5e6r7t8y9u0i1o" },
@@ -612,7 +612,7 @@ describe("degraded banner in the environment layout (D-33)", () => {
   });
 
   it("sits on the dashboard of a degraded environment with the worst issue, and goes when the stream says online", async () => {
-    grant("environments.read", "environments.manage");
+    grant("environments.read", "environments.configure");
     withAgentEnv({ state: "degraded", reason: "agent_offline", issues: ISSUES });
     renderAt("/env/e1");
     expect(await screen.findByText("Lab host is degraded")).toBeTruthy();

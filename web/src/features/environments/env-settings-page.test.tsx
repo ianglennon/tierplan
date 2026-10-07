@@ -144,11 +144,10 @@ beforeEach(() => {
         });
       }
       if (path === "/api/env/e2/agents") return Response.json({ items: [NODE] });
-      if (path === "/api/environments/e2/adopt-cluster") {
+      if (path === "/api/env/e2/adopt-cluster") {
         return Response.json({ clusterId: "x3k2m9t0q4w5e6r7t8y9u0i1o" });
       }
-      if (path === "/api/environments/e2/agents/a1/revoke")
-        return new Response(null, { status: 204 });
+      if (path === "/api/env/e2/agents/a1/revoke") return new Response(null, { status: 204 });
       if (path === "/api/environments/e2/fold-local" && req.method === "POST") {
         // The local environment is retired and nothing offers a fold any more.
         items = [{ ...AGENT_ENV, foldOffered: undefined }];
@@ -267,17 +266,11 @@ describe("/settings/environments/$envId", () => {
     }
   });
 
-  it("hides Remove environment without environments.delete, and Agent updates without environments.manage or on the local socket", async () => {
-    current = me(["environments.read", "environments.manage", "environments.token"]);
+  it("hides Remove environment without environments.delete, and Agent updates on the local socket", async () => {
+    current = me(["environments.read", "environments.configure", "environments.token"]);
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "Agent updates" });
     expect(screen.queryByRole("heading", { name: "Remove environment" })).toBeNull();
-    cleanup();
-
-    current = me(["environments.read", "environments.token", "environments.delete"]);
-    renderAt("/settings/environments/e2");
-    await screen.findByRole("heading", { level: 3, name: "Remove environment" });
-    expect(screen.queryByRole("heading", { name: "Agent updates" })).toBeNull();
     cleanup();
 
     // The host Bayplan runs on has no agents to update.
@@ -286,6 +279,29 @@ describe("/settings/environments/$envId", () => {
     await screen.findByRole("heading", { level: 3, name: "Remove environment" });
     expect(screen.queryByRole("heading", { name: "Agent updates" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Join token" })).toBeNull();
+  });
+
+  it("gives an env Admin of this environment General, Connection, Nodes and agents and Agent updates, and no Join token, Local host or Remove environment", async () => {
+    items = [env({ foldOffered: true }), { ...LOCAL, foldOffered: true }];
+    current = makeMe({ envs: { e2: "admin" } });
+    renderAt("/settings/environments/e2");
+    await screen.findByRole("heading", { level: 3, name: "General" });
+    await screen.findByRole("heading", { level: 3, name: "Agent updates" });
+    expect(headings()).toEqual(["General", "Connection", "Nodes and agents", "Agent updates"]);
+    // The token is never read, the settings page's URL is left out, and the node table acts.
+    expect(seen).not.toContain("GET /api/environments/e2/token");
+    expect(seen).not.toContain("GET /api/settings");
+    expect(await screen.findByRole("button", { name: "Actions for mgr-1" })).toBeTruthy();
+  });
+
+  it("shows no permission to a Viewer of the environment and to an Admin of a different one", async () => {
+    for (const who of [makeMe({ envs: { e2: "viewer" } }), makeMe({ envs: { e1: "admin" } })]) {
+      current = who;
+      renderAt("/settings/environments/e2");
+      expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "General" })).toBeNull();
+      cleanup();
+    }
   });
 
   it("keeps Phase 1's Remove host wording for the local socket, with no uninstall box and no manual command", async () => {
@@ -346,27 +362,25 @@ describe("/settings/environments/$envId", () => {
       "edge will be bound to the swarm that now reports cluster ID x3k2m9t0q4w5e6r7t8y9u0i1o",
     );
     fireEvent.click(within(dialog).getByRole("button", { name: "Adopt new cluster" }));
-    await waitFor(() => expect(seen).toContain("POST /api/environments/e2/adopt-cluster"));
+    await waitFor(() => expect(seen).toContain("POST /api/env/e2/adopt-cluster"));
   });
 
-  it("does not offer Adopt new cluster on an online environment or to someone without environments.manage", async () => {
+  it("does not offer Adopt new cluster on an online environment", async () => {
     renderAt("/settings/environments/e2");
     const card = (await screen.findByRole("heading", { name: "Connection" })).closest("section");
     expect(
       within(card as HTMLElement).queryByRole("button", { name: "Adopt new cluster" }),
     ).toBeNull();
-    cleanup();
+  });
 
+  it("offers Adopt new cluster to an env Admin of the environment while the cluster is changed", async () => {
     items = [env({ status: { state: "cluster_changed", reason: "cluster_changed" } }), LOCAL];
-    current = me(["environments.read", "environments.token"], ["settings.read"]);
+    current = makeMe({ envs: { e2: "admin" } });
     renderAt("/settings/environments/e2");
-    const card2 = (await screen.findByRole("heading", { name: "Connection" })).closest("section");
+    const card = (await screen.findByRole("heading", { name: "Connection" })).closest("section");
     expect(
-      await within(card2 as HTMLElement).findByText("This swarm was re-initialised."),
+      await within(card as HTMLElement).findByRole("button", { name: "Adopt new cluster" }),
     ).toBeTruthy();
-    expect(
-      within(card2 as HTMLElement).queryByRole("button", { name: "Adopt new cluster" }),
-    ).toBeNull();
   });
 
   it("shows only the check command that fits a swarm, not the standalone one too", async () => {
@@ -406,10 +420,10 @@ describe("/settings/environments/$envId", () => {
     expect(seen).not.toContain("GET /api/environments/e2/token");
   });
 
-  it("hides Rename and the General card without environments.configure on the environment, even with environments.manage", async () => {
+  it("shows no permission, and no Rename, without environments.configure on the environment, even with environments.manage and environments.token", async () => {
     current = me(["environments.read", "environments.manage", "environments.token"]);
     renderAt("/settings/environments/e2");
-    await screen.findByRole("heading", { level: 3, name: "Join token" });
+    expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
     expect(screen.queryByRole("heading", { level: 3, name: "General" })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Rename/ })).toBeNull();
   });
@@ -515,9 +529,12 @@ describe("/settings/environments/$envId", () => {
     expect(screen.queryByRole("heading", { level: 3, name: "Local host" })).toBeNull();
   });
 
-  it("hides the Local host card from someone without environments.manage", async () => {
+  it("hides the Local host card from someone without environments.manage, even with environments.configure", async () => {
     items = [env({ foldOffered: true }), { ...LOCAL, foldOffered: true }];
-    current = me(["environments.read", "environments.delete"], ["settings.read"]);
+    current = me(
+      ["environments.read", "environments.configure", "environments.delete"],
+      ["settings.read"],
+    );
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "Remove environment" });
     expect(screen.queryByRole("heading", { level: 3, name: "Local host" })).toBeNull();

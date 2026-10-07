@@ -14,15 +14,8 @@ import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 
-function me(global: string[], env: string[]) {
-  return makeMe({ instanceAdmin: true, permissions: { global, environments: { "*": env } } });
-}
-
-const READER = me([], ["environments.read"]);
-const ADMIN = me(
-  ["settings.read", "environments.create"],
-  ["environments.read", "environments.manage"],
-);
+const READER = makeMe({ allEnvironments: "viewer" });
+const ADMIN = makeMe({ instanceAdmin: true });
 
 function env(id: string, name: string, state: EnvironmentItem["status"]["state"], extra = {}) {
   return {
@@ -367,11 +360,22 @@ describe("EnvSwitcher (D-35)", () => {
       expect(screen.queryByRole("option", { name: "Manage environments" })).toBeNull();
     });
 
-    it("offers Manage environments to environments.manage without settings.read", async () => {
-      account = me(["environments.manage"], ["environments.read"]);
+    it("offers Manage environments to an env Admin of one environment, who holds no installation-wide permission", async () => {
+      account = makeMe({ envs: { a: "admin" } });
       renderAt("/env/a");
       await openSwitcher();
       expect(screen.getByRole("option", { name: "Manage environments" })).toBeTruthy();
+    });
+
+    it("leaves Manage environments out for an Operator or a Viewer of every environment", async () => {
+      for (const role of ["operator", "viewer"] as const) {
+        account = makeMe({ allEnvironments: role });
+        renderAt("/env/a");
+        await openSwitcher();
+        expect(screen.getByRole("option", { name: "All environments" })).toBeTruthy();
+        expect(screen.queryByRole("option", { name: "Manage environments" })).toBeNull();
+        cleanup();
+      }
     });
 
     const originalUA = navigator.userAgent;
