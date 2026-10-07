@@ -544,6 +544,13 @@ func (f *authFixture) asUser(t *testing.T, name, method, path, body string) *env
 	return &envRec{rec.Code, rec.Body.Bytes(), ptyp}
 }
 
+// addEnvUser makes a user who holds one role on one environment and nothing else.
+func (f *authFixture) addEnvUser(t *testing.T, name, envID, role string) {
+	t.Helper()
+	f.addUser(t, name, false)
+	f.addEnvRole(t, name, envID, role)
+}
+
 // An env Admin renames the environment they administer through the environment-scoped
 // route (D-07), sees no other environment, and cannot go through the old path.
 func TestAnEnvAdminRenamesTheirOwnEnvironmentAndNoOtherThroughTheEnvironmentScopedRoute(t *testing.T) {

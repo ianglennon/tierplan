@@ -16,7 +16,7 @@ func TestRequirementOfEveryRegisteredPermission(t *testing.T) {
 		rbac.PermEnvironmentsCreate:    {Kind: rbac.NeedInstance},
 		rbac.PermEnvironmentsManage:    {Kind: rbac.NeedInstance},
 		rbac.PermEnvironmentsToken:     {Kind: rbac.NeedInstance},
-		rbac.PermEnvironmentsRevoke:    {Kind: rbac.NeedInstance},
+		rbac.PermEnvironmentsRevoke:    {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
 		rbac.PermEnvironmentsDelete:    {Kind: rbac.NeedInstance},
 		rbac.PermEnvironmentsConfigure: {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
 		rbac.PermEnvironmentsAccess:    {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
