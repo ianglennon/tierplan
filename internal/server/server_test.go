@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -305,17 +306,13 @@ func TestBuildRejectsADockerHostThatIsNotAUnixSocketBeforeTouchingTheDataDirecto
 	}
 }
 
-func TestBuildSeedsTheAdminRoleAndEveryRouteIsGuarded(t *testing.T) {
+func TestBuildGuardsEveryRoute(t *testing.T) {
 	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
 
-	got, err := srv.Store().RQ.ListRolePermissions(context.Background(), rbac.AdminRoleID)
-	if err != nil || len(got) != len(rbac.All()) {
-		t.Errorf("admin holds %d permissions (%v), want %d", len(got), err, len(rbac.All()))
-	}
 	if err := httpx.VerifyAllGuarded(srv.router); err != nil {
 		t.Errorf("the assembled router has an unguarded route: %v", err)
 	}
@@ -385,7 +382,7 @@ func TestBuildSignsInWithTheSessionAuthenticatorAndCSRFGuard(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rbac.AssignGlobalRole(ctx, tx, srv.Store().Q, rbac.PrincipalUser, "u1", rbac.AdminRoleID); err != nil {
+	if err := rbac.GrantInstanceAdminTx(ctx, tx, srv.Store().Q, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -414,8 +411,36 @@ func TestBuildSignsInWithTheSessionAuthenticatorAndCSRFGuard(t *testing.T) {
 		t.Fatalf("login: %d %s", rec.Code, rec.Body)
 	}
 	cookie := rec.Result().Cookies()[0]
-	if rec := do(http.MethodGet, "/api/me", "", cookie, ""); rec.Code != http.StatusOK {
-		t.Fatalf("/api/me with the cookie: %d %s", rec.Code, rec.Body)
+	meRec := do(http.MethodGet, "/api/me", "", cookie, "")
+	if meRec.Code != http.StatusOK {
+		t.Fatalf("/api/me with the cookie: %d %s", meRec.Code, meRec.Body)
+	}
+	// The granted user is an instance admin, and /api/me lists every global
+	// permission and every environment permission under "*" (D-01, D-03).
+	if u, err := srv.Store().RQ.GetUserByID(ctx, "u1"); err != nil || u.InstanceAdmin != 1 {
+		t.Fatalf("the first admin: instance_admin = %d (%v), want 1", u.InstanceAdmin, err)
+	}
+	var me struct {
+		Permissions struct {
+			Global       []string            `json:"global"`
+			Environments map[string][]string `json:"environments"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(meRec.Body.Bytes(), &me); err != nil {
+		t.Fatal(err)
+	}
+	var wantGlobal, wantEnv []string
+	for _, p := range rbac.All() {
+		if p.Scope == rbac.ScopeGlobal {
+			wantGlobal = append(wantGlobal, string(p.Name))
+		} else {
+			wantEnv = append(wantEnv, string(p.Name))
+		}
+	}
+	slices.Sort(wantGlobal)
+	slices.Sort(wantEnv)
+	if !slices.Equal(me.Permissions.Global, wantGlobal) || !slices.Equal(me.Permissions.Environments["*"], wantEnv) {
+		t.Errorf("/api/me permissions = %+v, want global %v and * %v", me.Permissions, wantGlobal, wantEnv)
 	}
 	if rec := do(http.MethodPost, "/api/auth/logout", "", cookie, ""); rec.Code != http.StatusForbidden {
 		t.Fatalf("logout without the CSRF token: %d, want 403", rec.Code)
@@ -464,7 +489,7 @@ func TestBuildReportsForwardedHeadersFromAPeerThatIsNotATrustedProxy(t *testing.
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := rbac.AssignGlobalRole(ctx, tx, srv.Store().Q, rbac.PrincipalUser, "u1", rbac.AdminRoleID); err != nil {
+		if err := rbac.GrantInstanceAdminTx(ctx, tx, srv.Store().Q, "u1"); err != nil {
 			t.Fatal(err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -610,7 +635,7 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rbac.AssignGlobalRole(ctx, tx, srv.Store().Q, rbac.PrincipalUser, "u1", rbac.AdminRoleID); err != nil {
+	if err := rbac.GrantInstanceAdminTx(ctx, tx, srv.Store().Q, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {

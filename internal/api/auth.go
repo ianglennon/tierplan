@@ -29,6 +29,10 @@ const problemInvalidCredentials = "invalid_credentials" //nolint:gosec // a prob
 // distinguishable by anyone but the audit log (D-30).
 const invalidCredentialsDetail = "Invalid username or password."
 
+// instanceAdminRole is what the Phase 1 role field says for an instance admin.
+// Plan 04 replaces the field with the access summary.
+const instanceAdminRole = "admin"
+
 // AuthDeps are the dependencies of the sign-in routes.
 type AuthDeps struct {
 	Login    *auth.Login
@@ -123,13 +127,20 @@ func RegisterAuth(r *httpx.Router, d AuthDeps) {
 		}
 		return p, nil
 	}
-	// roleOf is the user's global role, empty when they hold none.
+	// roleOf is "admin" for an instance admin and empty for everyone else. The
+	// role field is a Phase 1 shape that the access API replaces.
 	roleOf := func(ctx context.Context, userID string) (string, error) {
-		role, err := d.Store.RQ.GetUserGlobalRole(ctx, userID)
+		u, err := d.Store.RQ.GetUserByID(ctx, userID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil
 		}
-		return role, err
+		if err != nil {
+			return "", err
+		}
+		if u.InstanceAdmin != 0 {
+			return instanceAdminRole, nil
+		}
+		return "", nil
 	}
 
 	httpx.Register(r, huma.Operation{

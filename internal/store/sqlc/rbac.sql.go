@@ -10,21 +10,44 @@ import (
 	"database/sql"
 )
 
-const deleteRolePermission = `-- name: DeleteRolePermission :exec
-DELETE FROM role_permissions WHERE role_id = ? AND permission = ?
+const getUserAccessFlags = `-- name: GetUserAccessFlags :one
+SELECT instance_admin, disabled, deleted_at FROM users WHERE id = ?
 `
 
-type DeleteRolePermissionParams struct {
-	RoleID     string
-	Permission string
+type GetUserAccessFlagsRow struct {
+	InstanceAdmin int64
+	Disabled      int64
+	DeletedAt     sql.NullInt64
 }
 
-func (q *Queries) DeleteRolePermission(ctx context.Context, arg DeleteRolePermissionParams) error {
-	_, err := q.db.ExecContext(ctx, deleteRolePermission, arg.RoleID, arg.Permission)
+// What decides whether a user may act at all, and as whom: the instance flag,
+// the disabled switch and the tombstone.
+func (q *Queries) GetUserAccessFlags(ctx context.Context, id string) (GetUserAccessFlagsRow, error) {
+	row := q.db.QueryRowContext(ctx, getUserAccessFlags, id)
+	var i GetUserAccessFlagsRow
+	err := row.Scan(&i.InstanceAdmin, &i.Disabled, &i.DeletedAt)
+	return i, err
+}
+
+const insertAssignmentExtra = `-- name: InsertAssignmentExtra :exec
+INSERT INTO assignment_extras (assignment_id, permission) VALUES (?, ?)
+ON CONFLICT (assignment_id, permission) DO NOTHING
+`
+
+type InsertAssignmentExtraParams struct {
+	AssignmentID string
+	Permission   string
+}
+
+func (q *Queries) InsertAssignmentExtra(ctx context.Context, arg InsertAssignmentExtraParams) error {
+	_, err := q.db.ExecContext(ctx, insertAssignmentExtra, arg.AssignmentID, arg.Permission)
 	return err
 }
 
 const insertRoleAssignment = `-- name: InsertRoleAssignment :exec
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+   SPDX-FileCopyrightText: 2026 The Bayplan Authors */
+
 INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
@@ -51,49 +74,53 @@ func (q *Queries) InsertRoleAssignment(ctx context.Context, arg InsertRoleAssign
 	return err
 }
 
-const insertRolePermission = `-- name: InsertRolePermission :exec
-INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)
-ON CONFLICT (role_id, permission) DO NOTHING
-`
-
-type InsertRolePermissionParams struct {
-	RoleID     string
-	Permission string
-}
-
-func (q *Queries) InsertRolePermission(ctx context.Context, arg InsertRolePermissionParams) error {
-	_, err := q.db.ExecContext(ctx, insertRolePermission, arg.RoleID, arg.Permission)
-	return err
-}
-
-const listPrincipalPermissions = `-- name: ListPrincipalPermissions :many
-SELECT DISTINCT ra.env_id AS env_id, rp.permission AS permission
+const listUserAssignments = `-- name: ListUserAssignments :many
+SELECT ra.id AS id,
+       ra.principal_type AS principal_type,
+       ra.principal_id AS principal_id,
+       ra.role_id AS role_id,
+       ra.env_id AS env_id,
+       CAST(COALESCE((SELECT json_group_array(ae.permission) FROM assignment_extras ae WHERE ae.assignment_id = ra.id), '[]') AS TEXT) AS extras,
+       CAST(COALESCE(t.name, '') AS TEXT) AS team_name
 FROM role_assignments ra
-JOIN role_permissions rp ON rp.role_id = ra.role_id
-WHERE ra.principal_type = ? AND ra.principal_id = ?
-ORDER BY ra.env_id, rp.permission
+LEFT JOIN teams t ON ra.principal_type = 'team' AND t.id = ra.principal_id
+WHERE (ra.principal_type = 'user' AND ra.principal_id = ?1)
+   OR (ra.principal_type = 'team' AND ra.principal_id IN (SELECT tm.team_id FROM team_members tm WHERE tm.user_id = ?1))
+ORDER BY ra.created_at, ra.id
 `
 
-type ListPrincipalPermissionsParams struct {
+type ListUserAssignmentsRow struct {
+	ID            string
 	PrincipalType string
 	PrincipalID   string
+	RoleID        string
+	EnvID         sql.NullString
+	Extras        string
+	TeamName      string
 }
 
-type ListPrincipalPermissionsRow struct {
-	EnvID      sql.NullString
-	Permission string
-}
-
-func (q *Queries) ListPrincipalPermissions(ctx context.Context, arg ListPrincipalPermissionsParams) ([]ListPrincipalPermissionsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listPrincipalPermissions, arg.PrincipalType, arg.PrincipalID)
+// Every assignment that reaches a user: the ones made to the user and the ones
+// made to a team the user belongs to. A NULL env_id applies to every
+// environment. extras is a JSON array of the dangerous permissions the
+// assignment carries; team_name is empty for a direct assignment.
+func (q *Queries) ListUserAssignments(ctx context.Context, userID string) ([]ListUserAssignmentsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUserAssignments, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListPrincipalPermissionsRow
+	var items []ListUserAssignmentsRow
 	for rows.Next() {
-		var i ListPrincipalPermissionsRow
-		if err := rows.Scan(&i.EnvID, &i.Permission); err != nil {
+		var i ListUserAssignmentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PrincipalType,
+			&i.PrincipalID,
+			&i.RoleID,
+			&i.EnvID,
+			&i.Extras,
+			&i.TeamName,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -105,84 +132,4 @@ func (q *Queries) ListPrincipalPermissions(ctx context.Context, arg ListPrincipa
 		return nil, err
 	}
 	return items, nil
-}
-
-const listRolePermissions = `-- name: ListRolePermissions :many
-SELECT permission FROM role_permissions WHERE role_id = ? ORDER BY permission
-`
-
-func (q *Queries) ListRolePermissions(ctx context.Context, roleID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listRolePermissions, roleID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var permission string
-		if err := rows.Scan(&permission); err != nil {
-			return nil, err
-		}
-		items = append(items, permission)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const principalHasPermission = `-- name: PrincipalHasPermission :one
-SELECT EXISTS (
-    SELECT 1
-    FROM role_assignments ra
-    JOIN role_permissions rp ON rp.role_id = ra.role_id
-    WHERE ra.principal_type = ?1
-      AND ra.principal_id = ?2
-      AND rp.permission = ?3
-      AND (ra.env_id IS NULL OR (CAST(?4 AS TEXT) <> '' AND ra.env_id = CAST(?4 AS TEXT)))
-) AS allowed
-`
-
-type PrincipalHasPermissionParams struct {
-	PrincipalType string
-	PrincipalID   string
-	Permission    string
-	EnvID         string
-}
-
-// An assignment with a NULL env_id applies everywhere. One tied to an
-// environment applies only when the caller passes that environment ID; a global
-// permission check passes the empty string, which no assignment matches.
-func (q *Queries) PrincipalHasPermission(ctx context.Context, arg PrincipalHasPermissionParams) (bool, error) {
-	row := q.db.QueryRowContext(ctx, principalHasPermission,
-		arg.PrincipalType,
-		arg.PrincipalID,
-		arg.Permission,
-		arg.EnvID,
-	)
-	var allowed bool
-	err := row.Scan(&allowed)
-	return allowed, err
-}
-
-const upsertRole = `-- name: UpsertRole :exec
-/* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors */
-
-INSERT INTO roles (id, name, builtin) VALUES (?, ?, ?)
-ON CONFLICT (id) DO UPDATE SET name = excluded.name, builtin = excluded.builtin
-`
-
-type UpsertRoleParams struct {
-	ID      string
-	Name    string
-	Builtin int64
-}
-
-func (q *Queries) UpsertRole(ctx context.Context, arg UpsertRoleParams) error {
-	_, err := q.db.ExecContext(ctx, upsertRole, arg.ID, arg.Name, arg.Builtin)
-	return err
 }

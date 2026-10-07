@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
 	"github.com/ianglennon/bayplan/internal/vault"
 )
@@ -114,20 +115,23 @@ type fixture struct {
 	audit *captureAuditor
 }
 
-// newFixture builds a router over a real store with the admin role seeded and
-// "admin-user" assigned it. The Auditor is a capturing fake unless real is set.
+// newFixture builds a router over a real store with "admin-user" an instance
+// admin. The Auditor is a capturing fake unless real is set.
 func newFixture(t *testing.T, tweak func(*Options)) *fixture {
 	t.Helper()
 	s := storetest.New(t)
 	ctx := context.Background()
-	if err := rbac.SeedAdminRole(ctx, s); err != nil {
-		t.Fatal(err)
-	}
 	tx, err := s.Write.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rbac.AssignGlobalRole(ctx, tx, s.Q, rbac.PrincipalUser, "admin-user", rbac.AdminRoleID); err != nil {
+	// The grant needs a real user row: an ID with no row is an inactive user.
+	if err := s.Q.WithTx(tx).InsertUser(ctx, sqlc.InsertUserParams{
+		ID: "admin-user", Username: "admin-user", PasswordHash: "x", CreatedAt: 1, UpdatedAt: 1, PasswordChangedAt: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbac.GrantInstanceAdminTx(ctx, tx, s.Q, "admin-user"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -550,9 +554,6 @@ func TestRealAuditWriterReceivesTheDenial(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := storetest.New(t)
-	if err := rbac.SeedAdminRole(context.Background(), s); err != nil {
-		t.Fatal(err)
-	}
 	r := New(Options{
 		Checker: rbac.NewChecker(s), Authenticator: fakeAuth{},
 		Auditor:      audit.NewWriter(s, v, slog.New(slog.DiscardHandler), nil),
@@ -760,7 +761,7 @@ func TestStillAuthorizedFollowsTheSessionTheEnvironmentAndThePermission(t *testi
 	flip(func(*fixture) { delete(envs, "env-on") }, "the environment is removed", false)
 	flip(func(*fixture) { envs["env-on"] = Env{ID: "env-on", Name: "On", Enabled: false} }, "the environment is disabled", false)
 	flip(func(f2 *fixture) {
-		if _, err := f2.s.Write.Exec(`DELETE FROM role_assignments`); err != nil {
+		if _, err := f2.s.Write.Exec(`UPDATE users SET instance_admin = 0 WHERE id = 'admin-user'`); err != nil {
 			t.Fatal(err)
 		}
 	}, "the permission is withdrawn", false)

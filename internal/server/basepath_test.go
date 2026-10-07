@@ -194,7 +194,7 @@ func addAdmin(t *testing.T, srv *Server, password string) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rbac.AssignGlobalRole(ctx, tx, srv.Store().Q, rbac.PrincipalUser, "u1", rbac.AdminRoleID); err != nil {
+	if err := rbac.GrantInstanceAdminTx(ctx, tx, srv.Store().Q, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {

@@ -134,9 +134,6 @@ func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	f.acctVault = v
 	f.dataInfo = datadir.Info{Path: t.TempDir(), Persisted: true}
 	f.aud = audit.NewWriter(f.st, v, log, f.clk.now)
-	if err := rbac.SeedAdminRole(context.Background(), f.st); err != nil {
-		t.Fatal(err)
-	}
 	if f.inst, err = instance.Load(context.Background(), f.st, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +234,7 @@ func (f *authFixture) addUser(t *testing.T, name string, admin bool) string {
 		t.Fatal(err)
 	}
 	if admin {
-		if err := rbac.AssignGlobalRole(ctx, tx, f.st.Q, rbac.PrincipalUser, id, rbac.AdminRoleID); err != nil {
+		if err := rbac.GrantInstanceAdminTx(ctx, tx, f.st.Q, id); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -43,6 +43,11 @@ type AppMetum struct {
 	UpdatedAt int64
 }
 
+type AssignmentExtra struct {
+	AssignmentID string
+	Permission   string
+}
+
 type AuditLog struct {
 	Seq        int64
 	ID         string
@@ -62,6 +67,29 @@ type AuditLog struct {
 	KeyID      string
 	PrevHmac   []byte
 	Hmac       []byte
+}
+
+type BackupRun struct {
+	ID         string
+	Source     string
+	StartedAt  int64
+	FinishedAt sql.NullInt64
+	Ok         int64
+	FileName   string
+	SizeBytes  int64
+	Error      string
+}
+
+type BackupSchedule struct {
+	ID               int64
+	Enabled          int64
+	Frequency        string
+	Weekday          int64
+	TimeUtc          string
+	Keep             int64
+	PassphraseSealed string
+	UpdatedAt        int64
+	UpdatedBy        string
 }
 
 type EnvCa struct {
@@ -101,6 +129,18 @@ type Environment struct {
 	LocalSocketPath  sql.NullString
 }
 
+type OwnedResource struct {
+	Kind          string
+	ResourceID    string
+	EnvID         string
+	Name          string
+	OwnerID       string
+	State         string
+	NeedsEnvAdmin int64
+	CreatedAt     int64
+	UpdatedAt     int64
+}
+
 type Role struct {
 	ID      string
 	Name    string
@@ -116,11 +156,6 @@ type RoleAssignment struct {
 	CreatedAt     int64
 }
 
-type RolePermission struct {
-	RoleID     string
-	Permission string
-}
-
 type Session struct {
 	IDHash            []byte
 	UserID            string
@@ -130,12 +165,26 @@ type Session struct {
 	Remember          int64
 	Ip                string
 	UserAgent         string
+	PublicID          sql.NullString
 }
 
 type Setting struct {
 	Key       string
 	Value     string
 	UpdatedAt int64
+}
+
+type Team struct {
+	ID        string
+	Name      string
+	CreatedAt int64
+	UpdatedAt int64
+}
+
+type TeamMember struct {
+	TeamID    string
+	UserID    string
+	CreatedAt int64
 }
 
 type User struct {
@@ -148,6 +197,21 @@ type User struct {
 	FailedCount       int64
 	LockedUntil       sql.NullInt64
 	Disabled          int64
+	InstanceAdmin     int64
+	DisplayName       string
+	Email             string
+	DeletedAt         sql.NullInt64
+	LastLoginAt       sql.NullInt64
+}
+
+type UserLink struct {
+	ID        string
+	UserID    string
+	Kind      string
+	TokenHash []byte
+	CreatedAt int64
+	ExpiresAt int64
+	CreatedBy string
 }
 
 type UserRecentEnvironment struct {

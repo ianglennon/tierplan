@@ -57,7 +57,7 @@ func (q *Queries) DeleteUserSessionsExcept(ctx context.Context, arg DeleteUserSe
 }
 
 const getSessionByHash = `-- name: GetSessionByHash :one
-SELECT id_hash, user_id, created_at, last_seen_at, absolute_expires_at, remember, ip, user_agent FROM sessions WHERE id_hash = ?
+SELECT id_hash, user_id, created_at, last_seen_at, absolute_expires_at, remember, ip, user_agent, public_id FROM sessions WHERE id_hash = ?
 `
 
 func (q *Queries) GetSessionByHash(ctx context.Context, idHash []byte) (Session, error) {
@@ -72,6 +72,7 @@ func (q *Queries) GetSessionByHash(ctx context.Context, idHash []byte) (Session,
 		&i.Remember,
 		&i.Ip,
 		&i.UserAgent,
+		&i.PublicID,
 	)
 	return i, err
 }

@@ -225,13 +225,6 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		return st.Ready(ctx)
 	}
 
-	// The admin role holds every registered permission, re-synced at every
-	// start so a new permission reaches admins on upgrade (D-45).
-	if err := rbac.SeedAdminRole(ctx, st); err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("seed admin role: %w", err)
-	}
-
 	aud := audit.NewWriter(st, vlt, log, nil)
 
 	// While no user exists every start mints a fresh setup token, writes it to

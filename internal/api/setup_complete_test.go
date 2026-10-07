@@ -138,9 +138,13 @@ func TestSetupCompleteCreatesTheAdminSignsInAndStoresTheSettings(t *testing.T) {
 	if u.ID != got.User.ID || !strings.HasPrefix(u.PasswordHash, "$argon2id$v=19$m=19456,t=2,p=1$") || strings.Contains(u.PasswordHash, goodPassword) {
 		t.Fatalf("user row %+v", u)
 	}
-	// The global admin role.
-	if n := f.count(t, `SELECT COUNT(*) FROM role_assignments WHERE principal_type = 'user' AND principal_id = ? AND role_id = 'admin' AND env_id IS NULL`, u.ID); n != 1 {
-		t.Fatalf("admin role assignments = %d, want 1", n)
+	// The first user is an instance admin by the flag, set in the same
+	// transaction that created them (D-01); no assignment row is written.
+	if u.InstanceAdmin != 1 {
+		t.Fatalf("instance_admin = %d, want 1", u.InstanceAdmin)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM role_assignments`); n != 0 {
+		t.Fatalf("role assignments = %d, want none", n)
 	}
 	// The settings.
 	if v, ok := f.setting(t, "instance_name"); !ok || v != "Home lab" {

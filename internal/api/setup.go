@@ -383,8 +383,8 @@ func (d SetupDeps) complete(ctx context.Context, in *CompleteSetupInput) (*Compl
 	}); err != nil {
 		return internal("insert user", err)
 	}
-	if err := rbac.AssignGlobalRole(ctx, tx, d.Store.Q, rbac.PrincipalUser, id, rbac.AdminRoleID); err != nil {
-		return internal("assign admin role", err)
+	if err := rbac.GrantInstanceAdminTx(ctx, tx, d.Store.Q, id); err != nil {
+		return internal("grant instance admin", err)
 	}
 	if err := d.Instance.SetTx(ctx, tx, d.Store.Q, c.instanceName, c.publicURL); err != nil {
 		return internal("store instance settings", err)
@@ -421,7 +421,7 @@ func (d SetupDeps) complete(ctx context.Context, in *CompleteSetupInput) (*Compl
 		SetCookie:    d.Sessions.Cookie(rawSession, false, d.Instance.CookieScope()),
 		CacheControl: "no-store",
 		Body: CompleteSetupBody{
-			User:            SetupUserBody{ID: id, Username: c.username, Role: rbac.AdminRoleID},
+			User:            SetupUserBody{ID: id, Username: c.username, Role: instanceAdminRole},
 			CSRFToken:       d.Sessions.CSRFToken(idHash),
 			InstanceName:    c.instanceName,
 			PublicURL:       d.Instance.PublicURL(),

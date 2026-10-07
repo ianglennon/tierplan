@@ -323,7 +323,7 @@ func (s *Server) signIn() {
 	}); err != nil {
 		s.t.Fatal(err)
 	}
-	if err := rbac.AssignGlobalRole(ctx, tx, st.Q, rbac.PrincipalUser, "u1", rbac.AdminRoleID); err != nil {
+	if err := rbac.GrantInstanceAdminTx(ctx, tx, st.Q, "u1"); err != nil {
 		s.t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
