@@ -23,10 +23,12 @@ const PASS = "correct horse battery";
 let sent: Sent[];
 let answer: () => Response | Promise<Response>;
 let saved: { name: string; blob: Blob }[];
+let minLength: number;
 
 beforeEach(() => {
   sent = [];
   saved = [];
+  minLength = 16;
   setCsrfToken("csrf-1");
   answer = () =>
     new Response("backup-bytes", {
@@ -43,7 +45,7 @@ beforeEach(() => {
       if (req.method === "POST") entry.body = await req.clone().json();
       sent.push(entry);
       if (path === "/api/backup/info") {
-        return Response.json({ minPassphraseLength: 16, fileExtension: ".bayplan" });
+        return Response.json({ minPassphraseLength: minLength, fileExtension: ".bayplan" });
       }
       if (path === "/api/backup/export") return answer();
       return Response.json({}, { status: 404 });
@@ -114,5 +116,195 @@ describe("Backup page", () => {
     renderPage();
     expect(screen.getByRole("heading", { name: "Back up and restore Bayplan" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Download a backup" })).toBeTruthy();
+  });
+});
+
+const download = () =>
+  screen.getByRole("button", { name: /^(Download backup|Preparing backup…)$/ });
+
+describe("Backup page layout", () => {
+  it("shows the intro, then the Download card, then the collapsible Master key note", async () => {
+    renderPage();
+    const intro = screen.getByText(/^A backup holds users, teams, access, settings/);
+    expect(intro.textContent).toBe(
+      "A backup holds users, teams, access, settings, environments and the audit log, and the same for anything added in later releases. It doesn't hold the master key, sessions or pending links. Keep the backup passphrase safe: Bayplan can't recover it.",
+    );
+    const card = screen.getByRole("heading", { name: "Download a backup" });
+    const note = screen.getByRole("button", { name: "Master key" });
+    expect(intro.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(card.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the rotation command behind the Master key trigger, as an offline command", async () => {
+    renderPage();
+    const trigger = screen.getByRole("button", { name: "Master key" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText(/Rotate the master key from the command line/)).toBeNull();
+
+    fireEvent.click(trigger);
+    expect(
+      await screen.findByText(
+        "Rotate the master key from the command line while Bayplan is stopped:",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("docker run --rm -v <volume>:/data ghcr.io/ianglennon/bayplan key rotate"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("The old key is kept as bayplan.key.old until you delete it."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/docker exec/)).toBeNull();
+  });
+});
+
+describe("Download card fields", () => {
+  it("takes both passphrases as password inputs the browser will not autofill, each with a show and hide toggle", async () => {
+    renderPage();
+    for (const label of ["Passphrase", "Confirm passphrase"]) {
+      const input = field(label);
+      expect(input.type).toBe("password");
+      expect(input.autocomplete).toBe("new-password");
+    }
+    const toggles = screen.getAllByRole("button", { name: "Show passphrase" });
+    expect(toggles).toHaveLength(2);
+    fireEvent.click(toggles[0] as HTMLElement);
+    expect(field("Passphrase").type).toBe("text");
+    expect(field("Confirm passphrase").type).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: "Hide passphrase" }));
+    expect(field("Passphrase").type).toBe("password");
+  });
+
+  it("states the minimum the server gave", async () => {
+    minLength = 20;
+    renderPage();
+    expect(await screen.findByText("At least 20 characters.")).toBeTruthy();
+  });
+
+  it("asks for the minimum from the server and refuses a shorter passphrase without sending it", async () => {
+    minLength = 20;
+    renderPage();
+    await screen.findByText("At least 20 characters.");
+    fill("nineteen characters"); // 19 characters
+    fireEvent.click(download());
+    expect(await screen.findByText("Use at least 20 characters.")).toBeTruthy();
+    expect(field("Passphrase").getAttribute("aria-invalid")).toBe("true");
+    expect(exports()).toHaveLength(0);
+  });
+
+  it("refuses passphrases that differ, without sending anything", async () => {
+    renderPage();
+    fill(PASS, `${PASS}!`);
+    fireEvent.click(download());
+    expect(await screen.findByText("The passphrases don't match.")).toBeTruthy();
+    expect(field("Confirm passphrase").getAttribute("aria-invalid")).toBe("true");
+    expect(exports()).toHaveLength(0);
+  });
+
+  it("counts characters, not bytes: sixteen accented letters are enough", async () => {
+    renderPage();
+    const sixteen = "é".repeat(16);
+    fill(sixteen);
+    fireEvent.click(download());
+    await waitFor(() => expect(exports()).toHaveLength(1));
+    expect(exports()[0]?.body).toEqual({ passphrase: sixteen });
+  });
+});
+
+describe("Download card while the backup is made", () => {
+  it("says Preparing backup… with a spinner, disables the fields and sends a second click nowhere", async () => {
+    let release: (r: Response) => void = () => {};
+    answer = () =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+    renderPage();
+    fill(PASS);
+    fireEvent.click(download());
+
+    const pending = await screen.findByRole("button", { name: "Preparing backup…" });
+    expect(pending.querySelector("[role=status], svg")).toBeTruthy();
+    expect(field("Passphrase").disabled).toBe(true);
+    expect(field("Confirm passphrase").disabled).toBe(true);
+    fireEvent.click(pending);
+    fireEvent.submit(pending.closest("form") as HTMLFormElement);
+    expect(exports()).toHaveLength(1);
+
+    release(
+      new Response("bytes", {
+        headers: { "Content-Disposition": 'attachment; filename="b.bayplan"' },
+      }),
+    );
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(screen.getByRole("button", { name: "Download backup" })).toBeTruthy();
+  });
+
+  it("toasts Backup downloaded., clears both fields and keeps the passphrase nowhere on the page", async () => {
+    renderPage();
+    fill(PASS);
+    fireEvent.click(download());
+
+    expect(await screen.findByText("Backup downloaded.")).toBeTruthy();
+    await waitFor(() => expect(field("Passphrase").value).toBe(""));
+    expect(field("Confirm passphrase").value).toBe("");
+    expect(document.body.innerHTML).not.toContain(PASS);
+    expect(document.body.textContent).not.toContain(PASS);
+    expect(field("Passphrase").disabled).toBe(false);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it.each([
+    [409, { type: "backup_busy" }],
+    [409, { type: "audit_chain_broken" }],
+    [500, { title: "Internal Server Error" }],
+  ])("shows the inline alert and no toast when the server answers %s", async (status, body) => {
+    answer = () => Response.json(body, { status });
+    renderPage();
+    fill(PASS);
+    fireEvent.click(download());
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Couldn't create the backup. Check the container logs, then try again.",
+    );
+    expect(saved).toHaveLength(0);
+    expect(document.querySelector("[data-sonner-toast]")).toBeNull();
+    // The person can correct and try again: the fields are live and still hold what was typed.
+    expect(field("Passphrase").disabled).toBe(false);
+    expect(field("Passphrase").value).toBe(PASS);
+  });
+
+  it("shows the same alert when the server cannot be reached", async () => {
+    answer = () => Promise.reject(new TypeError("Failed to fetch"));
+    renderPage();
+    fill(PASS);
+    fireEvent.click(download());
+    expect((await screen.findByRole("alert")).textContent).toContain("Couldn't create the backup.");
+    expect(document.querySelector("[data-sonner-toast]")).toBeNull();
+  });
+
+  it("clears the alert when the person tries again", async () => {
+    answer = () => Response.json({}, { status: 500 });
+    renderPage();
+    fill(PASS);
+    fireEvent.click(download());
+    await screen.findByRole("alert");
+
+    answer = () =>
+      new Response("bytes", {
+        headers: { "Content-Disposition": 'attachment; filename="b.bayplan"' },
+      });
+    fireEvent.click(download());
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("points a passphrase the server calls too short at the field", async () => {
+    answer = () => Response.json({ type: "passphrase_too_short" }, { status: 422 });
+    minLength = 16;
+    renderPage();
+    fill(PASS);
+    fireEvent.click(download());
+    expect(await screen.findByText("Use at least 16 characters.")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
