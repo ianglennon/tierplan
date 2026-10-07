@@ -12,7 +12,7 @@ import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 
 const ME = {
-  user: { id: "u1", username: "admin", role: "admin" },
+  user: { id: "u1", username: "admin", displayName: "", instanceAdmin: true },
   csrfToken: "csrf-1",
   permissions: { global: [], environments: { "*": ["environments.read"] } },
 };
@@ -217,7 +217,7 @@ describe("user menu", () => {
     renderAt("/");
     await openUserMenu();
     expect(await screen.findByText("admin")).toBeTruthy();
-    expect(screen.getByText("Admin")).toBeTruthy();
+    expect(screen.getByText("Instance admin")).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: "Light" })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: "Dark" })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: "System" })).toBeTruthy();

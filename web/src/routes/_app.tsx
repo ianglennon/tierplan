@@ -49,7 +49,7 @@ function ShellBody() {
         {/* The page title goes here: breadcrumbs or a heading, set by each page. */}
         <div id="header-title" className="min-w-0 flex-1 truncate text-sm font-medium" />
         {canSeeBell ? <HealthBell /> : null}
-        {me ? <UserMenu username={me.user.username} role={me.user.role} /> : null}
+        {me ? <UserMenu username={me.user.username} instanceAdmin={me.user.instanceAdmin} /> : null}
       </header>
       <main id="main" tabIndex={-1} className="flex-1 p-4 outline-none md:p-6">
         <Outlet />

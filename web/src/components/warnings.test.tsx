@@ -31,9 +31,12 @@ let plainHttp = false;
 vi.mock("@/components/auth-layout", () => ({ isPlainHttpRemote: () => plainHttp }));
 
 const ADMIN = {
-  user: { id: "u1", username: "admin", role: "admin" },
+  user: { id: "u1", username: "admin", displayName: "", instanceAdmin: true },
   csrfToken: "csrf-1",
   permissions: { global: ["settings.read", "settings.write"], environments: {} },
+  access: {},
+  requirements: {},
+  administrators: [],
 };
 const VIEWER = { ...ADMIN, permissions: { global: [], environments: {} } };
 // Reads every environment and may finish setting one up, but has no say over the instance.

@@ -982,6 +982,17 @@ export interface components {
             /** @description The Docker API path the agent refused */
             endpoint: string;
         };
+        EnvAccessBody: {
+            /** @description The dangerous permissions the grants carry explicitly, sorted */
+            extras: string[] | null;
+            /**
+             * @description The highest role any grant gives
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description Every grant that contributes, in the order instance, all, team (by name), direct */
+            sources: components["schemas"]["SourceBody"][] | null;
+        };
         EnvWarningBody: {
             /** @description For cert_not_renewing and clock_skew: the agent */
             agentId?: string;
@@ -1424,10 +1435,20 @@ export interface components {
             username: string;
         };
         MeBody: {
+            /** @description The user's access by environment ID, and the key * for access that applies to every environment */
+            access: {
+                [key: string]: components["schemas"]["EnvAccessBody"];
+            };
+            /** @description The usernames of the active instance admins, for a signed-in user who has no access to any environment; empty otherwise */
+            administrators: string[] | null;
             /** @description Sent as X-CSRF-Token on every mutating request */
             csrfToken: string;
             /** @description Effective permissions of the signed-in user */
             permissions: components["schemas"]["PermissionsBody"];
+            /** @description What every registered permission asks of a caller, so the UI can say what a disabled control needs */
+            requirements: {
+                [key: string]: components["schemas"]["RequirementBody"];
+            };
             /** @description The signed-in user */
             user: components["schemas"]["UserBody"];
         };
@@ -1516,6 +1537,18 @@ export interface components {
             /** @description Up to 3 environment IDs, most recently used first */
             environmentIds: string[] | null;
         };
+        RequirementBody: {
+            /**
+             * @description role: held by the named role and above. extra: held by Admin, and by Operator only when the assignment carries it. instance: held by instance admins alone
+             * @enum {string}
+             */
+            kind: "role" | "extra" | "instance";
+            /**
+             * @description The lowest role that can hold the permission; absent when kind is instance
+             * @enum {string}
+             */
+            role?: "viewer" | "operator" | "admin";
+        };
         RevokeAgentBody: {
             /** @description Why the node is revoked, for the audit log and the node table. Optional */
             reason?: string;
@@ -1568,10 +1601,21 @@ export interface components {
         SetupUserBody: {
             /** @description The user's ID */
             id: string;
-            /** @description The user's global role */
-            role: string;
+            /** @description Always true: the first user is the instance admin (D-01) */
+            instanceAdmin: boolean;
             /** @description The lower-cased username */
             username: string;
+        };
+        SourceBody: {
+            /**
+             * @description Where the grant comes from: the instance-admin flag, an assignment to every environment, a team the user belongs to, or an assignment to the user on this environment
+             * @enum {string}
+             */
+            kind: "instance" | "all" | "team" | "direct";
+            /** @description The team's ID; set when kind is team */
+            teamId?: string;
+            /** @description The team's name; set when kind is team */
+            teamName?: string;
         };
         SummaryCountsBody: {
             /**
@@ -1689,10 +1733,12 @@ export interface components {
             state: "idle" | "updating" | "failed";
         };
         UserBody: {
+            /** @description The name shown for the user; empty when none was set, and the SPA then shows the username */
+            displayName: string;
             /** @description The user's ID */
             id: string;
-            /** @description The user's global role, empty when they have none */
-            role: string;
+            /** @description True for an instance admin: Admin on every environment, with every extra, and the only holder of the installation-wide permissions (D-01) */
+            instanceAdmin: boolean;
             /** @description The lower-cased username */
             username: string;
         };

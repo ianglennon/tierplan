@@ -141,9 +141,9 @@ type CompleteSetupInput struct {
 
 // SetupUserBody is the admin the completion created.
 type SetupUserBody struct {
-	ID       string `json:"id" doc:"The user's ID"`
-	Username string `json:"username" doc:"The lower-cased username"`
-	Role     string `json:"role" doc:"The user's global role"`
+	ID            string `json:"id" doc:"The user's ID"`
+	Username      string `json:"username" doc:"The lower-cased username"`
+	InstanceAdmin bool   `json:"instanceAdmin" doc:"Always true: the first user is the instance admin (D-01)"`
 }
 
 // CompleteSetupBody is the signed-in state the SPA needs after setup.
@@ -421,7 +421,7 @@ func (d SetupDeps) complete(ctx context.Context, in *CompleteSetupInput) (*Compl
 		SetCookie:    d.Sessions.Cookie(rawSession, false, d.Instance.CookieScope()),
 		CacheControl: "no-store",
 		Body: CompleteSetupBody{
-			User:            SetupUserBody{ID: id, Username: c.username, Role: instanceAdminRole},
+			User:            SetupUserBody{ID: id, Username: c.username, InstanceAdmin: true},
 			CSRFToken:       d.Sessions.CSRFToken(idHash),
 			InstanceName:    c.instanceName,
 			PublicURL:       d.Instance.PublicURL(),

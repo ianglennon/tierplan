@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -17,6 +16,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 )
 
 // problemInvalidCredentials is the stable type of every failed sign-in. The SPA
@@ -28,10 +28,6 @@ const problemInvalidCredentials = "invalid_credentials" //nolint:gosec // a prob
 // Unknown user, wrong password, locked, disabled and rate limited must not be
 // distinguishable by anyone but the audit log (D-30).
 const invalidCredentialsDetail = "Invalid username or password."
-
-// instanceAdminRole is what the Phase 1 role field says for an instance admin.
-// Plan 04 replaces the field with the access summary.
-const instanceAdminRole = "admin"
 
 // AuthDeps are the dependencies of the sign-in routes.
 type AuthDeps struct {
@@ -58,9 +54,10 @@ type LoginInput struct {
 
 // UserBody is a user as the SPA needs to show them.
 type UserBody struct {
-	ID       string `json:"id" doc:"The user's ID"`
-	Username string `json:"username" doc:"The lower-cased username"`
-	Role     string `json:"role" doc:"The user's global role, empty when they have none"`
+	ID            string `json:"id" doc:"The user's ID"`
+	Username      string `json:"username" doc:"The lower-cased username"`
+	DisplayName   string `json:"displayName" doc:"The name shown for the user; empty when none was set, and the SPA then shows the username"`
+	InstanceAdmin bool   `json:"instanceAdmin" doc:"True for an instance admin: Admin on every environment, with every extra, and the only holder of the installation-wide permissions (D-01)"`
 }
 
 // LoginBody is the signed-in state returned by a sign-in.
@@ -95,11 +92,34 @@ type PermissionsBody struct {
 	Environments map[string][]string `json:"environments" doc:"Permissions per environment ID; the key * holds those that apply to every environment"`
 }
 
+// SourceBody is one grant that contributes to access to an environment (D-06).
+type SourceBody struct {
+	Kind     string `json:"kind" enum:"instance,all,team,direct" doc:"Where the grant comes from: the instance-admin flag, an assignment to every environment, a team the user belongs to, or an assignment to the user on this environment"`
+	TeamID   string `json:"teamId,omitempty" doc:"The team's ID; set when kind is team"`
+	TeamName string `json:"teamName,omitempty" doc:"The team's name; set when kind is team"`
+}
+
+// EnvAccessBody is the signed-in user's effective access to one environment.
+type EnvAccessBody struct {
+	Role    string       `json:"role" enum:"viewer,operator,admin" doc:"The highest role any grant gives"`
+	Extras  []string     `json:"extras" doc:"The dangerous permissions the grants carry explicitly, sorted"`
+	Sources []SourceBody `json:"sources" doc:"Every grant that contributes, in the order instance, all, team (by name), direct"`
+}
+
+// RequirementBody is what one permission asks of a caller (D-19).
+type RequirementBody struct {
+	Kind string `json:"kind" enum:"role,extra,instance" doc:"role: held by the named role and above. extra: held by Admin, and by Operator only when the assignment carries it. instance: held by instance admins alone"`
+	Role string `json:"role,omitempty" enum:"viewer,operator,admin" doc:"The lowest role that can hold the permission; absent when kind is instance"`
+}
+
 // MeBody is the signed-in user's own state.
 type MeBody struct {
-	User        UserBody        `json:"user" doc:"The signed-in user"`
-	CSRFToken   string          `json:"csrfToken" doc:"Sent as X-CSRF-Token on every mutating request"`
-	Permissions PermissionsBody `json:"permissions" doc:"Effective permissions of the signed-in user"`
+	User           UserBody                   `json:"user" doc:"The signed-in user"`
+	CSRFToken      string                     `json:"csrfToken" doc:"Sent as X-CSRF-Token on every mutating request"`
+	Permissions    PermissionsBody            `json:"permissions" doc:"Effective permissions of the signed-in user"`
+	Access         map[string]EnvAccessBody   `json:"access" doc:"The user's access by environment ID, and the key * for access that applies to every environment"`
+	Requirements   map[string]RequirementBody `json:"requirements" doc:"What every registered permission asks of a caller, so the UI can say what a disabled control needs"`
+	Administrators []string                   `json:"administrators" doc:"The usernames of the active instance admins, for a signed-in user who has no access to any environment; empty otherwise"`
 }
 
 // MeOutput wraps MeBody for huma.
@@ -127,22 +147,6 @@ func RegisterAuth(r *httpx.Router, d AuthDeps) {
 		}
 		return p, nil
 	}
-	// roleOf is "admin" for an instance admin and empty for everyone else. The
-	// role field is a Phase 1 shape that the access API replaces.
-	roleOf := func(ctx context.Context, userID string) (string, error) {
-		u, err := d.Store.RQ.GetUserByID(ctx, userID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-		if u.InstanceAdmin != 0 {
-			return instanceAdminRole, nil
-		}
-		return "", nil
-	}
-
 	httpx.Register(r, huma.Operation{
 		OperationID: "login",
 		Method:      http.MethodPost,
@@ -171,15 +175,11 @@ func RegisterAuth(r *httpx.Router, d AuthDeps) {
 		if err != nil {
 			return nil, internal("sign in", err)
 		}
-		role, err := roleOf(ctx, res.User.ID)
-		if err != nil {
-			return nil, internal("look up role", err)
-		}
 		return &LoginOutput{
 			SetCookie:    d.Sessions.Cookie(res.RawSessionID, in.Body.Remember, d.Instance.CookieScope()),
 			CacheControl: "no-store",
 			Body: LoginBody{
-				User:      UserBody{ID: res.User.ID, Username: res.User.Username, Role: role},
+				User:      userBody(res.User),
 				CSRFToken: d.Sessions.CSRFToken(res.IDHash),
 			},
 		}, nil
@@ -215,9 +215,9 @@ func RegisterAuth(r *httpx.Router, d AuthDeps) {
 		if err != nil {
 			return nil, err
 		}
-		role, err := roleOf(ctx, p.ID)
+		u, err := d.Store.RQ.GetUserByID(ctx, p.ID)
 		if err != nil {
-			return nil, internal("look up role", err)
+			return nil, internal("look up user", err)
 		}
 		global, perEnv, err := d.Checker.EffectivePermissions(ctx, p)
 		if err != nil {
@@ -227,15 +227,78 @@ func RegisterAuth(r *httpx.Router, d AuthDeps) {
 		for env, list := range perEnv {
 			perms.Environments[env] = names(list)
 		}
+		acc, err := d.Checker.Access(ctx, p)
+		if err != nil {
+			return nil, internal("access", err)
+		}
+		admins := []string{}
+		if !acc.InstanceAdmin && len(acc.Envs) == 0 {
+			// Only a user with nothing is told whom to ask (D-08).
+			if admins, err = d.Store.RQ.ListActiveInstanceAdmins(ctx); err != nil {
+				return nil, internal("list instance admins", err)
+			}
+			if admins == nil {
+				admins = []string{}
+			}
+		}
 		return &MeOutput{
 			CacheControl: "no-store",
 			Body: MeBody{
-				User:        UserBody{ID: p.ID, Username: p.Name, Role: role},
-				CSRFToken:   d.Sessions.CSRFToken(p.SessionIDHash),
-				Permissions: perms,
+				User:           userBody(u),
+				CSRFToken:      d.Sessions.CSRFToken(p.SessionIDHash),
+				Permissions:    perms,
+				Access:         accessBody(acc),
+				Requirements:   requirementsBody(rbac.DefaultRegistry()),
+				Administrators: admins,
 			},
 		}, nil
 	})
+}
+
+// userBody is a user row as the SPA shows it.
+func userBody(u sqlc.User) UserBody {
+	return UserBody{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, InstanceAdmin: u.InstanceAdmin != 0}
+}
+
+// accessBody lists the user's effective access by environment ID, with * for
+// the grants that apply to every environment. An instance admin has the one
+// entry * (D-03). The extras and sources are never null.
+func accessBody(acc rbac.Access) map[string]EnvAccessBody {
+	out := map[string]EnvAccessBody{}
+	if !acc.Active {
+		return out
+	}
+	keys := make([]string, 0, len(acc.Envs)+1)
+	if acc.InstanceAdmin {
+		keys = append(keys, rbac.AllEnvironments)
+	} else {
+		for key := range acc.Envs {
+			keys = append(keys, key)
+		}
+	}
+	for _, key := range keys {
+		ea := acc.For(key)
+		body := EnvAccessBody{Role: ea.Role.String(), Extras: names(ea.Extras), Sources: make([]SourceBody, 0, len(ea.Sources))}
+		for _, src := range ea.Sources {
+			body.Sources = append(body.Sources, SourceBody{Kind: string(src.Kind), TeamID: src.TeamID, TeamName: src.TeamName})
+		}
+		out[key] = body
+	}
+	return out
+}
+
+// requirementsBody says what every permission of reg asks of a caller.
+func requirementsBody(reg rbac.Registry) map[string]RequirementBody {
+	out := make(map[string]RequirementBody, len(reg))
+	for _, p := range reg {
+		need := rbac.RequirementOf(p)
+		body := RequirementBody{Kind: string(need.Kind)}
+		if need.Role != rbac.RoleNone {
+			body.Role = need.Role.String()
+		}
+		out[string(p.Name)] = body
+	}
+	return out
 }
 
 // names turns permissions into strings, never nil, so the JSON is [] not null.

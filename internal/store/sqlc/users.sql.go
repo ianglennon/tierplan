@@ -103,6 +103,37 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) error {
 	return err
 }
 
+const listActiveInstanceAdmins = `-- name: ListActiveInstanceAdmins :many
+SELECT username FROM users
+WHERE instance_admin = 1 AND disabled = 0 AND deleted_at IS NULL
+ORDER BY username
+`
+
+// The usernames of the instance admins who can still sign in: not disabled and
+// not tombstoned. A signed-in user with no access is told whom to ask (D-08).
+func (q *Queries) ListActiveInstanceAdmins(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveInstanceAdmins)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var username string
+		if err := rows.Scan(&username); err != nil {
+			return nil, err
+		}
+		items = append(items, username)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockUser = `-- name: LockUser :exec
 UPDATE users SET locked_until = ? WHERE id = ?
 `

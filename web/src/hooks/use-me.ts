@@ -8,6 +8,7 @@ import { instanceQuery } from "@/api/instance";
 import type { components } from "@/api/schema";
 
 export type Me = components["schemas"]["MeBody"];
+export type Requirement = components["schemas"]["RequirementBody"];
 
 // The ["me"] query: who is signed in, their CSRF token and their effective
 // permissions. A 401 is thrown, so route guards can send the browser to /login
@@ -53,6 +54,26 @@ export function hasPermission(me: Me | undefined, perm: string, envId?: string):
   if (envId === undefined) return (me.permissions.global ?? []).includes(perm);
   const envs = me.permissions.environments;
   return (envs["*"] ?? []).includes(perm) || (envs[envId] ?? []).includes(perm);
+}
+
+// isInstanceAdmin is true for an instance admin: Admin on every environment and
+// the only holder of the installation-wide permissions (D-01). Like
+// hasPermission it only decides what to show.
+export function isInstanceAdmin(me: Me | undefined): boolean {
+  return me?.user.instanceAdmin === true;
+}
+
+export function useInstanceAdmin(): boolean {
+  const { data } = useMe();
+  return isInstanceAdmin(data);
+}
+
+// requirementFor says what a permission asks of a caller (role, extra or
+// instance), as /api/me lists it from the server's registry, so a disabled
+// control can say what it needs (D-19). It is undefined for a name the server
+// does not register, and while the user is not loaded.
+export function requirementFor(me: Me | undefined, perm: string): Requirement | undefined {
+  return me?.requirements[perm];
 }
 
 // usePermission only decides what to show. The server enforces every

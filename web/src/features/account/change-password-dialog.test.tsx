@@ -13,9 +13,12 @@ import { meQueryOptions } from "@/hooks/use-me";
 import "@/i18n";
 
 const ME = {
-  user: { id: "u1", username: "admin", role: "admin" },
+  user: { id: "u1", username: "admin", displayName: "", instanceAdmin: true },
   csrfToken: "csrf-old",
   permissions: { global: [], environments: {} },
+  access: {},
+  requirements: {},
+  administrators: [],
 };
 
 interface Sent {

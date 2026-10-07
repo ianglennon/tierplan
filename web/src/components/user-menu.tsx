@@ -23,7 +23,7 @@ import { getTheme, setTheme, type ThemeMode } from "@/lib/theme";
 
 interface UserMenuProps {
   username: string;
-  role: string;
+  instanceAdmin: boolean;
 }
 
 // Initials only (UI-SPEC): the first two characters of the username.
@@ -39,7 +39,7 @@ const THEMES: ReadonlyArray<{ mode: ThemeMode; key: string }> = [
 
 // UserMenu is the header menu on every signed-in page: who is signed in, the
 // theme choice, Change password (D-34) and Log out (AUTH-03, D-63).
-export function UserMenu({ username, role }: UserMenuProps) {
+export function UserMenu({ username, instanceAdmin }: UserMenuProps) {
   const t = useT();
   const signOut = useSignOut();
   const [theme, setThemeState] = useState<ThemeMode>(getTheme);
@@ -73,10 +73,8 @@ export function UserMenu({ username, role }: UserMenuProps) {
             <span className="truncate text-sm font-medium text-foreground" title={username}>
               {username}
             </span>
-            {role ? (
-              <span className="text-xs text-muted-foreground">
-                {role === "admin" ? t("shell.userMenu.roleAdmin") : role}
-              </span>
+            {instanceAdmin ? (
+              <span className="text-xs text-muted-foreground">{t("shell.userMenu.roleAdmin")}</span>
             ) : null}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />

@@ -12,14 +12,20 @@ import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 
 const ADMIN = {
-  user: { id: "u1", username: "admin", role: "admin" },
+  user: { id: "u1", username: "admin", displayName: "", instanceAdmin: true },
   csrfToken: "csrf-1",
   permissions: { global: ["settings.read", "settings.write"], environments: {} },
+  access: {},
+  requirements: {},
+  administrators: [],
 };
 const VIEWER = {
-  user: { id: "u2", username: "viewer", role: "" },
+  user: { id: "u2", username: "viewer", displayName: "", instanceAdmin: false },
   csrfToken: "csrf-2",
   permissions: { global: [], environments: {} },
+  access: {},
+  requirements: {},
+  administrators: [],
 };
 
 let me = ADMIN;
@@ -87,7 +93,8 @@ describe("account and warnings in the app shell", () => {
       .map((i) => i.textContent);
     expect(labels).toEqual(["Change password", "Log out"]);
     const text = menu.textContent ?? "";
-    expect(text.indexOf("Admin")).toBeLessThan(text.indexOf("Change password"));
+    expect(text.indexOf("Instance admin")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("Instance admin")).toBeLessThan(text.indexOf("Change password"));
     expect(text.indexOf("Change password")).toBeLessThan(text.indexOf("Theme"));
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Change password" }));
@@ -124,6 +131,16 @@ describe("account and warnings in the app shell", () => {
     expect(screen.queryByRole("button", { name: /^Warnings/ })).toBeNull();
     expect(screen.queryByText(/^Data isn't being persisted\./)).toBeNull();
     expect(warningRequests).toBe(0);
+  });
+
+  it("shows the user menu of anyone but an instance admin no role line", async () => {
+    me = VIEWER;
+    renderAt("/");
+    const trigger = await screen.findByRole("button", { name: "User menu" });
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    const menu = await screen.findByRole("menu");
+    expect(menu.textContent).toContain("viewer");
+    expect(menu.textContent).not.toContain("Instance admin");
   });
 
   it("mounts one toast region for the signed-in pages", async () => {

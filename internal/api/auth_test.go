@@ -295,9 +295,10 @@ func loginBody(user, password string, remember bool) string {
 
 type loginResp struct {
 	User struct {
-		ID       string `json:"id"`
-		Username string `json:"username"`
-		Role     string `json:"role"`
+		ID            string `json:"id"`
+		Username      string `json:"username"`
+		DisplayName   string `json:"displayName"`
+		InstanceAdmin bool   `json:"instanceAdmin"`
 	} `json:"user"`
 	CSRFToken string `json:"csrfToken"`
 }
@@ -365,8 +366,11 @@ func TestLoginSignsInWithABrowserSessionCookieAndReturnsTheUserAndCSRFToken(t *t
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.User.ID != "id-admin" || got.User.Username != "admin" || got.User.Role != "admin" || got.CSRFToken == "" {
+	if got.User.ID != "id-admin" || got.User.Username != "admin" || !got.User.InstanceAdmin || got.CSRFToken == "" {
 		t.Fatalf("body = %+v", got)
+	}
+	if strings.Contains(rec.Body.String(), `"role"`) {
+		t.Fatalf("body = %s, want no role field", rec.Body)
 	}
 	c := sessionCookie(rec)
 	if c == nil || c.Name != "bayplan_session" || c.Value == "" {
@@ -642,15 +646,69 @@ func TestLoginRejectsAnOversizedBodyFieldsWithoutTouchingTheAccount(t *testing.T
 
 type meResp struct {
 	User struct {
-		ID       string `json:"id"`
-		Username string `json:"username"`
-		Role     string `json:"role"`
+		ID            string `json:"id"`
+		Username      string `json:"username"`
+		DisplayName   string `json:"displayName"`
+		InstanceAdmin bool   `json:"instanceAdmin"`
 	} `json:"user"`
 	CSRFToken   string `json:"csrfToken"`
 	Permissions struct {
 		Global       []string            `json:"global"`
 		Environments map[string][]string `json:"environments"`
 	} `json:"permissions"`
+	Access map[string]struct {
+		Role    string   `json:"role"`
+		Extras  []string `json:"extras"`
+		Sources []struct {
+			Kind     string `json:"kind"`
+			TeamID   string `json:"teamId"`
+			TeamName string `json:"teamName"`
+		} `json:"sources"`
+	} `json:"access"`
+	Requirements map[string]struct {
+		Kind string `json:"kind"`
+		Role string `json:"role"`
+	} `json:"requirements"`
+	Administrators []string `json:"administrators"`
+}
+
+// getMe signs name in and returns the decoded /api/me body and the raw body.
+func (f *authFixture) getMe(t *testing.T, name string) (meResp, string) {
+	t.Helper()
+	cookie, _ := f.signIn(t, name, false)
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me", cookie: cookie})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/me as %s: %d %s", name, rec.Code, rec.Body)
+	}
+	var got meResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	return got, rec.Body.String()
+}
+
+// addTeam makes a team of the named users and returns its ID.
+func (f *authFixture) addTeam(t *testing.T, name string, members ...string) string {
+	t.Helper()
+	id := "team-" + name
+	if _, err := f.st.Write.Exec(`INSERT INTO teams (id, name, created_at, updated_at) VALUES (?, ?, 0, 0)`, id, name); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range members {
+		if _, err := f.st.Write.Exec(`INSERT INTO team_members (team_id, user_id, created_at) VALUES (?, ?, 0)`, id, "id-"+m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return id
+}
+
+// addTeamRole gives a team a role on one environment.
+func (f *authFixture) addTeamRole(t *testing.T, teamID, envID, role string) {
+	t.Helper()
+	if _, err := f.st.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
+		VALUES (?, 'team', ?, ?, ?, 0)`, "ra-"+teamID+"-"+envID, teamID, role, envID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestMeReturnsTheUserCSRFTokenAndEffectivePermissions(t *testing.T) {
@@ -664,7 +722,7 @@ func TestMeReturnsTheUserCSRFTokenAndEffectivePermissions(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.User.ID != "id-admin" || got.User.Username != "admin" || got.User.Role != "admin" || got.CSRFToken != csrf {
+	if got.User.ID != "id-admin" || got.User.Username != "admin" || !got.User.InstanceAdmin || got.CSRFToken != csrf {
 		t.Fatalf("body = %+v, want the user and the same CSRF token the sign-in returned", got)
 	}
 
@@ -702,8 +760,114 @@ func TestMeForAUserWithNoRoleHasEmptyPermissionListsNotNull(t *testing.T) {
 	}
 	var got meResp
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
-	if got.User.Role != "" {
-		t.Fatalf("role = %q, want empty", got.User.Role)
+	if got.User.InstanceAdmin {
+		t.Fatal("a user with no grant is not an instance admin")
+	}
+	if !strings.Contains(rec.Body.String(), `"access":{}`) || !strings.Contains(rec.Body.String(), `"administrators":["admin"]`) {
+		t.Fatalf("body = %s, want empty access and the administrators", rec.Body)
+	}
+}
+
+func TestMeForTheFirstAdminIsAnInstanceAdminWithOneAllEnvironmentsEntry(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	got, raw := f.getMe(t, "admin")
+	if !got.User.InstanceAdmin || got.User.DisplayName != "" {
+		t.Fatalf("user = %+v", got.User)
+	}
+	var generic struct {
+		User map[string]any `json:"user"`
+	}
+	if err := json.Unmarshal([]byte(raw), &generic); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := generic.User["role"]; has {
+		t.Fatalf("user = %v, want no role field", generic.User)
+	}
+	if len(got.Access) != 1 {
+		t.Fatalf("access = %+v, want only %q", got.Access, "*")
+	}
+	all := got.Access["*"]
+	var wantExtras []string
+	for _, p := range rbac.All() {
+		if p.Scope == rbac.ScopeEnvironment && p.Extra {
+			wantExtras = append(wantExtras, string(p.Name))
+		}
+	}
+	slices.Sort(wantExtras)
+	if all.Role != "admin" || !slices.Equal(all.Extras, wantExtras) || len(all.Sources) != 1 || all.Sources[0].Kind != "instance" {
+		t.Fatalf("access[*] = %+v, want admin, extras %v and the one source instance", all, wantExtras)
+	}
+	if len(got.Requirements) != len(rbac.All()) {
+		t.Fatalf("%d requirements for %d permissions", len(got.Requirements), len(rbac.All()))
+	}
+	for perm, want := range map[string]struct{ kind, role string }{
+		"containers.exec":        {"extra", "operator"},
+		"environments.read":      {"role", "viewer"},
+		"environments.configure": {"role", "admin"},
+		"users.manage":           {"instance", ""},
+	} {
+		if r := got.Requirements[perm]; r.Kind != want.kind || r.Role != want.role {
+			t.Errorf("requirements[%s] = %+v, want %+v", perm, r, want)
+		}
+	}
+	if !strings.Contains(raw, `"administrators":[]`) {
+		t.Fatalf("body = %s, want administrators as an empty array", raw)
+	}
+}
+
+func TestMeShowsATeamAndADirectGrantAsSourcesOfTheHigherRole(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addUser(t, "dev", false)
+	f.addEnvRole(t, "dev", "env-a", "viewer")
+	team := f.addTeam(t, "ops", "dev")
+	f.addTeamRole(t, team, "env-a", "operator")
+
+	got, raw := f.getMe(t, "dev")
+	if got.User.InstanceAdmin {
+		t.Fatal("dev is not an instance admin")
+	}
+	a, ok := got.Access["env-a"]
+	if !ok || len(got.Access) != 1 {
+		t.Fatalf("access = %+v, want only env-a", got.Access)
+	}
+	if a.Role != "operator" || len(a.Extras) != 0 {
+		t.Fatalf("access[env-a] = %+v, want operator with no extras", a)
+	}
+	if len(a.Sources) != 2 || a.Sources[0].Kind != "team" || a.Sources[0].TeamName != "ops" || a.Sources[0].TeamID != team || a.Sources[1].Kind != "direct" {
+		t.Fatalf("sources = %+v, want team ops then direct", a.Sources)
+	}
+	if !strings.Contains(raw, `"extras":[]`) || !strings.Contains(raw, `"administrators":[]`) {
+		t.Fatalf("body = %s, want empty arrays, not null", raw)
+	}
+}
+
+func TestMeListsTheActiveInstanceAdminsOnlyForAUserWithNoEnvironmentAccess(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addInstanceAdmin(t, "zed")
+	f.addInstanceAdmin(t, "gone")
+	f.addInstanceAdmin(t, "off")
+	f.addUser(t, "nobody", false)
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", "env-a", "viewer")
+	if _, err := f.st.Write.Exec(`UPDATE users SET deleted_at = 1 WHERE id = 'id-gone'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.Write.Exec(`UPDATE users SET disabled = 1 WHERE id = 'id-off'`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := f.getMe(t, "nobody")
+	if want := []string{"admin", "zed"}; !slices.Equal(got.Administrators, want) {
+		t.Fatalf("administrators = %v, want %v (sorted, without the disabled and the deleted)", got.Administrators, want)
+	}
+	if len(got.Access) != 0 {
+		t.Fatalf("access = %+v, want none", got.Access)
+	}
+	if got, _ := f.getMe(t, "viewer"); len(got.Administrators) != 0 {
+		t.Fatalf("a user with access was told the administrators: %v", got.Administrators)
+	}
+	if got, _ := f.getMe(t, "zed"); len(got.Administrators) != 0 {
+		t.Fatalf("an instance admin was told the administrators: %v", got.Administrators)
 	}
 }
 

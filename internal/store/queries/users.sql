@@ -37,3 +37,10 @@ UPDATE users SET password_hash = ?, password_changed_at = ?, updated_at = ? WHER
 
 -- name: SetUserInstanceAdmin :execrows
 UPDATE users SET instance_admin = ?, updated_at = ? WHERE id = ?;
+
+-- name: ListActiveInstanceAdmins :many
+-- The usernames of the instance admins who can still sign in: not disabled and
+-- not tombstoned. A signed-in user with no access is told whom to ask (D-08).
+SELECT username FROM users
+WHERE instance_admin = 1 AND disabled = 0 AND deleted_at IS NULL
+ORDER BY username;

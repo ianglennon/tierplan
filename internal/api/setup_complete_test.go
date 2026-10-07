@@ -68,9 +68,9 @@ func (f *setupFixture) complete(t *testing.T, over map[string]any) *httptest.Res
 
 type completeResponse struct {
 	User struct {
-		ID       string `json:"id"`
-		Username string `json:"username"`
-		Role     string `json:"role"`
+		ID            string `json:"id"`
+		Username      string `json:"username"`
+		InstanceAdmin bool   `json:"instanceAdmin"`
 	} `json:"user"`
 	CSRFToken       string `json:"csrfToken"`
 	InstanceName    string `json:"instanceName"`
@@ -126,7 +126,7 @@ func TestSetupCompleteCreatesTheAdminSignsInAndStoresTheSettings(t *testing.T) {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
 	}
 	got := decodeComplete(t, rec)
-	if got.User.ID == "" || got.User.Username != "admin" || got.User.Role != "admin" || got.CSRFToken == "" {
+	if got.User.ID == "" || got.User.Username != "admin" || !got.User.InstanceAdmin || got.CSRFToken == "" {
 		t.Fatalf("body = %+v", got)
 	}
 

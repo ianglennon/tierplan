@@ -704,6 +704,46 @@
         ],
         "type": "object"
       },
+      "EnvAccessBody": {
+        "additionalProperties": false,
+        "properties": {
+          "extras": {
+            "description": "The dangerous permissions the grants carry explicitly, sorted",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "role": {
+            "description": "The highest role any grant gives",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          },
+          "sources": {
+            "description": "Every grant that contributes, in the order instance, all, team (by name), direct",
+            "items": {
+              "$ref": "#/components/schemas/SourceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "extras",
+          "sources"
+        ],
+        "type": "object"
+      },
       "EnvWarningBody": {
         "additionalProperties": false,
         "properties": {
@@ -1730,6 +1770,23 @@
       "MeBody": {
         "additionalProperties": false,
         "properties": {
+          "access": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EnvAccessBody"
+            },
+            "description": "The user's access by environment ID, and the key * for access that applies to every environment",
+            "type": "object"
+          },
+          "administrators": {
+            "description": "The usernames of the active instance admins, for a signed-in user who has no access to any environment; empty otherwise",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "csrfToken": {
             "description": "Sent as X-CSRF-Token on every mutating request",
             "type": "string"
@@ -1737,6 +1794,13 @@
           "permissions": {
             "$ref": "#/components/schemas/PermissionsBody",
             "description": "Effective permissions of the signed-in user"
+          },
+          "requirements": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RequirementBody"
+            },
+            "description": "What every registered permission asks of a caller, so the UI can say what a disabled control needs",
+            "type": "object"
           },
           "user": {
             "$ref": "#/components/schemas/UserBody",
@@ -1746,7 +1810,10 @@
         "required": [
           "user",
           "csrfToken",
-          "permissions"
+          "permissions",
+          "access",
+          "requirements",
+          "administrators"
         ],
         "type": "object"
       },
@@ -2014,6 +2081,33 @@
         ],
         "type": "object"
       },
+      "RequirementBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "role: held by the named role and above. extra: held by Admin, and by Operator only when the assignment carries it. instance: held by instance admins alone",
+            "enum": [
+              "role",
+              "extra",
+              "instance"
+            ],
+            "type": "string"
+          },
+          "role": {
+            "description": "The lowest role that can hold the permission; absent when kind is instance",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
       "RevokeAgentBody": {
         "additionalProperties": false,
         "properties": {
@@ -2136,9 +2230,9 @@
             "description": "The user's ID",
             "type": "string"
           },
-          "role": {
-            "description": "The user's global role",
-            "type": "string"
+          "instanceAdmin": {
+            "description": "Always true: the first user is the instance admin (D-01)",
+            "type": "boolean"
           },
           "username": {
             "description": "The lower-cased username",
@@ -2148,7 +2242,34 @@
         "required": [
           "id",
           "username",
-          "role"
+          "instanceAdmin"
+        ],
+        "type": "object"
+      },
+      "SourceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "Where the grant comes from: the instance-admin flag, an assignment to every environment, a team the user belongs to, or an assignment to the user on this environment",
+            "enum": [
+              "instance",
+              "all",
+              "team",
+              "direct"
+            ],
+            "type": "string"
+          },
+          "teamId": {
+            "description": "The team's ID; set when kind is team",
+            "type": "string"
+          },
+          "teamName": {
+            "description": "The team's name; set when kind is team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
         ],
         "type": "object"
       },
@@ -2380,13 +2501,17 @@
       "UserBody": {
         "additionalProperties": false,
         "properties": {
+          "displayName": {
+            "description": "The name shown for the user; empty when none was set, and the SPA then shows the username",
+            "type": "string"
+          },
           "id": {
             "description": "The user's ID",
             "type": "string"
           },
-          "role": {
-            "description": "The user's global role, empty when they have none",
-            "type": "string"
+          "instanceAdmin": {
+            "description": "True for an instance admin: Admin on every environment, with every extra, and the only holder of the installation-wide permissions (D-01)",
+            "type": "boolean"
           },
           "username": {
             "description": "The lower-cased username",
@@ -2396,7 +2521,8 @@
         "required": [
           "id",
           "username",
-          "role"
+          "displayName",
+          "instanceAdmin"
         ],
         "type": "object"
       },
