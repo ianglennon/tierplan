@@ -30,9 +30,13 @@ type Broken struct {
 
 // VerifyResult is the outcome of Verify. Entries counts every entry examined,
 // including anchors; Broken is nil when the chain is intact.
+// AttestationsUnchecked counts key.rotated entries whose attestation could not be
+// checked because the key that made it is not loaded: that is not a break, but it
+// is not a pass either (D-33).
 type VerifyResult struct {
-	Entries int
-	Broken  *Broken
+	Entries               int
+	Broken                *Broken
+	AttestationsUnchecked int
 }
 
 // Verify walks the chain in sequence order (never timestamp order, because
@@ -42,7 +46,9 @@ type VerifyResult struct {
 //   - its HMAC must recompute under the key named by its key_id;
 //   - its prev_hmac must equal its predecessor's stored HMAC;
 //   - the first remaining entry's prev_hmac must be the 32-byte genesis value,
-//     or the last_pruned_hmac of a retained audit.pruned anchor.
+//     or the last_pruned_hmac of a retained audit.pruned anchor;
+//   - a key.rotated entry's attestation must recompute under the old key it
+//     names, when this vault holds that key; otherwise it is counted, not failed.
 //
 // Truncating the newest entries cannot be detected without an external
 // anchor; that residual risk is documented in docs/threat-model.md.
@@ -120,6 +126,15 @@ func Verify(ctx context.Context, s *store.Store, v *vault.Vault) (VerifyResult, 
 				if prevMAC != nil && !bytes.Equal(row.PrevHmac, prevMAC) {
 					setBroken(row, "prev link mismatch: the entry before this one is missing or was altered")
 				}
+				if row.Action == ActionKeyRotated {
+					switch checkAttestation(v, row, details) {
+					case attestationMismatch:
+						setBroken(row, "rotation attestation mismatch: the entry does not carry a valid attestation from the old key")
+					case attestationUnchecked:
+						res.AttestationsUnchecked++
+					case attestationOK:
+					}
+				}
 			}
 			prevMAC = row.Hmac
 		}
@@ -136,6 +151,37 @@ func Verify(ctx context.Context, s *store.Store, v *vault.Vault) (VerifyResult, 
 		}
 	}
 	return res, nil
+}
+
+type attestationOutcome int
+
+const (
+	attestationOK attestationOutcome = iota
+	attestationUnchecked
+	attestationMismatch
+)
+
+// checkAttestation recomputes a key.rotated row's attestation with the old key it
+// names. A row with no old key ID or attestation cannot have been written by
+// RecordRotationTx and is a mismatch.
+func checkAttestation(v *vault.Vault, row sqlc.AuditLog, details map[string]string) attestationOutcome {
+	oldKID, newKID, head, att := details["old_kid"], details["new_kid"], details["old_head"], details["attestation"]
+	if oldKID == "" || att == "" {
+		return attestationMismatch
+	}
+	oldKey, err := v.SubkeyFor(oldKID, vault.LabelAuditHMAC)
+	if err != nil {
+		return attestationUnchecked
+	}
+	oldHead, err := hex.DecodeString(head)
+	if err != nil {
+		return attestationMismatch
+	}
+	want := RotationAttestation(oldKey, oldKID, newKID, oldHead, row.ID, row.Ts)
+	if !hmac.Equal([]byte(want), []byte(att)) {
+		return attestationMismatch
+	}
+	return attestationOK
 }
 
 func parseDetails(s string) (map[string]string, error) {
