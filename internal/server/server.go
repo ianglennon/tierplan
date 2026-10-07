@@ -108,35 +108,58 @@ type Server struct {
 	background     sync.WaitGroup
 }
 
-// NewRouter wires every operation. It takes plain dependencies so the
-// `openapi` subcommand can build the same handlers without a database or a
-// socket.
-//
-// agentConnect serves the agent WebSocket at /agent/connect. It is the one route
-// outside the policy besides the probes and the setup page, because the handshake
-// inside it is its own authentication. Nil mounts a handler that answers 404,
-// which is what the `openapi` subcommand and the router-walk tests pass: the route
-// exists in every router, so its exemption is always checked.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, agentsDeps api.AgentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, envStream api.EnvStreamDeps, recent api.RecentDeps, auditDeps api.AuditDeps, settings api.SettingsDeps, agentConnect http.Handler) *httpx.Router {
-	r := httpx.New(opts)
+// RouterDeps are the dependencies of every route group. One struct, because a
+// positional list of this length is where a swapped pair of arguments of the same
+// type goes unnoticed (RESEARCH Pitfall 10). The zero value builds the same
+// routes with no database or socket, which is what the `openapi` subcommand and
+// the router-walk tests use.
+type RouterDeps struct {
+	Options      httpx.Options
+	System       api.SystemDeps
+	Setup        api.SetupDeps
+	Auth         api.AuthDeps
+	Account      api.AccountDeps
+	LocalHost    api.LocalHostDeps
+	Environments api.EnvironmentsDeps
+	Agents       api.AgentsDeps
+	Dashboard    api.DashboardDeps
+	Events       api.EventsDeps
+	EnvStream    api.EnvStreamDeps
+	Recent       api.RecentDeps
+	Audit        api.AuditDeps
+	Settings     api.SettingsDeps
+	Backup       api.BackupDeps
+	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
+	// route outside the policy besides the probes and the setup page, because the
+	// handshake inside it is its own authentication. Nil mounts a handler that
+	// answers 404: the route exists in every router, so its exemption is always
+	// checked.
+	AgentConnect http.Handler
+}
+
+// NewRouter wires every operation.
+func NewRouter(d RouterDeps) *httpx.Router {
+	r := httpx.New(d.Options)
+	agentConnect := d.AgentConnect
 	if agentConnect == nil {
 		agentConnect = http.NotFoundHandler()
 	}
 	r.AgentConnect(agentConnect)
-	api.RegisterSystem(r, sys)
-	api.RegisterSetup(r, setup)
-	api.RegisterAuth(r, authDeps)
-	api.RegisterAccount(r, account)
-	api.RegisterSettings(r, settings)
-	api.RegisterLocalHost(r, localHost)
-	api.RegisterEnvironments(r, environments)
-	api.RegisterAgents(r, agentsDeps)
-	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: environments.Envs, Checker: environments.Checker, Agents: agentsDeps, Log: environments.Log})
-	api.RegisterDashboard(r, dashboard)
-	api.RegisterEvents(r, events)
-	api.RegisterEnvStream(r, envStream)
-	api.RegisterRecent(r, recent)
-	api.RegisterAudit(r, auditDeps)
+	api.RegisterSystem(r, d.System)
+	api.RegisterSetup(r, d.Setup)
+	api.RegisterAuth(r, d.Auth)
+	api.RegisterAccount(r, d.Account)
+	api.RegisterSettings(r, d.Settings)
+	api.RegisterLocalHost(r, d.LocalHost)
+	api.RegisterEnvironments(r, d.Environments)
+	api.RegisterAgents(r, d.Agents)
+	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Agents: d.Agents, Log: d.Environments.Log})
+	api.RegisterDashboard(r, d.Dashboard)
+	api.RegisterEvents(r, d.Events)
+	api.RegisterEnvStream(r, d.EnvStream)
+	api.RegisterRecent(r, d.Recent)
+	api.RegisterAudit(r, d.Audit)
+	api.RegisterBackup(r, d.Backup)
 	return r
 }
 
@@ -393,67 +416,76 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
-	router := NewRouter(httpx.Options{
-		Fallback:       spa,
-		Checker:        checker,
-		Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, inst.CookieScope, nil),
-		EnvResolver:    envSvc,
-		Auditor:        anonAudit,
-		MutationGuard:  auth.NewCSRFGuard(sessions),
-		TrustedProxies: cfg.TrustedProxies,
-		Proxy:          proxyObs,
-		PublicOrigin:   inst.PublicOrigin,
-		Logger:         log,
-		// Strict-Transport-Security when the request came over TLS or the
-		// public URL is https, which also covers a TLS-terminating proxy (D-37).
-		// Not for Bayplan's own self-signed certificate: a browser pinned to it
-		// could not click through a regenerated one (WR-09).
-		HSTS: func(r *http.Request) bool {
-			if r.TLS != nil {
-				return !cfg.TLSSelfSigned
-			}
-			return inst.Secure()
+	router := NewRouter(RouterDeps{
+		Options: httpx.Options{
+			Fallback:       spa,
+			Checker:        checker,
+			Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, inst.CookieScope, nil),
+			EnvResolver:    envSvc,
+			Auditor:        anonAudit,
+			MutationGuard:  auth.NewCSRFGuard(sessions),
+			TrustedProxies: cfg.TrustedProxies,
+			Proxy:          proxyObs,
+			PublicOrigin:   inst.PublicOrigin,
+			Logger:         log,
+			// Strict-Transport-Security when the request came over TLS or the
+			// public URL is https, which also covers a TLS-terminating proxy (D-37).
+			// Not for Bayplan's own self-signed certificate: a browser pinned to it
+			// could not click through a regenerated one (WR-09).
+			HSTS: func(r *http.Request) bool {
+				if r.TLS != nil {
+					return !cfg.TLSSelfSigned
+				}
+				return inst.Secure()
+			},
 		},
-	}, api.SystemDeps{Ready: ready}, api.SetupDeps{
-		Gate: gate,
-		// 5 attempts at once, then one every 12 seconds, per client address (D-05).
-		Limiter:   auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
-		Audit:     aud,
-		AnonAudit: anonAudit,
-		Store:     st,
-		Config:    cfg,
-		Instance:  inst,
-		Sessions:  sessions,
-		SPA:       spa,
-		Log:       log,
-	}, api.AuthDeps{
-		Login:    login,
-		Sessions: sessions,
-		Instance: inst,
-		Store:    st,
-		Checker:  checker,
-		Log:      log,
-	}, api.AccountDeps{
-		Sessions: sessions,
-		Instance: inst,
-		Store:    st,
-		Audit:    aud,
-		DataDir:  info,
-		Vault:    vlt,
-		Proxy:    proxyObs,
-		// Five password-change attempts per user at once, then one every 12
-		// seconds (T-01-60): ample for a person, slow for a guesser.
-		Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
-		Log:     log,
-	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
-		api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
-		api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
-		api.EventsDeps{Aggregator: aggregator, Log: log},
-		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
-		api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
-		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
-		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log}, tunnelHub.Handler())
+		System: api.SystemDeps{Ready: ready},
+		Setup: api.SetupDeps{
+			Gate: gate,
+			// 5 attempts at once, then one every 12 seconds, per client address (D-05).
+			Limiter:   auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
+			Audit:     aud,
+			AnonAudit: anonAudit,
+			Store:     st,
+			Config:    cfg,
+			Instance:  inst,
+			Sessions:  sessions,
+			SPA:       spa,
+			Log:       log,
+		},
+		Auth: api.AuthDeps{
+			Login:    login,
+			Sessions: sessions,
+			Instance: inst,
+			Store:    st,
+			Checker:  checker,
+			Log:      log,
+		},
+		Account: api.AccountDeps{
+			Sessions: sessions,
+			Instance: inst,
+			Store:    st,
+			Audit:    aud,
+			DataDir:  info,
+			Vault:    vlt,
+			Proxy:    proxyObs,
+			// Five password-change attempts per user at once, then one every 12
+			// seconds (T-01-60): ample for a person, slow for a guesser.
+			Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
+			Log:     log,
+		},
+		LocalHost:    api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
+		Environments: api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
+		Agents:       api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
+		Dashboard:    api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
+		Events:       api.EventsDeps{Aggregator: aggregator, Log: log},
+		EnvStream:    api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
+		Recent:       api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
+		Audit:        api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
+		Settings:     api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log},
+		Backup:       api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, AppVersion: buildinfo.Get().Version, Log: log},
+		AgentConnect: tunnelHub.Handler(),
+	})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		tunnelHub.Close()

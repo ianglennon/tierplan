@@ -256,6 +256,34 @@ describe("Settings layout", () => {
   });
 });
 
+describe("Backup tab", () => {
+  it("shows the Backup tab to an instance admin and opens the page", async () => {
+    const router = renderAt("/settings/backup");
+    const tab = await screen.findByRole("tab", { name: "Backup" });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(tab.getAttribute("href")).toBe("/settings/backup");
+    expect(router.state.location.pathname).toBe("/settings/backup");
+    expect(await screen.findByRole("heading", { name: "Download a backup" })).toBeTruthy();
+    await waitFor(() => expect(document.title).toBe("Backup · Lab"));
+  });
+
+  it("keeps the Backup tab from anyone without backup.manage and says so on a direct visit", async () => {
+    me = {
+      ...ADMIN,
+      permissions: { global: ["settings.read"], environments: {} },
+    };
+    renderAt("/settings/general");
+    await screen.findByRole("tab", { name: "General" });
+    expect(screen.queryByRole("tab", { name: "Backup" })).toBeNull();
+    cleanup();
+    queryClient.clear();
+
+    renderAt("/settings/backup");
+    expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Download a backup" })).toBeNull();
+  });
+});
+
 describe("navigation", () => {
   it("adds Settings to the sidebar for an admin and leaves it out for a viewer", async () => {
     renderAt("/settings/environments");

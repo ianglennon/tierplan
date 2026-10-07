@@ -151,3 +151,15 @@ func (s *Store) Ready(ctx context.Context) error {
 	}
 	return nil
 }
+
+// SchemaVersion returns the highest schema migration applied to the database,
+// read from the goose bookkeeping table. It is the version a backup records, so
+// a restore knows what migrations the file still needs.
+func (s *Store) SchemaVersion(ctx context.Context) (int64, error) {
+	var v sql.NullInt64
+	err := s.Read.QueryRowContext(ctx, `SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&v)
+	if err != nil {
+		return 0, fmt.Errorf("read schema version: %w", err)
+	}
+	return v.Int64, nil
+}

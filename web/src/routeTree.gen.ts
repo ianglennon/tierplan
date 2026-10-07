@@ -20,6 +20,7 @@ import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppEnvEnvIdRouteImport } from './routes/_app/env/$envId'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
 import { Route as AppSettingsAboutRouteImport } from './routes/_app/settings/about'
+import { Route as AppSettingsBackupRouteImport } from './routes/_app/settings/backup'
 import { Route as AppSettingsEnvironmentsRouteImport } from './routes/_app/settings/environments'
 import { Route as AppSettingsGeneralRouteImport } from './routes/_app/settings/general'
 import { Route as AppEnvEnvIdIndexRouteImport } from './routes/_app/env/$envId/index'
@@ -83,6 +84,11 @@ const AppSettingsAboutRoute = AppSettingsAboutRouteImport.update({
   path: '/about',
   getParentRoute: () => AppSettingsRoute,
 } as any)
+const AppSettingsBackupRoute = AppSettingsBackupRouteImport.update({
+  id: '/backup',
+  path: '/backup',
+  getParentRoute: () => AppSettingsRoute,
+} as any)
 const AppSettingsEnvironmentsRoute = AppSettingsEnvironmentsRouteImport.update({
   id: '/environments',
   path: '/environments',
@@ -135,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AppSettingsRouteWithChildren
   '/env/$envId': typeof AppEnvEnvIdRouteWithChildren
   '/settings/about': typeof AppSettingsAboutRoute
+  '/settings/backup': typeof AppSettingsBackupRoute
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/settings/general': typeof AppSettingsGeneralRoute
   '/settings/': typeof AppSettingsIndexRoute
@@ -153,6 +160,7 @@ export interface FileRoutesByTo {
   '/environments': typeof AppEnvironmentsRoute
   '/': typeof AppIndexRoute
   '/settings/about': typeof AppSettingsAboutRoute
+  '/settings/backup': typeof AppSettingsBackupRoute
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/settings/general': typeof AppSettingsGeneralRoute
   '/settings': typeof AppSettingsIndexRoute
@@ -175,6 +183,7 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/env/$envId': typeof AppEnvEnvIdRouteWithChildren
   '/_app/settings/about': typeof AppSettingsAboutRoute
+  '/_app/settings/backup': typeof AppSettingsBackupRoute
   '/_app/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/_app/settings/general': typeof AppSettingsGeneralRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
@@ -197,6 +206,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/env/$envId'
     | '/settings/about'
+    | '/settings/backup'
     | '/settings/environments'
     | '/settings/general'
     | '/settings/'
@@ -215,6 +225,7 @@ export interface FileRouteTypes {
     | '/environments'
     | '/'
     | '/settings/about'
+    | '/settings/backup'
     | '/settings/environments'
     | '/settings/general'
     | '/settings'
@@ -236,6 +247,7 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/env/$envId'
     | '/_app/settings/about'
+    | '/_app/settings/backup'
     | '/_app/settings/environments'
     | '/_app/settings/general'
     | '/_app/settings/'
@@ -333,6 +345,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsAboutRouteImport
       parentRoute: typeof AppSettingsRoute
     }
+    '/_app/settings/backup': {
+      id: '/_app/settings/backup'
+      path: '/backup'
+      fullPath: '/settings/backup'
+      preLoaderRoute: typeof AppSettingsBackupRouteImport
+      parentRoute: typeof AppSettingsRoute
+    }
     '/_app/settings/environments': {
       id: '/_app/settings/environments'
       path: '/environments'
@@ -394,6 +413,7 @@ declare module '@tanstack/react-router' {
 
 interface AppSettingsRouteChildren {
   AppSettingsAboutRoute: typeof AppSettingsAboutRoute
+  AppSettingsBackupRoute: typeof AppSettingsBackupRoute
   AppSettingsEnvironmentsRoute: typeof AppSettingsEnvironmentsRoute
   AppSettingsGeneralRoute: typeof AppSettingsGeneralRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
@@ -402,6 +422,7 @@ interface AppSettingsRouteChildren {
 
 const AppSettingsRouteChildren: AppSettingsRouteChildren = {
   AppSettingsAboutRoute: AppSettingsAboutRoute,
+  AppSettingsBackupRoute: AppSettingsBackupRoute,
   AppSettingsEnvironmentsRoute: AppSettingsEnvironmentsRoute,
   AppSettingsGeneralRoute: AppSettingsGeneralRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,

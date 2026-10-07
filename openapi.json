@@ -462,6 +462,25 @@
         ],
         "type": "object"
       },
+      "BackupInfoBody": {
+        "additionalProperties": false,
+        "properties": {
+          "fileExtension": {
+            "description": "The extension of a backup file, with the dot",
+            "type": "string"
+          },
+          "minPassphraseLength": {
+            "description": "The fewest characters a backup passphrase may have",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "minPassphraseLength",
+          "fileExtension"
+        ],
+        "type": "object"
+      },
       "ChangePasswordBody": {
         "additionalProperties": false,
         "properties": {
@@ -1460,6 +1479,20 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "ExportBackupInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "passphrase": {
+            "description": "Locks the backup. At least 16 characters; Bayplan never stores it and cannot recover it",
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "required": [
+          "passphrase"
         ],
         "type": "object"
       },
@@ -3083,6 +3116,96 @@
         "summary": "Sign out of this browser",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/backup/export": {
+      "post": {
+        "description": "Takes a consistent copy of the database while Bayplan runs and answers with it as a download named bayplan-backup-\u003cUTC YYYYMMDD-HHMM\u003e.bayplan, locked with the passphrase in the body. The backup holds users, teams, access, settings, environments and the audit log. It does not hold the master key, sessions, invite or reset links or pending join tokens, and every secret in it is sealed under a key that is only inside the encrypted file. The passphrase is sent in the body, is never stored or logged, and is not in the audit entry. 422 passphrase_too_short for fewer than 16 characters; 409 audit_chain_broken when the audit log does not verify; 409 backup_busy while another backup is being prepared. Audited as backup.exported. Needs backup.manage.",
+        "operationId": "exportBackup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportBackupInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "contentMediaType": "application/octet-stream",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The backup file",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Download an encrypted backup",
+        "tags": [
+          "backup"
+        ]
+      }
+    },
+    "/api/backup/info": {
+      "get": {
+        "description": "The shortest passphrase a backup accepts and the file extension a backup file has. Needs backup.manage.",
+        "operationId": "getBackupInfo",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupInfoBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get the rules for a backup passphrase",
+        "tags": [
+          "backup"
         ]
       }
     },

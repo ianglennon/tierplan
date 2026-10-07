@@ -104,6 +104,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/backup/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Download an encrypted backup
+         * @description Takes a consistent copy of the database while Bayplan runs and answers with it as a download named bayplan-backup-<UTC YYYYMMDD-HHMM>.bayplan, locked with the passphrase in the body. The backup holds users, teams, access, settings, environments and the audit log. It does not hold the master key, sessions, invite or reset links or pending join tokens, and every secret in it is sealed under a key that is only inside the encrypted file. The passphrase is sent in the body, is never stored or logged, and is not in the audit entry. 422 passphrase_too_short for fewer than 16 characters; 409 audit_chain_broken when the audit log does not verify; 409 backup_busy while another backup is being prepared. Audited as backup.exported. Needs backup.manage.
+         */
+        post: operations["exportBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the rules for a backup passphrase
+         * @description The shortest passphrase a backup accepts and the file extension a backup file has. Needs backup.manage.
+         */
+        get: operations["getBackupInfo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}": {
         parameters: {
             query?: never;
@@ -917,6 +957,15 @@ export interface components {
              */
             retentionDays: number;
         };
+        BackupInfoBody: {
+            /** @description The extension of a backup file, with the dot */
+            fileExtension: string;
+            /**
+             * Format: int64
+             * @description The fewest characters a backup passphrase may have
+             */
+            minPassphraseLength: number;
+        };
         ChangePasswordBody: {
             /** @description The CSRF token of the new session, sent as X-CSRF-Token on every mutating request */
             csrfToken: string;
@@ -1337,6 +1386,10 @@ export interface components {
         EventListBody: {
             /** @description At most 50 events, newest first */
             items: components["schemas"]["EventDTO"][] | null;
+        };
+        ExportBackupInputBody: {
+            /** @description Locks the backup. At least 16 characters; Bayplan never stores it and cannot recover it */
+            passphrase: string;
         };
         ImageItem: {
             /** Format: date-time */
@@ -1996,6 +2049,70 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    exportBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportBackupInputBody"];
+            };
+        };
+        responses: {
+            /** @description The backup file */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getBackupInfo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfoBody"];
+                };
             };
             /** @description Error */
             default: {

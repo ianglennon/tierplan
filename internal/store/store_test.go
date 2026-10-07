@@ -388,3 +388,22 @@ func TestOpenTightensADatabaseLeftReadableByAnOlderBuild(t *testing.T) {
 		t.Errorf("mode = %o, want 600", perm)
 	}
 }
+
+func TestSchemaVersionIsTheHighestAppliedMigration(t *testing.T) {
+	dir := t.TempDir()
+	s := open(t, dir)
+	if _, err := store.Migrate(context.Background(), s, store.MigrateOptions{AppVersion: "1.0.0", DataDir: dir}); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	got, err := s.SchemaVersion(context.Background())
+	if err != nil || got != embeddedTarget(t) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", got, err, embeddedTarget(t))
+	}
+}
+
+func TestSchemaVersionOfAnUnmigratedDatabaseIsAnError(t *testing.T) {
+	s := open(t, t.TempDir())
+	if v, err := s.SchemaVersion(context.Background()); err == nil {
+		t.Fatalf("SchemaVersion of an empty database = %d, nil; want an error", v)
+	}
+}

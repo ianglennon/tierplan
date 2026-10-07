@@ -25,7 +25,6 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
@@ -317,7 +316,7 @@ func TestBuildGuardsEveryRoute(t *testing.T) {
 		t.Errorf("the assembled router has an unguarded route: %v", err)
 	}
 	// The openapi subcommand builds the same routes with no dependencies.
-	if err := httpx.VerifyAllGuarded(NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.AgentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.EnvStreamDeps{}, api.RecentDeps{}, api.AuditDeps{}, api.SettingsDeps{}, nil)); err != nil {
+	if err := httpx.VerifyAllGuarded(NewRouter(RouterDeps{})); err != nil {
 		t.Errorf("the dependency-free router has an unguarded route: %v", err)
 	}
 }
