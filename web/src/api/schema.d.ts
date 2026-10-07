@@ -104,6 +104,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename an environment or switch its automatic agent updates
+         * @description Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.configure on the environment (env Admin or instance admin); an environment the caller cannot see answers 404 environment_not_found. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the environment's connected agents at once.
+         */
+        patch: operations["updateEnvironment"];
+        trace?: never;
+    };
     "/api/env/{envId}/agents": {
         parameters: {
             query?: never;
@@ -325,11 +345,7 @@ export interface paths {
         delete: operations["removeEnvironment"];
         options?: never;
         head?: never;
-        /**
-         * Rename an environment or switch its automatic agent updates
-         * @description Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the environment's connected agents at once.
-         */
-        patch: operations["updateEnvironment"];
+        patch?: never;
         trace?: never;
     };
     "/api/environments/{envId}/adopt-cluster": {
@@ -1992,6 +2008,43 @@ export interface operations {
             };
         };
     };
+    updateEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEnvironmentInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listEnvironmentAgents: {
         parameters: {
             query?: never;
@@ -2473,43 +2526,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
-    updateEnvironment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateEnvironmentInputBody"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "Cache-Control"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EnvironmentBody"];
-                };
             };
             /** @description Error */
             default: {

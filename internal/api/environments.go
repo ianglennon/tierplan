@@ -425,14 +425,15 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "updateEnvironment",
 		Method:      http.MethodPatch,
-		Path:        "/api/environments/{envId}",
+		Path:        "/api/env/{envId}",
 		Summary:     "Rename an environment or switch its automatic agent updates",
-		Description: "Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the " +
+		Description: "Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.configure on the environment " +
+			"(env Admin or instance admin); an environment the caller cannot see answers 404 environment_not_found. 422 invalid_name unless the " +
 			"name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed " +
 			"the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the " +
 			"environment's connected agents at once.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateEnvironmentInput) (*EnvironmentOutput, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsConfigure, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *UpdateEnvironmentInput) (*EnvironmentOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")

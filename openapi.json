@@ -3086,6 +3086,67 @@
         ]
       }
     },
+    "/api/env/{envId}": {
+      "patch": {
+        "description": "Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.configure on the environment (env Admin or instance admin); an environment the caller cannot see answers 404 environment_not_found. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the environment's connected agents at once.",
+        "operationId": "updateEnvironment",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEnvironmentInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Rename an environment or switch its automatic agent updates",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/agents": {
       "get": {
         "description": "Every enrolled agent with its node name, role, status, whether its host is blocked, whether it is connected, versions, the full certificate fingerprint and expiry, clock offset, when it was last seen, the policy flags the host owner set and the last request it refused. Problems come first: revoked agents, then agents that are not connected, then the rest by node name. A local-socket environment has none, and an empty manualCleanup. Never carries a key, a token or a serial. 404 environment_not_found when the environment does not exist or the caller may not read it. Needs environments.read on the environment.",
@@ -3806,65 +3867,6 @@
           }
         },
         "summary": "Remove an environment",
-        "tags": [
-          "environments"
-        ]
-      },
-      "patch": {
-        "description": "Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the environment's connected agents at once.",
-        "operationId": "updateEnvironment",
-        "parameters": [
-          {
-            "description": "The environment ID",
-            "in": "path",
-            "name": "envId",
-            "required": true,
-            "schema": {
-              "description": "The environment ID",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateEnvironmentInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EnvironmentBody"
-                }
-              }
-            },
-            "description": "OK",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Rename an environment or switch its automatic agent updates",
         "tags": [
           "environments"
         ]

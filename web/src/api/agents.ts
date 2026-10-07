@@ -153,7 +153,7 @@ export async function updateAllAgents(envId: string): Promise<number> {
 
 // setAutoUpdate switches the environment's automatic agent updates (D-28).
 export async function setAutoUpdate(envId: string, autoUpdate: boolean): Promise<void> {
-  const { error, response } = await api.PATCH("/api/environments/{envId}", {
+  const { error, response } = await api.PATCH("/api/env/{envId}", {
     params: { path: { envId } },
     body: { autoUpdate },
   });

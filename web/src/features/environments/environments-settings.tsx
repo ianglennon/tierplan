@@ -120,7 +120,7 @@ function RenameForm({ environment, onDone, onPendingChange }: RenameFormProps) {
     setBusy(true);
     setFormError(null);
     try {
-      const { error, response } = await api.PATCH("/api/environments/{envId}", {
+      const { error, response } = await api.PATCH("/api/env/{envId}", {
         params: { path: { envId: environment.id } },
         body: { name },
       });

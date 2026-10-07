@@ -235,13 +235,17 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   useDocumentTitle(env?.name);
 
   const canManage = hasPermission(me, "environments.manage");
+  // Rename and the auto-update switch need configure on this environment (D-07), so an
+  // env Admin has the General card without holding any installation-wide permission.
+  const canConfigure = hasPermission(me, "environments.configure", envId);
   const canToken = hasPermission(me, "environments.token");
   const canRevoke = hasPermission(me, "environments.revoke");
   const canRead = hasPermission(me, "environments.read", envId);
   const canSettings = hasPermission(me, "settings.read");
   const canDelete = hasPermission(me, "environments.delete");
 
-  if (!(canManage || canToken || canRevoke || canSettings || canDelete)) return <NoPermission />;
+  if (!(canManage || canConfigure || canToken || canRevoke || canSettings || canDelete))
+    return <NoPermission />;
 
   if (environments.isPending) {
     return (
@@ -314,7 +318,7 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
           ) : null}
         </div>
       </header>
-      {canManage ? <GeneralCard env={env} /> : null}
+      {canConfigure ? <GeneralCard env={env} /> : null}
       {canRead ? (
         <ConnectionCard env={env} canSettings={canSettings} canManage={canManage} />
       ) : null}
