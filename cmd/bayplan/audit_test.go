@@ -6,7 +6,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,4 +128,52 @@ func TestAuditVerifyWithoutADatabaseSaysSo(t *testing.T) {
 
 func bayplanKeyFiles(dir string) ([]string, error) {
 	return filepath.Glob(filepath.Join(dir, vault.KeyFile))
+}
+
+func TestAuditVerifyNamesUncheckedRotationAttestationsOnlyWhenThereAreSome(t *testing.T) {
+	dir, st := seedDataDir(t, 3)
+	ctx := context.Background()
+	oldV, err := vault.Load("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newKey, err := vault.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newV, err := vault.New(newKey, "file")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := audit.Rekey(ctx, tx, st.Q, newV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := audit.NewWriter(st, newV, slog.New(slog.DiscardHandler), time.Now)
+	if err := w.RecordRotationTx(ctx, tx, oldV.Subkey(vault.LabelAuditHMAC), oldV.KeyID(), res, audit.SystemCLI); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// The server now runs on the new key alone.
+	keyPath := filepath.Join(dir, vault.KeyFile)
+	if err := os.WriteFile(keyPath, []byte(base64.StdEncoding.EncodeToString(newKey)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := runCLI(t, dir, "audit", "verify")
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 || lines[0] != "audit chain OK: 4 entries" ||
+		lines[1] != "1 key rotation attestation(s) not checked: the previous key is not loaded" {
+		t.Fatalf("output = %q", out)
+	}
 }

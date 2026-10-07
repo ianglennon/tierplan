@@ -4,6 +4,7 @@
 package audit_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"log/slog"
@@ -201,3 +202,118 @@ func TestRekeyOfAnEmptyLogIsANoOp(t *testing.T) {
 	}
 }
 
+// rotate re-keys the fixture's chain under b and records the key.rotated entry
+// with an attestation made by the old key, in one committed transaction.
+func (f *fixture) rotate(t *testing.T, b *vault.Vault) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := f.s.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := audit.Rekey(ctx, tx, f.s.Q, b)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	w := audit.NewWriter(f.s, b, slog.New(slog.DiscardHandler), f.clk.Now)
+	if err := w.RecordRotationTx(ctx, tx, f.v.Subkey(vault.LabelAuditHMAC), f.v.KeyID(), res, audit.SystemCLI); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("RecordRotationTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// bothKeys is a vault whose active key is b that can also read the fixture's key.
+func (f *fixture) bothKeys(t *testing.T, b *vault.Vault, oldKey []byte) *vault.Vault {
+	t.Helper()
+	if _, err := b.AddKey(oldKey); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestKeyRotatedAttestationIsCheckedWhenTheOldKeyIsLoaded(t *testing.T) {
+	f := newFixture(t)
+	f.record(t, 5)
+	b := newVault(t, 9)
+	f.rotate(t, b)
+
+	var details string
+	if err := f.s.Read.QueryRow(`SELECT details FROM audit_log WHERE action = ?`, audit.ActionKeyRotated).Scan(&details); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"old_kid", "new_kid", "old_head", "entries", "attestation"} {
+		if !strings.Contains(details, `"`+k+`"`) {
+			t.Errorf("key.rotated details %s lack %s", details, k)
+		}
+	}
+
+	res := verifyWith(t, f, f.bothKeys(t, b, bytes.Repeat([]byte{5}, 32)))
+	if res.Broken != nil || res.AttestationsUnchecked != 0 || res.Entries != 6 {
+		t.Fatalf("verify with both keys = %+v (broken %+v)", res, res.Broken)
+	}
+}
+
+func TestAWrongRotationAttestationIsReportedAsBrokenAtItsSeq(t *testing.T) {
+	f := newFixture(t)
+	f.record(t, 5)
+	b := newVault(t, 9)
+	f.rotate(t, b)
+
+	var seq int64
+	var att string
+	if err := f.s.Read.QueryRow(`SELECT seq, json_extract(details, '$.attestation') FROM audit_log WHERE action = ?`,
+		audit.ActionKeyRotated).Scan(&seq, &att); err != nil {
+		t.Fatal(err)
+	}
+	flipped := "0"
+	if att[0] == '0' {
+		flipped = "1"
+	}
+	f.exec(t, `UPDATE audit_log SET details = json_set(details, '$.attestation', ?) WHERE seq = ?`, flipped+att[1:], seq)
+	// Re-sign the whole chain under B so only the attestation is wrong.
+	f.rekey(t, b)
+
+	res := verifyWith(t, f, f.bothKeys(t, b, bytes.Repeat([]byte{5}, 32)))
+	if res.Broken == nil || res.Broken.Seq != seq || !strings.Contains(res.Broken.Reason, "rotation attestation mismatch") {
+		t.Fatalf("verify = %+v (broken %+v), want a rotation attestation mismatch at seq %d", res, res.Broken, seq)
+	}
+}
+
+func TestRotationAttestationIsCountedAsNotCheckedWhenTheOldKeyIsAbsent(t *testing.T) {
+	f := newFixture(t)
+	f.record(t, 5)
+	b := newVault(t, 9)
+	f.rotate(t, b)
+
+	res := verifyWith(t, f, b)
+	if res.Broken != nil || res.AttestationsUnchecked != 1 {
+		t.Fatalf("verify with the new key alone = %+v (broken %+v), want intact and 1 unchecked", res, res.Broken)
+	}
+}
+
+func TestRotationAttestationBindsEveryField(t *testing.T) {
+	key := bytes.Repeat([]byte{1}, 32)
+	base := audit.RotationAttestation(key, "k1-a", "k1-b", []byte("head"), "id-1", 7)
+	if len(base) != 64 {
+		t.Fatalf("attestation = %q, want 64 hex characters", base)
+	}
+	for name, got := range map[string]string{
+		"old kid":  audit.RotationAttestation(key, "k1-x", "k1-b", []byte("head"), "id-1", 7),
+		"new kid":  audit.RotationAttestation(key, "k1-a", "k1-x", []byte("head"), "id-1", 7),
+		"old head": audit.RotationAttestation(key, "k1-a", "k1-b", []byte("hexd"), "id-1", 7),
+		"entry id": audit.RotationAttestation(key, "k1-a", "k1-b", []byte("head"), "id-2", 7),
+		"time":     audit.RotationAttestation(key, "k1-a", "k1-b", []byte("head"), "id-1", 8),
+		"key":      audit.RotationAttestation(bytes.Repeat([]byte{2}, 32), "k1-a", "k1-b", []byte("head"), "id-1", 7),
+	} {
+		if got == base {
+			t.Errorf("changing the %s did not change the attestation", name)
+		}
+	}
+	if again := audit.RotationAttestation(key, "k1-a", "k1-b", []byte("head"), "id-1", 7); again != base {
+		t.Error("the attestation is not deterministic")
+	}
+}
