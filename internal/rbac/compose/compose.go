@@ -227,6 +227,9 @@ func (c *checker) entries(v val, depth int) []entry {
 	var merges []val
 	have := map[string]struct{}{}
 	for i := 0; i+1 < len(v.n.Content); i += 2 {
+		if !c.spend() {
+			return nil
+		}
 		k := c.resolve(val{n: v.n.Content[i]})
 		x := val{n: v.n.Content[i+1], at: v.at}
 		if k.n.Kind == yaml.ScalarNode && k.n.ShortTag() == "!!merge" {
@@ -246,6 +249,9 @@ func (c *checker) entries(v val, depth int) []entry {
 		if m.n.Kind == yaml.SequenceNode {
 			sources = sources[:0]
 			for _, item := range m.n.Content {
+				if !c.spend() {
+					return nil
+				}
 				sources = append(sources, val{n: item, at: m.at})
 			}
 		}

@@ -4,6 +4,8 @@
 package compose
 
 import (
+	"path"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -37,7 +39,9 @@ type rule struct {
 }
 
 // serviceRules is the table of service attributes that escalate to the host
-// (D-13). Rules run in this order; findings are re-sorted by position.
+// (D-13). Rules run in this order; findings are re-sorted by position. Rules
+// that only matter under Swarm (a stack deploy may ignore privileged, devices
+// or cap_add) are flagged regardless: over-flagging is the safe direction.
 var serviceRules = []rule{
 	{
 		Name:   "privileged",
@@ -46,14 +50,99 @@ var serviceRules = []rule{
 		Leaves: scalarLeaves,
 		Bad:    func(t string) bool { return !clearlyFalse(t) },
 	},
+	{
+		Name:   "cap_add",
+		Key:    "cap_add",
+		Why:    "adds Linux capabilities to the container (ALL is root on the host)",
+		Leaves: listLeaves,
+		Bad:    always,
+	},
+	{
+		Name:   "devices",
+		Key:    "devices",
+		Why:    "gives the container access to a host device",
+		Leaves: listLeaves,
+		Bad:    always,
+	},
+	{
+		Name:   "device_cgroup_rules",
+		Key:    "device_cgroup_rules",
+		Why:    "allows access to host devices by major and minor number",
+		Leaves: listLeaves,
+		Bad:    always,
+	},
+	{
+		Name:   "pid",
+		Key:    "pid",
+		Why:    "shares the host or another container's process namespace",
+		Leaves: scalarLeaves,
+		Bad:    hostOrContainer,
+	},
+	{
+		Name:   "ipc",
+		Key:    "ipc",
+		Why:    "shares the host or another container's IPC namespace",
+		Leaves: scalarLeaves,
+		Bad:    hostOrContainer,
+	},
+	{
+		Name:   "uts",
+		Key:    "uts",
+		Why:    "shares the host's hostname namespace",
+		Leaves: scalarLeaves,
+		Bad:    isHost,
+	},
+	{
+		Name:   "userns_mode",
+		Key:    "userns_mode",
+		Why:    "opts out of user namespace remapping",
+		Leaves: scalarLeaves,
+		Bad:    isHost,
+	},
+	{
+		Name:   "cgroup",
+		Key:    "cgroup",
+		Why:    "uses the host's cgroup namespace",
+		Leaves: scalarLeaves,
+		Bad:    isHost,
+	},
+	{
+		Name:   "cgroup_parent",
+		Key:    "cgroup_parent",
+		Why:    "places the container under an arbitrary host cgroup",
+		Leaves: scalarLeaves,
+		Bad:    func(t string) bool { return strings.TrimSpace(t) != "" },
+	},
+	{
+		Name:   "network_mode",
+		Key:    "network_mode",
+		Why:    "uses the host network or another container's network namespace",
+		Leaves: scalarLeaves,
+		Bad:    hostOrContainer,
+	},
+	{
+		Name:   "security_opt",
+		Key:    "security_opt",
+		Why:    "turns off or replaces the container's confinement (seccomp, AppArmor, SELinux, masked paths, no-new-privileges)",
+		Leaves: listLeaves,
+		Bad:    securityOptBad,
+	},
+	{
+		Name:   "volumes",
+		Key:    "volumes",
+		Why:    "host takeover through the Docker socket or a system path",
+		Leaves: volumeLeaves,
+		Bad:    hostPathBad,
+	},
 }
 
-// volumeRule reads a top-level named volume (Key is unused for it).
+// volumeRule reads a top-level named volume (Key is unused for it): the local
+// driver turns type none with o bind into a bind mount of device.
 var volumeRule = rule{
 	Name:   "volume_driver_opts",
 	Why:    "the local volume driver turns these options into a bind mount of a host path",
-	Leaves: func(*checker, val) []leaf { return nil },
-	Bad:    func(string) bool { return false },
+	Leaves: driverOptsLeaves,
+	Bad:    hostPathBad,
 }
 
 // at builds a leaf for a node at the position the walk reports for it.
@@ -107,4 +196,227 @@ func interpolated(s string) bool {
 		}
 	}
 	return false
+}
+
+func always(string) bool { return true }
+
+func isHost(t string) bool { return strings.ToLower(strings.TrimSpace(t)) == "host" }
+
+// hostOrContainer matches host and container:<name>; none, bridge, shareable,
+// private and service:<name> are not escalations.
+func hostOrContainer(t string) bool {
+	v := strings.ToLower(strings.TrimSpace(t))
+	return v == "host" || strings.HasPrefix(v, "container:")
+}
+
+// listLeaves checks a list attribute: one leaf per entry. A long-syntax entry
+// (a mapping) is checked by its source; a scalar where a list belongs is one
+// entry. An empty or null attribute has no leaves.
+func listLeaves(c *checker, v val) []leaf {
+	v = c.resolve(v)
+	if v.n.Kind != yaml.SequenceNode {
+		return scalarLeaves(c, v)
+	}
+	var out []leaf
+	for _, item := range v.n.Content {
+		if !c.spend() {
+			break
+		}
+		it := c.resolve(val{n: item, at: v.at})
+		switch it.n.Kind {
+		case yaml.ScalarNode:
+			out = append(out, at(it, it.n.Value))
+		case yaml.MappingNode:
+			if src, ok := c.scalarField(c.entries(it, 0), "source"); ok {
+				out = append(out, at(src, src.n.Value))
+			} else {
+				out = append(out, at(it, "<mapping>"))
+			}
+		default:
+			out = append(out, at(it, "<sequence>"))
+		}
+	}
+	return out
+}
+
+// scalarField returns the first non-null scalar entry called name.
+func (c *checker) scalarField(fields []entry, name string) (val, bool) {
+	for _, f := range fields {
+		if f.name != name {
+			continue
+		}
+		x := c.resolve(f.val)
+		if x.n.Kind == yaml.ScalarNode && x.n.ShortTag() != "!!null" {
+			return x, true
+		}
+	}
+	return val{}, false
+}
+
+// securityOptBad reports whether one security_opt entry disables or replaces
+// confinement. Docker accepts both key=value and key:value.
+func securityOptBad(t string) bool {
+	t = strings.TrimSpace(t)
+	key, value := t, ""
+	if i := strings.IndexAny(t, "=:"); i >= 0 {
+		key, value = t[:i], t[i+1:]
+	}
+	key = strings.ToLower(strings.TrimSpace(key))
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch key {
+	case "seccomp":
+		// unconfined, and also a custom profile: it is a profile the reviewer
+		// cannot see from here.
+		return true
+	case "apparmor", "systempaths":
+		return value == "unconfined"
+	case "label":
+		return value == "disable" || value == "type:spc_t"
+	case "no-new-privileges":
+		switch value {
+		case "", "true", "1", "yes", "on":
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// volumeLeaves checks the service volumes list in short and long syntax. Only
+// host sources are leaves: a named volume, a relative path, a tmpfs, an image
+// mount and an anonymous volume are never host paths here.
+func volumeLeaves(c *checker, v val) []leaf {
+	v = c.resolve(v)
+	if v.n.Kind != yaml.SequenceNode {
+		return nil
+	}
+	var out []leaf
+	for _, item := range v.n.Content {
+		if !c.spend() {
+			break
+		}
+		it := c.resolve(val{n: item, at: v.at})
+		switch it.n.Kind {
+		case yaml.ScalarNode:
+			s := it.n.Value
+			src, ok := shortSource(s)
+			switch {
+			case !ok:
+			case interpolated(src):
+				out = append(out, at(it, s))
+			default:
+				out = append(out, at(it, src))
+			}
+		case yaml.MappingNode:
+			fields := c.entries(it, 0)
+			if t, ok := c.scalarField(fields, "type"); ok {
+				switch strings.ToLower(strings.TrimSpace(t.n.Value)) {
+				case "volume", "tmpfs", "image", "cluster":
+					continue
+				}
+			}
+			if src, ok := c.scalarField(fields, "source"); ok {
+				out = append(out, at(src, src.n.Value))
+			}
+		}
+	}
+	return out
+}
+
+// shortSource returns the source of a short-syntax volume entry
+// (source:target[:mode]); an entry with no colon is an anonymous volume and
+// has none. A Windows drive letter's colon is not a separator.
+func shortSource(s string) (string, bool) {
+	start := 0
+	if len(s) >= 3 && ((s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z')) && s[1] == ':' && (s[2] == '\\' || s[2] == '/') {
+		start = 2
+	}
+	i := strings.IndexByte(s[start:], ':')
+	if i < 0 {
+		return "", false
+	}
+	src := s[:start+i]
+	return src, src != ""
+}
+
+// Host paths a container must not be given. A bind of the container runtime's
+// socket, of an ancestor directory of it, of the root, or of a system or
+// runtime directory is host takeover.
+var (
+	// socketAncestors are directories that contain a runtime socket or the
+	// Docker data directory; mounting one of them exactly exposes it.
+	socketAncestors = []string{"/var", "/var/run", "/run", "/var/lib"}
+	// systemTrees are directories whose whole subtree is off limits.
+	systemTrees = []string{"/etc", "/proc", "/sys", "/dev", "/boot", "/root", "/var/lib/docker"}
+	// socketNames are runtime socket file names, wherever they are mounted from.
+	socketNames = []string{"docker.sock", "containerd.sock", "podman.sock", "crio.sock"}
+)
+
+// hostPathBad reports whether a bind source (or local-driver device) is a path
+// that gives the container the host. The path is cleaned first, so .., repeated
+// separators and a trailing slash do not hide it. Relative paths and named
+// volumes are not host paths; a relative path's real location depends on the
+// project directory, which this pass cannot see.
+func hostPathBad(p string) bool {
+	p = strings.TrimSpace(p)
+	if strings.Contains(strings.ToLower(strings.ReplaceAll(p, "\\", "/")), "pipe/docker_engine") {
+		return true
+	}
+	if !strings.HasPrefix(p, "/") {
+		return false
+	}
+	p = path.Clean(p)
+	if p == "/" || slices.Contains(socketAncestors, p) || slices.Contains(socketNames, path.Base(p)) {
+		return true
+	}
+	for _, tree := range systemTrees {
+		if p == tree || strings.HasPrefix(p, tree+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// driverOptsLeaves checks one top-level volume definition. Only the local
+// driver binds host paths, and only with type none or o containing bind; when
+// o or type cannot be read (interpolation) the device is checked anyway.
+func driverOptsLeaves(c *checker, v val) []leaf {
+	fields := c.entries(v, 0)
+	var out []leaf
+	if d, ok := c.scalarField(fields, "driver"); ok {
+		name := strings.ToLower(strings.TrimSpace(d.n.Value))
+		switch {
+		case interpolated(d.n.Value):
+			out = append(out, leaf{text: d.n.Value, line: d.line(), col: d.column(), key: "driver"})
+		case name != "local":
+			return nil
+		}
+	}
+	var opts []entry
+	for _, f := range fields {
+		if f.name == "driver_opts" {
+			opts = append(opts, c.entries(f.val, 0)...)
+		}
+	}
+	binds, unknown := false, false
+	if o, ok := c.scalarField(opts, "o"); ok {
+		if interpolated(o.n.Value) {
+			unknown = true
+			out = append(out, leaf{text: o.n.Value, line: o.line(), col: o.column(), key: "driver_opts.o"})
+		} else if strings.Contains(strings.ToLower(o.n.Value), "bind") {
+			binds = true
+		}
+	}
+	if t, ok := c.scalarField(opts, "type"); ok {
+		if interpolated(t.n.Value) {
+			unknown = true
+			out = append(out, leaf{text: t.n.Value, line: t.line(), col: t.column(), key: "driver_opts.type"})
+		} else if strings.EqualFold(strings.TrimSpace(t.n.Value), "none") {
+			binds = true
+		}
+	}
+	if d, ok := c.scalarField(opts, "device"); ok && (binds || unknown) {
+		out = append(out, leaf{text: d.n.Value, line: d.line(), col: d.column(), key: "driver_opts.device"})
+	}
+	return out
 }
