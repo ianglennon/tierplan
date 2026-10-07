@@ -599,6 +599,12 @@ func (s *Server) Close() error {
 // DataDir reports the prepared data directory, for the admin banner (plan 14).
 func (s *Server) DataDir() datadir.Info { return s.dataDir }
 
+// Routes lists every route the server registered behind the policy, with the
+// requirement each one declares. The enforcement test calls every one of them as
+// every principal archetype, so a route cannot be added without it being proven
+// refused for whoever lacks its requirement.
+func (s *Server) Routes() []httpx.RouteRecord { return s.router.Routes() }
+
 // Handler is the root HTTP handler: the router behind StripBasePath, so a
 // request under the public URL's path reaches the same routes whether or not a
 // proxy stripped the prefix. It runs before chi and every middleware (D-50).
