@@ -44,3 +44,7 @@ UPDATE users SET instance_admin = ?, updated_at = ? WHERE id = ?;
 SELECT username FROM users
 WHERE instance_admin = 1 AND disabled = 0 AND deleted_at IS NULL
 ORDER BY username;
+
+-- name: SetUserLastLogin :exec
+-- Stamps a successful sign-in (UTC unix nanoseconds).
+UPDATE users SET last_login_at = ? WHERE id = ?;

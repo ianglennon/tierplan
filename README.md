@@ -103,6 +103,7 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `BAYPLAN_LOGIN_LOCKOUT` | `30m` | no | How long a locked account stays locked. |
 | `BAYPLAN_SESSION_IDLE_TIMEOUT` | `12h` | no | Idle time after which a session ends. |
 | `BAYPLAN_SESSION_REMEMBER_LIFETIME` | `720h` | no | Lifetime of a "keep me signed in" session. |
+| `BAYPLAN_INVITE_TTL` | `72h` | no | How long a one-time invite or password reset link works, from `1h` to `720h`. |
 | `BAYPLAN_AUDIT_RETENTION_DAYS` | `365` | no | Days to keep audit entries; `0` keeps them forever. |
 | `BAYPLAN_SKIP_PRE_MIGRATE_BACKUP` | `false` | no | Do not snapshot the database before a migration. |
 | `BAYPLAN_TLS_CERT_FILE` | unset | no | Path to a TLS certificate in PEM form. Needs `BAYPLAN_TLS_KEY_FILE`. |

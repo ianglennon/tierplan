@@ -104,6 +104,14 @@ type setting struct {
 	apply  func(c *Config, raw string) error
 }
 
+// The range BAYPLAN_INVITE_TTL accepts: an hour is the shortest a person can
+// plausibly act on a link they were handed, and 30 days the longest a bearer
+// secret should stay live.
+const (
+	minInviteTTL = time.Hour
+	maxInviteTTL = 720 * time.Hour
+)
+
 // settings is the single source of truth for env names, flags, defaults and parsing.
 var settings = []setting{
 	{env: "BAYPLAN_LISTEN", flag: "listen", def: ":7480", desc: "address to listen on",
@@ -141,7 +149,13 @@ var settings = []setting{
 			return err
 		}},
 	{env: "BAYPLAN_INVITE_TTL", flag: "invite-ttl", def: "72h", desc: "how long an invite or password reset link works",
-		apply: func(c *Config, raw string) (err error) { c.InviteTTL, err = parseDuration(raw); return err }},
+		apply: func(c *Config, raw string) (err error) {
+			c.InviteTTL, err = parseDuration(raw)
+			if err == nil && (c.InviteTTL < minInviteTTL || c.InviteTTL > maxInviteTTL) {
+				err = fmt.Errorf("%q must be between %s and %s", raw, minInviteTTL, maxInviteTTL)
+			}
+			return err
+		}},
 	{env: "BAYPLAN_AUDIT_RETENTION_DAYS", flag: "audit-retention-days", def: "365", desc: "days to keep audit entries, 0 for forever",
 		apply: func(c *Config, raw string) (err error) { c.AuditRetentionDays, err = parseInt(raw, 0); return err }},
 	{env: "BAYPLAN_SKIP_PRE_MIGRATE_BACKUP", flag: "skip-pre-migrate-backup", def: "false", desc: "do not back up the database before a migration",

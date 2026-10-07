@@ -190,6 +190,21 @@ func (q *Queries) SetUserInstanceAdmin(ctx context.Context, arg SetUserInstanceA
 	return result.RowsAffected()
 }
 
+const setUserLastLogin = `-- name: SetUserLastLogin :exec
+UPDATE users SET last_login_at = ? WHERE id = ?
+`
+
+type SetUserLastLoginParams struct {
+	LastLoginAt sql.NullInt64
+	ID          string
+}
+
+// Stamps a successful sign-in (UTC unix nanoseconds).
+func (q *Queries) SetUserLastLogin(ctx context.Context, arg SetUserLastLoginParams) error {
+	_, err := q.db.ExecContext(ctx, setUserLastLogin, arg.LastLoginAt, arg.ID)
+	return err
+}
+
 const unlockUserByUsername = `-- name: UnlockUserByUsername :execrows
 UPDATE users SET failed_count = 0, locked_until = NULL WHERE username = ?
 `

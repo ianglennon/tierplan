@@ -37,6 +37,10 @@ const (
 	reasonDisabled    = "disabled"
 	reasonLocked      = "locked"
 	reasonBadPassword = "bad_password"
+	// reasonInvitePending is a sign-in as a user who has not yet chosen a password
+	// with their invite link (AUTH-04). Like the others it never reaches the
+	// caller: the answer is the generic one.
+	reasonInvitePending = "invite_pending"
 )
 
 // What a refused sign-in records as its target when no stored username can be
@@ -160,6 +164,12 @@ func (l *Login) Login(ctx context.Context, in LoginInput) (LoginResult, error) {
 	case u.LockedUntil.Valid && u.LockedUntil.Int64 > now.UTC().UnixNano():
 		l.dummy(in.Password)
 		return LoginResult{}, l.refuse(ctx, in, u.Username, reasonLocked, u.ID, "")
+	case u.PasswordHash == "":
+		// An invited user has no password yet. This is a normal state, not an
+		// unreadable hash, and it must neither count toward a lock nor be told
+		// from a wrong password by timing.
+		l.dummy(in.Password)
+		return LoginResult{}, l.refuse(ctx, in, u.Username, reasonInvitePending, u.ID, "")
 	}
 
 	ok, err := VerifyPassword(in.Password, u.PasswordHash)
@@ -283,6 +293,9 @@ func (l *Login) succeed(ctx context.Context, in LoginInput, u sqlc.User) (LoginR
 	if err := q.ResetLoginFailures(ctx, u.ID); err != nil {
 		return LoginResult{}, fmt.Errorf("auth: reset failures: %w", err)
 	}
+	if err := q.SetUserLastLogin(ctx, sqlc.SetUserLastLoginParams{LastLoginAt: sql.NullInt64{Int64: l.now().UTC().UnixNano(), Valid: true}, ID: u.ID}); err != nil {
+		return LoginResult{}, fmt.Errorf("auth: stamp last sign-in: %w", err)
+	}
 	if len(in.PreviousSessionHash) > 0 {
 		if err := q.DeleteSession(ctx, in.PreviousSessionHash); err != nil {
 			return LoginResult{}, fmt.Errorf("auth: rotate session: %w", err)
@@ -309,6 +322,7 @@ func (l *Login) succeed(ctx context.Context, in LoginInput, u sqlc.User) (LoginR
 	}
 	u.FailedCount = 0
 	u.LockedUntil = sql.NullInt64{}
+	u.LastLoginAt = sql.NullInt64{Int64: l.now().UTC().UnixNano(), Valid: true}
 	return LoginResult{User: u, RawSessionID: raw, IDHash: hash}, nil
 }
 
