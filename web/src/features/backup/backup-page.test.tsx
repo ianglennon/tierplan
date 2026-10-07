@@ -3,6 +3,7 @@
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -24,11 +25,18 @@ let sent: Sent[];
 let answer: () => Response | Promise<Response>;
 let saved: { name: string; blob: Blob }[];
 let minLength: number;
+// Every toast goes through sonner's toast.success or toast.error, so "no toast"
+// is a spy that was never called: the Toaster itself is global and still holds
+// the toasts of earlier tests.
+let successToast: ReturnType<typeof vi.spyOn>;
+let errorToast: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   sent = [];
   saved = [];
   minLength = 16;
+  successToast = vi.spyOn(toast, "success");
+  errorToast = vi.spyOn(toast, "error");
   setCsrfToken("csrf-1");
   answer = () =>
     new Response("backup-bytes", {
@@ -118,6 +126,8 @@ describe("Backup page", () => {
     expect(screen.getByRole("heading", { name: "Download a backup" })).toBeTruthy();
   });
 });
+
+const FAILED = "Couldn't create the backup. Check the container logs, then try again.";
 
 const download = () =>
   screen.getByRole("button", { name: /^(Download backup|Preparing backup…)$/ });
@@ -223,8 +233,8 @@ describe("Download card while the backup is made", () => {
 
     const pending = await screen.findByRole("button", { name: "Preparing backup…" });
     expect(pending.querySelector("[role=status], svg")).toBeTruthy();
-    expect(field("Passphrase").disabled).toBe(true);
-    expect(field("Confirm passphrase").disabled).toBe(true);
+    expect(field("Passphrase").matches(":disabled")).toBe(true);
+    expect(field("Confirm passphrase").matches(":disabled")).toBe(true);
     fireEvent.click(pending);
     fireEvent.submit(pending.closest("form") as HTMLFormElement);
     expect(exports()).toHaveLength(1);
@@ -244,12 +254,13 @@ describe("Download card while the backup is made", () => {
     fireEvent.click(download());
 
     expect(await screen.findByText("Backup downloaded.")).toBeTruthy();
+    expect(successToast).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(field("Passphrase").value).toBe(""));
     expect(field("Confirm passphrase").value).toBe("");
     expect(document.body.innerHTML).not.toContain(PASS);
     expect(document.body.textContent).not.toContain(PASS);
-    expect(field("Passphrase").disabled).toBe(false);
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(field("Passphrase").matches(":disabled")).toBe(false);
+    expect(screen.queryByText(FAILED)).toBeNull();
   });
 
   it.each([
@@ -263,13 +274,12 @@ describe("Download card while the backup is made", () => {
     fireEvent.click(download());
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe(
-      "Couldn't create the backup. Check the container logs, then try again.",
-    );
+    expect(alert.textContent).toBe(FAILED);
     expect(saved).toHaveLength(0);
-    expect(document.querySelector("[data-sonner-toast]")).toBeNull();
+    expect(successToast).not.toHaveBeenCalled();
+    expect(errorToast).not.toHaveBeenCalled();
     // The person can correct and try again: the fields are live and still hold what was typed.
-    expect(field("Passphrase").disabled).toBe(false);
+    expect(field("Passphrase").matches(":disabled")).toBe(false);
     expect(field("Passphrase").value).toBe(PASS);
   });
 
@@ -278,8 +288,9 @@ describe("Download card while the backup is made", () => {
     renderPage();
     fill(PASS);
     fireEvent.click(download());
-    expect((await screen.findByRole("alert")).textContent).toContain("Couldn't create the backup.");
-    expect(document.querySelector("[data-sonner-toast]")).toBeNull();
+    expect((await screen.findByRole("alert")).textContent).toBe(FAILED);
+    expect(successToast).not.toHaveBeenCalled();
+    expect(errorToast).not.toHaveBeenCalled();
   });
 
   it("clears the alert when the person tries again", async () => {
@@ -295,7 +306,7 @@ describe("Download card while the backup is made", () => {
       });
     fireEvent.click(download());
     await waitFor(() => expect(saved).toHaveLength(1));
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(FAILED)).toBeNull();
   });
 
   it("points a passphrase the server calls too short at the field", async () => {
@@ -305,6 +316,6 @@ describe("Download card while the backup is made", () => {
     fill(PASS);
     fireEvent.click(download());
     expect(await screen.findByText("Use at least 16 characters.")).toBeTruthy();
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(FAILED)).toBeNull();
   });
 });
