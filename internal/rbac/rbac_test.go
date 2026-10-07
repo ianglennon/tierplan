@@ -699,7 +699,7 @@ func TestRoleParsing(t *testing.T) {
 	if rbac.RoleNone.String() != "none" || rbac.RoleNone.ID() != "" {
 		t.Error("RoleNone naming")
 	}
-	if !(rbac.RoleViewer < rbac.RoleOperator && rbac.RoleOperator < rbac.RoleAdmin) {
+	if rbac.RoleViewer >= rbac.RoleOperator || rbac.RoleOperator >= rbac.RoleAdmin {
 		t.Error("roles must be ordered viewer < operator < admin")
 	}
 }

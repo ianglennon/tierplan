@@ -5,8 +5,9 @@ package store_test
 
 import (
 	"context"
+	"io/fs"
 	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -18,22 +19,22 @@ import (
 // than max, so a test can stage a database as an older release left it.
 func migrationsUpTo(t *testing.T, max int64) fstest.MapFS {
 	t.Helper()
-	files, err := filepath.Glob("migrations/*.sql")
-	if err != nil || len(files) == 0 {
+	dir := os.DirFS("migrations")
+	names, err := fs.Glob(dir, "*.sql")
+	if err != nil || len(names) == 0 {
 		t.Fatalf("no embedded migrations: %v", err)
 	}
 	m := fstest.MapFS{}
-	for _, f := range files {
-		name := filepath.Base(f)
+	for _, name := range names {
 		prefix, _, _ := strings.Cut(name, "_")
-		var v int64
-		for _, c := range prefix {
-			v = v*10 + int64(c-'0')
+		v, err := strconv.ParseInt(prefix, 10, 64)
+		if err != nil {
+			t.Fatalf("migration %s has no numeric prefix", name)
 		}
 		if v > max {
 			continue
 		}
-		b, err := os.ReadFile(f)
+		b, err := fs.ReadFile(dir, name)
 		if err != nil {
 			t.Fatal(err)
 		}
