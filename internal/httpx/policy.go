@@ -133,8 +133,9 @@ func StillAuthorized(ctx context.Context) bool {
 	return fn(ctx)
 }
 
-// recheck builds the closure Guarded stores for StillAuthorized: the same three
-// checks authorize makes, for this principal, requirement and environment.
+// recheck builds the closure Guarded stores for StillAuthorized: the same checks
+// authorize makes, in the same order (session, visibility, environment, then
+// permission), for this principal, requirement and environment.
 func (r *Router) recheck(route string, p *rbac.Principal, need rbac.Requirement, envID string) func(context.Context) bool {
 	return func(ctx context.Context) bool {
 		deny := func(why string, err error) bool {
@@ -149,14 +150,23 @@ func (r *Router) recheck(route string, p *rbac.Principal, need rbac.Requirement,
 				return deny("session", err)
 			}
 		}
+		if r.opts.Checker == nil {
+			return deny("no checker", nil)
+		}
 		if need.Perm != "" && need.Scope == rbac.ScopeEnvironment {
+			// The same order as authorize (D-08): a user whose last grant on the
+			// environment is gone no longer sees it, so the stream ends before the
+			// environment is even looked up (D-10).
+			if p.Type == rbac.PrincipalUser {
+				ea, err := r.opts.Checker.EnvAccess(ctx, p, envID)
+				if err != nil || ea.Role == rbac.RoleNone {
+					return deny("visibility", err)
+				}
+			}
 			e, err := r.opts.EnvResolver.Resolve(ctx, envID)
 			if err != nil || !e.Enabled {
 				return deny("environment", ignoreEnvState(err))
 			}
-		}
-		if r.opts.Checker == nil {
-			return deny("no checker", nil)
 		}
 		d := r.opts.Checker.Check(ctx, p, need, envID)
 		if d.Err != nil || !d.Allowed {
