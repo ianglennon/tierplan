@@ -448,13 +448,13 @@ func TestListOfAnUnknownEnvironmentIs404(t *testing.T) {
 	}
 }
 
-func TestAViewerReadsTheSummaryAndEveryListAndAUserWithoutAnAssignmentIsRefused(t *testing.T) {
+func TestAViewerReadsTheSummaryAndEveryListAndAUserWithoutAGrantGetsNotFound(t *testing.T) {
 	f, e := dashEnv(t, richEngine())
 	f.addUser(t, "viewer", false)
 	f.addEnvRole(t, "viewer", e.ID, "viewer")
 	f.addUser(t, "nobody", false)
 
-	want := map[string]int{"viewer": 200, "nobody": 403}
+	want := map[string]int{"viewer": 200, "nobody": 404}
 	for user, code := range want {
 		cookie, _ := f.signIn(t, user, false)
 		for _, what := range dataPaths {

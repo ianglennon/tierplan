@@ -166,10 +166,39 @@ func newFixture(t *testing.T, tweak func(*Options)) *fixture {
 		rbac.Require(rbac.PermSettingsWrite), echo)
 	Register(f.r, huma.Operation{OperationID: "listContainers", Method: http.MethodGet, Path: "/api/env/{envId}/containers"},
 		rbac.Require(rbac.PermContainersRead), echoEnv)
+	Register(f.r, huma.Operation{OperationID: "envSummary", Method: http.MethodGet, Path: "/api/env/{envId}/summary"},
+		rbac.Require(rbac.PermEnvironmentsRead), echoEnv)
+	Register(f.r, huma.Operation{OperationID: "configureEnv", Method: http.MethodGet, Path: "/api/env/{envId}/configure"},
+		rbac.Require(rbac.PermEnvironmentsConfigure), echoEnv)
 	f.r.Guarded(http.MethodGet, "/api/stream", rbac.Require(rbac.PermAuditRead),
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("stream")) }))
 	f.r.Exempt(http.MethodGet, "/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	return f
+}
+
+// addUser inserts a real, active users row: an ID with no row is an inactive
+// user, who holds nothing.
+func (f *fixture) addUser(t *testing.T, id string) {
+	t.Helper()
+	if err := f.s.Q.InsertUser(context.Background(), sqlc.InsertUserParams{
+		ID: id, Username: id, PasswordHash: "x", CreatedAt: 1, UpdatedAt: 1, PasswordChangedAt: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// grant gives the user a role on one environment, or on all of them when envID
+// is empty.
+func (f *fixture) grant(t *testing.T, userID, role, envID string) {
+	t.Helper()
+	var env any
+	if envID != "" {
+		env = envID
+	}
+	if _, err := f.s.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
+VALUES (?, 'user', ?, ?, ?, 1)`, "ra-"+userID+"-"+envID, userID, role, env); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func do(h http.Handler, method, path string, mods ...func(*http.Request)) *httptest.ResponseRecorder {
@@ -293,25 +322,114 @@ func TestEnvironmentRoutesAnswer404ForUnknownAnd409ForDisabled(t *testing.T) {
 	}
 }
 
-func TestTheEnvironmentIsResolvedBeforeThePermissionIsChecked(t *testing.T) {
+// TestAnEnvironmentTheCallerCannotSeeIsIndistinguishableFromOneThatDoesNotExist
+// is D-08: a signed-in user with no grant gets the same 404, byte for byte, for
+// an enabled environment, a disabled one and an ID that was never created, and
+// every such probe is audited with the typed path.
+func TestAnEnvironmentTheCallerCannotSeeIsIndistinguishableFromOneThatDoesNotExist(t *testing.T) {
+	f := newFixture(t, nil)
+	f.addUser(t, "nogrant")
+	h := f.r.Handler()
+
+	var bodies [][]byte
+	for _, id := range []string{"env-on", "env-off", "missing"} {
+		rec := do(h, http.MethodGet, "/api/env/"+id+"/summary", as("nogrant"))
+		if rec.Code != http.StatusNotFound || problemType(t, rec) != "environment_not_found" {
+			t.Fatalf("%s: %d %s, want 404 environment_not_found", id, rec.Code, rec.Body)
+		}
+		bodies = append(bodies, rec.Body.Bytes())
+	}
+	if !bytes.Equal(bodies[0], bodies[1]) || !bytes.Equal(bodies[0], bodies[2]) {
+		t.Fatalf("bodies differ:\n enabled  %s\n disabled %s\n missing  %s", bodies[0], bodies[1], bodies[2])
+	}
+
+	entries := f.audit.all()
+	if len(entries) != 3 {
+		t.Fatalf("audit entries = %d (%+v), want one per probe", len(entries), entries)
+	}
+	for i, id := range []string{"env-on", "env-off", "missing"} {
+		e := entries[i]
+		if e.Action != audit.ActionPermissionDenied || e.Result != audit.ResultDenied || e.Reason != "environment_not_visible" {
+			t.Errorf("%s: entry = %+v, want permission.denied / denied / environment_not_visible", id, e)
+		}
+		if e.EnvID != id || e.TargetType != "route" || e.TargetID != "GET /api/env/{envId}/summary" {
+			t.Errorf("%s: target = %q %q env %q", id, e.TargetType, e.TargetID, e.EnvID)
+		}
+		if e.Actor.Type != audit.ActorUser || e.Actor.ID != "nogrant" {
+			t.Errorf("%s: actor = %+v", id, e.Actor)
+		}
+	}
+}
+
+func TestAnAnonymousCallerIsRefusedWith401BeforeAnyEnvironmentLookup(t *testing.T) {
 	f := newFixture(t, nil)
 	h := f.r.Handler()
-	// A signed-in user without the permission still gets the environment answer.
-	if rec := do(h, http.MethodGet, "/api/env/nope/containers", as("plain-user")); rec.Code != http.StatusNotFound {
-		t.Errorf("forbidden user, unknown env = %d, want 404", rec.Code)
+	for _, id := range []string{"env-on", "env-off", "missing"} {
+		if rec := do(h, http.MethodGet, "/api/env/"+id+"/summary"); rec.Code != http.StatusUnauthorized {
+			t.Errorf("anonymous, %s = %d, want 401", id, rec.Code)
+		}
 	}
-	if rec := do(h, http.MethodGet, "/api/env/env-off/containers", as("plain-user")); rec.Code != http.StatusConflict {
-		t.Errorf("forbidden user, disabled env = %d, want 409", rec.Code)
+}
+
+func TestAnInstanceAdminSeesTheHandlerTheDisabledConflictAndAnUnauditedNotFound(t *testing.T) {
+	f := newFixture(t, nil)
+	h := f.r.Handler()
+	if rec := do(h, http.MethodGet, "/api/env/env-on/summary", as("admin-user")); rec.Code != http.StatusOK {
+		t.Errorf("enabled = %d, want 200: %s", rec.Code, rec.Body)
 	}
-	if rec := do(h, http.MethodGet, "/api/env/env-on/containers", as("plain-user")); rec.Code != http.StatusForbidden {
-		t.Errorf("forbidden user, valid env = %d, want 403", rec.Code)
+	if rec := do(h, http.MethodGet, "/api/env/env-off/summary", as("admin-user")); rec.Code != http.StatusConflict || problemType(t, rec) != "environment_disabled" {
+		t.Errorf("disabled = %d %s, want 409 environment_disabled", rec.Code, rec.Body)
 	}
-	// An anonymous caller must not learn which environments exist.
-	if rec := do(h, http.MethodGet, "/api/env/nope/containers"); rec.Code != http.StatusUnauthorized {
-		t.Errorf("anonymous, unknown env = %d, want 401", rec.Code)
+	if rec := do(h, http.MethodGet, "/api/env/missing/summary", as("admin-user")); rec.Code != http.StatusNotFound || problemType(t, rec) != "environment_not_found" {
+		t.Errorf("missing = %d %s, want 404 environment_not_found", rec.Code, rec.Body)
 	}
-	if rec := do(h, http.MethodGet, "/api/env/env-on/containers"); rec.Code != http.StatusUnauthorized {
-		t.Errorf("anonymous, valid env = %d, want 401", rec.Code)
+	if n := len(f.audit.all()); n != 0 {
+		t.Errorf("an instance admin's requests wrote %d audit entries, want none", n)
+	}
+}
+
+// A user who can see an environment learns it is disabled (409); one who cannot
+// gets the 404 (D-08 narrows P1 D-48).
+func TestOnlyACallerWhoCanSeeADisabledEnvironmentIsTold409(t *testing.T) {
+	f := newFixture(t, nil)
+	f.addUser(t, "viewer")
+	f.grant(t, "viewer", "viewer", "env-off")
+	h := f.r.Handler()
+	if rec := do(h, http.MethodGet, "/api/env/env-off/summary", as("viewer")); rec.Code != http.StatusConflict || problemType(t, rec) != "environment_disabled" {
+		t.Fatalf("viewer on a disabled environment = %d %s, want 409 environment_disabled", rec.Code, rec.Body)
+	}
+	if n := len(f.audit.all()); n != 0 {
+		t.Errorf("the 409 was audited %d times, want not at all", n)
+	}
+}
+
+func TestAVisibleEnvironmentWhereTheRoleIsTooLowAnswers403AndIsAudited(t *testing.T) {
+	f := newFixture(t, nil)
+	f.addUser(t, "viewer")
+	f.grant(t, "viewer", "viewer", "env-on")
+	h := f.r.Handler()
+	if rec := do(h, http.MethodGet, "/api/env/env-on/summary", as("viewer")); rec.Code != http.StatusOK {
+		t.Fatalf("viewer reads the summary = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	rec := do(h, http.MethodGet, "/api/env/env-on/configure", as("viewer"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer configures = %d %s, want 403", rec.Code, rec.Body)
+	}
+	e := one(t, f.audit)
+	if e.Reason != "forbidden" || e.EnvID != "env-on" || e.TargetID != "GET /api/env/{envId}/configure" {
+		t.Errorf("entry = %+v, want reason forbidden on env-on", e)
+	}
+	// The Viewer's grant on env-on gives nothing on another environment.
+	if rec := do(h, http.MethodGet, "/api/env/env-off/summary", as("viewer")); rec.Code != http.StatusNotFound {
+		t.Errorf("viewer on a different environment = %d, want 404", rec.Code)
+	}
+}
+
+func TestASystemPrincipalSkipsTheVisibilityStep(t *testing.T) {
+	f := newFixture(t, nil)
+	// system:janitor holds nothing, so it is refused 403, not told the environment is hidden.
+	if rec := do(f.r.Handler(), http.MethodGet, "/api/env/env-on/summary", as("janitor")); rec.Code != http.StatusForbidden {
+		t.Fatalf("system principal = %d, want 403", rec.Code)
 	}
 }
 
