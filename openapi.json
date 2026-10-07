@@ -1,6 +1,26 @@
 {
   "components": {
     "schemas": {
+      "AcceptInviteInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "description": "At least 12 characters, not on the common-password list and not containing the username",
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "token": {
+            "description": "The token from the part of the link after #token=",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ],
+        "type": "object"
+      },
       "AddEnvironmentBody": {
         "additionalProperties": false,
         "properties": {
@@ -701,6 +721,48 @@
           "truncated",
           "nodes",
           "notReporting"
+        ],
+        "type": "object"
+      },
+      "CreateUserBody": {
+        "additionalProperties": false,
+        "properties": {
+          "link": {
+            "$ref": "#/components/schemas/LinkBody",
+            "description": "The one-time invite link; it cannot be shown again"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserSummaryBody",
+            "description": "The user that was created, with status invite_pending"
+          }
+        },
+        "required": [
+          "user",
+          "link"
+        ],
+        "type": "object"
+      },
+      "CreateUserInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "description": "Optional; at most 64 characters",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "email": {
+            "description": "Optional; a bare address. Bayplan never sends mail",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "username": {
+            "description": "3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
         ],
         "type": "object"
       },
@@ -1727,6 +1789,25 @@
         ],
         "type": "object"
       },
+      "LinkBody": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresAt": {
+            "description": "When the link stops working",
+            "format": "date-time",
+            "type": "string"
+          },
+          "url": {
+            "description": "The address to give the user. The secret is in the part after #, which a browser never sends to a server",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
       "LocalHostBody": {
         "additionalProperties": false,
         "properties": {
@@ -1797,6 +1878,47 @@
         "required": [
           "username",
           "password"
+        ],
+        "type": "object"
+      },
+      "LookupInviteBody": {
+        "additionalProperties": false,
+        "properties": {
+          "instanceName": {
+            "description": "The name of this Bayplan instance",
+            "type": "string"
+          },
+          "kind": {
+            "description": "invite for a new user choosing a first password, reset for an existing user choosing a new one",
+            "enum": [
+              "invite",
+              "reset"
+            ],
+            "type": "string"
+          },
+          "username": {
+            "description": "Whose link it is",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "username",
+          "instanceName"
+        ],
+        "type": "object"
+      },
+      "LookupInviteInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "description": "The token from the part of the link after #token=",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
         ],
         "type": "object"
       },
@@ -2432,6 +2554,24 @@
         ],
         "type": "object"
       },
+      "TeamRefBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The team's ID",
+            "type": "string"
+          },
+          "name": {
+            "description": "The team's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "TokenStatusBody": {
         "additionalProperties": false,
         "properties": {
@@ -2556,6 +2696,73 @@
           "username",
           "displayName",
           "instanceAdmin"
+        ],
+        "type": "object"
+      },
+      "UserSummaryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "description": "The name shown for the user; empty when none was set",
+            "type": "string"
+          },
+          "email": {
+            "description": "The user's email address; empty when none was set. Bayplan never sends mail to it",
+            "type": "string"
+          },
+          "id": {
+            "description": "The user's ID",
+            "type": "string"
+          },
+          "instanceAdmin": {
+            "description": "True for an instance admin",
+            "type": "boolean"
+          },
+          "lastLoginAt": {
+            "description": "When the user last signed in; absent if they never have",
+            "format": "date-time",
+            "type": "string"
+          },
+          "lockedUntil": {
+            "description": "While the account is locked: when the lock ends",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "description": "Locked, then disabled, then invite expired, then invite pending, then active",
+            "enum": [
+              "active",
+              "disabled",
+              "locked",
+              "invite_pending",
+              "invite_expired",
+              "deleted"
+            ],
+            "type": "string"
+          },
+          "teams": {
+            "description": "The teams the user belongs to",
+            "items": {
+              "$ref": "#/components/schemas/TeamRefBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "username": {
+            "description": "The lower-cased username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "displayName",
+          "email",
+          "instanceAdmin",
+          "status",
+          "teams"
         ],
         "type": "object"
       },
@@ -4474,6 +4681,97 @@
         ]
       }
     },
+    "/api/invite/accept": {
+      "post": {
+        "description": "Public. Spends the link and sets the user's password. It does not sign anyone in: the user signs in afterwards with the password they chose. A link works once.",
+        "operationId": "acceptInvite",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInviteInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Choose a password with a one-time link",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/invite/lookup": {
+      "post": {
+        "description": "Public. The token is in the body, never in the address. Every link that cannot be used, whether expired, used, replaced, unknown or belonging to a disabled or deleted user, answers the same 404 invalid_link.",
+        "operationId": "lookupInvite",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LookupInviteInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupInviteBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Say what a one-time link is for",
+        "tags": [
+          "users"
+        ]
+      }
+    },
     "/api/local-host": {
       "get": {
         "description": "Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.create because it is the context for adding the host.",
@@ -4859,6 +5157,55 @@
         "summary": "Check the setup token and return the step 3 defaults",
         "tags": [
           "setup"
+        ]
+      }
+    },
+    "/api/users": {
+      "post": {
+        "description": "The user has no password. The response carries a link, valid for BAYPLAN_INVITE_TTL (72 hours by default), that opens a page where they choose one. Bayplan sends no email: the admin hands the link over. A username that belonged to a deleted user answers 409 username_reserved.",
+        "operationId": "createUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateUserBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a user and a one-time invite link",
+        "tags": [
+          "users"
         ]
       }
     },

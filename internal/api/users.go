@@ -1,0 +1,154 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+package api
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/ianglennon/bayplan/internal/access"
+	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
+)
+
+// Field error codes of the user routes. The SPA maps each to its copy.
+const (
+	codeInvalidEmail       = "invalid_email"
+	codeDisplayNameTooLong = "display_name_too_long"
+)
+
+// TeamRefBody names a team a user belongs to.
+type TeamRefBody struct {
+	ID   string `json:"id" doc:"The team's ID"`
+	Name string `json:"name" doc:"The team's name"`
+}
+
+// UserSummaryBody is a user as an admin sees them in the users table.
+type UserSummaryBody struct {
+	ID            string        `json:"id" doc:"The user's ID"`
+	Username      string        `json:"username" doc:"The lower-cased username"`
+	DisplayName   string        `json:"displayName" doc:"The name shown for the user; empty when none was set"`
+	Email         string        `json:"email" doc:"The user's email address; empty when none was set. Bayplan never sends mail to it"`
+	InstanceAdmin bool          `json:"instanceAdmin" doc:"True for an instance admin"`
+	Status        string        `json:"status" enum:"active,disabled,locked,invite_pending,invite_expired,deleted" doc:"Locked, then disabled, then invite expired, then invite pending, then active"`
+	LockedUntil   string        `json:"lockedUntil,omitempty" format:"date-time" doc:"While the account is locked: when the lock ends"`
+	LastLoginAt   string        `json:"lastLoginAt,omitempty" format:"date-time" doc:"When the user last signed in; absent if they never have"`
+	Teams         []TeamRefBody `json:"teams" doc:"The teams the user belongs to"`
+}
+
+// LinkBody is a one-time link, shown once to the admin who asked for it.
+type LinkBody struct {
+	URL       string `json:"url" doc:"The address to give the user. The secret is in the part after #, which a browser never sends to a server"`
+	ExpiresAt string `json:"expiresAt" format:"date-time" doc:"When the link stops working"`
+}
+
+// summaryOf builds the table row for a user.
+func summaryOf(u sqlc.User, now time.Time, linkLive bool) UserSummaryBody {
+	b := UserSummaryBody{
+		ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email,
+		InstanceAdmin: u.InstanceAdmin != 0, Status: userStatus(u, now, linkLive),
+		Teams: []TeamRefBody{},
+	}
+	if u.LockedUntil.Valid && u.LockedUntil.Int64 > now.UTC().UnixNano() {
+		b.LockedUntil = time.Unix(0, u.LockedUntil.Int64).UTC().Format(time.RFC3339)
+	}
+	if u.LastLoginAt.Valid {
+		b.LastLoginAt = time.Unix(0, u.LastLoginAt.Int64).UTC().Format(time.RFC3339)
+	}
+	return b
+}
+
+// CreateUserInput is a new user.
+type CreateUserInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		Username    string `json:"username" maxLength:"64" doc:"3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case"`
+		DisplayName string `json:"displayName,omitempty" maxLength:"256" doc:"Optional; at most 64 characters"`
+		Email       string `json:"email,omitempty" maxLength:"254" doc:"Optional; a bare address. Bayplan never sends mail"`
+	}
+}
+
+// CreateUserBody is the new user and the link that lets them choose a password.
+type CreateUserBody struct {
+	User UserSummaryBody `json:"user" doc:"The user that was created, with status invite_pending"`
+	Link LinkBody        `json:"link" doc:"The one-time invite link; it cannot be shown again"`
+}
+
+// CreateUserOutput wraps CreateUserBody for huma.
+type CreateUserOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         CreateUserBody
+}
+
+func registerUsers(r *httpx.Router, d AccessDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID:   "createUser",
+		Method:        http.MethodPost,
+		Path:          "/api/users",
+		Summary:       "Create a user and a one-time invite link",
+		DefaultStatus: http.StatusCreated,
+		Description: "The user has no password. The response carries a link, valid for BAYPLAN_INVITE_TTL (72 hours " +
+			"by default), that opens a page where they choose one. Bayplan sends no email: the admin hands the " +
+			"link over. A username that belonged to a deleted user answers 409 username_reserved.",
+		Tags: []string{"users"},
+	}, rbac.Requirement{Perm: rbac.PermUsersManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *CreateUserInput) (*CreateUserOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		u, link, err := d.Access.CreateUser(ctx, p.AuditActor(), access.CreateUserInput{
+			Username: in.Body.Username, DisplayName: in.Body.DisplayName, Email: in.Body.Email,
+			IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+		})
+		switch {
+		case errors.Is(err, access.ErrUsernameReserved):
+			return nil, httpx.Problem(http.StatusConflict, problemUsernameReserved, "That username belonged to a deleted user and stays reserved.")
+		case errors.Is(err, access.ErrUsernameTaken):
+			return nil, httpx.Problem(http.StatusConflict, problemUsernameTaken, "That username is already taken.")
+		case errors.Is(err, access.ErrInvalidUsername), errors.Is(err, access.ErrInvalidEmail), errors.Is(err, access.ErrDisplayNameTooLong):
+			return nil, userFieldProblems(err)
+		case err != nil:
+			d.Log.Error("create user failed", "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		return &CreateUserOutput{
+			CacheControl: "no-store",
+			Body: CreateUserBody{
+				User: summaryOf(u, d.now(), true),
+				Link: LinkBody{URL: linkURL(d.Instance, link.Token), ExpiresAt: link.ExpiresAt.UTC().Format(time.RFC3339)},
+			},
+		}, nil
+	})
+}
+
+// userFieldProblems turns the validation errors of a user submission into one
+// 422 validation_failed that names every field at fault, with a stable code.
+func userFieldProblems(err error) error {
+	var problems []*huma.ErrorDetail
+	add := func(location, code string) {
+		problems = append(problems, &huma.ErrorDetail{Location: location, Message: code})
+	}
+	if errors.Is(err, access.ErrInvalidUsername) {
+		add("body.username", codeInvalidUsername)
+	}
+	if errors.Is(err, access.ErrDisplayNameTooLong) {
+		add("body.displayName", codeDisplayNameTooLong)
+	}
+	if errors.Is(err, access.ErrInvalidEmail) {
+		add("body.email", codeInvalidEmail)
+	}
+	return &huma.ErrorModel{
+		Type:   problemValidationFailed,
+		Title:  http.StatusText(http.StatusUnprocessableEntity),
+		Status: http.StatusUnprocessableEntity,
+		Detail: "validation failed",
+		Errors: problems,
+	}
+}

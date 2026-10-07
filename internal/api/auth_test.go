@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/access"
 	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -122,6 +123,15 @@ type authFixture struct {
 	settingsAgents api.SettingsAgents
 	// envWarningsNow is the clock of GET /api/environments/warnings; nil means the wall clock.
 	envWarningsNow func() time.Time
+	// inviteTTL is BAYPLAN_INVITE_TTL as the access service sees it; zero is the 72 hour
+	// default. inviteLimiter throttles the public invite routes per address and
+	// inviteAudit records their refusals; nil means a generous limiter and the writer
+	// itself (plan 03-11).
+	inviteTTL     time.Duration
+	inviteLimiter *auth.IPLimiter
+	inviteAudit   httpx.Auditor
+	// access is the service behind the user and invite routes, built with the router.
+	access *access.Service
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -171,6 +181,16 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
 		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
 		Checker: checker, Refusals: refusalSource(f.refusals), Now: f.clk.now,
+	})
+	f.access = access.New(f.st, f.aud, checker, f.inviteTTL)
+	f.access.Now = f.clk.now
+	inviteLimiter := f.inviteLimiter
+	if inviteLimiter == nil {
+		inviteLimiter = auth.NewIPLimiter(time.Second, 1000, 10*time.Minute, f.clk.now)
+	}
+	api.RegisterAccess(r, api.AccessDeps{
+		Access: f.access, Store: f.st, Checker: checker, Instance: f.inst, Sessions: f.sess,
+		Limiter: inviteLimiter, AnonAudit: f.inviteAudit, Now: f.clk.now, Log: log,
 	})
 	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, AgentAllowInsecure: f.agentAllowInsecure, Log: log})
 	api.RegisterLocalHost(r, f.localHost)

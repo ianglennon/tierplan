@@ -132,6 +132,11 @@ const (
 	ActionKeyRotated                 = "key.rotated"
 )
 
+// ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or
+// reset link: an unusable link or the per-address limit. It never carries the
+// link.
+const ActionAuthLinkRefused = "auth.link_refused"
+
 // Errors returned by Record.
 var (
 	// ErrSecretField means a detail key names a secret; nothing was written.

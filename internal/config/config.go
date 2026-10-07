@@ -56,8 +56,10 @@ type Config struct {
 	LoginLockout            time.Duration
 	SessionIdleTimeout      time.Duration
 	SessionRememberLifetime time.Duration
-	AuditRetentionDays      int // 0 means keep forever
-	SkipPreMigrateBackup    bool
+	// InviteTTL is how long a one-time invite or reset link works (D-24).
+	InviteTTL            time.Duration
+	AuditRetentionDays   int // 0 means keep forever
+	SkipPreMigrateBackup bool
 
 	TLSCertFile   string
 	TLSKeyFile    string
@@ -138,6 +140,8 @@ var settings = []setting{
 			c.SessionRememberLifetime, err = parseDuration(raw)
 			return err
 		}},
+	{env: "BAYPLAN_INVITE_TTL", flag: "invite-ttl", def: "72h", desc: "how long an invite or password reset link works",
+		apply: func(c *Config, raw string) (err error) { c.InviteTTL, err = parseDuration(raw); return err }},
 	{env: "BAYPLAN_AUDIT_RETENTION_DAYS", flag: "audit-retention-days", def: "365", desc: "days to keep audit entries, 0 for forever",
 		apply: func(c *Config, raw string) (err error) { c.AuditRetentionDays, err = parseInt(raw, 0); return err }},
 	{env: "BAYPLAN_SKIP_PRE_MIGRATE_BACKUP", flag: "skip-pre-migrate-backup", def: "false", desc: "do not back up the database before a migration",

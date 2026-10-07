@@ -553,6 +553,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/invite/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Choose a password with a one-time link
+         * @description Public. Spends the link and sets the user's password. It does not sign anyone in: the user signs in afterwards with the password they chose. A link works once.
+         */
+        post: operations["acceptInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/invite/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Say what a one-time link is for
+         * @description Public. The token is in the body, never in the address. Every link that cannot be used, whether expired, used, replaced, unknown or belonging to a disabled or deleted user, answers the same 404 invalid_link.
+         */
+        post: operations["lookupInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/local-host": {
         parameters: {
             query?: never;
@@ -711,6 +751,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a user and a one-time invite link
+         * @description The user has no password. The response carries a link, valid for BAYPLAN_INVITE_TTL (72 hours by default), that opens a page where they choose one. Bayplan sends no email: the admin hands the link over. A username that belonged to a deleted user answers 409 username_reserved.
+         */
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/version": {
         parameters: {
             query?: never;
@@ -772,6 +832,12 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcceptInviteInputBody: {
+            /** @description At least 12 characters, not on the common-password list and not containing the username */
+            password: string;
+            /** @description The token from the part of the link after #token= */
+            token: string;
+        };
         AddEnvironmentBody: {
             /** @description The oldest agent version in the environment; null when it has no agent, and for the local socket */
             agentVersion: string | null;
@@ -1037,6 +1103,20 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        CreateUserBody: {
+            /** @description The one-time invite link; it cannot be shown again */
+            link: components["schemas"]["LinkBody"];
+            /** @description The user that was created, with status invite_pending */
+            user: components["schemas"]["UserSummaryBody"];
+        };
+        CreateUserInputBody: {
+            /** @description Optional; at most 64 characters */
+            displayName?: string;
+            /** @description Optional; a bare address. Bayplan never sends mail */
+            email?: string;
+            /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
+            username: string;
         };
         DenialBody: {
             /**
@@ -1477,6 +1557,15 @@ export interface components {
              */
             rememberDays: number;
         };
+        LinkBody: {
+            /**
+             * Format: date-time
+             * @description When the link stops working
+             */
+            expiresAt: string;
+            /** @description The address to give the user. The secret is in the part after #, which a browser never sends to a server */
+            url: string;
+        };
         LocalHostBody: {
             /** @description Whether a unix socket exists at that path */
             detected: boolean;
@@ -1502,6 +1591,21 @@ export interface components {
             remember?: boolean;
             /** @description The account name; matched case-insensitively */
             username: string;
+        };
+        LookupInviteBody: {
+            /** @description The name of this Bayplan instance */
+            instanceName: string;
+            /**
+             * @description invite for a new user choosing a first password, reset for an existing user choosing a new one
+             * @enum {string}
+             */
+            kind: "invite" | "reset";
+            /** @description Whose link it is */
+            username: string;
+        };
+        LookupInviteInputBody: {
+            /** @description The token from the part of the link after #token= */
+            token: string;
         };
         MeBody: {
             /** @description The user's access by environment ID, and the key * for access that applies to every environment */
@@ -1755,6 +1859,12 @@ export interface components {
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
         };
+        TeamRefBody: {
+            /** @description The team's ID */
+            id: string;
+            /** @description The team's name */
+            name: string;
+        };
         TokenStatusBody: {
             /**
              * Format: date-time
@@ -1808,6 +1918,35 @@ export interface components {
             id: string;
             /** @description True for an instance admin: Admin on every environment, with every extra, and the only holder of the installation-wide permissions (D-01) */
             instanceAdmin: boolean;
+            /** @description The lower-cased username */
+            username: string;
+        };
+        UserSummaryBody: {
+            /** @description The name shown for the user; empty when none was set */
+            displayName: string;
+            /** @description The user's email address; empty when none was set. Bayplan never sends mail to it */
+            email: string;
+            /** @description The user's ID */
+            id: string;
+            /** @description True for an instance admin */
+            instanceAdmin: boolean;
+            /**
+             * Format: date-time
+             * @description When the user last signed in; absent if they never have
+             */
+            lastLoginAt?: string;
+            /**
+             * Format: date-time
+             * @description While the account is locked: when the lock ends
+             */
+            lockedUntil?: string;
+            /**
+             * @description Locked, then disabled, then invite expired, then invite pending, then active
+             * @enum {string}
+             */
+            status: "active" | "disabled" | "locked" | "invite_pending" | "invite_expired" | "deleted";
+            /** @description The teams the user belongs to */
+            teams: components["schemas"]["TeamRefBody"][] | null;
             /** @description The lower-cased username */
             username: string;
         };
@@ -2986,6 +3125,72 @@ export interface operations {
             };
         };
     };
+    acceptInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptInviteInputBody"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    lookupInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LookupInviteInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LookupInviteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getLocalHost: {
         parameters: {
             query?: never;
@@ -3260,6 +3465,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUserInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateUserBody"];
                 };
             };
             /** @description Error */

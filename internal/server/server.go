@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/access"
 	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -69,17 +70,17 @@ func newHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
 type Server struct {
 	// refusals folds a signed-in user's repeated refusals into one audit entry.
 	refusals *auth.RefusalCoalescer
-	cfg     config.Config
-	log     *slog.Logger
-	dataDir datadir.Info
-	store   *store.Store
-	vault   *vault.Vault
-	audit   *audit.Writer
-	setup   *auth.SetupGate
-	inst    *instance.Instance
-	session *auth.Sessions
-	envs    *envs.Service
-	monitor *envs.Monitor
+	cfg      config.Config
+	log      *slog.Logger
+	dataDir  datadir.Info
+	store    *store.Store
+	vault    *vault.Vault
+	audit    *audit.Writer
+	setup    *auth.SetupGate
+	inst     *instance.Instance
+	session  *auth.Sessions
+	envs     *envs.Service
+	monitor  *envs.Monitor
 	// snapshots caches the resource lists per environment for a few seconds.
 	// The events hub invalidates it on every Docker event.
 	snapshots *envs.Snapshots
@@ -121,6 +122,7 @@ type RouterDeps struct {
 	Setup        api.SetupDeps
 	Auth         api.AuthDeps
 	Account      api.AccountDeps
+	Access       api.AccessDeps
 	LocalHost    api.LocalHostDeps
 	Environments api.EnvironmentsDeps
 	Agents       api.AgentsDeps
@@ -151,6 +153,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterSetup(r, d.Setup)
 	api.RegisterAuth(r, d.Auth)
 	api.RegisterAccount(r, d.Account)
+	api.RegisterAccess(r, d.Access)
 	api.RegisterSettings(r, d.Settings)
 	api.RegisterLocalHost(r, d.LocalHost)
 	api.RegisterEnvironments(r, d.Environments)
@@ -297,6 +300,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 
 	sessions := auth.NewSessions(st, vlt, cfg.SessionIdleTimeout, cfg.SessionRememberLifetime, nil)
 	checker := rbac.NewChecker(st)
+	accessSvc := access.New(st, aud, checker, cfg.InviteTTL)
 
 	// Sign-in: 10 attempts at once, then one every 2 seconds, per client address.
 	// This is protection against stuffing across usernames; the per-account lock
@@ -491,6 +495,14 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 			// seconds (T-01-60): ample for a person, slow for a guesser.
 			Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
 			Log:     log,
+		},
+		Access: api.AccessDeps{
+			Access: accessSvc, Store: st, Checker: checker, Instance: inst, Sessions: sessions,
+			// Opening or using a link: 5 attempts at once, then one every 12 seconds,
+			// per client address, like the setup token (T-03-40).
+			Limiter:   auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
+			AnonAudit: anonAudit,
+			Log:       log,
 		},
 		LocalHost:    api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
 		Environments: api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
