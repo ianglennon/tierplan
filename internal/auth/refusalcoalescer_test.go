@@ -5,6 +5,7 @@ package auth_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -75,5 +76,204 @@ func TestCoalescerWritesTheFirstRefusalNowAndOneSummaryWhenTheWindowCloses(t *te
 	}
 	if got := len(next.all()); got != 2 {
 		t.Fatalf("a second sweep wrote %d more rows, want none", got-2)
+	}
+}
+
+func TestCoalescerFailedFirstWriteReturnsTheErrorAndOpensNoWindow(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk)
+	ctx := context.Background()
+	e := userRefusal("u1", "GET /api/audit", "forbidden", "")
+	next.fail(errors.New("disk full"))
+	if err := co.Record(ctx, e); err == nil {
+		t.Fatal("a failed write must reach the caller so the answer becomes a 500")
+	}
+	if co.Pending() != 0 {
+		t.Fatal("a refusal that was not written opened a window")
+	}
+	next.fail(nil)
+	for range 3 {
+		if err := co.Record(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := next.all()
+	if len(rows) != 1 || rows[0].Details["coalesced"] != "" {
+		t.Fatalf("rows = %+v, want the retry written in full as the first of its window", rows)
+	}
+	if co.Pending() != 1 {
+		t.Fatalf("pending = %d, want the one window the retry opened", co.Pending())
+	}
+}
+
+func TestCoalescerCancellingRunWritesEveryPendingCount(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk)
+	e := userRefusal("u1", "GET /api/audit", "forbidden", "")
+	for range 4 {
+		if err := co.Record(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { co.Run(ctx, time.Hour); close(done) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+	rows := next.all()
+	if len(rows) != 2 || rows[1].Details["count"] != "3" || rows[1].Details["coalesced"] != "true" {
+		t.Fatalf("rows = %+v, want the first refusal and a flushed summary of 3 repeats", rows)
+	}
+}
+
+func TestCoalescerRetriesAFailedSummaryAtTheNextSweepWithTheCountsMerged(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk)
+	ctx := context.Background()
+	e := userRefusal("u1", "GET /api/audit", "forbidden", "")
+	for range 3 {
+		_ = co.Record(ctx, e)
+	}
+	clk.advance(2 * time.Minute)
+	next.fail(errors.New("busy"))
+	if err := co.Sweep(ctx); err == nil {
+		t.Fatal("a failed summary write must be reported")
+	}
+	next.fail(nil)
+	// The same key refuses again: the closed window is back in the table, so this
+	// one counts into it and the merged count is written at the next sweep.
+	_ = co.Record(ctx, e)
+	clk.advance(2 * time.Minute)
+	if err := co.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows := next.all()
+	if len(rows) != 2 || rows[1].Details["count"] != "3" {
+		t.Fatalf("rows = %+v, want the first refusal and one summary with the 2 + 1 repeats", rows)
+	}
+}
+
+func TestCoalescerAtTheTableCapANewKeyIsWrittenThroughAndOldOnesKeepCoalescing(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk, auth.WithMaxKeys(2))
+	ctx := context.Background()
+	a := userRefusal("u1", "GET /a", "forbidden", "")
+	b := userRefusal("u1", "GET /b", "forbidden", "")
+	c := userRefusal("u1", "GET /c", "forbidden", "")
+	for _, e := range []audit.Entry{a, b, c, c, c, a, a} {
+		if err := co.Record(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a, b and the full table's c, c, c: every one of c is written, a's repeats are counted.
+	if got := len(next.all()); got != 5 {
+		t.Fatalf("rows = %d, want a, b and three written-through c", got)
+	}
+	if co.Pending() != 2 {
+		t.Fatalf("pending = %d, want the two windows that fit", co.Pending())
+	}
+	clk.advance(2 * time.Minute)
+	if err := co.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows := next.all()
+	if len(rows) != 6 || rows[5].TargetID != "GET /a" || rows[5].Details["count"] != "2" {
+		t.Fatalf("rows = %+v, want a summary of a's 2 repeats", rows)
+	}
+}
+
+func TestCoalescerPassesAnonymousSystemAndOtherActionsStraightThrough(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk)
+	ctx := context.Background()
+	anonymous := userRefusal("", "GET /api/me", "unauthenticated", "")
+	anonymous.Actor = audit.Actor{Type: audit.ActorAnonymous}
+	system := userRefusal("system:cli", "GET /api/x", "forbidden", "")
+	system.Actor = audit.SystemCLI
+	login := userRefusal("u1", "u1", "", "")
+	login.Action = audit.ActionAuthLogin
+	for _, e := range []audit.Entry{anonymous, system, login} {
+		for range 4 {
+			if err := co.Record(ctx, e); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if got := len(next.all()); got != 12 {
+		t.Fatalf("rows = %d, want all 12 passed through unchanged", got)
+	}
+	if co.Pending() != 0 {
+		t.Fatal("an entry that is not a user's refusal was counted")
+	}
+}
+
+func TestCoalescerRefusalsThatDifferInEnvironmentOrTargetAreSeparateWindows(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk)
+	ctx := context.Background()
+	for _, e := range []audit.Entry{
+		userRefusal("u1", "GET /x", "forbidden", "env-a"),
+		userRefusal("u1", "GET /x", "forbidden", "env-b"),
+		userRefusal("u1", "GET /y", "forbidden", "env-a"),
+		userRefusal("u2", "GET /x", "forbidden", "env-a"),
+		userRefusal("u1", "GET /x", "environment_not_visible", "env-a"),
+	} {
+		if err := co.Record(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(next.all()); got != 5 || co.Pending() != 5 {
+		t.Fatalf("rows = %d, windows = %d, want 5 of each", got, co.Pending())
+	}
+}
+
+func TestCoalescerBurstsExpireAfterAnHourAndNeedTenRefusals(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk)
+	ctx := context.Background()
+	few := userRefusal("u1", "GET /few", "forbidden", "")
+	many := userRefusal("u2", "GET /many", "forbidden", "")
+	for range 8 {
+		_ = co.Record(ctx, few)
+	}
+	for range 10 {
+		_ = co.Record(ctx, many)
+	}
+	clk.advance(2 * time.Minute)
+	if err := co.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	bursts := co.Bursts(clk.now())
+	if len(bursts) != 1 || bursts[0].ActorID != "u2" || bursts[0].ActorName != "name-u2" || bursts[0].Count != 10 {
+		t.Fatalf("bursts = %+v, want only u2's 10 refusals", bursts)
+	}
+	clk.advance(57 * time.Minute) // 59 minutes after the burst began
+	if got := len(co.Bursts(clk.now())); got != 1 {
+		t.Fatalf("bursts 59 minutes on = %d, want 1", got)
+	}
+	clk.advance(2 * time.Minute)
+	if got := len(co.Bursts(clk.now())); got != 0 {
+		t.Fatalf("bursts an hour on = %d, want 0", got)
+	}
+}
+
+func TestCoalescerBurstThresholdAndWindowAreOptions(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk, auth.WithBurstThreshold(3), auth.WithWindow(10*time.Second))
+	ctx := context.Background()
+	e := userRefusal("u1", "GET /x", "forbidden", "")
+	for range 3 {
+		_ = co.Record(ctx, e)
+	}
+	clk.advance(11 * time.Second)
+	if err := co.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(co.Bursts(clk.now())); got != 1 || len(next.all()) != 2 {
+		t.Fatalf("bursts = %d, rows = %d, want 1 burst and a summary after an 11 second window", got, len(next.all()))
 	}
 }
