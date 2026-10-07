@@ -160,13 +160,7 @@ Bayplan needs to be reachable from the host over `wss://` with a certificate the
 - **Back up `/data/bayplan.key` together with the database** (`/data/bayplan.db`). The key encrypts stored secrets and keys the audit log's integrity chain. Lose it and those secrets cannot be read and `bayplan audit verify` cannot check the log. Bayplan shows a reminder until an admin acknowledges it. A backup that holds both the key and the database holds everything, so protect it like a password store. If you supply `BAYPLAN_ENCRYPTION_KEY` yourself, no key file is written and you keep that value safe.
 - Before it applies a database migration to an existing database, Bayplan writes a snapshot to `/data/backups` and keeps the newest three. If the volume has less than twice the database's size free, it refuses to start rather than fill the volume; `BAYPLAN_SKIP_PRE_MIGRATE_BACKUP=true` skips the snapshot.
 - **Downgrades are refused.** A database written by a newer schema stops an older binary at startup, naming both versions and the newest snapshot.
-- Upgrade by replacing the container on the same volume:
-
-  ```sh
-  docker pull ghcr.io/ianglennon/bayplan:0.1
-  docker rm -f bayplan
-  docker run -d --name bayplan ... ghcr.io/ianglennon/bayplan:0.1
-  ```
+- **Upgrading** means replacing the container on the same volume. [docs/upgrade.md](docs/upgrade.md) covers `docker run` and compose, what happens on start, how to check the audit chain afterwards and how to roll back. Bayplan never checks for new versions itself.
 
 ## Operations
 
