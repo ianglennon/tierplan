@@ -68,6 +68,8 @@ type authFixture struct {
 	acctVault *vault.Vault
 	// proxy feeds the proxy items of GET /api/warnings (plan 02-25); nil means none.
 	proxy *httpx.ProxyObserver
+	// refusals feeds the refusal_burst items of GET /api/warnings (plan 03-10); nil means none.
+	refusals *auth.RefusalCoalescer
 	// pwLimiter is the per-user throttle on POST /api/me/password; nil means none.
 	pwLimiter *auth.IPLimiter
 	// localHost feeds GET /api/local-host (plan 15).
@@ -168,6 +170,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterAccount(r, api.AccountDeps{
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
 		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
+		Checker: checker, Refusals: refusalSource(f.refusals), Now: f.clk.now,
 	})
 	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, AgentAllowInsecure: f.agentAllowInsecure, Log: log})
 	api.RegisterLocalHost(r, f.localHost)
@@ -1047,4 +1050,13 @@ func TestMutationFromAnotherOriginIsRefusedBeforeLogin(t *testing.T) {
 	if f.sessionCount(t) != 0 {
 		t.Fatal("a cross-origin login created a session")
 	}
+}
+
+// refusalSource keeps a nil coalescer a nil interface, so the warnings handler
+// sees "none" rather than a typed nil.
+func refusalSource(c *auth.RefusalCoalescer) interface{ Bursts(time.Time) []auth.Burst } {
+	if c == nil {
+		return nil
+	}
+	return c
 }

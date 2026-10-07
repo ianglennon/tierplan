@@ -67,6 +67,8 @@ func newHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
 
 // Server is the assembled application.
 type Server struct {
+	// refusals folds a signed-in user's repeated refusals into one audit entry.
+	refusals *auth.RefusalCoalescer
 	cfg     config.Config
 	log     *slog.Logger
 	dataDir datadir.Info
@@ -168,6 +170,13 @@ type Option func(*buildOptions)
 
 type buildOptions struct {
 	selfContainerID string
+	refusalClock    func() time.Time
+}
+
+// WithRefusalClock replaces the clock of the refusal coalescer, which decides
+// when a minute of repeated refusals has closed. It exists for tests.
+func WithRefusalClock(now func() time.Time) Option {
+	return func(o *buildOptions) { o.refusalClock = now }
 }
 
 // WithSelfContainerID supplies the ID of the container Bayplan runs in. The
@@ -304,6 +313,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	anonAudit := auth.NewAuditThrottle(aud, auth.NewIPLimiter(6*time.Second, 20, 10*time.Minute, nil), log, nil)
 	login.SetAnonymousAuditor(anonAudit)
 
+	// A signed-in user's refusals are different: the first of each kind is written
+	// in full before the answer goes out, and identical repeats inside a minute
+	// become one "refused xN" entry, so a refreshing tab cannot flood the single
+	// write connection or the log (D-20). Everything else, anonymous refusals
+	// included, passes through to the anonymous throttle.
+	refusals := auth.NewRefusalCoalescer(anonAudit, log, bo.refusalClock)
+
 	// The environment registry and its health monitors. Nothing is added here:
 	// the local host becomes an environment only when an admin asks (D-19).
 	// Bayplan's own container was identified before the privilege drop and is
@@ -422,7 +438,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 			Checker:        checker,
 			Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, inst.CookieScope, nil),
 			EnvResolver:    envSvc,
-			Auditor:        anonAudit,
+			Auditor:        refusals,
 			MutationGuard:  auth.NewCSRFGuard(sessions),
 			TrustedProxies: cfg.TrustedProxies,
 			Proxy:          proxyObs,
@@ -469,6 +485,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 			DataDir:  info,
 			Vault:    vlt,
 			Proxy:    proxyObs,
+			Checker:  checker,
+			Refusals: refusals,
 			// Five password-change attempts per user at once, then one every 12
 			// seconds (T-01-60): ample for a person, slow for a guesser.
 			Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
@@ -496,6 +514,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		return nil, err
 	}
 	srv := &Server{
+		refusals:   refusals,
 		cfg:        cfg,
 		log:        log,
 		dataDir:    info,
@@ -528,6 +547,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// Suppressed anonymous refusals are written every minute, and once more when
 	// bg ends, which is before Close shuts the database.
 	srv.background.Go(func() { anonAudit.Run(bg, time.Minute) })
+	srv.background.Go(func() { refusals.Run(bg, 10*time.Second) })
 	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { broker.Run(bg) })
 	srv.background.Go(func() { clusters.Run(bg) })
@@ -548,6 +568,10 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 
 // Store is the migrated database, for the dependencies later plans add.
 func (s *Server) Store() *store.Store { return s.store }
+
+// Refusals is the coalescer of signed-in users' refusals. Tests sweep it to close
+// a window without waiting a minute.
+func (s *Server) Refusals() *auth.RefusalCoalescer { return s.refusals }
 
 // Vault is the loaded master key, for the dependencies later plans add.
 func (s *Server) Vault() *vault.Vault { return s.vault }

@@ -58,7 +58,7 @@ interface Sent {
 
 let sent: Sent[] = [];
 let me = ADMIN;
-let items: Array<Record<string, string>> = [];
+let items: Array<Record<string, string | number>> = [];
 let ackStatus = 204;
 // What GET /api/environments/warnings answers, how, and when (a gate holds the
 // answer back to show the first-load state).
@@ -133,6 +133,7 @@ function makeRouter() {
     routeTree: root.addChildren([
       page("/"),
       page("/environments"),
+      page("/audit"),
       page("/env/$envId"),
       page("/settings/environments"),
       page("/settings/environments/$envId"),
@@ -791,5 +792,35 @@ describe("HealthBell environment items", () => {
       );
     });
     await waitFor(() => expect(envWarningsCalls().length).toBeGreaterThan(1));
+  });
+});
+
+describe("HealthBell refusal bursts", () => {
+  it("lists a burst for an instance admin with the user, the count and a link to the audit log", async () => {
+    items = [{ id: "refusal_burst", subject: "mallory", count: 12 }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("12 requests were refused")).toBeTruthy();
+    expect(
+      screen.getByText("mallory was refused 12 times in the last minute. Look at the audit log."),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "View audit log" });
+    expect(link.getAttribute("href")).toContain("/audit");
+    expect(link.getAttribute("href")).toContain("action=permission.denied");
+    // Derived from live state: there is nothing to dismiss.
+    expect(screen.queryByRole("button", { name: /dismiss|acknowledge/i })).toBeNull();
+  });
+
+  it("says a single refusal in the singular", async () => {
+    items = [{ id: "refusal_burst", subject: "mallory", count: 1 }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("1 request was refused")).toBeTruthy();
+  });
+
+  it("shows the unchanged empty bell when no burst or other condition holds", async () => {
+    renderWarnings();
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
   });
 });

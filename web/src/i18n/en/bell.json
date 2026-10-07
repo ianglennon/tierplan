@@ -48,6 +48,12 @@
         "review": "Review"
       }
     },
+    "refusalBurst": {
+      "title_one": "{{count}} request was refused",
+      "title_other": "{{count}} requests were refused",
+      "description": "{{user}} was refused {{count}} times in the last minute. Look at the audit log.",
+      "link": "View audit log"
+    },
     "proxy": {
       "docs": "Reverse proxy docs",
       "untrustedForwarded": {

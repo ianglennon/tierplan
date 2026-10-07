@@ -39,6 +39,7 @@ const reasonCurrentPasswordIncorrect = "current_password_incorrect" //nolint:gos
 const (
 	warningDataNotPersisted = "data_not_persisted"
 	warningKeyBackup        = "key_backup"
+	warningRefusalBurst     = "refusal_burst"
 	// warningProxyPrefix turns an observer signal kind into a warning ID: the
 	// reverse proxy warnings are proxy_untrusted_forwarded, proxy_url_mismatch and
 	// the third kind with the same prefix (D-53).
@@ -72,6 +73,14 @@ type AccountDeps struct {
 	// Proxy holds what the reverse proxy observer has seen, for the proxy
 	// warnings. Nil means there are none.
 	Proxy *httpx.ProxyObserver
+	// Checker decides who is an instance admin, who alone sees the refusal_burst
+	// warning. Nil means nobody is.
+	Checker *rbac.Checker
+	// Refusals lists the recent bursts of refused requests for the refusal_burst
+	// warning. Nil means there are none.
+	Refusals interface{ Bursts(time.Time) []auth.Burst }
+	// Now is the clock the bursts are aged by. Nil means time.Now.
+	Now func() time.Time
 	// Limiter throttles POST /api/me/password per user ID, right and wrong
 	// attempts alike, so a stolen session cannot guess the current password at
 	// the speed of the hash alone (T-01-60). Nil means no throttle.
@@ -105,13 +114,15 @@ type ChangePasswordOutput struct {
 
 // WarningBody is one instance warning that needs an admin's attention.
 type WarningBody struct {
-	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing" doc:"Which warning this is"`
+	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst" doc:"Which warning this is"`
 	Reason  string `json:"reason,omitempty" doc:"For data_not_persisted: why the data directory is not persisted"`
 	KeyPath string `json:"keyPath,omitempty" doc:"For key_backup: where the generated encryption key is stored"`
 	IP      string `json:"ip,omitempty" doc:"For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from"`
 	Host    string `json:"host,omitempty" doc:"For proxy_url_mismatch: the host the newest request was for"`
 	Scheme  string `json:"scheme,omitempty" doc:"For proxy_url_mismatch: the scheme the newest request effectively used, http or https"`
 	URL     string `json:"url,omitempty" doc:"For proxy_url_mismatch: the public URL the request should have matched"`
+	Subject string `json:"subject,omitempty" doc:"For refusal_burst: the username that was refused"`
+	Count   int    `json:"count,omitempty" doc:"For refusal_burst: how many times that user was refused inside one minute"`
 }
 
 // WarningsBody lists the warnings that apply right now.
@@ -288,6 +299,7 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			"while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). " +
 			"The reverse proxy warnings (the proxy_ ones) are listed while " +
 			"Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). " +
+			"refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). " +
 			"The plain-HTTP warning is the browser's to compute and is not listed.",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*WarningsOutput, error) {
@@ -305,6 +317,11 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			}
 		}
 		items = append(items, proxyItems(d)...)
+		burstItems, err := refusalItems(ctx, d)
+		if err != nil {
+			return nil, internal("read refusal bursts", err)
+		}
+		items = append(items, burstItems...)
 		return &WarningsOutput{CacheControl: "no-store", Body: WarningsBody{Items: items}}, nil
 	})
 
@@ -378,4 +395,34 @@ func proxyItems(d AccountDeps) []WarningBody {
 		out = append(out, w)
 	}
 	return out
+}
+
+// refusalItems turns the recent refusal bursts into warnings, one per user
+// naming the newest burst, for an active instance admin only: a refusal burst
+// names a user, which no one else may see (T-03-39).
+func refusalItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
+	if d.Refusals == nil || d.Checker == nil {
+		return nil, nil
+	}
+	a, err := d.Checker.Access(ctx, httpx.PrincipalFrom(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if !a.Active || !a.InstanceAdmin {
+		return nil, nil
+	}
+	now := time.Now
+	if d.Now != nil {
+		now = d.Now
+	}
+	var out []WarningBody
+	seen := map[string]bool{}
+	for _, b := range d.Refusals.Bursts(now()) { // newest first
+		if seen[b.ActorID] {
+			continue
+		}
+		seen[b.ActorID] = true
+		out = append(out, WarningBody{ID: warningRefusalBurst, Subject: b.ActorName, Count: b.Count})
+	}
+	return out, nil
 }

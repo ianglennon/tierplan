@@ -111,6 +111,7 @@ type Entry =
   | { kind: "plainHttp"; key: string; severity: "warning"; since?: string }
   | { kind: "keyBackup"; key: string; severity: "warning"; since?: string }
   | { kind: "proxy"; key: string; severity: "warning"; since?: string; w: Warning }
+  | { kind: "refusalBurst"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "env"; key: string; severity: EnvWarning["severity"]; since?: string; w: EnvWarning }
   | { kind: "manyOffline"; key: string; severity: "error"; since?: string; count: number };
 
@@ -121,7 +122,7 @@ const entryKey = (w: EnvWarning) => `${w.id}:${w.envId ?? ""}:${w.agentId ?? w.n
 // offline environments are one item.
 export function bellEntries(
   env: EnvWarning[],
-  instance: { plainHttp: boolean; keyBackup: boolean; proxy: Warning[] },
+  instance: { plainHttp: boolean; keyBackup: boolean; proxy: Warning[]; bursts?: Warning[] },
 ): Entry[] {
   const offline = env.filter((w) => w.id === "env_offline");
   const collapse = offline.length > COLLAPSE_OFFLINE_ABOVE;
@@ -148,6 +149,14 @@ export function bellEntries(
     entries.push({ kind: "plainHttp", key: "plain_http", severity: "warning" });
   for (const w of instance.proxy) {
     entries.push({ kind: "proxy", key: w.id, severity: "warning", w });
+  }
+  for (const w of instance.bursts ?? []) {
+    entries.push({
+      kind: "refusalBurst",
+      key: `refusal_burst:${w.subject ?? ""}`,
+      severity: "warning",
+      w,
+    });
   }
   if (instance.keyBackup)
     entries.push({ kind: "keyBackup", key: "key_backup", severity: "warning" });
@@ -391,7 +400,8 @@ export function HealthBell() {
   const plainHttp = isPlainHttpRemote();
   const keyBackup = items.some((w) => w.id === "key_backup");
   const proxyItems = items.filter((w) => proxyCopy(w.id) !== undefined);
-  const entries = bellEntries(envItems, { plainHttp, keyBackup, proxy: proxyItems });
+  const bursts = items.filter((w) => w.id === "refusal_burst");
+  const entries = bellEntries(envItems, { plainHttp, keyBackup, proxy: proxyItems, bursts });
   const loading = instanceLoading || envLoading;
   const count = loading ? 0 : entries.length;
 
@@ -553,6 +563,29 @@ export function HealthBell() {
                         </Item>
                       );
                     }
+                    case "refusalBurst":
+                      return (
+                        <BellItem
+                          key={entry.key}
+                          id="refusal_burst"
+                          title={t("bell.refusalBurst.title", { count: entry.w.count ?? 0 })}
+                        >
+                          <ItemDescription className="line-clamp-none wrap-anywhere">
+                            {t("bell.refusalBurst.description", {
+                              user: entry.w.subject ?? "",
+                              count: entry.w.count ?? 0,
+                            })}
+                          </ItemDescription>
+                          <Link
+                            to="/audit"
+                            search={{ action: "permission.denied" }}
+                            className={`${linkClass} text-sm ${touchLink}`}
+                            onClick={actions.close}
+                          >
+                            {t("bell.refusalBurst.link")}
+                          </Link>
+                        </BellItem>
+                      );
                     case "keyBackup":
                       return (
                         <Item
