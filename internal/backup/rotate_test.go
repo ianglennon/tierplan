@@ -361,3 +361,39 @@ func TestRotateKeyRefusesWhenTheKeyInUseIsNotTheOneTheDatabaseWasRotatedTo(t *te
 		t.Fatalf("RotateKey with the old key after a rotation = %v, want ErrKeyMismatch", err)
 	}
 }
+
+// WR-A02: the commit is flushed to the database file before a key file moves,
+// so under synchronous=NORMAL a power loss cannot undo the re-wrap while the
+// fsynced key swap survives.
+func TestRotateKeyFlushesTheCommitBeforeAnyKeyFileMoves(t *testing.T) {
+	f := newRotateFixture(t)
+	var (
+		walAtCommit  int64 = -1
+		keyFileMoved bool
+	)
+	restore := backup.SetRotateHook(func(point string) error {
+		switch point {
+		case backup.CrashAfterCommit:
+			if info, err := os.Stat(filepath.Join(f.dir, store.DatabaseFile+"-wal")); err == nil {
+				walAtCommit = info.Size()
+			} else {
+				walAtCommit = 0
+			}
+			if _, err := os.Stat(filepath.Join(f.dir, vault.OldKeyFile)); err == nil {
+				keyFileMoved = true
+			}
+		}
+		return nil
+	})
+	t.Cleanup(restore)
+
+	if _, err := backup.RotateKey(context.Background(), f.st, f.dir, f.old, audit.SystemCLI); err != nil {
+		t.Fatal(err)
+	}
+	if walAtCommit != 0 {
+		t.Fatalf("the write-ahead log held %d bytes after the commit: the rotation was not folded into the database file", walAtCommit)
+	}
+	if keyFileMoved {
+		t.Fatal("a key file had moved before the commit was flushed")
+	}
+}

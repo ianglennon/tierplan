@@ -165,6 +165,14 @@ func RotateKey(ctx context.Context, st *store.Store, dataDir string, old *vault.
 		return res, err
 	}
 	committed = true
+	// The pools run with synchronous=NORMAL, where a commit is not yet on disk:
+	// a power loss could undo the re-wrap while the key file swap below, which is
+	// fsynced, survives. Fold the log into the database file and flush it before
+	// any key file moves. If that fails the key files are left as they are and
+	// the next start finishes the swap, as after a crash at this point.
+	if err := flushRotation(ctx, st); err != nil {
+		return res, err
+	}
 	if err := crash(pointAfterCommit); err != nil {
 		return res, err
 	}
@@ -192,6 +200,20 @@ func RotateKey(ctx context.Context, st *store.Store, dataDir string, old *vault.
 		return res, fmt.Errorf("the audit chain does not verify after rotation (entry %d: %s)", verified.Broken.Seq, verified.Broken.Reason)
 	}
 	return res, nil
+}
+
+// flushRotation makes the committed rotation durable: a TRUNCATE checkpoint
+// syncs the write-ahead log, copies it into the database file, syncs that file
+// and empties the log. It fails when the checkpoint could not complete.
+func flushRotation(ctx context.Context, st *store.Store) error {
+	var busy, logFrames, checkpointed int
+	if err := st.Write.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed); err != nil {
+		return fmt.Errorf("the database now uses the new key but it could not be flushed to disk, so the key files were not swapped; the next start finishes the rotation: %w", err)
+	}
+	if busy != 0 {
+		return errors.New("the database now uses the new key but it could not be flushed to disk (the database is busy), so the key files were not swapped; the next start finishes the rotation")
+	}
+	return nil
 }
 
 // rotateTx is the one write transaction of a rotation.
