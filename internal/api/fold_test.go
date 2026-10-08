@@ -156,27 +156,30 @@ func TestTheNodeListOfAFoldedEnvironmentHasALocalSocketRowWithNoCertificateAndNo
 	if rec := f.req(t, http.MethodPost, f.foldPath(), ""); rec.code != http.StatusOK {
 		t.Fatalf("fold: %d %s", rec.code, rec.body)
 	}
-	rec := f.req(t, http.MethodGet, "/api/env/"+f.env.ID+"/agents", "")
-	if rec.code != http.StatusOK {
-		t.Fatalf("agents: %d %s", rec.code, rec.body)
-	}
 	var list struct {
 		Items []map[string]any `json:"items"`
 	}
-	if err := json.Unmarshal(rec.body, &list); err != nil {
-		t.Fatal(err)
-	}
+	var row map[string]any
+	// The fold re-registers the socket, so its row reads as unprobed until the
+	// next probe answers; wait for that rather than racing it.
+	waitFor(t, "the folded host to be probed", func() bool {
+		rec := f.req(t, http.MethodGet, "/api/env/"+f.env.ID+"/agents", "")
+		if rec.code != http.StatusOK {
+			t.Fatalf("agents: %d %s", rec.code, rec.body)
+		}
+		if err := json.Unmarshal(rec.body, &list); err != nil {
+			t.Fatal(err)
+		}
+		row = nil
+		for _, it := range list.Items {
+			if it["role"] == "local" {
+				row = it
+			}
+		}
+		return row != nil && row["connected"] == true
+	})
 	if len(list.Items) != 2 {
 		t.Fatalf("items = %v, want mgr-1 and the folded host", list.Items)
-	}
-	var row map[string]any
-	for _, it := range list.Items {
-		if it["role"] == "local" {
-			row = it
-		}
-	}
-	if row == nil {
-		t.Fatalf("no row with role local in %v", list.Items)
 	}
 	if row["node"] != "local-1" || row["status"] != "active" || row["connected"] != true || row["blocked"] != false {
 		t.Errorf("local row = %v, want local-1, active, connected, not blocked", row)
