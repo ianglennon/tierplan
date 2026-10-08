@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Lock } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -49,6 +49,16 @@ export function ProfileCard({ user, onChanged }: ProfileCardProps) {
     defaultValues: { displayName: user.displayName, email: user.email },
     mode: "onSubmit",
   });
+  // The values on screen and the version a save is sent with must come from the
+  // same read. When the user is read again (another admin changed them, or a
+  // switch on this page did), the fields follow it, except the ones being edited:
+  // those are what the admin means to save.
+  const seenVersion = useRef(user.updatedAt);
+  useEffect(() => {
+    if (seenVersion.current === user.updatedAt) return;
+    seenVersion.current = user.updatedAt;
+    form.reset({ displayName: user.displayName, email: user.email }, { keepDirtyValues: true });
+  }, [user.updatedAt, user.displayName, user.email, form]);
   const errors = form.formState.errors;
   const errorOf = (name: FieldName) => {
     const message = errors[name]?.message;
@@ -75,6 +85,8 @@ export function ProfileCard({ user, onChanged }: ProfileCardProps) {
           return;
         case "stale_change":
           setStale(true);
+          // Read the user again, so the next try is based on what they are now.
+          onChanged();
           return;
         case "fields": {
           const routed = result.fields.flatMap((f) => {

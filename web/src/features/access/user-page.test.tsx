@@ -375,6 +375,77 @@ describe("the Profile card", () => {
     );
   });
 
+  // WR-C-01: the fields and the version a save is sent with come from the same read.
+  it("follows a change made elsewhere: a save sends the new email with the new version, not the old email", async () => {
+    user = userBody({ displayName: "Alice", email: "old@example.test" });
+    write = (_req, body) => {
+      if (body && "enabled" in (body as object)) {
+        // Another admin changed the email too, so the answer carries it.
+        user = {
+          ...user,
+          instanceAdmin: true,
+          email: "other-admin@example.test",
+          updatedAt: "2026-10-08T09:00:00Z",
+        };
+        return Response.json(user);
+      }
+      user = { ...user, ...(body as object), updatedAt: "2026-10-08T10:00:00Z" };
+      return Response.json(user);
+    };
+    renderAt(PAGE);
+    expect((await screen.findByLabelText<HTMLInputElement>("Email")).value).toBe(
+      "old@example.test",
+    );
+    fireEvent.click(await screen.findByRole("switch", { name: "Instance administrator" }));
+    const confirm = await screen.findByRole("alertdialog");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Make instance admin" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText<HTMLInputElement>("Email").value).toBe(
+        "other-admin@example.test",
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Alice L" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText("Profile saved.")).toBeTruthy();
+    expect(sent["PATCH /api/users/u1"]).toEqual({
+      displayName: "Alice L",
+      email: "other-admin@example.test",
+      updatedAt: "2026-10-08T09:00:00Z",
+    });
+  });
+
+  it("keeps what the admin is typing when the user is read again, and reads them again after a stale refusal", async () => {
+    write = () => conflict("stale_change");
+    renderAt(PAGE);
+    fireEvent.change(await screen.findByLabelText("Display name"), { target: { value: "Mine" } });
+    const reads = () => seen.filter((s) => s === "GET /api/users/u1").length;
+    const before = reads();
+    // Meanwhile somebody else changed the user.
+    user = userBody({ email: "theirs@example.test", updatedAt: "2026-10-08T09:00:00Z" });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "This changed while you were looking at it.",
+    );
+    // Not a dead end: the page read the user again, the typed name stayed, the rest followed.
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    await waitFor(() =>
+      expect(screen.getByLabelText<HTMLInputElement>("Email").value).toBe("theirs@example.test"),
+    );
+    expect(screen.getByLabelText<HTMLInputElement>("Display name").value).toBe("Mine");
+    write = (_req, body) => {
+      user = { ...user, ...(body as object), updatedAt: "2026-10-08T10:00:00Z" };
+      return Response.json(user);
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText("Profile saved.")).toBeTruthy();
+    expect(sent["PATCH /api/users/u1"]).toEqual({
+      displayName: "Mine",
+      email: "theirs@example.test",
+      updatedAt: "2026-10-08T09:00:00Z",
+    });
+  });
+
   it("shows the field message under the email when the server refuses it", async () => {
     write = () =>
       Response.json(
