@@ -148,6 +148,9 @@ func lifecycleError(d AccessDeps, op string, err error) error {
 	case errors.Is(err, access.ErrLastInstanceAdmin):
 		return httpx.Problem(http.StatusConflict, problemLastInstanceAdmin,
 			"Bayplan needs at least one active instance admin. Make someone else an instance admin first.")
+	case errors.Is(err, access.ErrUserDisabled):
+		return httpx.Problem(http.StatusConflict, problemUserDisabled,
+			"That user is disabled. Enable them first, then reset their password.")
 	case errors.Is(err, access.ErrStaleChange):
 		return httpx.Problem(http.StatusConflict, problemStaleChange,
 			"This changed while you were looking at it. Reload the page and try again.")
@@ -310,7 +313,8 @@ type UpdateUserInput struct {
 }
 
 // registerUserLifecycle registers the routes of one user's page: read, edit,
-// disable, enable, delete, instance admin and unlock. All need users.manage.
+// disable, enable, delete, instance admin, unlock and password reset. All need
+// users.manage.
 func registerUserLifecycle(r *httpx.Router, d AccessDeps) {
 	manage := rbac.Requirement{Perm: rbac.PermUsersManage, Scope: rbac.ScopeGlobal}
 
@@ -430,6 +434,32 @@ func registerUserLifecycle(r *httpx.Router, d AccessDeps) {
 			return nil, lifecycleError(d, "set instance admin", err)
 		}
 		return readUser(ctx, d, in.UserID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "resetUserPassword",
+		Method:      http.MethodPost,
+		Path:        "/api/users/{userId}/reset-password",
+		Summary:     "Issue a password reset link",
+		Description: "Ends every session of the user at once, in the same step that makes the link, and answers a one-time " +
+			"link built like an invite's that lets them choose a new password. It is valid for BAYPLAN_INVITE_TTL (72 hours " +
+			"by default) and replaces any link they held. Bayplan sends no email: the admin hands the link over. " +
+			"A disabled user answers 409 user_disabled; an unknown or deleted user answers 404 user_not_found. " +
+			"Audited as user.password_reset_issued with the number of sessions ended.",
+		Tags: []string{"users"},
+	}, manage, func(ctx context.Context, in *UserIDInput) (*RegenerateInviteOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		_, link, err := d.Access.IssueReset(ctx, p.AuditActor(), in.UserID, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent))
+		if err != nil {
+			return nil, lifecycleError(d, "reset password", err)
+		}
+		return &RegenerateInviteOutput{
+			CacheControl: "no-store",
+			Body:         LinkBody{URL: linkURL(d.Instance, link.Token), ExpiresAt: link.ExpiresAt.UTC().Format(time.RFC3339)},
+		}, nil
 	})
 
 	httpx.Register(r, huma.Operation{

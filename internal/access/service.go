@@ -51,6 +51,9 @@ var (
 	ErrNotInvited = errors.New("access: this user is not waiting on an invite")
 	// ErrNotFound is a user, team or session that does not exist.
 	ErrNotFound = errors.New("access: not found")
+	// ErrUserDisabled is a reset for a disabled user. A disabled user cannot sign
+	// in, and a link would not be usable, so an admin enables them first.
+	ErrUserDisabled = errors.New("access: that user is disabled")
 )
 
 // Link is a freshly issued one-time link. Token is the secret; only its SHA-256

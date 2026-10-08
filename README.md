@@ -172,6 +172,7 @@ Run these with `docker exec <container> bayplan ...`. Each drops to UID 1000 fir
 | `bayplan healthcheck` | Exits 0 when the local server answers `/healthz`. This is the image's `HEALTHCHECK`. |
 | `bayplan setup-token` | Prints the active setup token. Exits 1 once setup is complete. |
 | `bayplan user unlock <name>` | Clears a locked account, for when the only admin is locked out. Recorded in the audit log as `system:cli`. Exits 1 if there is no such user. |
+| `bayplan user reset-password <name>` | Ends every session of a user and prints a one-time link that lets them choose a new password, for when the only admin has forgotten theirs. The link is built from the stored public URL and base path; with none stored it is printed as `/invite#token=…` to open on your Bayplan address. Recorded in the audit log as `system:cli`. Exits 1 if there is no such user or the user is disabled. |
 | `bayplan audit verify` | Recomputes the audit log's HMAC chain and names the first broken entry. Exits 1 on a broken chain. It cannot see entries deleted from the end of the log; see the threat model. |
 | `bayplan version` | Prints the version and commit. |
 

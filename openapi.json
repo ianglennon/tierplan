@@ -2217,6 +2217,35 @@
         ],
         "type": "object"
       },
+      "ProfileBody": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "description": "The name shown for the user; empty when none was set",
+            "type": "string"
+          },
+          "email": {
+            "description": "The user's email address; empty when none was set. Bayplan never sends mail to it",
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "The version of the profile a save is based on; send it back unchanged to PATCH",
+            "format": "date-time",
+            "type": "string"
+          },
+          "username": {
+            "description": "The lower-cased username. It can never be changed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "displayName",
+          "email",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
       "RecentEnvironmentsBody": {
         "additionalProperties": false,
         "properties": {
@@ -2696,6 +2725,30 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "UpdateMyProfileInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "description": "The name shown for you; at most 64 characters. Send an empty string to clear it; leave it out to keep it",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "email": {
+            "description": "A bare address, or empty to clear it; leave it out to keep it. Bayplan never sends mail",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "The updatedAt of the profile this edit is based on. If it changed since, the answer is 409 stale_change",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "updatedAt"
+        ],
         "type": "object"
       },
       "UpdateSettingsInputBody": {
@@ -5095,6 +5148,92 @@
         ]
       }
     },
+    "/api/me/profile": {
+      "get": {
+        "description": "The username, display name and email, with the updatedAt a save must be based on.",
+        "operationId": "getMyProfile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the signed-in user's own profile",
+        "tags": [
+          "auth"
+        ]
+      },
+      "patch": {
+        "description": "Send displayName, email or both, with the updatedAt you read. If the profile changed since, nothing is saved and the answer is 409 stale_change. The username can never be changed and is not accepted. An invalid field answers 422 on body.displayName or body.email. Saving what is already there changes nothing. Audited as user.updated with the caller as actor and target.",
+        "operationId": "updateMyProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMyProfileInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Edit the signed-in user's own display name and email",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/me/recent-environments": {
       "get": {
         "description": "Up to 3 environment IDs, the most recently used first and, for uses at the same instant, in ID order. An environment that was removed, or that the user can no longer read, is left out.",
@@ -5920,6 +6059,57 @@
           }
         },
         "summary": "Replace a user's invite link",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/users/{userId}/reset-password": {
+      "post": {
+        "description": "Ends every session of the user at once, in the same step that makes the link, and answers a one-time link built like an invite's that lets them choose a new password. It is valid for BAYPLAN_INVITE_TTL (72 hours by default) and replaces any link they held. Bayplan sends no email: the admin hands the link over. A disabled user answers 409 user_disabled; an unknown or deleted user answers 404 user_not_found. Audited as user.password_reset_issued with the number of sessions ended.",
+        "operationId": "resetUserPassword",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Issue a password reset link",
         "tags": [
           "users"
         ]

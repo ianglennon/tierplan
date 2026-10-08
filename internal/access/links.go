@@ -11,6 +11,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -254,6 +256,73 @@ func (s *Service) RegenerateInvite(ctx context.Context, actor audit.Actor, userI
 		Details: map[string]string{"username": u.Username, "expires_at": link.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00")},
 	}); err != nil {
 		return "", Link{}, fmt.Errorf("access: audit invite regenerated: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", Link{}, fmt.Errorf("access: commit: %w", err)
+	}
+	return u.Username, link, nil
+}
+
+// LinkURL is the address that is handed to a user for a one-time link. The token
+// travels in the URL fragment, which a browser never sends to a server, so it
+// appears in no access log, Referer header or proxy log on the way (D-22a). The
+// address is built on the public URL when one is stored; without one it is
+// relative to this Bayplan, base path included, because that is all the server
+// knows. The API and the CLI both build it here, so the two cannot disagree.
+func LinkURL(publicURL, basePath, token string) string {
+	base := strings.TrimRight(publicURL, "/")
+	if base == "" {
+		base = basePath
+	}
+	return base + "/invite#token=" + token
+}
+
+// IssueReset gives a user a way back in after a forgotten password (D-22b): in
+// one transaction it ends every session the user has, replaces their link with a
+// one-time reset link, and records the audit entry. The link works exactly like
+// an invite and is spent the same way; AcceptLink sets the password. It returns
+// the username and the link, which is shown once to whoever asked for it. A user
+// who does not exist or is deleted is ErrNotFound and one who is disabled is
+// ErrUserDisabled; neither changes anything. There is no last-admin guard:
+// resetting the only instance admin is exactly the case this exists for. actor
+// is the admin, or audit.SystemCLI for `bayplan user reset-password`; the caller
+// has checked users.manage. The entry holds the username, how many sessions
+// ended and the expiry, never the token.
+func (s *Service) IssueReset(ctx context.Context, actor audit.Actor, userID string, opts ...Option) (string, Link, error) {
+	o := optionsOf(opts)
+	tx, err := s.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return "", Link{}, fmt.Errorf("access: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.Store.Q.WithTx(tx)
+
+	u, err := liveUserTx(ctx, q, userID)
+	if err != nil {
+		return "", Link{}, err
+	}
+	if u.Disabled != 0 {
+		return "", Link{}, ErrUserDisabled
+	}
+	// Whoever held the old password must sign in again. This is in the same
+	// transaction that issues the link, so no session can outlive a reset.
+	ended, err := q.DeleteAllUserSessions(ctx, u.ID)
+	if err != nil {
+		return "", Link{}, fmt.Errorf("access: end sessions: %w", err)
+	}
+	link, err := s.issueLinkTx(ctx, q, u.ID, LinkReset, actor.ID)
+	if err != nil {
+		return "", Link{}, err
+	}
+	if err := s.Audit.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: audit.ActionUserPasswordResetIssued, TargetType: "user", TargetID: u.ID,
+		Result: audit.ResultSuccess, IP: o.ip, UserAgent: o.userAgent,
+		Details: map[string]string{
+			"username": u.Username, "ended": strconv.FormatInt(ended, 10),
+			"expires_at": link.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		},
+	}); err != nil {
+		return "", Link{}, fmt.Errorf("access: audit password reset issued: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return "", Link{}, fmt.Errorf("access: commit: %w", err)

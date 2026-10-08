@@ -650,6 +650,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the signed-in user's own profile
+         * @description The username, display name and email, with the updatedAt a save must be based on.
+         */
+        get: operations["getMyProfile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Edit the signed-in user's own display name and email
+         * @description Send displayName, email or both, with the updatedAt you read. If the profile changed since, nothing is saved and the answer is 409 stale_change. The username can never be changed and is not accepted. An invalid field answers 422 on body.displayName or body.email. Saving what is already there changes nothing. Audited as user.updated with the caller as actor and target.
+         */
+        patch: operations["updateMyProfile"];
+        trace?: never;
+    };
     "/api/me/recent-environments": {
         parameters: {
             query?: never;
@@ -937,6 +961,26 @@ export interface paths {
          * @description For a user who has not yet set a password. The new link replaces the previous one, which stops working at once, and is valid for BAYPLAN_INVITE_TTL. A user who has already set a password answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.
          */
         post: operations["regenerateInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a password reset link
+         * @description Ends every session of the user at once, in the same step that makes the link, and answers a one-time link built like an invite's that lets them choose a new password. It is valid for BAYPLAN_INVITE_TTL (72 hours by default) and replaces any link they held. Bayplan sends no email: the admin hands the link over. A disabled user answers 409 user_disabled; an unknown or deleted user answers 404 user_not_found. Audited as user.password_reset_issued with the number of sessions ended.
+         */
+        post: operations["resetUserPassword"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1938,6 +1982,19 @@ export interface components {
             swarmNodeState?: string;
             type?: string;
         };
+        ProfileBody: {
+            /** @description The name shown for the user; empty when none was set */
+            displayName: string;
+            /** @description The user's email address; empty when none was set. Bayplan never sends mail to it */
+            email: string;
+            /**
+             * Format: date-time
+             * @description The version of the profile a save is based on; send it back unchanged to PATCH
+             */
+            updatedAt: string;
+            /** @description The lower-cased username. It can never be changed */
+            username: string;
+        };
         RecentEnvironmentsBody: {
             /** @description Up to 3 environment IDs, most recently used first */
             environmentIds: string[] | null;
@@ -2156,6 +2213,17 @@ export interface components {
             autoUpdate?: boolean;
             /** @description The new name, 1 to 64 characters */
             name?: string;
+        };
+        UpdateMyProfileInputBody: {
+            /** @description The name shown for you; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
+            displayName?: string;
+            /** @description A bare address, or empty to clear it; leave it out to keep it. Bayplan never sends mail */
+            email?: string;
+            /**
+             * Format: date-time
+             * @description The updatedAt of the profile this edit is based on. If it changed since, the answer is 409 stale_change
+             */
+            updatedAt: string;
         };
         UpdateSettingsInputBody: {
             /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while BAYPLAN_AGENT_URL is set. An http agent URL for a host that is not this machine is refused with 422 insecure_agent_url unless BAYPLAN_AGENT_ALLOW_INSECURE is on */
@@ -3613,6 +3681,70 @@ export interface operations {
             };
         };
     };
+    getMyProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateMyProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMyProfileInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listRecentEnvironments: {
         parameters: {
             query?: never;
@@ -4163,6 +4295,39 @@ export interface operations {
         };
     };
     regenerateInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    resetUserPassword: {
         parameters: {
             query?: never;
             header?: never;

@@ -5,7 +5,6 @@ package api
 
 import (
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/access"
@@ -28,6 +27,8 @@ const (
 	problemLastInstanceAdmin = "last_instance_admin"
 	// problemStaleChange is a save based on a version that has since changed.
 	problemStaleChange = "stale_change"
+	// problemUserDisabled is a password reset for a user who is disabled.
+	problemUserDisabled = "user_disabled"
 )
 
 // invalidLinkDetail is the one message every unusable link carries: expired,
@@ -71,18 +72,13 @@ func RegisterAccess(r *httpx.Router, d AccessDeps) {
 	registerUsers(r, d)
 	registerInvite(r, d)
 	registerSessions(r, d)
+	registerProfile(r, d)
 }
 
-// linkURL is the address an admin hands to a user. The token travels in the URL
-// fragment, which a browser never sends to a server, so it appears in no access
-// log, Referer header or proxy log on the way (D-22a). Without a public URL the
-// address is relative to this Bayplan, base path included.
+// linkURL is the address an admin hands to a user: access.LinkURL on this
+// instance's public URL and base path, which is also what the CLI prints.
 func linkURL(inst *instance.Instance, token string) string {
-	base := strings.TrimRight(inst.PublicURL(), "/")
-	if base == "" {
-		base = inst.BasePath()
-	}
-	return base + "/invite#token=" + token
+	return access.LinkURL(inst.PublicURL(), inst.BasePath(), token)
 }
 
 // userStatus is a user's one-word state: access.Status, which holds the
