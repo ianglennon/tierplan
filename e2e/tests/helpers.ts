@@ -2,9 +2,16 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { execFileSync } from "node:child_process";
-import { test as base, expect, type Page, type TestInfo } from "@playwright/test";
+import {
+  type APIResponse,
+  type BrowserContext,
+  test as base,
+  expect,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 
-import { at, COMPOSE_FILE } from "./env";
+import { at, COMPOSE_FILE, ORIGIN } from "./env";
 
 // compose runs `docker compose -f e2e/compose.yaml <args>` against the stack
 // `make e2e` brought up and returns what it printed.
@@ -181,4 +188,75 @@ export async function screenshotOnFailure(page: Page, info: TestInfo): Promise<v
     body: await page.screenshot({ fullPage: true }),
     contentType: "image/png",
   });
+}
+
+// retryName keeps a name the spec creates unique across a CI retry: the first
+// attempt uses the plain name, a retry adds its number, so a user or team the
+// failed attempt left behind does not make the retry fail on "already taken".
+export function retryName(base: string, info: TestInfo): string {
+  return info.retry === 0 ? base : `${base}-r${info.retry}`;
+}
+
+// createUserViaUI creates a user in Settings > Access > Users the way an
+// instance admin does, reads the one-time invite link out of the dialog (Show
+// link, then the text of the block) and closes the dialog. The link is what the
+// admin would send to the person: it is returned whole, token included, and
+// must be opened in a browser that is not signed in.
+export async function createUserViaUI(page: Page, username: string): Promise<string> {
+  await page.goto(at("/settings/access/users"));
+  await expect(page.getByRole("table", { name: "Users" })).toBeVisible();
+  await page.getByRole("button", { name: "Create user", exact: true }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Create user" });
+  await dialog.getByRole("textbox", { name: "Username" }).fill(username);
+  await dialog.getByRole("button", { name: "Create user", exact: true }).click();
+
+  // The same dialog moves on to the one-time link.
+  await expect(
+    page.getByRole("dialog").getByRole("heading", { name: `${username} is ready` }),
+  ).toBeVisible();
+  const ready = page.getByRole("dialog");
+  // The token is hidden until it is asked for.
+  await expect(ready.locator("code")).toContainText("\u2022\u2022\u2022\u2022");
+  await ready.getByRole("button", { name: "Show link" }).click();
+  const link = ((await ready.locator("code").textContent()) ?? "").trim();
+  expect(link, "the invite link carries its token in the fragment").toMatch(/\/invite#token=.+/);
+  await ready.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  return link;
+}
+
+// apiAs sends a mutating API call as whoever the context is signed in as, the
+// way a script holding that person's cookie would: with the Origin the server
+// expects and the CSRF token /api/me hands out. It goes round the UI, so it
+// reaches actions the UI hides from that person.
+export async function apiAs(
+  context: BrowserContext,
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<APIResponse> {
+  const me = await context.request.get(at("/api/me"));
+  expect(me.ok(), "GET /api/me").toBe(true);
+  const { csrfToken } = (await me.json()) as { csrfToken: string };
+  return context.request.fetch(at(path), {
+    method,
+    data: body,
+    headers: { Origin: ORIGIN, "X-CSRF-Token": csrfToken },
+  });
+}
+
+interface EnvironmentRow {
+  id: string;
+  name: string;
+  isLocalSocket: boolean;
+}
+
+// environmentsOf lists the environments the signed-in context can see, through
+// the API: the specs that follow the agent spec need the id of the Docker host
+// Bayplan manages and of the agent environment it left revoked.
+export async function environmentsOf(context: BrowserContext): Promise<EnvironmentRow[]> {
+  const res = await context.request.get(at("/api/environments"));
+  expect(res.ok(), "GET /api/environments").toBe(true);
+  return ((await res.json()) as { items: EnvironmentRow[] }).items;
 }

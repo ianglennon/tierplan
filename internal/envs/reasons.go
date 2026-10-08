@@ -30,14 +30,19 @@ const (
 	ReasonEngineUnreachable   = wire.ReasonEngineUnreachable
 	ReasonUnsupportedEngine   = wire.ReasonUnsupportedEngine
 	ReasonAgentPolicyDenied   = wire.ReasonAgentPolicyDenied
+	// ReasonUnknownAgent is D-31: the agent holds a certificate this environment
+	// issued, but the agent is not in the database, as after a restore from an
+	// older backup.
+	ReasonUnknownAgent = wire.ReasonUnknownAgent
 )
 
-// reasons is the fixed set of codes: the D-40 codes and the certificate issue.
+// reasons is the fixed set of codes: the D-40 codes, unknown_agent (D-31) and the
+// certificate issue.
 var reasons = map[string]struct{}{
 	ReasonAgentOffline: {}, ReasonTLSUntrusted: {}, ReasonAuthRejected: {}, ReasonCertExpired: {}, ReasonRevoked: {},
 	ReasonBlocked: {}, ReasonVersionIncompatible: {}, ReasonClockSkew: {}, ReasonTimeout: {}, ReasonNotAManager: {},
 	ReasonNoQuorum: {}, ReasonClusterChanged: {}, ReasonEngineUnreachable: {}, ReasonUnsupportedEngine: {},
-	ReasonAgentPolicyDenied: {}, IssueCertExpiring: {},
+	ReasonAgentPolicyDenied: {}, ReasonUnknownAgent: {}, IssueCertExpiring: {},
 }
 
 // IsReason reports whether code is one of the D-40 codes, or IssueCertExpiring.

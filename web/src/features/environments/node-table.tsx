@@ -502,15 +502,16 @@ interface NodeTableProps {
 
 // NodeTable is "Nodes and agents" (D-04, D-08, D-45): every node's agent with
 // its certificate, clock and last seen, problems first, with Revoke node and
-// Unblock node for someone who holds environments.revoke. It scrolls inside its
+// Unblock node for someone who holds environments.revoke on the environment, and
+// Update agent for someone who holds environments.configure on it (D-07). It scrolls inside its
 // card, vertically for a swarm of fifty nodes and sideways on a phone, and the
 // header stays put. A local-socket environment shows its one row and no actions.
 export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const now = useNow();
-  const canRevoke = usePermission("environments.revoke");
-  const canManage = usePermission("environments.manage");
+  const canRevoke = usePermission("environments.revoke", envId);
+  const canConfigure = usePermission("environments.configure", envId);
   const environments = useQuery(environmentsQuery);
   const env = environments.data?.items?.find((e) => e.id === envId);
   const isLocal = env?.kind === "local";
@@ -538,7 +539,7 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
   const list = isLocal ? [] : (agents.data?.items ?? []);
   // Update agent is for an environment whose automatic updates are off: with them
   // on, Bayplan updates the agents by itself (D-28).
-  const canUpdate = canManage && env?.kind === "agent" && env.autoUpdate === false;
+  const canUpdate = canConfigure && env?.kind === "agent" && env.autoUpdate === false;
 
   const update = useMutation({
     mutationFn: (target: AgentItem) => updateAgent(envId, target.id),

@@ -10,12 +10,12 @@ import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ME = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ME = makeMe({
+  instanceAdmin: true,
   permissions: { global: [], environments: { "*": ["environments.read"] } },
-};
+});
 
 const UNREACHABLE = "Can't reach Bayplan. Check your connection and try again.";
 // The query client retries a failed guard fetch once after a second, so the

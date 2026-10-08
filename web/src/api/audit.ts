@@ -8,12 +8,15 @@ import type { components } from "@/api/schema";
 import { type AuditSearch, DEFAULT_RANGE, rangeFor } from "@/features/audit/filters";
 
 export type AuditEntry = components["schemas"]["AuditEntryDTO"];
+// One name of the user filter, with whether the user behind it has been deleted.
+export type AuditActor = components["schemas"]["AuditActorDTO"];
 
 // Entries per page: the server default, stated here so the screen and its
 // copy agree (UI-SPEC: 50 at a time).
 export const AUDIT_PAGE_SIZE = 50;
 
-// The user filter's suggestions: the actor names the log has seen.
+// The user filter's suggestions: the actor names the log has seen, each marked
+// when the user has since been deleted (D-22c).
 export const auditActorsQuery = queryOptions({
   queryKey: ["audit", "actors"],
   queryFn: async () => {

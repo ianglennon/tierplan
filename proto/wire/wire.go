@@ -272,6 +272,12 @@ const (
 	ReasonEngineUnreachable   = "engine_unreachable"
 	ReasonUnsupportedEngine   = "unsupported_engine"
 	ReasonAgentPolicyDenied   = "agent_policy_denied"
+	// ReasonUnknownAgent is a hello refused because the certificate was issued by
+	// the environment's own CA for an agent the environment does not know, as
+	// happens to an agent enrolled after the backup this server was restored from
+	// (D-31). It is only ever said to a holder of a certificate the environment
+	// really issued; every other failed hello stays ReasonAuthRejected.
+	ReasonUnknownAgent = "unknown_agent"
 )
 
 // Refusals only an enrolment can meet. token_disabled and token_superseded are

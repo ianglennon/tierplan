@@ -22,7 +22,6 @@ import (
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
-	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
@@ -76,9 +75,6 @@ func newSetupFixtureThrottled(t *testing.T, cfg config.Config, wrap func(*audit.
 		t.Fatal(err)
 	}
 	aud := audit.NewWriter(st, v, log, nil)
-	if err := rbac.SeedAdminRole(context.Background(), st); err != nil {
-		t.Fatal(err)
-	}
 	inst, err := instance.Load(context.Background(), st, cfg)
 	if err != nil {
 		t.Fatal(err)

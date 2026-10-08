@@ -85,9 +85,13 @@ func TestEveryD40ReasonCodeIsDefinedOnce(t *testing.T) {
 		ReasonAgentOffline, ReasonTLSUntrusted, ReasonAuthRejected, ReasonCertExpired, ReasonRevoked,
 		ReasonBlocked, ReasonVersionIncompatible, ReasonClockSkew, ReasonTimeout, ReasonNotAManager,
 		ReasonNoQuorum, ReasonClusterChanged, ReasonEngineUnreachable, ReasonUnsupportedEngine, ReasonAgentPolicyDenied,
+		ReasonUnknownAgent,
 	}
-	if len(codes) != 15 {
-		t.Fatalf("D-40 names 15 codes, the test lists %d", len(codes))
+	if len(codes) != 16 {
+		t.Fatalf("D-40 names 15 codes and D-31 adds one, the test lists %d", len(codes))
+	}
+	if ReasonUnknownAgent != "unknown_agent" {
+		t.Fatalf("ReasonUnknownAgent = %q, the agents of other versions read this exact text", ReasonUnknownAgent)
 	}
 	seen := map[string]bool{}
 	for _, c := range codes {

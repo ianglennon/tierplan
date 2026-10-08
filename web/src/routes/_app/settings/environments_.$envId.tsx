@@ -3,16 +3,17 @@
 
 import { createFileRoute } from "@tanstack/react-router";
 
-import { EnvSettingsPage } from "@/features/environments/env-settings-page";
+import { EnvSettingsLayout } from "@/features/environments/env-settings-layout";
 
-// Settings > Environments > {env} (D-38). The trailing underscore on the file
-// name keeps this page inside the Settings layout but outside the list route,
-// so it replaces the list instead of rendering under it.
-function EnvironmentSettingsRoute() {
+// Settings > Environments > {env} (D-38): the frame with the breadcrumb, the title
+// and the tab bar "Settings" / "Access" (D-25), around the tab the URL names. The
+// trailing underscore on the file name keeps this page inside the Settings layout
+// but outside the list route, so it replaces the list instead of rendering under it.
+function EnvironmentSettingsLayoutRoute() {
   const { envId } = Route.useParams();
-  return <EnvSettingsPage envId={envId} />;
+  return <EnvSettingsLayout envId={envId} />;
 }
 
 export const Route = createFileRoute("/_app/settings/environments_/$envId")({
-  component: EnvironmentSettingsRoute,
+  component: EnvironmentSettingsLayoutRoute,
 });

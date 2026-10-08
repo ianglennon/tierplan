@@ -461,18 +461,22 @@ func TestARenewFromAnAgentRevokedMeanwhileIsRefusedAndTheSessionClosed(t *testin
 	// The revoke has committed and its kick has not reached the session yet.
 	srv.Exec(t, `UPDATE agents SET status = 'revoked' WHERE id = ?`, c.Identity.AgentID)
 	srv.Clock.Advance(20 * day)
-	askToRenew(t, control)
-	// The refusal may or may not outrun the close: what matters is that it is not a renewal.
-	select {
-	case line, ok := <-answers.lines:
-		if ok {
-			var got wire.RenewRefused
-			if err := json.Unmarshal(line, &got); err != nil || got.T != wire.TypeRenewRefused || got.Code != wire.ReasonRevoked {
-				t.Fatalf("answer = %s, want renew_refused revoked", line)
+	// The refusal may or may not outrun the close, and the close may even land before
+	// the renew is written: what matters is that it is not a renewal.
+	// A failed send means the stream is already closing; the wait below still
+	// requires the session to end, and to end as revoked.
+	if _, err := io.WriteString(control, `{"t":"renew"}`+"\n"); err == nil {
+		select {
+		case line, ok := <-answers.lines:
+			if ok {
+				var got wire.RenewRefused
+				if err := json.Unmarshal(line, &got); err != nil || got.T != wire.TypeRenewRefused || got.Code != wire.ReasonRevoked {
+					t.Fatalf("answer = %s, want renew_refused revoked", line)
+				}
 			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the server neither answered nor closed the session")
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the server neither answered nor closed the session")
 	}
 	waitFor(t, "the session to be closed", func() bool { return isDone(s) })
 	if got := s.Reason(); got != tunnel.DisconnectRevoked {

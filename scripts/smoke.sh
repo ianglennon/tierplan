@@ -134,7 +134,7 @@ code="$(curl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http
   "${BASE}/api/setup/complete")"
 [ "${code}" = "200" ] || fail "setup completion returned ${code}, want 200: $(cat "${WORK}/complete.json")"
 grep -q '"username":"admin"' "${WORK}/complete.json" || fail "setup completion did not return the lower-cased admin"
-grep -q '"role":"admin"' "${WORK}/complete.json" || fail "setup completion did not return the admin role"
+grep -q '"instanceAdmin":true' "${WORK}/complete.json" || fail "setup completion did not return an instance admin"
 grep -q '"csrfToken":"[A-Za-z0-9_-]\{20,\}"' "${WORK}/complete.json" || fail "setup completion did not return a CSRF token"
 COOKIE_LINE="$(grep -i '^set-cookie:' "${WORK}/complete.hdr" | tr -d '\r')"
 printf '%s' "${COOKIE_LINE}" | grep -q '^[Ss]et-[Cc]ookie: __Host-bayplan_session=' || fail "no __Host- session cookie under an https public URL: ${COOKIE_LINE}"

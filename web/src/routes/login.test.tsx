@@ -11,12 +11,12 @@ import { queryClient } from "@/api/query-client";
 import { resetBasePathForTests } from "@/lib/base-path";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ME = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ME = makeMe({
+  instanceAdmin: true,
   permissions: { global: ["audit.read"], environments: { "*": [] } },
-};
+});
 
 interface Sent {
   path: string;
@@ -241,6 +241,38 @@ describe("/login", () => {
     renderAt("/login?expired=true");
     expect(await screen.findByText("Your session expired. Sign in again.")).toBeTruthy();
   });
+
+  it("shows the password-set notice after a link was used", async () => {
+    stubApi({});
+    renderAt("/login?notice=password-set");
+    const notice = await screen.findByText("Password set. Sign in to continue.");
+    expect(notice.closest("[role=status]")).toBeTruthy();
+    // The form is still there: the notice does not sign anyone in.
+    expect(screen.getByLabelText("Username")).toBeTruthy();
+  });
+
+  it("shows the backup-restored notice after a restore from the setup wizard", async () => {
+    stubApi({});
+    renderAt("/login?notice=backup-restored");
+    const notice = await screen.findByText(
+      "Backup restored. Sign in with an account from the backup.",
+    );
+    expect(notice.closest("[role=status]")).toBeTruthy();
+    // The form is still there: the notice does not sign anyone in.
+    expect(screen.getByLabelText("Username")).toBeTruthy();
+    expect(screen.queryByText("Password set. Sign in to continue.")).toBeNull();
+  });
+
+  it.each(["other", "", "Password-Set", "password-set,x"])(
+    "shows no notice for the unknown notice value %j",
+    async (value) => {
+      stubApi({});
+      renderAt(`/login?notice=${encodeURIComponent(value)}`);
+      await screen.findByLabelText("Username");
+      expect(screen.queryByText("Password set. Sign in to continue.")).toBeNull();
+      expect(screen.queryByRole("status")).toBeNull();
+    },
+  );
 
   it("shows no expired notice by default", async () => {
     stubApi({});

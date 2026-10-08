@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke
+.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -36,12 +36,14 @@ SQLC_VERSION := v1.31.1
 
 gen:
 	go run ./cmd/bayplan openapi > openapi.json
+	go run ./cmd/bayplan permissions --format markdown > docs/permissions.md
+	go run ./cmd/bayplan permissions --format typescript > web/src/api/permissions.gen.ts
 	pnpm -C web exec openapi-typescript ../openapi.json -o src/api/schema.d.ts
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	node scripts/gen-notices.mjs
 
 gen-check: gen tidy-check
-	git diff --exit-code -- openapi.json web/src/api/schema.d.ts internal/store/sqlc web/public/third-party-notices.json
+	git diff --exit-code -- openapi.json web/src/api/schema.d.ts internal/store/sqlc web/public/third-party-notices.json docs/permissions.md web/src/api/permissions.gen.ts
 
 # go.mod and go.sum of every module must already be tidy: `go mod tidy -diff`
 # prints what tidy would change and exits non-zero without touching the files.
@@ -301,6 +303,47 @@ e2e-image: web
 # line per check; any FAIL fails the target.
 proxy-smoke: e2e-image
 	scripts/proxy-smoke.sh
+
+# The upgrade proof (D-34, PLAT-02): run the previous build, put state into it (setup, an
+# agent environment with a real agent connected, and a user, a team and a grant when
+# that build has them), swap in the current image on the same volume and network alias,
+# and check sign-in, the first admin's instance-admin flag, the agent coming back
+# online by itself, the grant and the audit chain. One PASS or FAIL line per check.
+#
+# The baseline is UPGRADE_BASE_REF, a commit (CI passes the pull request's base, or the
+# previous commit on a push). It is BUILT here from a detached git worktree with the
+# same recipe as e2e-image, not pulled: there is no released image before v0.1.0 and
+# the repository is private, so a registry has nothing to offer and a commit is the
+# only baseline that is both available and honest. The worktree and the build context
+# are removed on exit, even when the smoke fails. Needs Docker with buildx, pnpm, curl
+# and jq, and the ref reachable in this clone (CI checks out with fetch-depth 0).
+UPGRADE_BASE_REF ?= origin/main
+UPGRADE_BASE_DIR := .devdata/upgrade-base
+UPGRADE_BASE_CTX := .devdata/upgrade-base-ctx
+upgrade-smoke: e2e-image agent-image
+	@set -e; \
+	cleanup() { git worktree remove --force $(UPGRADE_BASE_DIR) >/dev/null 2>&1 || true; git worktree prune; rm -rf $(UPGRADE_BASE_DIR) $(UPGRADE_BASE_CTX); }; \
+	trap cleanup EXIT; \
+	cleanup; \
+	mkdir -p .devdata; \
+	git worktree add --detach $(UPGRADE_BASE_DIR) '$(UPGRADE_BASE_REF)'; \
+	pnpm -C $(UPGRADE_BASE_DIR)/web install --frozen-lockfile; \
+	pnpm -C $(UPGRADE_BASE_DIR)/web build; \
+	touch $(UPGRADE_BASE_DIR)/web/dist/.gitkeep; \
+	mkdir -p $(UPGRADE_BASE_CTX)/linux/amd64; \
+	(cd $(UPGRADE_BASE_DIR) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o $(CURDIR)/$(UPGRADE_BASE_CTX)/linux/amd64/bayplan ./cmd/bayplan); \
+	docker buildx build --platform linux/amd64 -f $(UPGRADE_BASE_DIR)/Dockerfile -t bayplan:base --load $(UPGRADE_BASE_CTX); \
+	BASE_IMAGE=bayplan:base HEAD_IMAGE=bayplan:e2e AGENT_IMAGE=bayplan-agent:dev scripts/upgrade-smoke.sh
+
+# The restore-over-a-running-container proof (D-30, PLAT-03, RESEARCH A3/A5): in the
+# shipped image with no restart policy, restore a backup through the web UI's API and
+# check that Bayplan re-executed itself with PID 1 intact (same State.Pid, StartedAt and
+# RestartCount), the restored accounts sign in, an account made after the backup does not,
+# and the audit chain verifies. RESTART_MODE=exit proves the fallback (the process
+# exits and a restart policy starts it) with the same checks. One PASS or FAIL line per
+# check; the last line is RESTORE SMOKE PASS. Needs Docker, curl, jq and tar.
+restore-smoke: e2e-image
+	scripts/restore-smoke.sh
 
 # The clipboard fallback in a real Chromium on an insecure origin (http://bayplan.test
 # mapped to 127.0.0.1, so there is no navigator.clipboard), against the real

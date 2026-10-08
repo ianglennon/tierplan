@@ -22,6 +22,11 @@ type Principal struct {
 	// SessionIDHash identifies the session a user principal authenticated
 	// with (plan 12); it is empty for system principals.
 	SessionIDHash []byte
+	// OnBehalfOf is the user ID of the owner a system principal acts for (D-14).
+	// The Checker then judges every request as that user, as of the moment of the
+	// request. It is empty for users and for system principals that act for no
+	// one.
+	OnBehalfOf string
 }
 
 // AuditActor is how the principal appears in the audit log: a user under its
@@ -52,6 +57,11 @@ var SystemPrincipals = map[string][]Perm{
 	"system:agent-update": {},
 	"system:agent-reaper": {},
 	"system:agent-hub":    {},
+	// system:restore is the actor of a restore and of the audit.reanchored entry
+	// it appends; system:backup is the actor of a scheduled backup. Neither holds
+	// a permission (D-28, D-29).
+	"system:restore": {},
+	"system:backup":  {},
 }
 
 // System returns the named system principal, or nil for a name that is not in
@@ -62,4 +72,16 @@ func System(name string) *Principal {
 		return nil
 	}
 	return &Principal{Type: PrincipalSystem, ID: name, Name: name}
+}
+
+// OnBehalf returns the named system principal acting for the owner with this
+// user ID, or nil for a system name that is not in SystemPrincipals. A nil
+// principal is anonymous, so an unknown name fails closed.
+func OnBehalf(systemID, ownerID string) *Principal {
+	p := System(systemID)
+	if p == nil {
+		return nil
+	}
+	p.OnBehalfOf = ownerID
+	return p
 }

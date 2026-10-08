@@ -357,7 +357,9 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 // refused decides how long to wait after a refusal, and says why once.
 //
 // A revoked agent with a join token drops its identity and enrols again at once,
-// as a new agent (see rejoin). Without a token, and for a blocked host, nothing
+// as a new agent (see rejoin). An agent the server does not know (unknown_agent, as
+// after a restore from a backup older than the agent) is handled the same way: its
+// identity is one the server will never accept, and only a new enrolment helps. Without a token, and for a blocked host, nothing
 // the agent can do changes the answer, so it keeps its identity and waits the
 // maximum; only an administrator, or an operator who adds a token, can help. An
 // expired certificate with a join token at hand enrols again at once; without
@@ -368,8 +370,8 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 		r.log.Warn("the server refused this agent", "code", re.Code, "detail", re.Detail, "hint", r.hint(re.Code))
 	}
 	switch re.Code {
-	case wire.ReasonRevoked:
-		return r.rejoin()
+	case wire.ReasonRevoked, wire.ReasonUnknownAgent:
+		return r.rejoin(re.Code)
 	case wire.ReasonBlocked:
 		return r.cfg.BackoffMax
 	case wire.ReasonCertExpired:
@@ -384,9 +386,10 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 	return max(wait, min(re.RetryAfter, maxRetryAfter))
 }
 
-// rejoin handles a hello that was refused revoked (D-10). The server keeps a
-// revoked agent revoked for good, also after an unblock, so the identity can
-// never work again. With a join token the agent deletes it and enrols again with
+// rejoin handles a hello that was refused revoked (D-10) or unknown_agent (D-31).
+// The server keeps a revoked agent revoked for good, also after an unblock, and an
+// agent it does not know stays unknown, so in both cases the identity can never
+// work again. With a join token the agent deletes it and enrols again with
 // a fresh key: a host that left its swarm and rejoined then comes back by itself,
 // while a host an administrator blocked is refused blocked at that enrolment and
 // waits. It returns how long to wait before the next attempt: none when it
@@ -395,7 +398,7 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 // An agent that rejoined less than the maximum backoff ago and is revoked again
 // waits the maximum before it does so a second time, so at most one new agent
 // per minute is ever enrolled.
-func (r *runner) rejoin() time.Duration {
+func (r *runner) rejoin(code string) time.Duration {
 	if !r.have || r.cfg.JoinToken == "" {
 		return r.cfg.BackoffMax
 	}
@@ -418,7 +421,11 @@ func (r *runner) rejoin() time.Duration {
 	r.cur, r.have, r.forceEnrol = state.State{}, false, false
 	r.mu.Unlock()
 	r.rejoinedAt = now
-	r.log.Info("the agent's identity was revoked; it dropped it and will enrol again with its join token")
+	if code == wire.ReasonUnknownAgent {
+		r.log.Info("the agent's identity is not known to this Bayplan; it dropped it and will enrol again with its join token")
+	} else {
+		r.log.Info("the agent's identity was revoked; it dropped it and will enrol again with its join token")
+	}
 	return 0
 }
 
@@ -436,6 +443,8 @@ func (r *runner) hint(code string) string {
 			return "this agent was revoked in Bayplan, or its node left the swarm, and it has no join token to enrol again with: start it with BAYPLAN_AGENT_JOIN_TOKEN_FILE or BAYPLAN_AGENT_JOIN_TOKEN set"
 		}
 		return "this agent was revoked in Bayplan, or its node left the swarm; it drops the revoked identity and enrols again as a new agent, unless an administrator blocked this host"
+	case wire.ReasonUnknownAgent:
+		return "this agent was enrolled after the backup this Bayplan was restored from; reinstall it with the environment's install command"
 	case wire.ReasonBlocked:
 		return "this host is on Bayplan's block list; an administrator can unblock it in the environment's settings"
 	case wire.ReasonCertExpired:

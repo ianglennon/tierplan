@@ -15,8 +15,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
+	"github.com/ianglennon/bayplan/internal/backup"
 	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
@@ -39,6 +41,9 @@ const reasonCurrentPasswordIncorrect = "current_password_incorrect" //nolint:gos
 const (
 	warningDataNotPersisted = "data_not_persisted"
 	warningKeyBackup        = "key_backup"
+	warningRefusalBurst     = "refusal_burst"
+	warningBackupFailed     = "backup_failed"
+	warningUnknownAgents    = "unknown_agents"
 	// warningProxyPrefix turns an observer signal kind into a warning ID: the
 	// reverse proxy warnings are proxy_untrusted_forwarded, proxy_url_mismatch and
 	// the third kind with the same prefix (D-53).
@@ -72,6 +77,17 @@ type AccountDeps struct {
 	// Proxy holds what the reverse proxy observer has seen, for the proxy
 	// warnings. Nil means there are none.
 	Proxy *httpx.ProxyObserver
+	// Checker decides who is an instance admin, who alone sees the refusal_burst
+	// warning. Nil means nobody is.
+	Checker *rbac.Checker
+	// Refusals lists the recent bursts of refused requests for the refusal_burst
+	// warning. Nil means there are none.
+	Refusals interface{ Bursts(time.Time) []auth.Burst }
+	// Now is the clock the bursts are aged by. Nil means time.Now.
+	Now func() time.Time
+	// Unknown lists the agents refused unknown_agent after a restore, for the
+	// unknown_agents warning. Nil means there are none.
+	Unknown *agents.UnknownAgents
 	// Limiter throttles POST /api/me/password per user ID, right and wrong
 	// attempts alike, so a stolen session cannot guess the current password at
 	// the speed of the hash alone (T-01-60). Nil means no throttle.
@@ -105,13 +121,17 @@ type ChangePasswordOutput struct {
 
 // WarningBody is one instance warning that needs an admin's attention.
 type WarningBody struct {
-	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing" doc:"Which warning this is"`
+	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst,backup_failed,unknown_agents" doc:"Which warning this is"`
 	Reason  string `json:"reason,omitempty" doc:"For data_not_persisted: why the data directory is not persisted"`
 	KeyPath string `json:"keyPath,omitempty" doc:"For key_backup: where the generated encryption key is stored"`
 	IP      string `json:"ip,omitempty" doc:"For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from"`
 	Host    string `json:"host,omitempty" doc:"For proxy_url_mismatch: the host the newest request was for"`
 	Scheme  string `json:"scheme,omitempty" doc:"For proxy_url_mismatch: the scheme the newest request effectively used, http or https"`
 	URL     string `json:"url,omitempty" doc:"For proxy_url_mismatch: the public URL the request should have matched"`
+	Subject string `json:"subject,omitempty" doc:"For refusal_burst: the username that was refused. For backup_failed: why the last scheduled backup failed"`
+	Count   int    `json:"count,omitempty" doc:"For refusal_burst: how many times that user was refused inside one minute. For unknown_agents: how many agents Bayplan does not know"`
+	// Since is a pointer so that "no good backup yet" leaves it out.
+	Since *time.Time `json:"since,omitempty" doc:"For backup_failed: when the last good scheduled backup finished; absent when there has not been one"`
 }
 
 // WarningsBody lists the warnings that apply right now.
@@ -288,6 +308,9 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			"while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). " +
 			"The reverse proxy warnings (the proxy_ ones) are listed while " +
 			"Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). " +
+			"refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). " +
+			"backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). " +
+			"unknown_agents is listed, for instance admins only, while agents that were installed after the backup this Bayplan was restored from keep trying; count is how many (D-31). " +
 			"The plain-HTTP warning is the browser's to compute and is not listed.",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*WarningsOutput, error) {
@@ -305,6 +328,21 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			}
 		}
 		items = append(items, proxyItems(d)...)
+		burstItems, err := refusalItems(ctx, d)
+		if err != nil {
+			return nil, internal("read refusal bursts", err)
+		}
+		items = append(items, burstItems...)
+		failed, err := backupFailedItems(ctx, d)
+		if err != nil {
+			return nil, internal("read the scheduled backup runs", err)
+		}
+		items = append(items, failed...)
+		unknown, err := unknownAgentsWarning(ctx, d)
+		if err != nil {
+			return nil, internal("read the unknown agents", err)
+		}
+		items = append(items, unknown...)
 		return &WarningsOutput{CacheControl: "no-store", Body: WarningsBody{Items: items}}, nil
 	})
 
@@ -378,4 +416,100 @@ func proxyItems(d AccountDeps) []WarningBody {
 		out = append(out, w)
 	}
 	return out
+}
+
+// refusalItems turns the recent refusal bursts into warnings, one per user
+// naming the newest burst, for an active instance admin only: a refusal burst
+// names a user, which no one else may see (T-03-39).
+func refusalItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
+	if d.Refusals == nil || d.Checker == nil {
+		return nil, nil
+	}
+	a, err := d.Checker.Access(ctx, httpx.PrincipalFrom(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if !a.Active || !a.InstanceAdmin {
+		return nil, nil
+	}
+	now := time.Now
+	if d.Now != nil {
+		now = d.Now
+	}
+	var out []WarningBody
+	seen := map[string]bool{}
+	for _, b := range d.Refusals.Bursts(now()) { // newest first
+		if seen[b.ActorID] {
+			continue
+		}
+		seen[b.ActorID] = true
+		out = append(out, WarningBody{ID: warningRefusalBurst, Subject: b.ActorName, Count: b.Count})
+	}
+	return out, nil
+}
+
+// backupFailedItems is the backup_failed warning: while scheduled backups are on
+// and the newest finished run did not write a backup, naming why and when the
+// last good one finished. A later successful run ends it, and so does turning the
+// schedule off, since nothing is then going to run. It is for an active instance
+// admin only: the reason can name paths on the host (T-03-114).
+func backupFailedItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
+	if d.Checker == nil {
+		return nil, nil
+	}
+	a, err := d.Checker.Access(ctx, httpx.PrincipalFrom(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if !a.Active || !a.InstanceAdmin {
+		return nil, nil
+	}
+	sched, err := backup.LoadSchedule(ctx, d.Store)
+	if err != nil {
+		return nil, err
+	}
+	if !sched.Enabled {
+		return nil, nil
+	}
+	last, err := d.Store.RQ.LastScheduleRun(ctx)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && last.Ok != 0) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	item := WarningBody{ID: warningBackupFailed, Subject: last.Error}
+	switch good, err := d.Store.RQ.LastSuccessfulScheduleRun(ctx); {
+	case err == nil && good.FinishedAt.Valid:
+		since := time.Unix(0, good.FinishedAt.Int64).UTC()
+		item.Since = &since
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return nil, err
+	}
+	return []WarningBody{item}, nil
+}
+
+// unknownAgentsWarning is the unknown_agents warning: how many agents are being
+// refused unknown_agent right now, for an active instance admin only (the list
+// names nodes and addresses). It is derived from the in-memory registry, so it
+// empties by itself 24 hours after the agents stop trying (D-31).
+func unknownAgentsWarning(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
+	if d.Unknown == nil || d.Checker == nil {
+		return nil, nil
+	}
+	a, err := d.Checker.Access(ctx, httpx.PrincipalFrom(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if !a.Active || !a.InstanceAdmin {
+		return nil, nil
+	}
+	list, err := unknownAgentItems(ctx, UnknownAgentsDeps{Unknown: d.Unknown, Store: d.Store, Now: d.Now})
+	if err != nil {
+		return nil, err
+	}
+	if len(list) == 0 {
+		return nil, nil
+	}
+	return []WarningBody{{ID: warningUnknownAgents, Count: len(list)}}, nil
 }

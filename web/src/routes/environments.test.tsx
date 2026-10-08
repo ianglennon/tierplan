@@ -12,17 +12,17 @@ import { queryClient } from "@/api/query-client";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 
 function permissions(...perms: string[]) {
   return splitPermissions(perms);
 }
 
-const ADMIN = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ADMIN = makeMe({
+  instanceAdmin: true,
   permissions: permissions("environments.read", "environments.create", "environments.token"),
-};
+});
 
 function env(id: string, name: string, state: EnvironmentItem["status"]["state"], extra = {}) {
   return {
@@ -236,6 +236,17 @@ describe("/environments", () => {
     expect(
       await screen.findByRole("heading", { name: "You don't have permission to view this page" }),
     ).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("shows the no-access state, not No permission, to someone with no access to any environment (D-08)", async () => {
+    me = makeMe({ envs: {}, administrators: ["admin"] });
+    renderAt("/environments");
+    expect(
+      await screen.findByRole("heading", { name: "You don't have access to any environments yet" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Administrators: admin")).toBeTruthy();
+    expect(screen.queryByText("You don't have permission to view this page")).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
   });
 

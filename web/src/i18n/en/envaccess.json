@@ -1,0 +1,68 @@
+{
+  "envaccess": {
+    "tabs": {
+      "label": "Environment sections",
+      "settings": "Settings",
+      "access": "Access"
+    },
+    "tab": {
+      "title": "Access to {{name}}",
+      "caption": "Everyone who can use this environment and where their access comes from.",
+      "add": "Add access",
+      "loading": "Loading who has access",
+      "loadFailed": "Couldn't load who has access.",
+      "loadFailedBody": "Check the connection and try again.",
+      "retry": "Retry",
+      "search": "Search people and teams",
+      "actionsFor": "Actions for {{name}}",
+      "you": "(you)",
+      "readOnly": "Only an instance admin can do this",
+      "all": "All",
+      "edit": "Edit access",
+      "remove": "Remove access…"
+    },
+    "teams": {
+      "heading": "Teams",
+      "label": "Teams with access to {{name}}",
+      "columns": {
+        "team": "Team",
+        "role": "Role",
+        "extras": "Extra permissions",
+        "source": "Comes from",
+        "actions": "Actions"
+      },
+      "empty": "No teams have access to {{name}}.",
+      "noMatch": "No teams match “{{query}}”.",
+      "show": "Show members of {{name}}",
+      "hide": "Hide members of {{name}}",
+      "members": "Members of {{name}}",
+      "noMembers": "No members can sign in."
+    },
+    "people": {
+      "heading": "People",
+      "label": "People with access to {{name}}",
+      "columns": {
+        "user": "User",
+        "role": "Role",
+        "extras": "Extra permissions",
+        "source": "Comes from",
+        "actions": "Actions"
+      },
+      "noMatch": "No people match “{{query}}”."
+    },
+    "dialog": {
+      "addBody": "Give a user or a team a role on {{environment}}.",
+      "who": "Who",
+      "whoPlaceholder": "Find a user or team…",
+      "whoLabel": "Users and teams",
+      "teams": "Teams",
+      "users": "Users",
+      "noMatch": "No users or teams match “{{query}}”.",
+      "onEnvironment": "On {{environment}}",
+      "delegation": "You can give access on {{environment}} only. Instance admins and all-environments access are set by an instance admin.",
+      "whoLoading": "Loading users and teams",
+      "whoFailed": "Couldn't load users and teams. Close this and try again.",
+      "everyone": "Everyone already has access here."
+    }
+  }
+}

@@ -111,6 +111,9 @@ type Entry =
   | { kind: "plainHttp"; key: string; severity: "warning"; since?: string }
   | { kind: "keyBackup"; key: string; severity: "warning"; since?: string }
   | { kind: "proxy"; key: string; severity: "warning"; since?: string; w: Warning }
+  | { kind: "refusalBurst"; key: string; severity: "warning"; since?: string; w: Warning }
+  | { kind: "backupFailed"; key: string; severity: "warning"; since?: string; w: Warning }
+  | { kind: "unknownAgents"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "env"; key: string; severity: EnvWarning["severity"]; since?: string; w: EnvWarning }
   | { kind: "manyOffline"; key: string; severity: "error"; since?: string; count: number };
 
@@ -121,7 +124,14 @@ const entryKey = (w: EnvWarning) => `${w.id}:${w.envId ?? ""}:${w.agentId ?? w.n
 // offline environments are one item.
 export function bellEntries(
   env: EnvWarning[],
-  instance: { plainHttp: boolean; keyBackup: boolean; proxy: Warning[] },
+  instance: {
+    plainHttp: boolean;
+    keyBackup: boolean;
+    proxy: Warning[];
+    bursts?: Warning[];
+    backupFailed?: Warning[];
+    unknownAgents?: Warning[];
+  },
 ): Entry[] {
   const offline = env.filter((w) => w.id === "env_offline");
   const collapse = offline.length > COLLAPSE_OFFLINE_ABOVE;
@@ -148,6 +158,22 @@ export function bellEntries(
     entries.push({ kind: "plainHttp", key: "plain_http", severity: "warning" });
   for (const w of instance.proxy) {
     entries.push({ kind: "proxy", key: w.id, severity: "warning", w });
+  }
+  for (const w of instance.bursts ?? []) {
+    entries.push({
+      kind: "refusalBurst",
+      key: `refusal_burst:${w.subject ?? ""}`,
+      severity: "warning",
+      w,
+    });
+  }
+  // Not dated by the failure: since is the last good backup, which says nothing
+  // about when this began, so it sorts with the undated items.
+  for (const w of instance.backupFailed ?? []) {
+    entries.push({ kind: "backupFailed", key: "backup_failed", severity: "warning", w });
+  }
+  for (const w of instance.unknownAgents ?? []) {
+    entries.push({ kind: "unknownAgents", key: "unknown_agents", severity: "warning", w });
   }
   if (instance.keyBackup)
     entries.push({ kind: "keyBackup", key: "key_backup", severity: "warning" });
@@ -197,6 +223,50 @@ function BellItem({ id, title, children }: { id: string; title: string; children
         {children}
       </ItemContent>
     </Item>
+  );
+}
+
+// The scheduled backup failed (D-32): why, and when the last good one finished. It
+// is derived from the newest run, so there is nothing to dismiss; it ends when a
+// later run works.
+function BackupFailedEntry({ w, close }: { w: Warning; close: () => void }) {
+  const t = useT();
+  const now = useNow();
+  const reason = (w.subject ?? "").replace(/\.+$/, "");
+  const time = w.since ? formatRelative(w.since, new Date(now), t) : "";
+  return (
+    <BellItem id="backup_failed" title={t("bell.backupFailed.title")}>
+      <ItemDescription className="line-clamp-none wrap-anywhere">
+        {time
+          ? t("bell.backupFailed.description", { reason, time })
+          : t("bell.backupFailed.descriptionNoTime", { reason })}
+      </ItemDescription>
+      <Link to="/settings/backup" className={`${linkClass} text-sm ${touchLink}`} onClick={close}>
+        {t("bell.backupFailed.link")}
+      </Link>
+    </BellItem>
+  );
+}
+
+// Agents that were installed after the backup this Bayplan was restored from keep
+// trying and are refused (D-31). The server derives it from what agents tried in the
+// last 24 hours, so there is nothing to dismiss: it ends when they are reinstalled.
+function UnknownAgentsEntry({ w, close }: { w: Warning; close: () => void }) {
+  const t = useT();
+  const count = w.count ?? 0;
+  return (
+    <BellItem id="unknown_agents" title={t("bell.unknownAgents.title", { count })}>
+      <ItemDescription className="line-clamp-none wrap-anywhere">
+        {t("bell.unknownAgents.description", { count })}
+      </ItemDescription>
+      <Link
+        to="/settings/environments"
+        className={`${linkClass} text-sm ${touchLink}`}
+        onClick={close}
+      >
+        {t("bell.unknownAgents.link")}
+      </Link>
+    </BellItem>
   );
 }
 
@@ -391,7 +461,17 @@ export function HealthBell() {
   const plainHttp = isPlainHttpRemote();
   const keyBackup = items.some((w) => w.id === "key_backup");
   const proxyItems = items.filter((w) => proxyCopy(w.id) !== undefined);
-  const entries = bellEntries(envItems, { plainHttp, keyBackup, proxy: proxyItems });
+  const bursts = items.filter((w) => w.id === "refusal_burst");
+  const backupFailed = items.filter((w) => w.id === "backup_failed");
+  const unknownAgents = items.filter((w) => w.id === "unknown_agents");
+  const entries = bellEntries(envItems, {
+    plainHttp,
+    keyBackup,
+    proxy: proxyItems,
+    bursts,
+    backupFailed,
+    unknownAgents,
+  });
   const loading = instanceLoading || envLoading;
   const count = loading ? 0 : entries.length;
 
@@ -553,6 +633,37 @@ export function HealthBell() {
                         </Item>
                       );
                     }
+                    case "refusalBurst":
+                      return (
+                        <BellItem
+                          key={entry.key}
+                          id="refusal_burst"
+                          title={t("bell.refusalBurst.title", { count: entry.w.count ?? 0 })}
+                        >
+                          <ItemDescription className="line-clamp-none wrap-anywhere">
+                            {t("bell.refusalBurst.description", {
+                              user: entry.w.subject ?? "",
+                              count: entry.w.count ?? 0,
+                            })}
+                          </ItemDescription>
+                          <Link
+                            to="/audit"
+                            search={{ action: "permission.denied" }}
+                            className={`${linkClass} text-sm ${touchLink}`}
+                            onClick={actions.close}
+                          >
+                            {t("bell.refusalBurst.link")}
+                          </Link>
+                        </BellItem>
+                      );
+                    case "backupFailed":
+                      return (
+                        <BackupFailedEntry key={entry.key} w={entry.w} close={actions.close} />
+                      );
+                    case "unknownAgents":
+                      return (
+                        <UnknownAgentsEntry key={entry.key} w={entry.w} close={actions.close} />
+                      );
                     case "keyBackup":
                       return (
                         <Item

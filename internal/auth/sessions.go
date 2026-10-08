@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"time"
@@ -34,7 +35,11 @@ const (
 // csrfLabel is the vault subkey label the CSRF tokens are keyed with (D-36).
 const csrfLabel = "bayplan/csrf/v1"
 
-const sessionIDBytes = 32 // 256 bits
+const (
+	sessionIDBytes = 32 // 256 bits
+	// publicIDBytes is the size of a session's public ID: 128 bits, 32 hex characters.
+	publicIDBytes = 16
+)
 
 // Sessions creates and describes server-side sessions. The database holds only
 // the SHA-256 of each session ID, so a copy of it contains nothing a browser
@@ -75,6 +80,13 @@ func (m *Sessions) CreateTx(ctx context.Context, tx *sql.Tx, userID string, reme
 	}
 	rawID = base64.RawURLEncoding.EncodeToString(buf)
 	idHash = HashSessionID(rawID)
+	// The public ID is the handle a session list names a session by. It is
+	// random and unrelated to the cookie, so showing it to the user gives away
+	// nothing a browser could present (RESEARCH A9, T-03-59).
+	pub := make([]byte, publicIDBytes)
+	if _, err := rand.Read(pub); err != nil {
+		return "", nil, fmt.Errorf("generate session public id: %w", err)
+	}
 
 	now := m.now().UTC().UnixNano()
 	p := sqlc.InsertSessionParams{
@@ -84,6 +96,7 @@ func (m *Sessions) CreateTx(ctx context.Context, tx *sql.Tx, userID string, reme
 		LastSeenAt: now,
 		Ip:         ip,
 		UserAgent:  userAgent,
+		PublicID:   sql.NullString{String: hex.EncodeToString(pub), Valid: true},
 	}
 	if remember {
 		p.Remember = 1

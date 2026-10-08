@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List audit entries
-         * @description Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. Needs audit.read.
+         * @description Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. An instance admin reads every entry. An Admin of one or more environments (environments.audit) reads only the entries on those environments, or on every environment when they are Admin of all of them, never an instance-level event such as a sign-in or a settings change; the scope is applied before paging. Anyone else gets 403, audited as permission.denied with reason no_audit_scope.
          */
         get: operations["listAudit"];
         put?: never;
@@ -33,7 +33,7 @@ export interface paths {
         };
         /**
          * List the actor names in the audit log
-         * @description The distinct actor names seen, sorted, at most 200, for the user filter. Needs audit.read.
+         * @description The distinct actor names seen, sorted, at most 200, for the user filter, each marked when the user behind it has been deleted. Under the same scope as the list: an Admin of environments sees only the actors of entries on those environments. 403 as for the list.
          */
         get: operations["listAuditActors"];
         put?: never;
@@ -53,7 +53,7 @@ export interface paths {
         };
         /**
          * Export the audit log as CSV or JSON
-         * @description Streams every entry matching the filters, newest first, as a download named bayplan-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are reads and are not audited. Needs audit.read.
+         * @description Streams every entry matching the filters, newest first, as a download named bayplan-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are reads and are not audited. Under the same scope as the list: an Admin of environments exports only the entries on those environments. 403 as for the list.
          */
         get: operations["exportAudit"];
         put?: never;
@@ -104,6 +104,294 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/backup/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Download an encrypted backup
+         * @description Takes a consistent copy of the database while Bayplan runs and answers with it as a download named bayplan-backup-<UTC YYYYMMDD-HHMM>.bayplan, locked with the passphrase in the body. The backup holds users, teams, access, settings, environments and the audit log. It does not hold the master key, sessions, invite or reset links or pending join tokens, and every secret in it is sealed under a key that is only inside the encrypted file. The passphrase is sent in the body, is never stored or logged, and is not in the audit entry. 422 passphrase_too_short for fewer than 16 characters; 409 audit_chain_broken when the audit log does not verify; 409 backup_busy while another backup is being prepared. Audited as backup.exported. Needs backup.manage.
+         */
+        post: operations["exportBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the scheduled backups on disk
+         * @description The scheduled backups in the backups folder, newest first, with their size and when each was made. Other files in the folder (pre-migration and pre-restore snapshots, anything copied in by hand) are not listed. Needs backup.manage.
+         */
+        get: operations["listBackupFiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/files/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download a scheduled backup
+         * @description The encrypted backup file as it is on disk. Only names of the form bayplan-backup-YYYYMMDD-HHMM.bayplan are served; any other name is 404 and is never looked up in the file system. Audited as backup.exported with source saved. Needs backup.manage.
+         */
+        get: operations["downloadBackupFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the rules for a backup passphrase
+         * @description The shortest passphrase a backup accepts, the file extension a backup file has and the largest file a restore accepts. Needs backup.manage.
+         */
+        get: operations["getBackupInfo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/restore/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore an uploaded backup over this instance
+         * @description Replaces everything in this Bayplan with the uploaded backup. The backup is opened, migrated to this version, re-keyed to this instance's master key and verified on a private copy first; nothing live changes until all of that has worked. Then Bayplan saves the current database as backups/prerestore-<time>.db, swaps the restored one in and restarts itself. The answer is 202 and Bayplan is unreachable for a moment; everyone is signed out, including the caller. confirm must be this instance's name (422 confirm_mismatch). The same refusals as the check apply and leave everything as it was, and 429 rate_limited when the caller has used their attempts. Audited in the restored log as audit.reanchored then backup.restored; a refused restore is recorded in this log as backup.failed (stage restore_apply) with a reason. Needs backup.manage.
+         */
+        post: operations["applyRestore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/restore/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check an uploaded backup
+         * @description Opens the uploaded file with the passphrase and answers what is in it, without changing anything. 422 backup_unreadable for a wrong passphrase or a damaged file, 422 not_a_backup for a file that is not a backup, 409 backup_newer for a backup from a newer Bayplan, 404 upload_not_found for an upload that is gone or expired, 409 restore_busy while another check or restore runs, 429 rate_limited when the caller has used their attempts. Audited as backup.checked; a refused check is recorded too, with result failure and a reason (unreadable, not_a_backup, newer, rate_limited). Needs backup.manage.
+         */
+        post: operations["checkRestore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/restore/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Discard the uploaded backup
+         * @description Removes the backup file that was uploaded and is waiting to be checked or restored, so a file sent by mistake does not hold the single upload slot until it expires. Answers 204 whether or not a file was waiting. 409 restore_busy while a check or restore runs or another file is still arriving. Audited as backup.upload_discarded when a file was removed. Needs backup.manage.
+         */
+        delete: operations["discardRestoreUpload"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the backup schedule
+         * @description Whether Bayplan makes a backup by itself, when, how many it keeps, where it writes them, when the next one is due and how the last runs went. Whether a passphrase is saved is reported; the passphrase never is. Needs backup.manage.
+         */
+        get: operations["getBackupSchedule"];
+        /**
+         * Set the backup schedule
+         * @description Turns scheduled backups on or off and sets when, how many to keep and the passphrase that locks them. The passphrase is sealed in the vault so backups can run with nobody present, and is never returned or logged; leave it out to keep the saved one. 422 passphrase_required when the schedule is on and no passphrase was ever saved; 422 passphrase_too_short for fewer than 16 characters. Audited as backup.schedule_updated. Needs backup.manage.
+         */
+        put: operations["putBackupSchedule"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename an environment or switch its automatic agent updates
+         * @description Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.configure on the environment (env Admin or instance admin); an environment the caller cannot see answers 404 environment_not_found. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the environment's connected agents at once.
+         */
+        patch: operations["updateEnvironment"];
+        trace?: never;
+    };
+    "/api/env/{envId}/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Everyone who can use an environment, and why
+         * @description The environment's Access tab: the teams with a grant on it or on every environment, and the people, one entry each, with the highest role any source gives, the union of the extra permissions and every source (direct, team, all environments, instance admin), worked out by the same evaluator that enforces access. Instance admins are always listed. A grant carries the ID an edit or removal names, present only for a grant on this environment. Needs environments.access on the environment (env Admin or instance admin); another environment answers 404 environment_not_found, a Viewer or Operator 403.
+         */
+        get: operations["listEnvAccess"];
+        /**
+         * Give a user or team a role on this environment
+         * @description An env Admin's (or instance admin's) way to give an existing user or team Admin, Operator or Viewer on this environment, with the extra permissions of an Operator. The body names no scope and no environment: the route is the environment, and a body carrying either is rejected (422). Saving an existing combination edits it (200, access.updated), a new one is created (201, access.granted); the grantee has it on their next request. A subject who is an instance admin answers 403 delegation_denied and is audited as permission.denied with that reason. Extras and stale edits answer as putUserGrant does. Teams, team membership and users are not managed here. Needs environments.access on the environment.
+         */
+        put: operations["putEnvAccess"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/access/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Who an environment's access can be given to
+         * @description The users and teams with no direct grant on the environment, for the Who list: usernames, display names and team names, never an email. Users who cannot sign in and instance admins are left out. Needs environments.access on the environment.
+         */
+        get: operations["listEnvAccessCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/access/{grantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove one of the environment's grants
+         * @description As deleteUserGrant, for a grant on this environment: the subject loses what it gave on their next request, the automations they own that no longer qualify pause, and the answer lists who lost which access. Audited as one access.revoked entry with this environment's ID. A grant that does not exist answers 404 grant_not_found; a grant on every environment or on another environment, or an instance admin's, answers 403 delegation_denied and is audited as permission.denied with that reason. An env Admin may remove their own Admin grant. Needs environments.access on the environment.
+         */
+        delete: operations["deleteEnvAccess"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/access/{grantId}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview what removing or changing one of the environment's grants takes away
+         * @description As previewUserGrantImpact, for a grant on this environment: who would lose which access if it were deleted (op delete) or saved with a lower role (op update). Nothing is written. A grant that does not exist answers 404 grant_not_found; a grant on every environment or on another environment, or an instance admin's, answers 403 delegation_denied. Needs environments.access on the environment.
+         */
+        post: operations["previewEnvAccessImpact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/adopt-cluster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt the new cluster of a re-initialised swarm
+         * @description A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.configure on the environment (env Admin or instance admin).
+         */
+        post: operations["adoptEnvironmentCluster"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/agents": {
         parameters: {
             query?: never;
@@ -118,6 +406,66 @@ export interface paths {
         get: operations["listEnvironmentAgents"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/agents/{agentId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a node's agent
+         * @description The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked when it was revoked already, by this admin or another. Needs environments.revoke on the environment (env Admin or instance admin). Audited as agent.revoked and agent.blocked.
+         */
+        post: operations["revokeEnvironmentAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/agents/{agentId}/unblock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Let a revoked node's host enrol again
+         * @description Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. An agent that still has its join token drops its revoked identity and enrols again by itself at its next try, within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke on the environment (env Admin or instance admin). Audited as agent.unblocked.
+         */
+        post: operations["unblockEnvironmentAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/agents/{agentId}/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update an agent to this server's version
+         * @description Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled (the host owner refused), agent_up_to_date or update_in_progress. Needs environments.configure on the environment (env Admin or instance admin). Audited as agent.updated, or agent.update_failed with its reason when the update does not finish.
+         */
+        post: operations["updateEnvironmentAgent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -244,6 +592,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/update-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update every agent of an environment that is behind
+         * @description Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.configure on the environment (env Admin or instance admin). Audited like an update of one agent.
+         */
+        post: operations["updateEnvironmentAgents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/volumes": {
         parameters: {
             query?: never;
@@ -288,6 +656,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/environments/unknown-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the agents Bayplan does not know
+         * @description After a restore from a backup, agents that were installed after the backup was taken present a certificate the environment issued but are not in the restored database, and are refused unknown_agent. This lists the ones that tried in the last 24 hours, newest first, from memory: it is empty after a restart until they try again, and an agent drops off 24 hours after it stops trying. Each is reinstalled with its environment's install command. Needs environments.token (instance admin).
+         */
+        get: operations["listUnknownAgents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments/warnings": {
         parameters: {
             query?: never;
@@ -323,90 +711,6 @@ export interface paths {
          * @description Needs environments.delete. Stops managing the host. Revokes every agent, disables the join token and deletes the environment, and changes nothing in Docker: its containers, networks and volumes are untouched (D-20, D-30). With uninstallAgents=true each online agent is first told to uninstall itself (a swarm's agents through one manager, which removes the agent service and its token secret; every agent removes its own container and state volume), and the request waits up to 30 seconds for their answers. Whatever they answer, or do not, the revoking and deletion follow, so hosts that were offline or refused keep their agent until the admin runs the manual cleanup command that GET /api/env/{envId}/agents gives. Audited as environment.removed, agent.revoked per agent, and agent.uninstalled per agent that confirmed.
          */
         delete: operations["removeEnvironment"];
-        options?: never;
-        head?: never;
-        /**
-         * Rename an environment or switch its automatic agent updates
-         * @description Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the environment's connected agents at once.
-         */
-        patch: operations["updateEnvironment"];
-        trace?: never;
-    };
-    "/api/environments/{envId}/adopt-cluster": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Adopt the new cluster of a re-initialised swarm
-         * @description A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.manage.
-         */
-        post: operations["adoptEnvironmentCluster"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/environments/{envId}/agents/{agentId}/revoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Revoke a node's agent
-         * @description The agent is disconnected within a second, its certificate is refused from now on, and its host's engine ID and swarm node ID are blocked so it cannot enrol again with a join token that is still valid, until the node is unblocked. Nothing on the host is changed. The optional reason is kept in the audit log. 404 environment_not_found or agent_not_found; 409 agent_already_revoked when it was revoked already, by this admin or another. Needs environments.revoke. Audited as agent.revoked and agent.blocked.
-         */
-        post: operations["revokeEnvironmentAgent"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/environments/{envId}/agents/{agentId}/unblock": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Let a revoked node's host enrol again
-         * @description Lifts the blocks the agent's revoke made, so its host can enrol again with the environment's join token, as a new agent. The revoked agent stays revoked. An agent that still has its join token drops its revoked identity and enrols again by itself at its next try, within a minute; one without a token waits at its backoff limit until it is installed again. 404 environment_not_found or agent_not_found; 409 not_blocked when there is nothing to lift. Needs environments.revoke. Audited as agent.unblocked.
-         */
-        post: operations["unblockEnvironmentAgent"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/environments/{envId}/agents/{agentId}/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Update an agent to this server's version
-         * @description Tells the agent to replace itself with this server's own agent image, for a development server the edge image. The update is started, not finished: the node list's updateState says updating until the agent reconnects on the new version. In a swarm the agent updates its own service, which rolls every node, so one request through a connected manager updates every agent that is behind. It works whatever the environment's autoUpdate is. 404 environment_not_found or agent_not_found; 409 agent_offline, no_manager_connected, self_update_disabled (the host owner refused), agent_up_to_date or update_in_progress. Needs environments.manage. Audited as agent.updated, or agent.update_failed with its reason when the update does not finish.
-         */
-        post: operations["updateEnvironmentAgent"];
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -460,26 +764,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/environments/{envId}/update-agents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Update every agent of an environment that is behind
-         * @description Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.manage. Audited like an update of one agent.
-         */
-        post: operations["updateEnvironmentAgents"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/instance": {
         parameters: {
             query?: never;
@@ -491,6 +775,46 @@ export interface paths {
         get: operations["getInstance"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/invite/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Choose a password with a one-time link
+         * @description Public. Spends the link and sets the user's password. It does not sign anyone in: the user signs in afterwards with the password they chose. A link works once.
+         */
+        post: operations["acceptInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/invite/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Say what a one-time link is for
+         * @description Public. The token is in the body, never in the address. Every link that cannot be used, whether expired, used, replaced, unknown or belonging to a disabled or deleted user, answers the same 404 invalid_link.
+         */
+        post: operations["lookupInvite"];
         delete?: never;
         options?: never;
         head?: never;
@@ -554,6 +878,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the signed-in user's own profile
+         * @description The username, display name and email, with the updatedAt a save must be based on.
+         */
+        get: operations["getMyProfile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Edit the signed-in user's own display name and email
+         * @description Send displayName, email or both, with the updatedAt you read. If the profile changed since, nothing is saved and the answer is 409 stale_change. The username can never be changed and is not accepted. An invalid field answers 422 on body.displayName or body.email. Saving what is already there changes nothing. Audited as user.updated with the caller as actor and target.
+         */
+        patch: operations["updateMyProfile"];
+        trace?: never;
+    };
     "/api/me/recent-environments": {
         parameters: {
             query?: never;
@@ -588,6 +936,106 @@ export interface paths {
          */
         put: operations["recordRecentEnvironment"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the signed-in user's sessions
+         * @description Every browser the caller is signed in on, most recently active first, with the device, address and last activity, and current set on the one making this request.
+         */
+        get: operations["listMySessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/sessions/revoke-others": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out everywhere else
+         * @description Ends every session of the caller except the one making this request, and says how many ended. Audited as user.sessions_revoked.
+         */
+        post: operations["revokeMyOtherSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/sessions/{publicId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Sign one of the caller's other sessions out
+         * @description That browser's next request answers 401. The session making this request cannot be revoked here: 409 current_session. A handle that is not one of the caller's sessions answers 404 session_not_found. Audited as session.revoked.
+         */
+        delete: operations["revokeMySession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/owned/{kind}/{resourceId}/eligible-owners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List who an automation could be handed to
+         * @description The active users, other than its owner, who hold what the automation needs on its environment right now: Admin when it needs that, otherwise the permission of its kind. Sorted by username. The transfer checks again, so this is a convenience. An unknown automation answers 404 automation_not_found.
+         */
+        get: operations["listEligibleOwners"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/owned/{kind}/{resourceId}/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hand an automation to another user
+         * @description The new owner must be able to run it now, which is checked again here: a user who could not answers 422 owner_not_eligible and nothing changes. A paused automation is active again under its new owner. Audited as owner.transferred. Answers the automation as it now is. An unknown automation answers 404 automation_not_found.
+         */
+        post: operations["transferOwned"];
         delete?: never;
         options?: never;
         head?: never;
@@ -638,6 +1086,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/setup/restore/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore an uploaded backup instead of creating the first admin
+         * @description The setup wizard's restore. Needs the setup token; 409 setup_complete once any user exists. Validates and prepares the backup as the Settings restore does, swaps it in and restarts; the restored accounts then sign in.
+         */
+        post: operations["setupRestoreApply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/restore/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check an uploaded backup during setup
+         * @description The setup wizard's version of the backup check. Needs the setup token; 409 setup_complete once any user exists, 401 for a wrong token, 429 when the address has used its attempts. Otherwise as the Settings check.
+         */
+        post: operations["setupRestoreCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/setup/token": {
         parameters: {
             query?: never;
@@ -649,6 +1137,494 @@ export interface paths {
         put?: never;
         /** Check the setup token and return the step 3 defaults */
         post: operations["verifySetupToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List teams
+         * @description Every team, sorted by name ignoring case, with how many members and grants each has. Only an instance admin may manage teams.
+         */
+        get: operations["listTeams"];
+        put?: never;
+        /**
+         * Create a team
+         * @description A team name is 1 to 64 characters and unique ignoring case: a name another team holds answers 409 team_name_taken and an empty or too long one answers 422 on body.name. Audited as team.created.
+         */
+        post: operations["createTeam"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{teamId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one team and its members
+         * @description The team with its members sorted by username. An unknown team answers 404 team_not_found.
+         */
+        get: operations["getTeam"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a team
+         * @description Removes the team, its grants and its memberships in one step, so no assignment or membership is left pointing at it. Its members lose the access it gave them on their next request, and the automations they own that no longer qualify pause. The answer lists who lost which access, worked out inside the same step. Audited as one team.deleted entry carrying members, impact_count and impact: the first ten items "username: environment before→after" joined by "; " and cut to 512 bytes. An unknown team answers 404 team_not_found.
+         */
+        delete: operations["deleteTeam"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename a team
+         * @description Send the name with the updatedAt you read. If the team changed since, nothing is saved and the answer is 409 stale_change. A name another team holds, ignoring case, answers 409 team_name_taken; an empty or too long one answers 422 on body.name. Saving the name it already has changes nothing. Audited as team.renamed with the old name.
+         */
+        patch: operations["renameTeam"];
+        trace?: never;
+    };
+    "/api/teams/{teamId}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a team's grants
+         * @description The grants made to the team: the one on every environment first, then those on single environments by name. Every member holds what they give. An unknown team answers 404 team_not_found.
+         */
+        get: operations["listTeamGrants"];
+        /**
+         * Give a team a role on an environment
+         * @description As putUserGrant, for a team: every member holds the role (the highest across their sources). An unknown team answers 404 team_not_found.
+         */
+        put: operations["putTeamGrant"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{teamId}/grants/{grantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a team's grant
+         * @description As deleteUserGrant, for a grant made to a team: every member loses what it gave them.
+         */
+        delete: operations["deleteTeamGrant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{teamId}/grants/{grantId}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview what removing or changing a team's grant takes away
+         * @description As previewUserGrantImpact, for a grant made to a team: the impact is on every member.
+         */
+        post: operations["previewTeamGrantImpact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{teamId}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview who loses access if a team changes
+         * @description Works out, with the same evaluator that enforces access, who would lose which environment access if the team were deleted (op delete) or a member removed (op remove_member, with userId). The change is applied inside a transaction that is rolled back, so nothing is written and nothing is audited. Confirming recomputes the impact when it commits. A remove_member for a user who is not in the team answers 404 member_not_found.
+         */
+        post: operations["previewTeamImpact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{teamId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add users to a team
+         * @description All or none: a user who does not exist or is deleted answers 404 user_not_found and nothing is added. A user who is already in the team changes nothing and writes no audit entry. Each user added is audited as team.member_added. Membership never makes anyone an instance admin.
+         */
+        post: operations["addTeamMembers"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{teamId}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a user from a team
+         * @description The user loses the access the team gave them on their next request and keeps every other grant. The automations they own that no longer qualify pause. The answer lists what they lost, worked out inside the same step. Audited as one team.member_removed entry carrying impact_count and impact (first ten items "username: environment before→after" joined by "; ", cut to 512 bytes). A user who is not in the team answers 404 member_not_found and nothing is written.
+         */
+        delete: operations["removeTeamMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List users
+         * @description Every user who is not deleted, sorted by username, with the status the users table shows: locked, disabled, invite expired, invite pending or active, in that order of precedence.
+         */
+        get: operations["listUsers"];
+        put?: never;
+        /**
+         * Create a user and a one-time invite link
+         * @description The user has no password. The response carries a link, valid for BAYPLAN_INVITE_TTL (72 hours by default), that opens a page where they choose one. Bayplan sends no email: the admin hands the link over. A username that belonged to a deleted user answers 409 username_reserved.
+         */
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one user
+         * @description The user as the user page shows them. An unknown or deleted user answers 404 user_not_found.
+         */
+        get: operations["getUser"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a user
+         * @description Turns the user into a tombstone and cannot be undone: they are disabled, their password, email and display name are cleared, instance admin is turned off, and their sessions, links, direct access and team memberships are removed in one step. Their username stays reserved, so creating it again answers 409 username_reserved. The automations they own pause as owner deleted, except those listed in the optional reassign body, which go to the user named for each in the same step; a user who could not run one answers 422 owner_not_eligible, one that is not the deleted user's answers 404 automation_not_found, and nothing is deleted. The last active instance admin cannot be deleted: 409 last_instance_admin. A user who is already deleted answers 404 user_not_found.
+         */
+        delete: operations["deleteUser"];
+        options?: never;
+        head?: never;
+        /**
+         * Edit a user's display name and email
+         * @description Send displayName, email or both, with the updatedAt you read. If the user changed since, nothing is saved and the answer is 409 stale_change. The username can never be changed and is not accepted. An invalid field answers 422 on body.displayName or body.email. Saving what is already there changes nothing.
+         */
+        patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/api/users/{userId}/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a user may do on each environment, and why
+         * @description The user's effective access: for each environment the user can reach, the highest role any source gives, the union of the extra permissions and every source (instance, all, team, direct), computed by the same evaluator that enforces access. An instance admin holds every environment, so the list is empty and instanceAdmin is true. grants lists the user's own grants, the ones editable on the user page. An unknown user answers 404 user_not_found.
+         */
+        get: operations["getUserAccess"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable a user
+         * @description Ends every session of the user at once and refuses their sign-in. Their grants and team memberships are kept and the automations they own pause. Answers the user as they now are. Disabling a disabled user changes nothing. The last active instance admin cannot be disabled: 409 last_instance_admin.
+         */
+        post: operations["disableUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable a user
+         * @description Lets a disabled user sign in again with the grants and teams they had. Enabling an enabled user changes nothing.
+         */
+        post: operations["enableUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Give a user a role on an environment
+         * @description Gives the user Admin, Operator or Viewer on one environment (scope env, with envId) or on all of them (scope all). A user holds at most one grant per scope: saving an existing combination edits it (200, audited as access.updated), a new one is created (201, access.granted). Extras are accepted only on Operator: a Viewer answers 422 viewer_cannot_have_extras, an Admin 422 extras_implied and a permission that is not an extra 422 unknown_extra. With expected set, a grant that has changed answers 409 stale_change. A grant never expires. An unknown user answers 404 user_not_found and an unknown environment 404 environment_not_found.
+         */
+        put: operations["putUserGrant"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/grants/{grantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a user's grant
+         * @description Removes the grant. The user loses the access it gave on their next request and keeps every other grant, and the automations they own that no longer qualify pause. The answer lists who lost which access, worked out inside the same step. Audited as one access.revoked entry carrying the subject, role, scope, impact_count and impact. A grant that is not the user's answers 404 grant_not_found.
+         */
+        delete: operations["deleteUserGrant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/grants/{grantId}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview what removing or changing a user's grant takes away
+         * @description Works out, with the same evaluator that enforces access, who would lose which environment access if the grant were deleted (op delete) or saved with a lower role (op update, with role and extras). The change is applied inside a transaction that is rolled back, so nothing is written and nothing is audited. A grant that is not the user's answers 404 grant_not_found.
+         */
+        post: operations["previewUserGrantImpact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/instance-admin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Turn instance admin on or off for a user
+         * @description Instance authority belongs to a user, never to a team. Setting what is already set changes nothing. Turning it off for the last active instance admin answers 409 last_instance_admin. Answers the user as they now are.
+         */
+        post: operations["setInstanceAdmin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/invite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace a user's invite link
+         * @description For a user who has not yet set a password. The new link replaces the previous one, which stops working at once, and is valid for BAYPLAN_INVITE_TTL. A user who has already set a password answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.
+         */
+        post: operations["regenerateInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/owned": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the automations a user owns
+         * @description The git syncs and webhooks that run with the user's permissions, with the environment each acts on and whether it is active or paused because its owner was disabled, deleted or no longer holds the permission it needs. Empty when they own nothing. An unknown or deleted user answers 404 user_not_found.
+         */
+        get: operations["listUserOwned"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a password reset link
+         * @description Ends every session of the user at once, in the same step that makes the link, and answers a one-time link built like an invite's that lets them choose a new password. It is valid for BAYPLAN_INVITE_TTL (72 hours by default) and replaces any link they held. Bayplan sends no email: the admin hands the link over. A disabled user answers 409 user_disabled; an unknown or deleted user answers 404 user_not_found. Audited as user.password_reset_issued with the number of sessions ended.
+         */
+        post: operations["resetUserPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a user's sessions
+         * @description For an admin on a user's page. No session is marked current. An unknown or deleted user answers 404 user_not_found.
+         */
+        get: operations["listUserSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/sessions/revoke-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * End all of a user's sessions
+         * @description Signs the user out everywhere at once and says how many ended. Nothing is written when they were not signed in anywhere. An unknown or deleted user answers 404 user_not_found. Audited as user.sessions_revoked.
+         */
+        post: operations["revokeUserSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unlock a locked user
+         * @description Clears the lock and the failed sign-in count, audited as auth.unlocked with the caller as actor. A user who is not locked is left alone and nothing is audited. Answers the user as they now are.
+         */
+        post: operations["unlockUser"];
         delete?: never;
         options?: never;
         head?: never;
@@ -681,7 +1657,7 @@ export interface paths {
         };
         /**
          * List the instance warnings that need an admin's attention
-         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). The plain-HTTP warning is the browser's to compute and is not listed.
+         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). unknown_agents is listed, for instance admins only, while agents that were installed after the backup this Bayplan was restored from keep trying; count is how many (D-31). The plain-HTTP warning is the browser's to compute and is not listed.
          */
         get: operations["listWarnings"];
         put?: never;
@@ -716,6 +1692,12 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcceptInviteInputBody: {
+            /** @description At least 12 characters, not on the common-password list and not containing the username */
+            password: string;
+            /** @description The token from the part of the link after #token= */
+            token: string;
+        };
         AddEnvironmentBody: {
             /** @description The oldest agent version in the environment; null when it has no agent, and for the local socket */
             agentVersion: string | null;
@@ -760,7 +1742,7 @@ export interface components {
             name: string;
             /** @description Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster */
             nodes: components["schemas"]["EnvironmentNodesBody"] | null;
-            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to */
+            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to */
             pendingClusterId?: string;
             status: components["schemas"]["EnvironmentStatusBody"];
             /**
@@ -781,6 +1763,17 @@ export interface components {
             kind: "local" | "agent";
             /** @description 1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent */
             name?: string;
+        };
+        AddTeamMembersInputBody: {
+            /** @description The users to add */
+            userIds: string[] | null;
+        };
+        AddedBody: {
+            /**
+             * Format: int64
+             * @description How many users were added. Users who were already in the team are not counted and leave no audit entry
+             */
+            added: number;
         };
         AdoptClusterBody: {
             /** @description The swarm cluster ID the environment is bound to now */
@@ -856,11 +1849,19 @@ export interface components {
             /** @description The commands that take the agent off a host by hand, for the hosts Bayplan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token */
             manualCleanup: components["schemas"]["InstallCleanupBody"];
         };
+        AuditActorDTO: {
+            /** @description True when the user behind the name has since been deleted */
+            deleted: boolean;
+            /** @description The actor's name as recorded */
+            name: string;
+        };
         AuditEntryDTO: {
             /** @description A stable action key such as auth.login */
             action: string;
             /** @description The actor's name. For a failed sign-in this is anonymous; the target is the matched account's username, or (unknown user) when none matched */
             actor: string;
+            /** @description True when the user behind the entry has since been deleted. The entry itself is unchanged */
+            actorDeleted: boolean;
             /** @enum {string} */
             actorType: "user" | "system" | "anonymous";
             details: {
@@ -900,6 +1901,86 @@ export interface components {
              * @description How many days entries are kept; 0 means forever
              */
             retentionDays: number;
+        };
+        BackupFileBody: {
+            /**
+             * Format: date-time
+             * @description When it was made, from its name (UTC, to the minute)
+             */
+            created: string;
+            /** @description The file name, bayplan-backup-YYYYMMDD-HHMM.bayplan */
+            name: string;
+            /**
+             * Format: int64
+             * @description Size in bytes
+             */
+            size: number;
+        };
+        BackupFilesOutputBody: {
+            /** @description The scheduled backups in the backups folder, newest first */
+            items: components["schemas"]["BackupFileBody"][] | null;
+        };
+        BackupInfoBody: {
+            /** @description The extension of a backup file, with the dot */
+            fileExtension: string;
+            /**
+             * Format: int64
+             * @description The largest backup file a restore accepts, in bytes
+             */
+            maxUploadBytes: number;
+            /**
+             * Format: int64
+             * @description The fewest characters a backup passphrase may have
+             */
+            minPassphraseLength: number;
+        };
+        BackupScheduleBody: {
+            /** @description The folder the backups are written into on the Bayplan host */
+            dir: string;
+            /** @description Whether Bayplan makes a backup by itself */
+            enabled: boolean;
+            /**
+             * @description How often
+             * @enum {string}
+             */
+            frequency: "daily" | "weekly";
+            /**
+             * Format: int64
+             * @description How many scheduled backups are kept; older ones are deleted
+             */
+            keep: number;
+            /** @description The newest scheduled run, successful or not */
+            lastRun?: components["schemas"]["ScheduleRunBody"];
+            /** @description The newest scheduled run that wrote a backup */
+            lastSuccess?: components["schemas"]["ScheduleRunBody"];
+            /**
+             * Format: date-time
+             * @description When the next backup is due; absent while the schedule is off
+             */
+            nextRun?: string;
+            /** @description Whether a passphrase is saved. The passphrase itself is never returned */
+            passphraseSaved: boolean;
+            /** @description The time of day in UTC, as 24-hour HH:MM */
+            timeUtc: string;
+            /**
+             * Format: int64
+             * @description For a weekly schedule: the day, 0 for Sunday to 6 for Saturday
+             */
+            weekday: number;
+        };
+        CandidateTeamBody: {
+            /** @description The team's ID */
+            id: string;
+            /** @description The team's name */
+            name: string;
+        };
+        CandidateUserBody: {
+            /** @description The user's display name, when set */
+            displayName?: string;
+            /** @description The user's ID */
+            id: string;
+            /** @description The user's username */
+            username: string;
         };
         ChangePasswordBody: {
             /** @description The CSRF token of the new session, sent as X-CSRF-Token on every mutating request */
@@ -973,6 +2054,28 @@ export interface components {
             /** @description True when total is more than the rows returned */
             truncated: boolean;
         };
+        CreateTeamInputBody: {
+            /** @description 1 to 64 characters; not case-sensitive for uniqueness */
+            name: string;
+        };
+        CreateUserBody: {
+            /** @description The one-time invite link; it cannot be shown again */
+            link: components["schemas"]["LinkBody"];
+            /** @description The user that was created, with status invite_pending */
+            user: components["schemas"]["UserSummaryBody"];
+        };
+        CreateUserInputBody: {
+            /** @description Optional; at most 64 characters */
+            displayName?: string;
+            /** @description Optional; a bare address. Bayplan never sends mail */
+            email?: string;
+            /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
+            username: string;
+        };
+        DeleteUserInputBody: {
+            /** @description Automations the user owns and who takes each over. Whatever is not listed is paused as owner deleted */
+            reassign?: components["schemas"]["ReassignBody"][] | null;
+        };
         DenialBody: {
             /**
              * Format: date-time
@@ -981,6 +2084,119 @@ export interface components {
             at: string;
             /** @description The Docker API path the agent refused */
             endpoint: string;
+        };
+        EffectiveEnvBody: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The environment's name */
+            envName: string;
+            /** @description The union of the extra permissions the sources give; an Admin holds every one */
+            extras: string[] | null;
+            /** @description True when the user reaches this environment only through a grant on every environment */
+            inherited: boolean;
+            /**
+             * @description The highest role any source gives
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description Every source, in the order instance, all, team, direct */
+            sources: components["schemas"]["SourceBody"][] | null;
+        };
+        EnvAccessBody: {
+            /** @description The dangerous permissions the grants carry explicitly, sorted */
+            extras: string[] | null;
+            /**
+             * @description The highest role any grant gives
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description Every grant that contributes, in the order instance, all, team (by name), direct */
+            sources: components["schemas"]["SourceBody"][] | null;
+        };
+        EnvAccessCandidatesBody: {
+            /** @description Teams with no direct grant here, by name */
+            teams: components["schemas"]["CandidateTeamBody"][] | null;
+            /** @description Users who can sign in, are not instance admins and have no direct grant here, by username */
+            users: components["schemas"]["CandidateUserBody"][] | null;
+        };
+        EnvAccessListBody: {
+            /** @description Everyone who can use the environment, one entry each, highest role first. Instance admins are always listed. */
+            people: components["schemas"]["EnvAccessPersonBody"][] | null;
+            /** @description Teams with a grant on the environment or on every environment, highest role first */
+            teams: components["schemas"]["EnvAccessTeamBody"][] | null;
+        };
+        EnvAccessMemberBody: {
+            /** @description The user's display name, when set */
+            displayName?: string;
+            /**
+             * @description The role the team gives them on the environment
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description The user's ID */
+            userId: string;
+            /** @description The user's username */
+            username: string;
+        };
+        EnvAccessPersonBody: {
+            /** @description The user's display name, when set */
+            displayName?: string;
+            /** @description The union of the extra permissions the sources give; an Admin holds every one */
+            extras: string[] | null;
+            /** @description The person's own grant on this environment, the one an env Admin may edit or remove; absent for an instance admin and for someone who reaches the environment only through a team or a grant on every environment */
+            grant?: components["schemas"]["GrantRef"];
+            /** @description True for an instance admin, who holds every environment with every extra permission */
+            instanceAdmin: boolean;
+            /**
+             * @description The highest role any source gives
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description True for the signed-in user's own row */
+            self: boolean;
+            /** @description Every source, in the order instance, all, team, direct */
+            sources: components["schemas"]["SourceBody"][] | null;
+            /** @description The user's ID */
+            userId: string;
+            /** @description The user's username */
+            username: string;
+        };
+        EnvAccessTeamBody: {
+            /** @description The union of the extra permissions the team's grants give; an Admin holds every one */
+            extras: string[] | null;
+            /** @description The team's own grant on this environment, the one an env Admin may edit or remove; absent when the team reaches the environment only through a grant on every environment */
+            grant?: components["schemas"]["GrantRef"];
+            /** @description The members who can sign in, with the role the team gives each */
+            members: components["schemas"]["EnvAccessMemberBody"][] | null;
+            /** @description The team's name */
+            name: string;
+            /**
+             * @description The highest role the team's grants give on the environment
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description Every source: direct for a grant on this environment, all for a grant on every environment */
+            sources: components["schemas"]["SourceBody"][] | null;
+            /** @description The team's ID */
+            teamId: string;
+        };
+        EnvGrantInputBody: {
+            /** @description The state of the grant the editor started from. If the grant is different now, or gone, nothing is saved and the answer is 409 stale_change */
+            expected?: components["schemas"]["GrantStateBody"];
+            /** @description The extra permissions; only Operator may carry any. A Viewer answers 422 viewer_cannot_have_extras, an Admin 422 extras_implied, and a name that is not an extra permission 422 unknown_extra */
+            extras?: string[] | null;
+            /**
+             * @description The role
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description The user's or team's ID */
+            subjectId: string;
+            /**
+             * @description Whether the grant is made to a user or a team
+             * @enum {string}
+             */
+            subjectType: "user" | "team";
         };
         EnvWarningBody: {
             /** @description For cert_not_renewing and clock_skew: the agent */
@@ -1087,7 +2303,7 @@ export interface components {
             name: string;
             /** @description Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster */
             nodes: components["schemas"]["EnvironmentNodesBody"] | null;
-            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to */
+            /** @description Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to */
             pendingClusterId?: string;
             status: components["schemas"]["EnvironmentStatusBody"];
             /**
@@ -1311,6 +2527,94 @@ export interface components {
             /** @description At most 50 events, newest first */
             items: components["schemas"]["EventDTO"][] | null;
         };
+        ExportBackupInputBody: {
+            /** @description Locks the backup. At least 16 characters; Bayplan never stores it and cannot recover it */
+            passphrase: string;
+        };
+        GrantBody: {
+            /**
+             * Format: date-time
+             * @description When the grant was first made
+             */
+            createdAt: string;
+            /** @description The environment's ID, for scope env */
+            envId?: string;
+            /** @description The environment's name, for scope env */
+            envName?: string;
+            /** @description The extra (dangerous) permissions the grant carries; only an Operator grant may carry any */
+            extras: string[] | null;
+            /** @description The grant's ID */
+            id: string;
+            /**
+             * @description The role
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /**
+             * @description env for one environment, all for every environment, including ones added later
+             * @enum {string}
+             */
+            scope: "env" | "all";
+            /** @description The user's or team's ID */
+            subjectId: string;
+            /**
+             * @description Whether the grant is made to a user or a team
+             * @enum {string}
+             */
+            subjectType: "user" | "team";
+        };
+        GrantChangeBody: {
+            /** @description The extra permissions the grant would be saved with, for update */
+            extras?: string[] | null;
+            /**
+             * @description The change to preview: delete the grant, or save it with a new role and extras
+             * @enum {string}
+             */
+            op: "delete" | "update";
+            /**
+             * @description The role the grant would be saved with, for update
+             * @enum {string}
+             */
+            role?: "viewer" | "operator" | "admin";
+        };
+        GrantInputBody: {
+            /** @description The environment, for scope env */
+            envId?: string;
+            /** @description The state of the grant the editor started from. If the grant is different now, or gone, nothing is saved and the answer is 409 stale_change */
+            expected?: components["schemas"]["GrantStateBody"];
+            /** @description The extra permissions; only Operator may carry any. A Viewer answers 422 viewer_cannot_have_extras, an Admin 422 extras_implied, and a name that is not an extra permission 422 unknown_extra */
+            extras?: string[] | null;
+            /**
+             * @description The role
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /**
+             * @description env for one environment, all for every environment
+             * @enum {string}
+             */
+            scope: "env" | "all";
+        };
+        GrantRef: {
+            /** @description The extra permissions this grant gives on the environment */
+            extras: string[] | null;
+            /** @description The grant's ID, for the edit and remove routes */
+            id: string;
+            /**
+             * @description The role this grant gives on the environment
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+        };
+        GrantStateBody: {
+            /** @description The extra permissions the grant had when the editor opened it */
+            extras?: string[] | null;
+            /**
+             * @description The role the grant had when the editor opened it
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+        };
         ImageItem: {
             /** Format: date-time */
             created?: string;
@@ -1342,6 +2646,30 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        ImpactBody: {
+            /** @description Who loses which environment access, sorted by username then environment. Empty when no one does */
+            impact: components["schemas"]["ImpactRowBody"][] | null;
+        };
+        ImpactRowBody: {
+            /**
+             * @description The role the user would hold there once the change is applied; none when the access ends
+             * @enum {string}
+             */
+            after: "none" | "viewer" | "operator" | "admin";
+            /**
+             * @description The role the user holds there now
+             * @enum {string}
+             */
+            before: "viewer" | "operator" | "admin";
+            /** @description The environment's ID, or * for an assignment that applies to every environment */
+            environmentId: string;
+            /** @description The environment's name, or All environments for * */
+            environmentName: string;
+            /** @description The user who loses access */
+            userId: string;
+            /** @description The user's username */
+            username: string;
         };
         InstallBody: {
             /** @description The address the agent dials, for example wss://bayplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
@@ -1397,6 +2725,15 @@ export interface components {
              */
             rememberDays: number;
         };
+        LinkBody: {
+            /**
+             * Format: date-time
+             * @description When the link stops working
+             */
+            expiresAt: string;
+            /** @description The address to give the user. The secret is in the part after #, which a browser never sends to a server */
+            url: string;
+        };
         LocalHostBody: {
             /** @description Whether a unix socket exists at that path */
             detected: boolean;
@@ -1423,11 +2760,36 @@ export interface components {
             /** @description The account name; matched case-insensitively */
             username: string;
         };
+        LookupInviteBody: {
+            /** @description The name of this Bayplan instance */
+            instanceName: string;
+            /**
+             * @description invite for a new user choosing a first password, reset for an existing user choosing a new one
+             * @enum {string}
+             */
+            kind: "invite" | "reset";
+            /** @description Whose link it is */
+            username: string;
+        };
+        LookupInviteInputBody: {
+            /** @description The token from the part of the link after #token= */
+            token: string;
+        };
         MeBody: {
+            /** @description The user's access by environment ID, and the key * for access that applies to every environment */
+            access: {
+                [key: string]: components["schemas"]["EnvAccessBody"];
+            };
+            /** @description The usernames of the active instance admins, for a signed-in user who has no access to any environment; empty otherwise */
+            administrators: string[] | null;
             /** @description Sent as X-CSRF-Token on every mutating request */
             csrfToken: string;
             /** @description Effective permissions of the signed-in user */
             permissions: components["schemas"]["PermissionsBody"];
+            /** @description What every registered permission asks of a caller, so the UI can say what a disabled control needs */
+            requirements: {
+                [key: string]: components["schemas"]["RequirementBody"];
+            };
             /** @description The signed-in user */
             user: components["schemas"]["UserBody"];
         };
@@ -1477,6 +2839,27 @@ export interface components {
             /** Format: int64 */
             volumes: number;
         };
+        OwnedBody: {
+            /** @description The environment it acts on */
+            envId: string;
+            /** @description The environment's name; its ID when the environment no longer exists */
+            envName: string;
+            /** @description The kind of automation, such as git.sync. Stable; the label is for people */
+            kind: string;
+            /** @description The kind named for people, such as Git sync */
+            label: string;
+            /** @description The automation's name */
+            name: string;
+            /** @description True when its last run used host-escalating compose keys, so its owner must hold Admin on the environment */
+            needsEnvAdmin: boolean;
+            /** @description The automation's ID within its kind */
+            resourceId: string;
+            /**
+             * @description active, or why it is paused: the owner no longer holds the permission it needs, the owner is disabled, or the owner was deleted
+             * @enum {string}
+             */
+            state: "active" | "paused_lacks_permission" | "paused_disabled" | "paused_deleted";
+        };
         PermissionsBody: {
             /** @description Permissions per environment ID; the key * holds those that apply to every environment */
             environments: {
@@ -1484,6 +2867,15 @@ export interface components {
             };
             /** @description Installation-wide permissions */
             global: string[] | null;
+        };
+        PreviewTeamImpactInputBody: {
+            /**
+             * @description The change to preview
+             * @enum {string}
+             */
+            op: "delete" | "remove_member";
+            /** @description The member to remove, for remove_member */
+            userId?: string;
         };
         ProbeResult: {
             apiVersion?: string;
@@ -1512,9 +2904,140 @@ export interface components {
             swarmNodeState?: string;
             type?: string;
         };
+        ProfileBody: {
+            /** @description The name shown for the user; empty when none was set */
+            displayName: string;
+            /** @description The user's email address; empty when none was set. Bayplan never sends mail to it */
+            email: string;
+            /**
+             * Format: date-time
+             * @description The version of the profile a save is based on; send it back unchanged to PATCH
+             */
+            updatedAt: string;
+            /** @description The lower-cased username. It can never be changed */
+            username: string;
+        };
+        PutBackupScheduleInputBody: {
+            /** @description Turn scheduled backups on or off */
+            enabled: boolean;
+            /**
+             * @description How often
+             * @enum {string}
+             */
+            frequency: "daily" | "weekly";
+            /**
+             * Format: int64
+             * @description How many scheduled backups to keep
+             */
+            keep: number;
+            /** @description Locks the scheduled backups; at least 16 characters. Leave it out to keep the saved one. It is stored sealed in the vault and never returned */
+            passphrase?: string;
+            /** @description The time of day in UTC, as 24-hour HH:MM */
+            timeUtc: string;
+            /**
+             * Format: int64
+             * @description For a weekly schedule: the day, 0 for Sunday to 6 for Saturday
+             */
+            weekday?: number;
+        };
+        ReassignBody: {
+            /** @description The automation's kind, as the owned list gives it */
+            kind: string;
+            /** @description The ID of the user who takes it over */
+            ownerId: string;
+            /** @description The automation's ID within its kind */
+            resourceId: string;
+        };
         RecentEnvironmentsBody: {
             /** @description Up to 3 environment IDs, most recently used first */
             environmentIds: string[] | null;
+        };
+        RenameTeamInputBody: {
+            /** @description 1 to 64 characters; not case-sensitive for uniqueness */
+            name: string;
+            /**
+             * Format: date-time
+             * @description The updatedAt of the team this rename is based on. If the team changed since, the answer is 409 stale_change
+             */
+            updatedAt: string;
+        };
+        RequirementBody: {
+            /**
+             * @description role: held by the named role and above. extra: held by Admin, and by Operator only when the assignment carries it. instance: held by instance admins alone
+             * @enum {string}
+             */
+            kind: "role" | "extra" | "instance";
+            /**
+             * @description The lowest role that can hold the permission; absent when kind is instance
+             * @enum {string}
+             */
+            role?: "viewer" | "operator" | "admin";
+        };
+        RestoreApplyBody: {
+            /** @description Always true: Bayplan is swapping the database and restarting, and everyone is signed out */
+            restarting: boolean;
+        };
+        RestoreApplyInputBody: {
+            /** @description The name of this instance, typed to confirm that everything in it is replaced */
+            confirm: string;
+            /** @description The passphrase the backup was made with */
+            passphrase: string;
+            /** @description The ID the upload answered */
+            uploadId: string;
+        };
+        RestoreCheckInputBody: {
+            /** @description The passphrase the backup was made with */
+            passphrase: string;
+            /** @description The ID the upload answered */
+            uploadId: string;
+        };
+        RestoreCountsBody: {
+            /**
+             * Format: int64
+             * @description Audit entries in the backup
+             */
+            auditEntries: number;
+            /**
+             * Format: int64
+             * @description Environments in the backup
+             */
+            environments: number;
+            /**
+             * Format: int64
+             * @description Teams in the backup
+             */
+            teams: number;
+            /**
+             * Format: int64
+             * @description Users in the backup
+             */
+            users: number;
+        };
+        RestoreSummaryBody: {
+            /** @description The Bayplan release that made it */
+            appVersion: string;
+            /** @description False when the audit log did not verify when the backup was made */
+            chainVerified: boolean;
+            /** @description What the backup holds */
+            counts: components["schemas"]["RestoreCountsBody"];
+            /**
+             * Format: date-time
+             * @description When the backup was made
+             */
+            created: string;
+            /** @description The instance the backup was made on */
+            instanceName: string;
+            /** @description True when the backup is from an older Bayplan and is upgraded while restoring */
+            older: boolean;
+            /** @description The public URL stored in the backup, empty when it had none */
+            publicUrl: string;
+            /** @description True when the backup's public URL is not the address in use now */
+            publicUrlDiffers: boolean;
+            /**
+             * Format: int64
+             * @description The database schema version of the backup
+             */
+            schema: number;
         };
         RevokeAgentBody: {
             /** @description Why the node is revoked, for the audit log and the node table. Optional */
@@ -1530,6 +3053,55 @@ export interface components {
             hasAgents: boolean;
             /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
             install: components["schemas"]["InstallBody"];
+        };
+        ScheduleRunBody: {
+            /**
+             * Format: date-time
+             * @description When the run finished
+             */
+            at: string;
+            /** @description Why it failed, when it did */
+            error?: string;
+            /** @description The backup file it wrote, when it did */
+            fileName?: string;
+            /** @description Whether it wrote a backup */
+            ok: boolean;
+            /**
+             * Format: int64
+             * @description The size of that file in bytes
+             */
+            size?: number;
+        };
+        SessionBody: {
+            /**
+             * Format: date-time
+             * @description When the user signed in
+             */
+            createdAt: string;
+            /** @description True for the session making this request. Never true when an admin looks at another user's sessions */
+            current: boolean;
+            /** @description The session's public ID, to revoke it by. It is not the cookie and cannot be used to sign in */
+            id: string;
+            /** @description The address the session was created from; empty when unknown */
+            ip: string;
+            /**
+             * Format: date-time
+             * @description When the session last made a request
+             */
+            lastSeenAt: string;
+            /** @description The user agent the session was created with; empty when the browser sent none */
+            userAgent: string;
+        };
+        SessionsEndedBody: {
+            /**
+             * Format: int64
+             * @description How many sessions ended
+             */
+            ended: number;
+        };
+        SetInstanceAdminInputBody: {
+            /** @description True to make the user an instance admin, false to remove it */
+            enabled: boolean;
         };
         SettingsBody: {
             /** @description The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set */
@@ -1565,13 +3137,40 @@ export interface components {
             /** @description True when BAYPLAN_PUBLIC_URL fixes the public URL */
             publicUrlLocked: boolean;
         };
+        SetupRestoreApplyInputBody: {
+            /** @description The passphrase the backup was made with */
+            passphrase: string;
+            /** @description The setup token printed in the container log */
+            setupToken: string;
+            /** @description The ID the upload answered */
+            uploadId: string;
+        };
+        SetupRestoreCheckInputBody: {
+            /** @description The passphrase the backup was made with */
+            passphrase: string;
+            /** @description The setup token printed in the container log */
+            setupToken: string;
+            /** @description The ID the upload answered */
+            uploadId: string;
+        };
         SetupUserBody: {
             /** @description The user's ID */
             id: string;
-            /** @description The user's global role */
-            role: string;
+            /** @description Always true: the first user is the instance admin (D-01) */
+            instanceAdmin: boolean;
             /** @description The lower-cased username */
             username: string;
+        };
+        SourceBody: {
+            /**
+             * @description Where the grant comes from: the instance-admin flag, an assignment to every environment, a team the user belongs to, or an assignment to the user on this environment
+             * @enum {string}
+             */
+            kind: "instance" | "all" | "team" | "direct";
+            /** @description The team's ID; set when kind is team */
+            teamId?: string;
+            /** @description The team's name; set when kind is team */
+            teamName?: string;
         };
         SummaryCountsBody: {
             /**
@@ -1642,6 +3241,86 @@ export interface components {
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
         };
+        TeamBody: {
+            /**
+             * Format: date-time
+             * @description When the team was created
+             */
+            createdAt: string;
+            /**
+             * Format: int64
+             * @description How many environment assignments the team holds; 0 shows as No access
+             */
+            grantCount: number;
+            /** @description The team's ID */
+            id: string;
+            /**
+             * Format: int64
+             * @description How many users are in the team
+             */
+            memberCount: number;
+            /** @description The team's name; 1 to 64 characters, unique ignoring case */
+            name: string;
+            /**
+             * Format: date-time
+             * @description The version of the team a rename is based on; send it back unchanged to PATCH
+             */
+            updatedAt: string;
+        };
+        TeamDetailBody: {
+            /**
+             * Format: date-time
+             * @description When the team was created
+             */
+            createdAt: string;
+            /**
+             * Format: int64
+             * @description How many environment assignments the team holds; 0 shows as No access
+             */
+            grantCount: number;
+            /** @description The team's ID */
+            id: string;
+            /**
+             * Format: int64
+             * @description How many users are in the team
+             */
+            memberCount: number;
+            /** @description The members, sorted by username */
+            members: components["schemas"]["TeamMemberBody"][] | null;
+            /** @description The team's name; 1 to 64 characters, unique ignoring case */
+            name: string;
+            /**
+             * Format: date-time
+             * @description The version of the team a rename is based on; send it back unchanged to PATCH
+             */
+            updatedAt: string;
+        };
+        TeamMemberBody: {
+            /**
+             * Format: date-time
+             * @description When the user joined the team
+             */
+            addedAt: string;
+            /** @description The name shown for the user; empty when none was set */
+            displayName: string;
+            /** @description True for an instance admin. Membership never grants this */
+            instanceAdmin: boolean;
+            /**
+             * @description The user's status, judged like the users table
+             * @enum {string}
+             */
+            status: "active" | "disabled" | "locked" | "invite_pending" | "invite_expired" | "deleted";
+            /** @description The user's ID */
+            userId: string;
+            /** @description The lower-cased username */
+            username: string;
+        };
+        TeamRefBody: {
+            /** @description The team's ID */
+            id: string;
+            /** @description The team's name */
+            name: string;
+        };
         TokenStatusBody: {
             /**
              * Format: date-time
@@ -1658,6 +3337,29 @@ export interface components {
              */
             generation: number;
         };
+        TransferOwnedInputBody: {
+            /** @description The ID of the user who takes it over */
+            ownerId: string;
+        };
+        UnknownAgentBody: {
+            /** @description The environment whose CA signed the agent's certificate */
+            envId: string;
+            /** @description That environment's name */
+            envName: string;
+            /** @description The address of the newest attempt */
+            ip: string;
+            /**
+             * Format: date-time
+             * @description When the agent last tried to connect
+             */
+            lastAttempt: string;
+            /** @description The agent as its certificate names it (the certificate's common name) */
+            node: string;
+        };
+        UnknownAgentsBody: {
+            /** @description Newest attempt first; empty when there are none */
+            items: components["schemas"]["UnknownAgentBody"][] | null;
+        };
         UpdateAgentsBody: {
             /**
              * Format: int64
@@ -1670,6 +3372,17 @@ export interface components {
             autoUpdate?: boolean;
             /** @description The new name, 1 to 64 characters */
             name?: string;
+        };
+        UpdateMyProfileInputBody: {
+            /** @description The name shown for you; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
+            displayName?: string;
+            /** @description A bare address, or empty to clear it; leave it out to keep it. Bayplan never sends mail */
+            email?: string;
+            /**
+             * Format: date-time
+             * @description The updatedAt of the profile this edit is based on. If it changed since, the answer is 409 stale_change
+             */
+            updatedAt: string;
         };
         UpdateSettingsInputBody: {
             /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while BAYPLAN_AGENT_URL is set. An http agent URL for a host that is not this machine is refused with 422 insecure_agent_url unless BAYPLAN_AGENT_ALLOW_INSECURE is on */
@@ -1688,11 +3401,122 @@ export interface components {
              */
             state: "idle" | "updating" | "failed";
         };
+        UpdateUserInputBody: {
+            /** @description The name shown for the user; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
+            displayName?: string;
+            /** @description A bare address, or empty to clear it; leave it out to keep it. Bayplan never sends mail */
+            email?: string;
+            /**
+             * Format: date-time
+             * @description The updatedAt of the user this edit is based on. If the user changed since, the answer is 409 stale_change
+             */
+            updatedAt: string;
+        };
+        UserAccessBody: {
+            /** @description The environments the user can reach, sorted by name */
+            environments: components["schemas"]["EffectiveEnvBody"][] | null;
+            /** @description The grants made to this user directly, the ones editable here */
+            grants: components["schemas"]["GrantBody"][] | null;
+            /** @description True for an instance admin, who holds every environment with every extra permission and so has no environments listed */
+            instanceAdmin: boolean;
+        };
         UserBody: {
+            /** @description The name shown for the user; empty when none was set, and the SPA then shows the username */
+            displayName: string;
             /** @description The user's ID */
             id: string;
-            /** @description The user's global role, empty when they have none */
-            role: string;
+            /** @description True for an instance admin: Admin on every environment, with every extra, and the only holder of the installation-wide permissions (D-01) */
+            instanceAdmin: boolean;
+            /** @description The lower-cased username */
+            username: string;
+        };
+        UserDetailBody: {
+            /**
+             * Format: date-time
+             * @description When the user was created
+             */
+            createdAt: string;
+            /** @description The name shown for the user; empty when none was set */
+            displayName: string;
+            /** @description The user's email address; empty when none was set. Bayplan never sends mail to it */
+            email: string;
+            /** @description The user's ID */
+            id: string;
+            /** @description True for an instance admin */
+            instanceAdmin: boolean;
+            /** @description True for the only instance admin who can still sign in. Demoting, disabling or deleting them answers 409 last_instance_admin, so a screen can show those actions as unavailable */
+            lastInstanceAdmin: boolean;
+            /**
+             * Format: date-time
+             * @description When the user last signed in; absent if they never have
+             */
+            lastLoginAt?: string;
+            /**
+             * Format: date-time
+             * @description While the account is locked: when the lock ends
+             */
+            lockedUntil?: string;
+            /**
+             * @description Locked, then disabled, then invite expired, then invite pending, then active
+             * @enum {string}
+             */
+            status: "active" | "disabled" | "locked" | "invite_pending" | "invite_expired" | "deleted";
+            /**
+             * Format: int64
+             * @description How many teams the user belongs to
+             */
+            teamCount: number;
+            /** @description The teams the user belongs to, sorted by name. The users table leaves it empty and shows teamCount; the user's own page fills it in */
+            teams: components["schemas"]["TeamRefBody"][] | null;
+            /**
+             * Format: date-time
+             * @description The version of the user a profile save is based on; send it back unchanged to PATCH
+             */
+            updatedAt: string;
+            /** @description The lower-cased username */
+            username: string;
+        };
+        UserRefBody: {
+            /** @description The name shown for the user; empty when none was set */
+            displayName: string;
+            /** @description The user's ID */
+            id: string;
+            /** @description The lower-cased username */
+            username: string;
+        };
+        UserSummaryBody: {
+            /** @description The name shown for the user; empty when none was set */
+            displayName: string;
+            /** @description The user's email address; empty when none was set. Bayplan never sends mail to it */
+            email: string;
+            /** @description The user's ID */
+            id: string;
+            /** @description True for an instance admin */
+            instanceAdmin: boolean;
+            /** @description True for the only instance admin who can still sign in. Demoting, disabling or deleting them answers 409 last_instance_admin, so a screen can show those actions as unavailable */
+            lastInstanceAdmin: boolean;
+            /**
+             * Format: date-time
+             * @description When the user last signed in; absent if they never have
+             */
+            lastLoginAt?: string;
+            /**
+             * Format: date-time
+             * @description While the account is locked: when the lock ends
+             */
+            lockedUntil?: string;
+            /**
+             * @description Locked, then disabled, then invite expired, then invite pending, then active
+             * @enum {string}
+             */
+            status: "active" | "disabled" | "locked" | "invite_pending" | "invite_expired" | "deleted";
+            /**
+             * Format: int64
+             * @description How many teams the user belongs to
+             */
+            teamCount: number;
+            /** @description The teams the user belongs to, sorted by name. The users table leaves it empty and shows teamCount; the user's own page fills it in */
+            teams: components["schemas"]["TeamRefBody"][] | null;
             /** @description The lower-cased username */
             username: string;
         };
@@ -1736,13 +3560,18 @@ export interface components {
             truncated: boolean;
         };
         WarningBody: {
+            /**
+             * Format: int64
+             * @description For refusal_burst: how many times that user was refused inside one minute. For unknown_agents: how many agents Bayplan does not know
+             */
+            count?: number;
             /** @description For proxy_url_mismatch: the host the newest request was for */
             host?: string;
             /**
              * @description Which warning this is
              * @enum {string}
              */
-            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing";
+            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing" | "refusal_burst" | "backup_failed" | "unknown_agents";
             /** @description For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from */
             ip?: string;
             /** @description For key_backup: where the generated encryption key is stored */
@@ -1751,6 +3580,13 @@ export interface components {
             reason?: string;
             /** @description For proxy_url_mismatch: the scheme the newest request effectively used, http or https */
             scheme?: string;
+            /**
+             * Format: date-time
+             * @description For backup_failed: when the last good scheduled backup finished; absent when there has not been one
+             */
+            since?: string;
+            /** @description For refusal_burst: the username that was refused. For backup_failed: why the last scheduled backup failed */
+            subject?: string;
             /** @description For proxy_url_mismatch: the public URL the request should have matched */
             url?: string;
         };
@@ -1826,7 +3662,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": string[] | null;
+                    "application/json": components["schemas"]["AuditActorDTO"][] | null;
                 };
             };
             /** @description Error */
@@ -1946,6 +3782,539 @@ export interface operations {
             };
         };
     };
+    exportBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportBackupInputBody"];
+            };
+        };
+        responses: {
+            /** @description The backup file */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listBackupFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupFilesOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    downloadBackupFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A file name from the list; only names of the form bayplan-backup-YYYYMMDD-HHMM.bayplan are served */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The backup file */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getBackupInfo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    applyRestore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreApplyInputBody"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreApplyBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkRestore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreCheckInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreSummaryBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    discardRestoreUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getBackupSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupScheduleBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putBackupSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBackupScheduleInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupScheduleBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEnvironmentInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvAccessListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putEnvAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnvGrantInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvAccessCandidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvAccessCandidatesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteEnvAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewEnvAccessImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantChangeBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    adoptEnvironmentCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptClusterBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listEnvironmentAgents: {
         parameters: {
             query?: never;
@@ -1967,6 +4336,106 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AgentListBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RevokeAgentBody"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unblockEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateEnvironmentAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {
@@ -2258,6 +4727,39 @@ export interface operations {
             };
         };
     };
+    updateEnvironmentAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateAgentsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listVolumes: {
         parameters: {
             query?: {
@@ -2376,6 +4878,36 @@ export interface operations {
             };
         };
     };
+    listUnknownAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnknownAgentsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listEnvironmentWarnings: {
         parameters: {
             query?: never;
@@ -2423,176 +4955,6 @@ export interface operations {
         responses: {
             /** @description No Content */
             204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
-    updateEnvironment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateEnvironmentInputBody"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "Cache-Control"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EnvironmentBody"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
-    adoptEnvironmentCluster: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "Cache-Control"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdoptClusterBody"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
-    revokeEnvironmentAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
-                agentId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["RevokeAgentBody"];
-            };
-        };
-        responses: {
-            /** @description No Content */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
-    unblockEnvironmentAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
-                agentId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description No Content */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
-    updateEnvironmentAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-                /** @description The agent ID, as listed by GET /api/env/{envId}/agents */
-                agentId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Accepted */
-            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2738,39 +5100,6 @@ export interface operations {
             };
         };
     };
-    updateEnvironmentAgents: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The environment ID */
-                envId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Accepted */
-            202: {
-                headers: {
-                    "Cache-Control"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UpdateAgentsBody"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
-            };
-        };
-    };
     getInstance: {
         parameters: {
             query?: never;
@@ -2787,6 +5116,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    acceptInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptInviteInputBody"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    lookupInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LookupInviteInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LookupInviteBody"];
                 };
             };
             /** @description Error */
@@ -2895,6 +5290,70 @@ export interface operations {
             };
         };
     };
+    getMyProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateMyProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMyProfileInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listRecentEnvironments: {
         parameters: {
             query?: never;
@@ -2943,6 +5402,170 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listMySessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeMyOtherSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsEndedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeMySession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's public ID, as the session list gives it */
+                publicId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEligibleOwners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The automation's kind, as the owned list gives it */
+                kind: string;
+                /** @description The automation's ID within its kind */
+                resourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRefBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    transferOwned: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The automation's kind, as the owned list gives it */
+                kind: string;
+                /** @description The automation's ID within its kind */
+                resourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferOwnedInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnedBody"];
+                };
             };
             /** @description Error */
             default: {
@@ -3054,6 +5677,74 @@ export interface operations {
             };
         };
     };
+    setupRestoreApply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRestoreApplyInputBody"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreApplyBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setupRestoreCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRestoreCheckInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreSummaryBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     verifySetupToken: {
         parameters: {
             query?: never;
@@ -3074,6 +5765,1039 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listTeams: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTeamInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    renameTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameTeamInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listTeamGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putTeamGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteTeamGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewTeamGrantImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantChangeBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewTeamImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewTeamImpactInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    addTeamMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddTeamMembersInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeTeamMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+                /** @description The member's user ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSummaryBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUserInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateUserBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DeleteUserInputBody"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUserInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getUserAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserAccessBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    enableUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putUserGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteUserGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewUserGrantImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantChangeBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setInstanceAdmin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetInstanceAdminInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    regenerateInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listUserOwned: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnedBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    resetUserPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listUserSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeUserSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsEndedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unlockUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
                 };
             };
             /** @description Error */

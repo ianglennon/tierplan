@@ -218,20 +218,9 @@ func TestEnvironmentListShowsEachEnvironmentWithItsStatus(t *testing.T) {
 func TestEnvironmentListHidesEnvironmentsTheCallerCannotRead(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
-	for _, q := range []string{
-		`INSERT INTO roles (id, name, builtin) VALUES ('role-viewer', 'viewer', 0)`,
-		`INSERT INTO role_permissions (role_id, permission) VALUES ('role-viewer', 'environments.read')`,
-	} {
-		if _, err := f.st.Write.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
 	f.addUser(t, "nobody", false)
 	f.addUser(t, "viewer", false)
-	if _, err := f.st.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
-		VALUES ('ra-1', 'user', 'id-viewer', 'role-viewer', ?, 0)`, e.ID); err != nil {
-		t.Fatal(err)
-	}
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
 
 	list := func(user string) string {
 		cookie, _ := f.signIn(t, user, false)
@@ -253,17 +242,17 @@ func TestEnvironmentRenameAndRemoveAuditAndAnswer404ForAnUnknownID(t *testing.T)
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	e := f.add(t)
 
-	rec := f.req(t, http.MethodPatch, "/api/environments/"+e.ID, `{"name":" Lab "}`)
+	rec := f.req(t, http.MethodPatch, "/api/env/"+e.ID, `{"name":" Lab "}`)
 	if rec.code != http.StatusOK || rec.env(t).Name != "Lab" {
 		t.Fatalf("rename: %d %s", rec.code, rec.body)
 	}
 	if got := f.audits(t, audit.ActionEnvironmentRenamed); len(got) != 1 || got[0].TargetID != e.ID {
 		t.Errorf("environment.renamed = %+v", got)
 	}
-	if rec := f.req(t, http.MethodPatch, "/api/environments/"+e.ID, `{"name":""}`); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "invalid_name" {
+	if rec := f.req(t, http.MethodPatch, "/api/env/"+e.ID, `{"name":""}`); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "invalid_name" {
 		t.Errorf("empty name: %d %q", rec.code, rec.ptyp)
 	}
-	if rec := f.req(t, http.MethodPatch, "/api/environments/nope", `{"name":"x"}`); rec.code != http.StatusNotFound {
+	if rec := f.req(t, http.MethodPatch, "/api/env/nope", `{"name":"x"}`); rec.code != http.StatusNotFound {
 		t.Errorf("rename unknown: %d %s", rec.code, rec.body)
 	}
 	if rec := f.req(t, http.MethodDelete, "/api/environments/nope", ""); rec.code != http.StatusNotFound {
@@ -340,7 +329,7 @@ func TestEnvironmentMutationsRequireTheCSRFHeader(t *testing.T) {
 	e := f.add(t)
 	for _, c := range []struct{ method, path, body string }{
 		{http.MethodPost, "/api/environments", `{"kind":"local"}`},
-		{http.MethodPatch, "/api/environments/" + e.ID, `{"name":"x"}`},
+		{http.MethodPatch, "/api/env/" + e.ID, `{"name":"x"}`},
 		{http.MethodDelete, "/api/environments/" + e.ID, ""},
 		{http.MethodPost, "/api/env/" + e.ID + "/reconnect", ""},
 	} {
@@ -361,12 +350,18 @@ func TestEnvironmentMutationsNeedAPermissionAndASession(t *testing.T) {
 	cookie, csrf := f.signIn(t, "viewer", false)
 	for _, c := range []struct{ method, path, body string }{
 		{http.MethodPost, "/api/environments", `{"kind":"local"}`},
-		{http.MethodPatch, "/api/environments/" + e.ID, `{"name":"x"}`},
+		{http.MethodPatch, "/api/env/" + e.ID, `{"name":"x"}`},
 		{http.MethodDelete, "/api/environments/" + e.ID, ""},
 		{http.MethodPost, "/api/env/" + e.ID + "/reconnect", ""},
 	} {
-		if rec := f.call(t, authReq{method: c.method, path: c.path, body: c.body, cookie: cookie, csrf: csrf}); rec.Code != http.StatusForbidden {
-			t.Errorf("%s %s as a user with no permissions: %d, want 403", c.method, c.path, rec.Code)
+		// A global route refuses with 403; an environment the user has no grant on
+		// is not visible to them at all, so its route answers 404 (D-08).
+		want := http.StatusForbidden
+		if strings.HasPrefix(c.path, "/api/env/") {
+			want = http.StatusNotFound
+		}
+		if rec := f.call(t, authReq{method: c.method, path: c.path, body: c.body, cookie: cookie, csrf: csrf}); rec.Code != want {
+			t.Errorf("%s %s as a user with no permissions: %d, want %d", c.method, c.path, rec.Code, want)
 		}
 		if rec := f.call(t, authReq{method: c.method, path: c.path, body: c.body}); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s anonymous: %d, want 401", c.method, c.path, rec.Code)
@@ -485,89 +480,144 @@ func TestEnvironmentAddAgentNeedsTheCreatePermission(t *testing.T) {
 	}
 }
 
-// addUserWithGlobalPerms adds a user holding a custom role, assigned
-// everywhere, that grants exactly perms (D-49: the split permissions).
-func (f *authFixture) addUserWithGlobalPerms(t *testing.T, name string, perms ...string) {
+// addInstanceAdmin adds a user who is an instance admin (D-01) and returns the
+// user's ID.
+func (f *authFixture) addInstanceAdmin(t *testing.T, name string) string {
 	t.Helper()
-	f.addUser(t, name, false)
-	role := "role-" + name
-	if _, err := f.st.Write.Exec(`INSERT INTO roles (id, name, builtin) VALUES (?, ?, 0)`, role, name); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range perms {
-		if _, err := f.st.Write.Exec(`INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)`, role, p); err != nil {
-			t.Fatal(err)
-		}
+	return f.addUser(t, name, true)
+}
+
+// addEnvRole gives a user that addUser has made a role ("viewer", "operator" or
+// "admin") on one environment, or on every environment when envID is empty. A
+// subject holds one assignment per scope.
+func (f *authFixture) addEnvRole(t *testing.T, name, envID, role string) {
+	t.Helper()
+	var env any
+	if envID != "" {
+		env = envID
 	}
 	if _, err := f.st.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
-		VALUES (?, 'user', ?, ?, NULL, 0)`, "ra-"+name, "id-"+name, role); err != nil {
+		VALUES (?, 'user', ?, ?, ?, 0)`, "ra-"+name+"-"+envID, "id-"+name, role, env); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestEnvironmentAddNeedsEnvironmentsCreateNotManage(t *testing.T) {
-	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.addUserWithGlobalPerms(t, "manager", "environments.manage", "environments.delete")
-	f.addUserWithGlobalPerms(t, "creator", "environments.create")
+// addAllEnvAdmin adds a user who is Admin on every environment but is not an
+// instance admin: the caller D-01 refuses every global operation.
+func (f *authFixture) addAllEnvAdmin(t *testing.T, name string) {
+	t.Helper()
+	f.addUser(t, name, false)
+	f.addEnvRole(t, name, "", "admin")
+}
 
-	cookie, csrf := f.signIn(t, "manager", false)
+func TestEnvironmentAddIsForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.addAllEnvAdmin(t, "envadmin")
+
+	cookie, csrf := f.signIn(t, "envadmin", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"local"}`, cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("add with environments.manage only: %d %s, want 403", rec.Code, rec.Body)
+		t.Fatalf("add as an admin of every environment: %d %s, want 403", rec.Code, rec.Body)
 	}
 	denied := f.audits(t, audit.ActionPermissionDenied)
-	if len(denied) != 1 || denied[0].ActorID != "id-manager" || denied[0].Result != "denied" || denied[0].TargetID != "POST /api/environments" {
+	if len(denied) != 1 || denied[0].ActorID != "id-envadmin" || denied[0].Result != "denied" || denied[0].TargetID != "POST /api/environments" {
 		t.Fatalf("permission.denied entries = %+v", denied)
 	}
 
-	cookie, csrf = f.signIn(t, "creator", false)
-	rec = f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"local"}`, cookie: cookie, csrf: csrf})
+	f.addInstanceAdmin(t, "owner")
+	ownerCookie, ownerCSRF := f.signIn(t, "owner", false)
+	rec = f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"local"}`, cookie: ownerCookie, csrf: ownerCSRF})
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("add with environments.create: %d %s, want 201", rec.Code, rec.Body)
+		t.Fatalf("add as an instance admin: %d %s, want 201", rec.Code, rec.Body)
 	}
 }
 
-func TestEnvironmentRenameNeedsEnvironmentsManage(t *testing.T) {
-	f := newEnvFix(t, dockertest.FakeConfig{})
-	e := f.add(t)
-	f.addUserWithGlobalPerms(t, "creator", "environments.create", "environments.delete")
-	f.addUserWithGlobalPerms(t, "manager", "environments.manage")
-
-	cookie, csrf := f.signIn(t, "creator", false)
-	rec := f.call(t, authReq{method: http.MethodPatch, path: "/api/environments/" + e.ID, body: `{"name":"Lab"}`, cookie: cookie, csrf: csrf})
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("rename without environments.manage: %d %s, want 403", rec.Code, rec.Body)
+// asUser calls a route as an existing user (made by addUser), signing them in first.
+func (f *authFixture) asUser(t *testing.T, name, method, path, body string) *envRec {
+	t.Helper()
+	cookie, csrf := f.signIn(t, name, false)
+	rec := f.call(t, authReq{method: method, path: path, body: body, cookie: cookie, csrf: csrf})
+	ptyp := ""
+	if rec.Code >= 400 {
+		ptyp = problemType(t, rec)
 	}
-	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-creator" {
+	return &envRec{rec.Code, rec.Body.Bytes(), ptyp}
+}
+
+// addEnvUser makes a user who holds one role on one environment and nothing else.
+func (f *authFixture) addEnvUser(t *testing.T, name, envID, role string) {
+	t.Helper()
+	f.addUser(t, name, false)
+	f.addEnvRole(t, name, envID, role)
+}
+
+// An env Admin renames the environment they administer through the environment-scoped
+// route (D-07), sees no other environment, and cannot go through the old path.
+func TestAnEnvAdminRenamesTheirOwnEnvironmentAndNoOtherThroughTheEnvironmentScopedRoute(t *testing.T) {
+	f := newAgentFix(t)
+	a := f.srv.NewEnvironment(t, "Alpha")
+	b := f.srv.NewEnvironment(t, "Beta")
+	f.addUser(t, "adminone", false)
+	f.addEnvRole(t, "adminone", a.ID, "admin")
+	f.addUser(t, "viewerone", false)
+	f.addEnvRole(t, "viewerone", a.ID, "viewer")
+
+	rec := f.asUser(t, "adminone", http.MethodPatch, "/api/env/"+a.ID, `{"name":"prod"}`)
+	if rec.code != http.StatusOK || rec.env(t).Name != "prod" {
+		t.Fatalf("rename as an env Admin on the environment: %d %s, want 200", rec.code, rec.body)
+	}
+	renamed := f.audits(t, audit.ActionEnvironmentRenamed)
+	if len(renamed) != 1 || renamed[0].TargetID != a.ID || renamed[0].ActorID != "id-adminone" {
+		t.Fatalf("environment.renamed = %+v", renamed)
+	}
+	var envID string
+	if err := f.st.Read.QueryRow(`SELECT env_id FROM audit_log WHERE action = ?`, audit.ActionEnvironmentRenamed).Scan(&envID); err != nil || envID != a.ID {
+		t.Fatalf("environment.renamed env_id = %q (%v), want %s", envID, err, a.ID)
+	}
+
+	rec = f.asUser(t, "adminone", http.MethodPatch, "/api/env/"+b.ID, `{"name":"stolen"}`)
+	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Fatalf("rename of another environment: %d %q %s, want 404 environment_not_found", rec.code, rec.ptyp, rec.body)
+	}
+	if got := f.audits(t, audit.ActionEnvironmentRenamed); len(got) != 1 {
+		t.Fatalf("a refused rename was audited as a rename: %+v", got)
+	}
+
+	rec = f.asUser(t, "viewerone", http.MethodPatch, "/api/env/"+a.ID, `{"name":"nope"}`)
+	if rec.code != http.StatusForbidden {
+		t.Fatalf("rename as a Viewer: %d %s, want 403", rec.code, rec.body)
+	}
+	denied := f.audits(t, audit.ActionPermissionDenied)
+	if len(denied) == 0 || denied[len(denied)-1].ActorID != "id-viewerone" {
 		t.Fatalf("permission.denied entries = %+v", denied)
 	}
 
-	cookie, csrf = f.signIn(t, "manager", false)
-	rec = f.call(t, authReq{method: http.MethodPatch, path: "/api/environments/" + e.ID, body: `{"name":"Lab"}`, cookie: cookie, csrf: csrf})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("rename with environments.manage: %d %s, want 200", rec.Code, rec.Body)
+	// An instance admin renames any environment; the old path is gone.
+	if rec := f.req(t, http.MethodPatch, "/api/env/"+b.ID, `{"name":"Beta 2"}`); rec.code != http.StatusOK {
+		t.Fatalf("rename as an instance admin: %d %s, want 200", rec.code, rec.body)
+	}
+	if rec := f.req(t, http.MethodPatch, "/api/environments/"+a.ID, `{"name":"x"}`); rec.code != http.StatusNotFound && rec.code != http.StatusMethodNotAllowed {
+		t.Fatalf("PATCH on the old path: %d %s, want 404 or 405", rec.code, rec.body)
 	}
 }
 
-func TestEnvironmentRemoveNeedsEnvironmentsDelete(t *testing.T) {
+func TestEnvironmentRemoveIsForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	e := f.add(t)
-	f.addUserWithGlobalPerms(t, "manager", "environments.create", "environments.manage")
-	f.addUserWithGlobalPerms(t, "deleter", "environments.delete")
+	f.addAllEnvAdmin(t, "envadmin")
 
-	cookie, csrf := f.signIn(t, "manager", false)
+	cookie, csrf := f.signIn(t, "envadmin", false)
 	rec := f.call(t, authReq{method: http.MethodDelete, path: "/api/environments/" + e.ID, cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("remove without environments.delete: %d %s, want 403", rec.Code, rec.Body)
+		t.Fatalf("remove as an admin of every environment: %d %s, want 403", rec.Code, rec.Body)
 	}
-	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-manager" {
+	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-envadmin" {
 		t.Fatalf("permission.denied entries = %+v", denied)
 	}
 
-	cookie, csrf = f.signIn(t, "deleter", false)
-	rec = f.call(t, authReq{method: http.MethodDelete, path: "/api/environments/" + e.ID, cookie: cookie, csrf: csrf})
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("remove with environments.delete: %d %s, want 204", rec.Code, rec.Body)
+	rec2 := f.req(t, http.MethodDelete, "/api/environments/"+e.ID, "")
+	if rec2.code != http.StatusNoContent {
+		t.Fatalf("remove as an instance admin: %d %s, want 204", rec2.code, rec2.body)
 	}
 }
 

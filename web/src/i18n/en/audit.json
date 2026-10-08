@@ -5,6 +5,7 @@
     "retention_one": "Entries are kept for {{count}} day.",
     "retention_other": "Entries are kept for {{count}} days.",
     "retentionForever": "Entries are kept forever.",
+    "scopedCaption": "Showing entries for the environments you administer.",
     "integrity": {
       "before": "Verify integrity with",
       "command": "bayplan audit verify",
@@ -67,7 +68,8 @@
         "logout": "Signed out",
         "locked": "Account locked",
         "unlocked": "Unlocked account",
-        "password_changed": "Changed password"
+        "password_changed": "Changed password",
+        "link_refused": "Refused invite or reset link"
       },
       "setup": {
         "token_failed": "Wrong setup token",
@@ -105,11 +107,70 @@
         "acknowledged": "Acknowledged warning"
       },
       "audit": {
-        "pruned": "Pruned audit log"
+        "pruned": "Pruned audit log",
+        "reanchored": "Re-anchored audit log"
       },
       "permission": {
         "denied": "Permission denied"
+      },
+      "user": {
+        "created": "Created user",
+        "updated": "Updated user",
+        "disabled": "Disabled user",
+        "enabled": "Enabled user",
+        "deleted": "Deleted user",
+        "invite_created": "Created invite link",
+        "invite_regenerated": "Regenerated invite link",
+        "invite_accepted": "Accepted invite",
+        "password_reset_issued": "Issued password reset link",
+        "password_reset_completed": "Completed password reset",
+        "admin_granted": "Made instance admin",
+        "admin_revoked": "Removed instance admin",
+        "sessions_revoked": "Ended all sessions"
+      },
+      "session": {
+        "revoked": "Revoked session"
+      },
+      "team": {
+        "created": "Created team",
+        "renamed": "Renamed team",
+        "deleted": "Deleted team",
+        "member_added": "Added team member",
+        "member_removed": "Removed team member"
+      },
+      "access": {
+        "granted": "Granted access",
+        "updated": "Changed access",
+        "revoked": "Removed access"
+      },
+      "owner": {
+        "transferred": "Transferred ownership"
+      },
+      "automation": {
+        "paused": "Paused automation",
+        "resumed": "Resumed automation"
+      },
+      "backup": {
+        "exported": "Exported backup",
+        "scheduled_run": "Ran scheduled backup",
+        "failed": "Backup failed",
+        "checked": "Checked backup file",
+        "restored": "Restored backup",
+        "schedule_updated": "Changed backup schedule",
+        "upload_discarded": "Discarded uploaded backup"
+      },
+      "key": {
+        "rotated": "Rotated master key"
       }
+    },
+    "coalesced": {
+      "badge": "×{{count}}",
+      "first": "First refused",
+      "last": "Last refused",
+      "count": "Count"
+    },
+    "reasons": {
+      "environment_not_visible": "Environment not visible to this user (answered as not found)."
     },
     "anonymous": "Anonymous",
     "none": "—",
@@ -137,6 +198,7 @@
       "reason": "Reason",
       "extra": "Details",
       "id": "Entry ID"
-    }
+    },
+    "deleted": "(deleted)"
   }
 }

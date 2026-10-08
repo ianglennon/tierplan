@@ -5,7 +5,9 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Navigate } from "@tanstack/react-router";
 
 import { environmentsQuery, recentQuery } from "@/api/environments";
+import { NoAccessState } from "@/components/no-access-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { hasNoEnvironmentAccess, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // A short staleTime: both lists are read again when they are older than this,
@@ -27,8 +29,24 @@ const FRESH_MS = 5_000;
 // which lives on /environments.
 function Home() {
   const t = useT();
-  const recent = useQuery({ ...recentQuery, staleTime: FRESH_MS, retry: false });
-  const list = useQuery({ ...environmentsQuery, staleTime: FRESH_MS, retry: false });
+  const { data: me } = useMe();
+  // A user with no access to any environment has nothing to open: they get the
+  // no-access state here, in the shell, and the lists are not read (D-08).
+  const noAccess = hasNoEnvironmentAccess(me);
+  const recent = useQuery({
+    ...recentQuery,
+    staleTime: FRESH_MS,
+    retry: false,
+    enabled: !noAccess,
+  });
+  const list = useQuery({
+    ...environmentsQuery,
+    staleTime: FRESH_MS,
+    retry: false,
+    enabled: !noAccess,
+  });
+
+  if (noAccess) return <NoAccessState administrators={me?.administrators} />;
 
   const settled = [recent, list].every((q) => !q.isPending && !q.isFetching);
   if (settled) {

@@ -236,17 +236,16 @@ func TestTokenEndpointsAnswer404EnvironmentNotFoundForAnUnknownEnvironment(t *te
 	}
 }
 
-func TestTokenEndpointsNeedEnvironmentsTokenNotManage(t *testing.T) {
+func TestTokenEndpointsAreForInstanceAdminsNotForAnAdminOfEveryEnvironment(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	id, _ := f.agentEnv(t)
-	f.addUserWithGlobalPerms(t, "manager", "environments.manage", "environments.create", "environments.delete", "environments.read")
-	f.addUserWithGlobalPerms(t, "keeper", "environments.token")
+	f.addAllEnvAdmin(t, "manager")
 
 	cookie, csrf := f.signIn(t, "manager", false)
 	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodGet} {
 		rec := f.call(t, authReq{method: method, path: "/api/environments/" + id + "/token", cookie: cookie, csrf: csrf})
 		if rec.Code != http.StatusForbidden {
-			t.Errorf("%s without environments.token: %d %s, want 403", method, rec.Code, rec.Body)
+			t.Errorf("%s as an admin of every environment: %d %s, want 403", method, rec.Code, rec.Body)
 		}
 	}
 	denied := f.audits(t, audit.ActionPermissionDenied)
@@ -257,11 +256,10 @@ func TestTokenEndpointsNeedEnvironmentsTokenNotManage(t *testing.T) {
 		t.Errorf("%d token entries written by a caller who was refused", n)
 	}
 
-	cookie, csrf = f.signIn(t, "keeper", false)
 	for method, want := range map[string]int{http.MethodGet: http.StatusOK, http.MethodPost: http.StatusOK, http.MethodDelete: http.StatusNoContent} {
-		rec := f.call(t, authReq{method: method, path: "/api/environments/" + id + "/token", cookie: cookie, csrf: csrf})
-		if rec.Code != want {
-			t.Errorf("%s with environments.token: %d %s, want %d", method, rec.Code, rec.Body, want)
+		rec := f.req(t, method, "/api/environments/"+id+"/token", "")
+		if rec.code != want {
+			t.Errorf("%s as an instance admin: %d %s, want %d", method, rec.code, rec.body, want)
 		}
 	}
 }
@@ -458,7 +456,7 @@ func TestAgentListReportsTheClockOffsetOfAConnectedAgent(t *testing.T) {
 	}
 }
 
-func TestAgentListOfAnEnvironmentTheCallerCannotReadIsRefusedWithNothingOfItAndAnUnknownOneIs404(t *testing.T) {
+func TestAgentListOfAnEnvironmentTheCallerHasNoGrantOnIs404WithNothingOfItLikeAnUnknownOne(t *testing.T) {
 	f := newAgentFix(t)
 	a := f.srv.NewEnvironment(t, "A")
 	b := f.srv.NewEnvironment(t, "B")
@@ -468,13 +466,13 @@ func TestAgentListOfAnEnvironmentTheCallerCannotReadIsRefusedWithNothingOfItAndA
 	cookie, csrf := f.signIn(t, "viewer", false)
 
 	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + b.ID + "/agents", cookie: cookie, csrf: csrf})
-	// Every /api/env route answers an environment the caller may not read with the
-	// platform's 403 and a permission.denied entry (an unknown one is a 404): the
-	// answer carries nothing of the environment's agents.
-	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "b-node") || strings.Contains(rec.Body.String(), b.ID) {
-		t.Fatalf("an environment the viewer may not read: %d %s, want 403 and nothing of it", rec.Code, rec.Body)
+	// Every /api/env route answers an environment the caller has no grant on with
+	// the 404 of a missing one and a permission.denied entry (D-08): the answer
+	// carries nothing of the environment's agents.
+	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "b-node") || strings.Contains(rec.Body.String(), b.ID) {
+		t.Fatalf("an environment the viewer may not read: %d %s, want 404 and nothing of it", rec.Code, rec.Body)
 	}
-	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-viewer" {
+	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-viewer" || denied[0].Reason != "environment_not_visible" {
 		t.Errorf("permission.denied entries = %+v", denied)
 	}
 	rec = f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + a.ID + "/agents", cookie: cookie, csrf: csrf})
@@ -495,19 +493,19 @@ func TestAgentListOfALocalSocketEnvironmentIsEmpty(t *testing.T) {
 	}
 }
 
-func TestRevokeNeedsEnvironmentsRevokeAndAnAdminWhoHasItDisconnectsTheAgentAndBlocksTheHost(t *testing.T) {
+func TestRevokeNeedsRevokeOnTheEnvironmentAndDisconnectsTheAgentAndBlocksTheHost(t *testing.T) {
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active"}, swarmNode("alpha", false))
 	f.srv.Events.WaitLen(t, 1)
 	s := f.srv.Hub.Session(a.id)
-	path := "/api/environments/" + env.ID + "/agents/" + a.id + "/revoke"
+	path := "/api/env/" + env.ID + "/agents/" + a.id + "/revoke"
 
-	f.addUserWithGlobalPerms(t, "reader", "environments.read", "environments.manage", "environments.token")
+	f.addEnvUser(t, "reader", env.ID, "viewer")
 	cookie, csrf := f.signIn(t, "reader", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: path, body: `{}`, cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("revoke without environments.revoke: %d %s, want 403", rec.Code, rec.Body)
+		t.Fatalf("revoke as a Viewer: %d %s, want 403", rec.Code, rec.Body)
 	}
 	denied := f.audits(t, audit.ActionPermissionDenied)
 	if len(denied) != 1 || denied[0].ActorID != "id-reader" || denied[0].Result != "denied" {
@@ -561,26 +559,26 @@ func TestRevokeAcceptsNoBodyRejectsAnOverlongReasonAndAnswers404ForUnknownThings
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, nil)
 	b := f.connect(t, other, dockertest.FakeConfig{Hostname: "beta"}, nil)
 
-	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/agents/"+a.id+"/revoke", `{"reason":"`+strings.Repeat("x", 257)+`"}`); rec.code != http.StatusUnprocessableEntity {
+	if rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/agents/"+a.id+"/revoke", `{"reason":"`+strings.Repeat("x", 257)+`"}`); rec.code != http.StatusUnprocessableEntity {
 		t.Errorf("a 257-character reason: %d %s, want 422", rec.code, rec.body)
 	}
 	if f.node(t, env.ID, a.id).Status != "active" {
 		t.Fatal("a refused revoke changed the agent")
 	}
-	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/agents/no-such-agent/revoke", `{}`); rec.code != http.StatusNotFound || rec.ptyp != "agent_not_found" {
+	if rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/agents/no-such-agent/revoke", `{}`); rec.code != http.StatusNotFound || rec.ptyp != "agent_not_found" {
 		t.Errorf("an unknown agent: %d type %q", rec.code, rec.ptyp)
 	}
-	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/agents/"+b.id+"/revoke", `{}`); rec.code != http.StatusNotFound || rec.ptyp != "agent_not_found" {
+	if rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/agents/"+b.id+"/revoke", `{}`); rec.code != http.StatusNotFound || rec.ptyp != "agent_not_found" {
 		t.Errorf("an agent of another environment: %d type %q", rec.code, rec.ptyp)
 	}
-	if rec := f.req(t, http.MethodPost, "/api/environments/0197b8a0-0000-7000-8000-000000000000/agents/"+a.id+"/revoke", `{}`); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+	if rec := f.req(t, http.MethodPost, "/api/env/0197b8a0-0000-7000-8000-000000000000/agents/"+a.id+"/revoke", `{}`); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
 		t.Errorf("an unknown environment: %d type %q", rec.code, rec.ptyp)
 	}
 	if f.node(t, other.ID, b.id).Status != "active" {
 		t.Error("the other environment's agent was changed")
 	}
 	// No body at all is a revoke without a reason.
-	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/agents/"+a.id+"/revoke", ""); rec.code != http.StatusNoContent {
+	if rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/agents/"+a.id+"/revoke", ""); rec.code != http.StatusNoContent {
 		t.Errorf("a revoke without a body: %d %s, want 204", rec.code, rec.body)
 	}
 }
@@ -589,8 +587,8 @@ func TestUnblockLiftsTheBlocksOfARevokedAgentAndIsNotBlockedOtherwise(t *testing
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, swarmNode("alpha", false))
-	revoke := "/api/environments/" + env.ID + "/agents/" + a.id + "/revoke"
-	unblock := "/api/environments/" + env.ID + "/agents/" + a.id + "/unblock"
+	revoke := "/api/env/" + env.ID + "/agents/" + a.id + "/revoke"
+	unblock := "/api/env/" + env.ID + "/agents/" + a.id + "/unblock"
 
 	if rec := f.req(t, http.MethodPost, unblock, ""); rec.code != http.StatusConflict || rec.ptyp != "not_blocked" {
 		t.Errorf("unblocking an active agent: %d type %q %s", rec.code, rec.ptyp, rec.body)
@@ -602,10 +600,10 @@ func TestUnblockLiftsTheBlocksOfARevokedAgentAndIsNotBlockedOtherwise(t *testing
 		t.Fatal("the revoked agent is not blocked")
 	}
 
-	f.addUserWithGlobalPerms(t, "reader", "environments.read", "environments.token")
+	f.addEnvUser(t, "reader", env.ID, "viewer")
 	cookie, csrf := f.signIn(t, "reader", false)
 	if rec := f.call(t, authReq{method: http.MethodPost, path: unblock, cookie: cookie, csrf: csrf}); rec.Code != http.StatusForbidden {
-		t.Errorf("unblock without environments.revoke: %d, want 403", rec.Code)
+		t.Errorf("unblock as a Viewer: %d, want 403", rec.Code)
 	}
 
 	if rec := f.req(t, http.MethodPost, unblock, ""); rec.code != http.StatusNoContent {
@@ -692,18 +690,18 @@ func TestEnvironmentsListShowsThePendingClusterOnlyWhileTheClusterIsChanged(t *t
 	}
 }
 
-func TestAdoptClusterNeedsEnvironmentsManageAndRebindsThroughAnAuditedAction(t *testing.T) {
+func TestAdoptClusterNeedsConfigureOnTheEnvironmentAndRebindsThroughAnAuditedAction(t *testing.T) {
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}, swarmNode("alpha", true))
 	f.srv.Events.WaitLen(t, 1)
-	path := "/api/environments/" + env.ID + "/adopt-cluster"
+	path := "/api/env/" + env.ID + "/adopt-cluster"
 	f.clusterChanged(t, env.ID, "cluster-2")
 
-	f.addUserWithGlobalPerms(t, "ops", "environments.read", "environments.revoke", "environments.token")
+	f.addEnvUser(t, "ops", env.ID, "viewer")
 	cookie, csrf := f.signIn(t, "ops", false)
 	if rec := f.call(t, authReq{method: http.MethodPost, path: path, cookie: cookie, csrf: csrf}); rec.Code != http.StatusForbidden {
-		t.Fatalf("adopt without environments.manage: %d %s, want 403", rec.Code, rec.Body)
+		t.Fatalf("adopt as a Viewer: %d %s, want 403", rec.Code, rec.Body)
 	}
 	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 1 || denied[0].ActorID != "id-ops" {
 		t.Fatalf("permission.denied entries = %+v", denied)
@@ -735,7 +733,7 @@ func TestAdoptClusterNeedsEnvironmentsManageAndRebindsThroughAnAuditedAction(t *
 	if rec := f.req(t, http.MethodPost, path, ""); rec.code != http.StatusConflict || rec.ptyp != "no_cluster_change" {
 		t.Errorf("a second adopt: %d type %q %s, want 409 no_cluster_change", rec.code, rec.ptyp, rec.body)
 	}
-	if rec := f.req(t, http.MethodPost, "/api/environments/0197b8a0-0000-7000-8000-000000000000/adopt-cluster", ""); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+	if rec := f.req(t, http.MethodPost, "/api/env/0197b8a0-0000-7000-8000-000000000000/adopt-cluster", ""); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
 		t.Errorf("an unknown environment: %d type %q", rec.code, rec.ptyp)
 	}
 }
@@ -754,7 +752,7 @@ func TestAnAgentOfTheAdoptedClusterIsAcceptedOnItsNextHello(t *testing.T) {
 	if got := f.environmentView(t, env.ID); got.PendingClusterID == nil || *got.PendingClusterID != "cluster-2" {
 		t.Fatalf("the handshake did not record the change: %+v", got)
 	}
-	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/adopt-cluster", ""); rec.code != http.StatusOK {
+	if rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/adopt-cluster", ""); rec.code != http.StatusOK {
 		t.Fatalf("adopt: %d %s", rec.code, rec.body)
 	}
 	if c := f.srv.Dial(t, tunneltest.Agent{Identity: &first.conn.Identity, Facts: reinit}); c.Welcome == nil {
@@ -869,29 +867,27 @@ func controlLine(t *testing.T, control io.Reader) wire.Update {
 	}
 }
 
-func (f *agentFix) asUser(t *testing.T, name string, method, path, body string, perms ...string) *envRec {
+// asAllEnvAdmin makes the request as a user who is Admin on every environment
+// without being an instance admin, and returns what came back.
+func (f *agentFix) asAllEnvAdmin(t *testing.T, name string, method, path, body string) *envRec {
 	t.Helper()
-	f.addUserWithGlobalPerms(t, name, perms...)
-	cookie, csrf := f.signIn(t, name, false)
-	rec := f.call(t, authReq{method: method, path: path, body: body, cookie: cookie, csrf: csrf})
-	ptyp := ""
-	if rec.Code >= 400 {
-		ptyp = problemType(t, rec)
-	}
-	return &envRec{rec.Code, rec.Body.Bytes(), ptyp}
+	f.addAllEnvAdmin(t, name)
+	return f.asUser(t, name, method, path, body)
 }
 
-func TestSwitchingAutoUpdateNeedsEnvironmentsManageStoresItAndIsAudited(t *testing.T) {
+func TestSwitchingAutoUpdateNeedsConfigureOnTheEnvironmentStoresItAndIsAudited(t *testing.T) {
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
-	path := "/api/environments/" + env.ID
+	path := "/api/env/" + env.ID
 
 	if got := f.environmentView(t, env.ID); got.AutoUpdate == nil || !*got.AutoUpdate {
 		t.Fatalf("a new agent environment has autoUpdate %v, want on by default", got.AutoUpdate)
 	}
-	rec := f.asUser(t, "reader", http.MethodPatch, path, `{"autoUpdate":false}`, "environments.read", "environments.token")
+	f.addUser(t, "reader", false)
+	f.addEnvRole(t, "reader", env.ID, "viewer")
+	rec := f.asUser(t, "reader", http.MethodPatch, path, `{"autoUpdate":false}`)
 	if rec.code != http.StatusForbidden {
-		t.Fatalf("PATCH autoUpdate without environments.manage: %d %s, want 403", rec.code, rec.body)
+		t.Fatalf("PATCH autoUpdate as a Viewer: %d %s, want 403", rec.code, rec.body)
 	}
 	if got := f.environmentView(t, env.ID); got.AutoUpdate == nil || !*got.AutoUpdate {
 		t.Fatal("a refused PATCH changed the setting")
@@ -927,11 +923,12 @@ func TestAnAdminUpdatesOneAgentThroughTheTunnelAndItIsAuditedUnderTheirName(t *t
 	env := f.srv.NewEnvironment(t, "Production")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, selfUpdating("alpha"))
 	f.srv.Events.WaitLen(t, 1)
-	path := "/api/environments/" + env.ID + "/agents/" + a.id + "/update"
+	path := "/api/env/" + env.ID + "/agents/" + a.id + "/update"
 
-	rec := f.asUser(t, "reader", http.MethodPost, path, ``, "environments.read", "environments.revoke", "environments.token")
+	f.addEnvUser(t, "reader", env.ID, "viewer")
+	rec := f.asUser(t, "reader", http.MethodPost, path, ``)
 	if rec.code != http.StatusForbidden {
-		t.Fatalf("update without environments.manage: %d %s, want 403", rec.code, rec.body)
+		t.Fatalf("update as a Viewer: %d %s, want 403", rec.code, rec.body)
 	}
 	if n := f.node(t, env.ID, a.id); n.UpdateState.State != "idle" {
 		t.Fatalf("a refused update changed the state: %+v", n.UpdateState)
@@ -967,18 +964,18 @@ func TestAnAdminUpdatesOneAgentThroughTheTunnelAndItIsAuditedUnderTheirName(t *t
 func TestUpdatingAnAgentThatIsOfflineUnknownUpToDateOrRefusingIsAProblem(t *testing.T) {
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
-	base := "/api/environments/" + env.ID + "/agents/"
+	base := "/api/env/" + env.ID + "/agents/"
 
 	if rec := f.req(t, http.MethodPost, base+"nobody/update", ``); rec.code != http.StatusNotFound || rec.ptyp != "agent_not_found" {
 		t.Errorf("an unknown agent: %d type %q", rec.code, rec.ptyp)
 	}
-	if rec := f.req(t, http.MethodPost, "/api/environments/nope/agents/x/update", ``); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+	if rec := f.req(t, http.MethodPost, "/api/env/nope/agents/x/update", ``); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
 		t.Errorf("an unknown environment: %d type %q", rec.code, rec.ptyp)
 	}
 
 	off := f.connect(t, env, dockertest.FakeConfig{Hostname: "off"}, selfUpdating("off"))
 	f.srv.Events.WaitLen(t, 1)
-	base = "/api/environments/" + env.ID + "/agents/"
+	base = "/api/env/" + env.ID + "/agents/"
 	s := f.srv.Hub.Session(off.id)
 	_ = off.conn.WS.CloseNow()
 	waitFor(t, "the session to end", func() bool { return isClosed(s) })
@@ -990,7 +987,7 @@ func TestUpdatingAnAgentThatIsOfflineUnknownUpToDateOrRefusingIsAProblem(t *test
 	refusing := f.connect(t, env2, dockertest.FakeConfig{Hostname: "refusing"}, &wire.Facts{
 		EngineID: "ENG:refusing", Hostname: "refusing", EngineReachable: true, Policy: wire.PolicyFacts{SelfUpdate: false}})
 	f.srv.Events.WaitLen(t, 3)
-	if rec := f.req(t, http.MethodPost, "/api/environments/"+env2.ID+"/agents/"+refusing.id+"/update", ``); rec.code != http.StatusConflict || rec.ptyp != "self_update_disabled" {
+	if rec := f.req(t, http.MethodPost, "/api/env/"+env2.ID+"/agents/"+refusing.id+"/update", ``); rec.code != http.StatusConflict || rec.ptyp != "self_update_disabled" {
 		t.Errorf("a host that refuses: %d type %q %s, want 409 self_update_disabled", rec.code, rec.ptyp, rec.body)
 	}
 	if got := f.audits(t, audit.ActionAgentUpdated); len(got) != 0 {
@@ -998,15 +995,16 @@ func TestUpdatingAnAgentThatIsOfflineUnknownUpToDateOrRefusingIsAProblem(t *test
 	}
 }
 
-func TestUpdatingAllAgentsAnswers202WithHowManyWereStartedAndNeedsManage(t *testing.T) {
+func TestUpdatingAllAgentsAnswers202WithHowManyWereStarted(t *testing.T) {
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	a := f.connect(t, env, dockertest.FakeConfig{Hostname: "alpha"}, selfUpdating("alpha"))
 	f.srv.Events.WaitLen(t, 1)
-	path := "/api/environments/" + env.ID + "/update-agents"
+	path := "/api/env/" + env.ID + "/update-agents"
 
-	if rec := f.asUser(t, "reader", http.MethodPost, path, ``, "environments.read", "environments.revoke"); rec.code != http.StatusForbidden {
-		t.Fatalf("update-agents without environments.manage: %d", rec.code)
+	f.addEnvUser(t, "reader", env.ID, "viewer")
+	if rec := f.asUser(t, "reader", http.MethodPost, path, ``); rec.code != http.StatusForbidden {
+		t.Fatalf("update-agents as a Viewer: %d", rec.code)
 	}
 	rec := f.req(t, http.MethodPost, path, ``)
 	if rec.code != http.StatusAccepted {
@@ -1032,7 +1030,7 @@ func TestUpdatingAllAgentsOfAnEnvironmentWithNoneConnectedIsAgentOffline(t *test
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
 	f.insertAgent(t, env.ID, "a-offline", "standalone", "active")
-	rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/update-agents", ``)
+	rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/update-agents", ``)
 	if rec.code != http.StatusConflict || rec.ptyp != "agent_offline" {
 		t.Fatalf("update-agents with nothing connected: %d type %q %s", rec.code, rec.ptyp, rec.body)
 	}
@@ -1068,7 +1066,7 @@ func TestTheNodeListSaysWhichAgentsAreBehindTheServerAndNeverARevokedOne(t *test
 	if !f.node(t, env.ID, a.id).UpdateAvailable || !f.node(t, env.ID, b.id).UpdateAvailable {
 		t.Fatalf("agents of v0.2.0 under a v0.2.1 server must be updateAvailable: %+v", f.nodes(t, env.ID))
 	}
-	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/agents/"+b.id+"/revoke", ``); rec.code != http.StatusNoContent {
+	if rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/agents/"+b.id+"/revoke", ``); rec.code != http.StatusNoContent {
 		t.Fatalf("revoke: %d %s", rec.code, rec.body)
 	}
 	if f.node(t, env.ID, b.id).UpdateAvailable {
@@ -1173,5 +1171,116 @@ func TestTheNodeListOffersNoStandaloneManualUpdateForAPlainAddressForAnotherHost
 	f.srv.Events.WaitLen(t, 2)
 	if cmd := f.node(t, env2.ID, node.id).ManualUpdateCommand; !strings.Contains(cmd, "docker service update") {
 		t.Errorf("the swarm manual update = %q, want the service update", cmd)
+	}
+}
+
+// The D-07 split in one place: an env Admin of A runs the enrolment actions of A that
+// became environment-scoped, is told nothing about B, and a Viewer of A is refused.
+func TestAnEnvAdminManagesTheEnrolmentOfTheirOwnEnvironmentAndNoOther(t *testing.T) {
+	f := newAgentFix(t)
+	a := f.srv.NewEnvironment(t, "Alpha")
+	b := f.srv.NewEnvironment(t, "Beta")
+	alpha := f.connect(t, a, dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}, swarmNode("alpha", true))
+	beta := f.connect(t, b, dockertest.FakeConfig{Hostname: "beta"}, selfUpdating("beta"))
+	f.srv.Events.WaitLen(t, 2)
+	f.clusterChanged(t, a.ID, "cluster-2")
+	f.addEnvUser(t, "adminone", a.ID, "admin")
+	f.addEnvUser(t, "viewerone", a.ID, "viewer")
+
+	type call struct{ name, path, body string }
+	callsOn := func(env tunneltest.Environment, agent string) []call {
+		base := "/api/env/" + env.ID
+		return []call{
+			{"revoke", base + "/agents/" + agent + "/revoke", `{}`},
+			{"unblock", base + "/agents/" + agent + "/unblock", ``},
+			{"adopt-cluster", base + "/adopt-cluster", ``},
+			{"update", base + "/agents/" + agent + "/update", ``},
+			{"update-agents", base + "/update-agents", ``},
+		}
+	}
+
+	for _, c := range callsOn(a, alpha.id) {
+		if rec := f.asUser(t, "viewerone", http.MethodPost, c.path, c.body); rec.code != http.StatusForbidden {
+			t.Errorf("%s as a Viewer of the environment: %d %s, want 403", c.name, rec.code, rec.body)
+		}
+	}
+	for _, c := range callsOn(b, beta.id) {
+		if rec := f.asUser(t, "adminone", http.MethodPost, c.path, c.body); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+			t.Errorf("%s on another environment as its env Admin: %d type %q %s, want 404 environment_not_found", c.name, rec.code, rec.ptyp, rec.body)
+		}
+	}
+	if f.node(t, b.ID, beta.id).Status != "active" || len(f.audits(t, audit.ActionAgentRevoked)) != 0 {
+		t.Fatal("a refused call changed the other environment")
+	}
+
+	own := callsOn(a, alpha.id)
+	if rec := f.asUser(t, "adminone", http.MethodPost, own[2].path, own[2].body); rec.code != http.StatusOK {
+		t.Fatalf("adopt-cluster as an env Admin: %d %s, want 200", rec.code, rec.body)
+	}
+	for _, c := range []call{own[3], own[4]} {
+		if rec := f.asUser(t, "adminone", http.MethodPost, c.path, c.body); rec.code == http.StatusForbidden || rec.code == http.StatusNotFound {
+			t.Errorf("%s as an env Admin: %d %s, want it authorised", c.name, rec.code, rec.body)
+		}
+	}
+	if rec := f.asUser(t, "adminone", http.MethodPost, own[0].path, own[0].body); rec.code != http.StatusNoContent {
+		t.Fatalf("revoke as an env Admin: %d %s, want 204", rec.code, rec.body)
+	}
+	if rec := f.asUser(t, "adminone", http.MethodPost, own[1].path, own[1].body); rec.code != http.StatusNoContent {
+		t.Fatalf("unblock as an env Admin: %d %s, want 204", rec.code, rec.body)
+	}
+	if got := f.audits(t, audit.ActionAgentRevoked); len(got) != 1 || got[0].ActorID != "id-adminone" {
+		t.Errorf("agent.revoked = %+v, want one row for the env Admin", got)
+	}
+	if got := f.audits(t, audit.ActionEnvironmentClusterAdopted); len(got) != 1 || got[0].ActorID != "id-adminone" || got[0].TargetID != a.ID {
+		t.Errorf("environment.cluster_adopted = %+v, want one row for the env Admin", got)
+	}
+}
+
+// Adding, deleting, folding in the local host and the join token stay with instance
+// admins (D-07): an env Admin of the environment is refused each, and it is audited.
+func TestAnEnvAdminCannotAddDeleteFoldOrReadTheTokenOfTheirOwnEnvironment(t *testing.T) {
+	f := newAgentFix(t)
+	a := f.srv.NewEnvironment(t, "Alpha")
+	f.addEnvUser(t, "adminone", a.ID, "admin")
+
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/environments", `{"kind":"agent","name":"new"}`},
+		{http.MethodDelete, "/api/environments/" + a.ID, ""},
+		{http.MethodPost, "/api/environments/" + a.ID + "/fold-local", ""},
+		{http.MethodGet, "/api/environments/" + a.ID + "/token", ""},
+		{http.MethodPost, "/api/environments/" + a.ID + "/token", ""},
+		{http.MethodDelete, "/api/environments/" + a.ID + "/token", ""},
+	} {
+		if rec := f.asUser(t, "adminone", c.method, c.path, c.body); rec.code != http.StatusForbidden {
+			t.Errorf("%s %s as an env Admin: %d %s, want 403", c.method, c.path, rec.code, rec.body)
+		}
+	}
+	if denied := f.audits(t, audit.ActionPermissionDenied); len(denied) != 6 {
+		t.Errorf("permission.denied entries = %d, want 6", len(denied))
+	}
+	if rec := f.req(t, http.MethodGet, "/api/environments/"+a.ID+"/token", ""); rec.code != http.StatusOK {
+		t.Errorf("token status as an instance admin: %d %s, want 200", rec.code, rec.body)
+	}
+}
+
+// WR-B-04: a PATCH whose name is invalid changes nothing, even when its autoUpdate
+// half would have been valid.
+func TestAPatchWithAnInvalidNameDoesNotApplyOrAuditTheAutoUpdateSwitch(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Production")
+	path := "/api/env/" + env.ID
+
+	for _, name := range []string{"", "   ", strings.Repeat("n", 65)} {
+		body, _ := json.Marshal(map[string]any{"autoUpdate": false, "name": name})
+		rec := f.req(t, http.MethodPatch, path, string(body))
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "invalid_name" {
+			t.Fatalf("PATCH with name %q: %d type %q %s, want 422 invalid_name", name, rec.code, rec.ptyp, rec.body)
+		}
+		if got := f.environmentView(t, env.ID); got.AutoUpdate == nil || !*got.AutoUpdate {
+			t.Fatalf("PATCH with name %q switched auto-update off although it failed", name)
+		}
+		if got := f.audits(t, audit.ActionEnvironmentAutoUpdateChanged); len(got) != 0 {
+			t.Fatalf("PATCH with name %q audited an auto-update change: %+v", name, got)
+		}
 	}
 }

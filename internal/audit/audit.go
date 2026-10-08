@@ -46,6 +46,8 @@ type Actor struct {
 var (
 	SystemCLI       = Actor{Type: ActorSystem, ID: "system:cli", Name: "system:cli"}
 	SystemRetention = Actor{Type: ActorSystem, ID: "system:audit-retention", Name: "system:audit-retention"}
+	SystemRestore   = Actor{Type: ActorSystem, ID: "system:restore", Name: "system:restore"}
+	SystemBackup    = Actor{Type: ActorSystem, ID: "system:backup", Name: "system:backup"}
 )
 
 // Result is the outcome of an action.
@@ -94,8 +96,48 @@ const (
 
 	ActionWarningAcknowledged = "warning.acknowledged"
 	ActionAuditPruned         = "audit.pruned"
+	ActionAuditReanchored     = "audit.reanchored"
 	ActionPermissionDenied    = "permission.denied"
+
+	ActionUserCreated                = "user.created"
+	ActionUserUpdated                = "user.updated"
+	ActionUserDisabled               = "user.disabled"
+	ActionUserEnabled                = "user.enabled"
+	ActionUserDeleted                = "user.deleted"
+	ActionUserInviteCreated          = "user.invite_created"
+	ActionUserInviteRegenerated      = "user.invite_regenerated"
+	ActionUserInviteAccepted         = "user.invite_accepted"
+	ActionUserPasswordResetIssued    = "user.password_reset_issued"
+	ActionUserPasswordResetCompleted = "user.password_reset_completed"
+	ActionUserAdminGranted           = "user.admin_granted"
+	ActionUserAdminRevoked           = "user.admin_revoked"
+	ActionSessionRevoked             = "session.revoked"
+	ActionUserSessionsRevoked        = "user.sessions_revoked"
+	ActionTeamCreated                = "team.created"
+	ActionTeamRenamed                = "team.renamed"
+	ActionTeamDeleted                = "team.deleted"
+	ActionTeamMemberAdded            = "team.member_added"
+	ActionTeamMemberRemoved          = "team.member_removed"
+	ActionAccessGranted              = "access.granted"
+	ActionAccessUpdated              = "access.updated"
+	ActionAccessRevoked              = "access.revoked"
+	ActionOwnerTransferred           = "owner.transferred"
+	ActionAutomationPaused           = "automation.paused"
+	ActionAutomationResumed          = "automation.resumed"
+	ActionBackupExported             = "backup.exported"
+	ActionBackupScheduledRun         = "backup.scheduled_run"
+	ActionBackupFailed               = "backup.failed"
+	ActionBackupChecked              = "backup.checked"
+	ActionBackupRestored             = "backup.restored"
+	ActionBackupScheduleUpdated      = "backup.schedule_updated"
+	ActionBackupUploadDiscarded      = "backup.upload_discarded"
+	ActionKeyRotated                 = "key.rotated"
 )
+
+// ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or
+// reset link: an unusable link or the per-address limit. It never carries the
+// link.
+const ActionAuthLinkRefused = "auth.link_refused"
 
 // Errors returned by Record.
 var (

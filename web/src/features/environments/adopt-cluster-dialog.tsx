@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 
@@ -50,7 +51,14 @@ interface AdoptClusterDialogProps {
 // log. Confirming posts once. A failure keeps it open with an inline alert; one
 // that says the change is gone also reads the environments again, behind the
 // message, so the page underneath stops offering it.
-export function AdoptClusterDialog({
+export function AdoptClusterDialog(props: AdoptClusterDialogProps) {
+  // Adopting needs environments.configure on the environment (D-07). Without it
+  // there is nothing to confirm, and nothing the server would accept.
+  const allowed = usePermission("environments.configure", props.environment.id);
+  return allowed ? <AdoptClusterDialogBody {...props} /> : null;
+}
+
+function AdoptClusterDialogBody({
   environment,
   open,
   onOpenChange,

@@ -68,9 +68,9 @@ func (f *setupFixture) complete(t *testing.T, over map[string]any) *httptest.Res
 
 type completeResponse struct {
 	User struct {
-		ID       string `json:"id"`
-		Username string `json:"username"`
-		Role     string `json:"role"`
+		ID            string `json:"id"`
+		Username      string `json:"username"`
+		InstanceAdmin bool   `json:"instanceAdmin"`
 	} `json:"user"`
 	CSRFToken       string `json:"csrfToken"`
 	InstanceName    string `json:"instanceName"`
@@ -126,7 +126,7 @@ func TestSetupCompleteCreatesTheAdminSignsInAndStoresTheSettings(t *testing.T) {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
 	}
 	got := decodeComplete(t, rec)
-	if got.User.ID == "" || got.User.Username != "admin" || got.User.Role != "admin" || got.CSRFToken == "" {
+	if got.User.ID == "" || got.User.Username != "admin" || !got.User.InstanceAdmin || got.CSRFToken == "" {
 		t.Fatalf("body = %+v", got)
 	}
 
@@ -138,9 +138,13 @@ func TestSetupCompleteCreatesTheAdminSignsInAndStoresTheSettings(t *testing.T) {
 	if u.ID != got.User.ID || !strings.HasPrefix(u.PasswordHash, "$argon2id$v=19$m=19456,t=2,p=1$") || strings.Contains(u.PasswordHash, goodPassword) {
 		t.Fatalf("user row %+v", u)
 	}
-	// The global admin role.
-	if n := f.count(t, `SELECT COUNT(*) FROM role_assignments WHERE principal_type = 'user' AND principal_id = ? AND role_id = 'admin' AND env_id IS NULL`, u.ID); n != 1 {
-		t.Fatalf("admin role assignments = %d, want 1", n)
+	// The first user is an instance admin by the flag, set in the same
+	// transaction that created them (D-01); no assignment row is written.
+	if u.InstanceAdmin != 1 {
+		t.Fatalf("instance_admin = %d, want 1", u.InstanceAdmin)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM role_assignments`); n != 0 {
+		t.Fatalf("role assignments = %d, want none", n)
 	}
 	// The settings.
 	if v, ok := f.setting(t, "instance_name"); !ok || v != "Home lab" {
@@ -548,8 +552,8 @@ func TestSetupCompleteConcurrentCompletionsHaveExactlyOneWinner(t *testing.T) {
 	if got := f.userCount(t); got != 1 {
 		t.Fatalf("users = %d, want exactly 1", got)
 	}
-	if got := f.count(t, `SELECT COUNT(*) FROM role_assignments WHERE role_id = 'admin'`); got != 1 {
-		t.Fatalf("admin role assignments = %d, want 1", got)
+	if got := f.count(t, `SELECT COUNT(*) FROM users WHERE instance_admin = 1`); got != 1 {
+		t.Fatalf("instance admins = %d, want 1", got)
 	}
 	if got := f.count(t, `SELECT COUNT(*) FROM sessions`); got != 1 {
 		t.Fatalf("sessions = %d, want 1", got)

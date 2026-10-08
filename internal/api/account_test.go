@@ -10,9 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/agents"
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
@@ -275,6 +278,8 @@ type warningsResp struct {
 		Host    string `json:"host"`
 		Scheme  string `json:"scheme"`
 		URL     string `json:"url"`
+		Subject string `json:"subject"`
+		Count   int    `json:"count"`
 	} `json:"items"`
 }
 
@@ -468,5 +473,132 @@ func TestProxyWarningsNeedSettingsRead(t *testing.T) {
 	cookie, _ := f.signIn(t, "viewer", false)
 	if code, _ := f.warnings(t, cookie); code != http.StatusForbidden {
 		t.Fatalf("GET /api/warnings without settings.read: %d, want 403", code)
+	}
+}
+
+// --- refusal bursts in GET /api/warnings (plan 03-10, D-20) -----------------
+
+// burstedCoalescer is a coalescer in which user "mallory" has just been refused
+// n times inside one window.
+func burstedCoalescer(t *testing.T, f *authFixture, n int) *auth.RefusalCoalescer {
+	t.Helper()
+	c := auth.NewRefusalCoalescer(f.aud, slog.New(slog.DiscardHandler), f.clk.now)
+	e := audit.Entry{
+		Actor:  audit.Actor{Type: audit.ActorUser, ID: "id-mallory", Name: "mallory"},
+		Action: audit.ActionPermissionDenied, Result: audit.ResultDenied, Reason: "forbidden",
+		TargetType: "route", TargetID: "GET /api/audit",
+	}
+	for range n {
+		if err := c.Record(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.clk.t = f.clk.t.Add(2 * time.Minute)
+	if err := c.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestAnInstanceAdminSeesARefusalBurstForOneHour(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.refusals = burstedCoalescer(t, f, 12)
+	f.h = f.build(t)
+	cookie, _ := f.signIn(t, "admin", false)
+
+	_, w := f.warnings(t, cookie)
+	if len(w.Items) != 1 || w.Items[0].ID != "refusal_burst" || w.Items[0].Subject != "mallory" || w.Items[0].Count != 12 {
+		t.Fatalf("got %+v, want one refusal_burst naming mallory and 12", w.Items)
+	}
+	// The session idles out long before an hour, so the admin signs in again.
+	f.clk.t = f.clk.t.Add(57 * time.Minute) // 59 minutes after the burst
+	cookie, _ = f.signIn(t, "admin", false)
+	if _, w := f.warnings(t, cookie); len(w.Items) != 1 {
+		t.Errorf("59 minutes later: %+v, want the burst still", w.Items)
+	}
+	f.clk.t = f.clk.t.Add(2 * time.Minute)
+	cookie, _ = f.signIn(t, "admin", false)
+	if _, w := f.warnings(t, cookie); len(w.Items) != 0 {
+		t.Errorf("an hour later: %+v, want none", w.Items)
+	}
+}
+
+func TestAWarningListedOnceForAUserWhoBurstsTwice(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	c := burstedCoalescer(t, f, 12)
+	e := audit.Entry{
+		Actor:  audit.Actor{Type: audit.ActorUser, ID: "id-mallory", Name: "mallory"},
+		Action: audit.ActionPermissionDenied, Result: audit.ResultDenied, Reason: "forbidden",
+		TargetType: "route", TargetID: "GET /api/other",
+	}
+	for range 20 {
+		if err := c.Record(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.clk.t = f.clk.t.Add(2 * time.Minute)
+	if err := c.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.refusals = c
+	f.h = f.build(t)
+	cookie, _ := f.signIn(t, "admin", false)
+	if _, w := f.warnings(t, cookie); len(w.Items) != 1 || w.Items[0].Count != 20 {
+		t.Fatalf("got %+v, want one item with the newest burst's 20", w.Items)
+	}
+}
+
+func TestARefusalBurstIsNotShownWithoutSettingsRead(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.refusals = burstedCoalescer(t, f, 12)
+	f.h = f.build(t)
+	f.addUser(t, "viewer", false)
+	cookie, _ := f.signIn(t, "viewer", false)
+	if code, w := f.warnings(t, cookie); code != http.StatusForbidden || len(w.Items) != 0 {
+		t.Fatalf("GET /api/warnings as a non-admin: %d %+v, want 403", code, w.Items)
+	}
+}
+
+// Agents Bayplan does not know after a restore (D-31): one warning, with how many,
+// for an instance admin while the registry holds any.
+func TestUnknownAgentsRaisesAWarningWithTheCountForAnInstanceAdminWhileTheRegistryHoldsAny(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, _ := f.signIn(t, "admin", false)
+	f.addAgentEnv(t, "env-a", "Production")
+	if _, w := f.warnings(t, cookie); len(w.Items) != 0 {
+		t.Fatalf("with an empty registry: %+v", w.Items)
+	}
+
+	now := f.clk.now()
+	f.unknown.Record(agents.UnknownAgent{EnvID: "env-a", Node: "agent-1", Key: "k1", LastAttempt: now})
+	f.unknown.Record(agents.UnknownAgent{EnvID: "env-a", Node: "agent-2", Key: "k2", LastAttempt: now.Add(-time.Minute)})
+	_, w := f.warnings(t, cookie)
+	if len(w.Items) != 1 || w.Items[0].ID != "unknown_agents" || w.Items[0].Count != 2 {
+		t.Fatalf("got %+v, want one unknown_agents with count 2", w.Items)
+	}
+
+	f.unknown.Forget("env-a", "k1")
+	f.unknown.Forget("env-a", "k2")
+	if _, w := f.warnings(t, cookie); len(w.Items) != 0 {
+		t.Fatalf("after the agents enrolled: %+v, want none", w.Items)
+	}
+}
+
+func TestTheUnknownAgentsWarningEmptiesWhenTheAgentsStopTryingAndIsNeverShownToAnyoneButAnInstanceAdmin(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addAgentEnv(t, "env-a", "Production")
+	f.unknown.Record(agents.UnknownAgent{EnvID: "env-a", Node: "agent-1", Key: "k1", LastAttempt: f.clk.now()})
+
+	f.addUser(t, "viewer", false)
+	viewer, _ := f.signIn(t, "viewer", false)
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/warnings", cookie: viewer})
+	if strings.Contains(rec.Body.String(), "unknown_agents") {
+		t.Fatalf("a non-admin was told: %d %s", rec.Code, rec.Body)
+	}
+
+	f.clk.t = f.clk.t.Add(25 * time.Hour)
+	cookie, _ := f.signIn(t, "admin", false)
+	if _, w := f.warnings(t, cookie); len(w.Items) != 0 {
+		t.Fatalf("a day after the last attempt: %+v, want none", w.Items)
 	}
 }

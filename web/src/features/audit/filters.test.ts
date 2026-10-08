@@ -8,6 +8,7 @@ import { resetBasePathForTests } from "@/lib/base-path";
 import {
   actionLabel,
   auditSearchSchema,
+  ENV_SCOPED_ACTIONS,
   exportUrl,
   formatDay,
   KNOWN_ACTIONS,
@@ -149,6 +150,106 @@ describe("the agent and environment lifecycle actions (D-13)", () => {
       const [area, name] = key.split(".") as [string, string];
       expect(labels[area]?.[name], key).toBeTruthy();
       expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);
+    }
+  });
+});
+
+// The labels of UI-SPEC "Audit log changes", plus the two actions the backend added
+// after it (automation.resumed, backup.schedule_updated). Written out here, not
+// read back from audit.json, so a label that drifts fails.
+const PHASE3_LABELS: Record<string, string> = {
+  "user.created": "Created user",
+  "user.updated": "Updated user",
+  "user.disabled": "Disabled user",
+  "user.enabled": "Enabled user",
+  "user.deleted": "Deleted user",
+  "user.invite_created": "Created invite link",
+  "user.invite_regenerated": "Regenerated invite link",
+  "user.invite_accepted": "Accepted invite",
+  "user.password_reset_issued": "Issued password reset link",
+  "user.password_reset_completed": "Completed password reset",
+  "user.admin_granted": "Made instance admin",
+  "user.admin_revoked": "Removed instance admin",
+  "session.revoked": "Revoked session",
+  "user.sessions_revoked": "Ended all sessions",
+  "team.created": "Created team",
+  "team.renamed": "Renamed team",
+  "team.deleted": "Deleted team",
+  "team.member_added": "Added team member",
+  "team.member_removed": "Removed team member",
+  "access.granted": "Granted access",
+  "access.updated": "Changed access",
+  "access.revoked": "Removed access",
+  "owner.transferred": "Transferred ownership",
+  "automation.paused": "Paused automation",
+  "automation.resumed": "Resumed automation",
+  "backup.exported": "Exported backup",
+  "backup.scheduled_run": "Ran scheduled backup",
+  "backup.failed": "Backup failed",
+  "backup.checked": "Checked backup file",
+  "backup.restored": "Restored backup",
+  "backup.schedule_updated": "Changed backup schedule",
+  "backup.upload_discarded": "Discarded uploaded backup",
+  "audit.reanchored": "Re-anchored audit log",
+  "key.rotated": "Rotated master key",
+};
+
+describe("the Phase 3 actions", () => {
+  it("lists every one in the Action filter", () => {
+    for (const key of Object.keys(PHASE3_LABELS)) expect(KNOWN_ACTIONS, key).toContain(key);
+  });
+
+  it("gives every one the label of the UI-SPEC, looked up by its own key", () => {
+    const labels = audit.audit.actions as Record<string, Record<string, string>>;
+    for (const [key, label] of Object.entries(PHASE3_LABELS)) {
+      const [area, name] = key.split(".") as [string, string];
+      expect(labels[area]?.[name], key).toBe(label);
+      expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);
+    }
+  });
+
+  it("still shows an unknown key as itself", () => {
+    expect(actionLabel("user.teleported", echo)).toBe("user.teleported");
+  });
+});
+
+describe("ENV_SCOPED_ACTIONS", () => {
+  it("holds exactly the actions that can carry an environment, all of them known", () => {
+    for (const key of ENV_SCOPED_ACTIONS) expect(KNOWN_ACTIONS, key).toContain(key);
+    for (const key of [
+      "permission.denied",
+      "access.granted",
+      "access.updated",
+      "access.revoked",
+      "environment.renamed",
+      "environment.failover",
+      "agent.enrolled",
+      "agent.revoked",
+      "automation.paused",
+      "automation.resumed",
+      "owner.transferred",
+    ]) {
+      expect(ENV_SCOPED_ACTIONS, key).toContain(key);
+    }
+  });
+
+  it("leaves out the instance-level events an env Admin never reads", () => {
+    for (const key of [
+      "auth.login",
+      "auth.login_failed",
+      "setup.completed",
+      "settings.updated",
+      "user.created",
+      "user.deleted",
+      "team.created",
+      "session.revoked",
+      "backup.exported",
+      "audit.reanchored",
+      "audit.pruned",
+      "key.rotated",
+      "warning.acknowledged",
+    ]) {
+      expect(ENV_SCOPED_ACTIONS, key).not.toContain(key);
     }
   });
 });

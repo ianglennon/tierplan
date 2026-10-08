@@ -2,29 +2,18 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useRouter } from "@tanstack/react-router";
-import { Server } from "lucide-react";
+import { useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 
 import { tokenStatusQuery } from "@/api/agents";
 import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
 import { NoPermission } from "@/components/full-page-state";
 import { StatusDot, useHealthLabel } from "@/components/status-dot";
-import { TypeBadge } from "@/components/type-badge";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdoptClusterDialog } from "@/features/environments/adopt-cluster-dialog";
 import { AgentUpdatesCard } from "@/features/environments/agent-updates-card";
+import { ENV_TITLE_ID } from "@/features/environments/env-settings-layout";
 import { RenameDialog } from "@/features/environments/environments-settings";
 import { FoldCard } from "@/features/environments/fold-card";
 import { InstallDialog } from "@/features/environments/install-dialog";
@@ -34,7 +23,7 @@ import { ReasonText } from "@/features/environments/reason-text";
 import { RemoveEnvironmentCard } from "@/features/environments/remove-environment-card";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { settingsQuery } from "@/features/settings/general-form";
-import { hasPermission, useDocumentTitle, useMe } from "@/hooks/use-me";
+import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
@@ -64,31 +53,6 @@ function activeReason(env: EnvironmentItem): ActiveReason | undefined {
     since: first.since,
     more: issues.length - 1,
   };
-}
-
-function Breadcrumb({ name }: { name: string }) {
-  const t = useT();
-  return (
-    <nav aria-label={t("envsettings.breadcrumb.label")}>
-      <ol className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground [&>li:not(:last-child)]:after:ms-2 [&>li:not(:last-child)]:after:content-['/']">
-        <li>
-          <Link to="/settings" className="rounded-sm text-accent-ink hover:underline">
-            {t("envsettings.breadcrumb.settings")}
-          </Link>
-        </li>
-        <li>
-          <Link to="/settings/environments" className="rounded-sm text-accent-ink hover:underline">
-            {t("envsettings.breadcrumb.environments")}
-          </Link>
-        </li>
-        <li className="min-w-0">
-          <span aria-current="page" className="break-words">
-            {name}
-          </span>
-        </li>
-      </ol>
-    </nav>
-  );
 }
 
 function GeneralCard({ env }: { env: EnvironmentItem }) {
@@ -130,11 +94,11 @@ function GeneralCard({ env }: { env: EnvironmentItem }) {
 function ConnectionCard({
   env,
   canSettings,
-  canManage,
+  canConfigure,
 }: {
   env: EnvironmentItem;
   canSettings: boolean;
-  canManage: boolean;
+  canConfigure: boolean;
 }) {
   const t = useT();
   const [adopting, setAdopting] = useState(false);
@@ -185,7 +149,7 @@ function ConnectionCard({
           ) : null}
         </div>
       ) : null}
-      {env.status.state === "cluster_changed" && canManage ? (
+      {env.status.state === "cluster_changed" && canConfigure ? (
         <>
           <div>
             <Button
@@ -213,18 +177,24 @@ interface EnvSettingsPageProps {
   envId: string;
 }
 
-// EnvSettingsPage is Settings > Environments > {env} (D-38): the breadcrumb and
-// the cards General, Connection, Nodes and agents, Join token and Agent updates,
-// and Remove environment last (D-30), each shown only to someone who holds its
-// permission. The Connection card offers Adopt new cluster while the swarm was
+// EnvSettingsPage is the Settings tab of Settings > Environments > {env} (D-38): the
+// cards General, Connection, Nodes and agents, Join token and Agent updates, and
+// Remove environment last (D-30). The breadcrumb, the title and the tab bar
+// (Settings, Access) belong to EnvSettingsLayout around it, which also answers
+// while the environment loads, is gone or is not the caller's to open. The page is
+// for someone who holds
+// environments.configure on this environment, an env Admin or an instance admin
+// (D-07). General, Connection, Nodes and agents and Agent updates are theirs;
+// Join token, Local host and Remove environment need the installation-wide
+// environments.token, environments.manage and environments.delete, so an env
+// Admin never sees those cards (D-19: a card with no usable action is hidden whole).
+// The Connection card offers Adopt new cluster while the swarm was
 // re-initialised (plan 19); the Local host card (plan 30) comes between Agent updates and
 // Remove, only while the server offers the fold. Hiding a card is not access control; the server answers 403.
 export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const router = useRouter();
-  // The title takes focus after a fold, when the card that had it is gone.
-  const title = useRef<HTMLHeadingElement>(null);
   // The toast after a revoke offers to rotate the join token; the install
   // dialog it opens belongs to the page so the toast outlives the table's row.
   const [rotating, setRotating] = useState(false);
@@ -232,93 +202,31 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   const environments = useQuery(environmentsQuery);
   const items = environments.data?.items ?? [];
   const env = items.find((e) => e.id === envId);
-  useDocumentTitle(env?.name);
 
-  const canManage = hasPermission(me, "environments.manage");
-  const canToken = hasPermission(me, "environments.token");
-  const canRevoke = hasPermission(me, "environments.revoke");
+  // Rename, the auto-update switch, agent updates and adopting a changed cluster need
+  // configure on this environment (D-07), so an env Admin has them without holding any
+  // installation-wide permission. Revoke is held per environment too.
+  const canConfigure = hasPermission(me, "environments.configure", envId);
+  const canRevoke = hasPermission(me, "environments.revoke", envId);
   const canRead = hasPermission(me, "environments.read", envId);
+  // The rest is installation-wide: the join token, the local-host fold, removal and
+  // the settings that hold the address agents dial.
+  const canToken = hasPermission(me, "environments.token");
+  const canFold = hasPermission(me, "environments.manage");
   const canSettings = hasPermission(me, "settings.read");
   const canDelete = hasPermission(me, "environments.delete");
 
-  if (!(canManage || canToken || canRevoke || canSettings || canDelete)) return <NoPermission />;
-
-  if (environments.isPending) {
-    return (
-      <div className="flex flex-col gap-4" aria-busy="true">
-        <span role="status" className="sr-only">
-          {t("envsettings.loading")}
-        </span>
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-32 w-full" />
-      </div>
-    );
-  }
-
-  if (environments.isError) {
-    return (
-      <Alert variant="destructive">
-        <AlertDescription className="flex flex-wrap items-center gap-3">
-          <span>{t("envsettings.loadFailed")}</span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="max-md:h-11"
-            disabled={environments.isFetching}
-            onClick={() => void environments.refetch()}
-          >
-            {t("envsettings.retry")}
-          </Button>
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (!env) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <Server aria-hidden="true" />
-          </EmptyMedia>
-          <EmptyTitle>{t("envsettings.notFound.heading")}</EmptyTitle>
-          <EmptyDescription>{t("envsettings.notFound.body")}</EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent>
-          <Button asChild variant="outline" className="max-md:h-11">
-            <Link to="/settings/environments">{t("envsettings.notFound.back")}</Link>
-          </Button>
-        </EmptyContent>
-      </Empty>
-    );
-  }
+  if (!canConfigure) return <NoPermission />;
+  // The layout has shown the environment loading or gone; there is nothing to add.
+  if (!env) return null;
 
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex flex-col gap-2">
-        <Breadcrumb name={env.name} />
-        <div className="flex flex-wrap items-center gap-2">
-          <h2
-            ref={title}
-            tabIndex={-1}
-            className="min-w-0 text-2xl font-semibold break-words outline-none"
-          >
-            {env.name}
-          </h2>
-          <TypeBadge envType={env.envType} type={env.type} isLocalSocket={env.isLocalSocket} />
-          {env.isSelfHost ? (
-            <Badge variant="outline" className="shrink-0">
-              {t("dashboard.selfBadge")}
-            </Badge>
-          ) : null}
-        </div>
-      </header>
-      {canManage ? <GeneralCard env={env} /> : null}
+      {canConfigure ? <GeneralCard env={env} /> : null}
       {canRead ? (
-        <ConnectionCard env={env} canSettings={canSettings} canManage={canManage} />
+        <ConnectionCard env={env} canSettings={canSettings} canConfigure={canConfigure} />
       ) : null}
-      {canRead ? (
+      {canRead && (canConfigure || canRevoke) ? (
         <SettingsCard title={t("envsettings.sections.nodes")}>
           <NodeTable
             envId={env.id}
@@ -327,7 +235,7 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
         </SettingsCard>
       ) : null}
       {canToken && env.kind === "agent" ? <JoinTokenCard envId={env.id} /> : null}
-      {canManage && canRead && env.kind === "agent" ? <AgentUpdatesCard env={env} /> : null}
+      {canConfigure && canRead && env.kind === "agent" ? <AgentUpdatesCard env={env} /> : null}
       {canToken && env.kind === "agent" ? (
         <InstallDialog
           open={rotating}
@@ -341,12 +249,12 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
           }}
         />
       ) : null}
-      {canManage && env.foldOffered ? (
+      {canFold && env.foldOffered ? (
         <FoldCard
           env={env}
           // The card and its dialog are gone with the offer, so focus would fall to the
-          // body; the title is where the page starts again.
-          focusFallback={() => title.current}
+          // body; the title (in the layout) is where the page starts again.
+          focusFallback={() => document.getElementById(ENV_TITLE_ID)}
           onFolded={(swarmEnvId) => {
             // The local host's own page is for an environment that no longer exists.
             if (swarmEnvId !== env.id)

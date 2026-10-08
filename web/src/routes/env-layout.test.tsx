@@ -4,6 +4,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -12,13 +13,10 @@ import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { retryTiming } from "@/routes/_app/env/$envId";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 
-const ME = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
-  permissions: splitPermissions([]),
-};
+const ME = makeMe({ instanceAdmin: true, permissions: splitPermissions([]) });
 
 let me: typeof ME = ME;
 
@@ -98,8 +96,14 @@ function stubApi() {
       }
       if (path === "/api/environments") return stub.environments();
       if (path === "/api/env/e1/summary") return stub.summary();
+      if (path === "/api/env/e2/summary") {
+        return Response.json({
+          ...SUMMARY,
+          environment: { ...SUMMARY.environment, id: "e2", name: "Second host" },
+        });
+      }
       if (path === "/api/env/e1/reconnect") return stub.reconnect();
-      if (path === "/api/environments/e1/adopt-cluster" && stub.adopt) return stub.adopt();
+      if (path === "/api/env/e1/adopt-cluster" && stub.adopt) return stub.adopt();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -444,7 +448,7 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
   });
 
   it("offers Open node settings and Remove environment for a revoked environment, by permission", async () => {
-    grant("environments.read", "environments.manage", "environments.delete");
+    grant("environments.read", "environments.configure", "environments.delete");
     withAgentEnv({ state: "revoked", reason: "revoked" });
     stub.summary = () =>
       problem(503, "environment_offline", { state: "revoked", reason: "revoked" });
@@ -462,7 +466,7 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("leaves out Remove environment without environments.delete, and the settings link without environments.manage", async () => {
+  it("leaves out Remove environment without environments.delete, and the settings link without environments.configure", async () => {
     grant("environments.read");
     withAgentEnv({ state: "revoked", reason: "revoked" });
     stub.summary = () =>
@@ -492,7 +496,7 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
   });
 
   it("offers Adopt new cluster first and Remove environment second, and adopting posts once and brings the page back", async () => {
-    grant("environments.read", "environments.manage", "environments.delete");
+    grant("environments.read", "environments.configure", "environments.delete");
     withAgentEnv(
       { state: "cluster_changed", reason: "cluster_changed" },
       { pendingClusterId: "x3k2m9t0q4w5e6r7t8y9u0i1o" },
@@ -615,7 +619,7 @@ describe("degraded banner in the environment layout (D-33)", () => {
   });
 
   it("sits on the dashboard of a degraded environment with the worst issue, and goes when the stream says online", async () => {
-    grant("environments.read", "environments.manage");
+    grant("environments.read", "environments.configure");
     withAgentEnv({ state: "degraded", reason: "agent_offline", issues: ISSUES });
     renderAt("/env/e1");
     expect(await screen.findByText("Lab host is degraded")).toBeTruthy();
@@ -655,5 +659,196 @@ describe("degraded banner in the environment layout (D-33)", () => {
     renderAt("/env/e1");
     await screen.findByRole("heading", { name: "Lab host" });
     expect(screen.queryByText(/is degraded/)).toBeNull();
+  });
+});
+
+// D-08 and D-10: an environment the user may not see is a missing page, and when
+// access changes under a user the app refetches who they are and moves them.
+describe("access changes under a user (D-08, D-10)", () => {
+  const SECOND = { ...LAB, id: "e2", name: "Second host" };
+  const meReads = () => sent.filter((s) => s.path === "/api/me").length;
+
+  // Sonner keeps its toasts in a store outside the rendered tree, so one test's
+  // toast would otherwise still be on screen in the next.
+  afterEach(() => {
+    toast.dismiss();
+  });
+
+  it("shows the plain Page not found for an environment the user cannot see, and no toast", async () => {
+    me = makeMe({ envs: { e2: "viewer" } });
+    stub.environments = () => Response.json({ items: [SECOND] });
+    stub.summary = () => problem(404, "environment_not_found");
+    renderAt("/env/e1");
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeTruthy();
+    expect(screen.queryByText("You don't have permission to view this page")).toBeNull();
+    await waitFor(() => expect(meReads()).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByText("Your access changed. Showing what you can see now.")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Page not found" })).toBeTruthy();
+  });
+
+  it("moves a user who lost the environment to one they can still see, with the info toast", async () => {
+    me = makeMe({ envs: { e1: "viewer", e2: "viewer" } });
+    stub.environments = () => Response.json({ items: [SECOND] });
+    stub.summary = () => {
+      // The grant is withdrawn: the server now answers as if e1 does not exist.
+      me = makeMe({ envs: { e2: "viewer" } });
+      return problem(404, "environment_not_found");
+    };
+    const router = renderAt("/env/e1");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/env/e2"));
+    expect(
+      await screen.findByText("Your access changed. Showing what you can see now."),
+    ).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Second host" })).toBeTruthy();
+  });
+
+  it("shows the no-access state when nothing is left to open", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    stub.environments = () => Response.json({ items: [] });
+    stub.summary = () => {
+      me = makeMe({ envs: {}, administrators: ["admin"] });
+      return problem(404, "environment_not_found");
+    };
+    const router = renderAt("/env/e1");
+    expect(
+      await screen.findByRole("heading", { name: "You don't have access to any environments yet" }),
+    ).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("shows the skeleton, never the no-access state, while /api/me is read again", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stub.environments = () => Response.json({ items: [] });
+    // Every read of /api/me after the refusal waits for the release.
+    let refused = false;
+    stub.summary = () => {
+      refused = true;
+      return problem(404, "environment_not_found");
+    };
+    const inner = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (refused && new URL(req.url).pathname === "/api/me") {
+          await held;
+          me = makeMe({ envs: {}, administrators: ["admin"] });
+        }
+        return inner(req);
+      }),
+    );
+    renderAt("/env/e1");
+    expect(await screen.findByLabelText("Checking what you can see")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Page not found" })).toBeNull();
+    expect(screen.queryByText("You don't have access to any environments yet")).toBeNull();
+    release?.();
+    expect(
+      await screen.findByRole("heading", { name: "You don't have access to any environments yet" }),
+    ).toBeTruthy();
+  });
+
+  // G-03-2: clicking a sidebar link mounts components that read /api/me again,
+  // and the server audits a refusal before it sends it, so /api/me can answer
+  // before the refused request does. The handler must not need the refusal to
+  // come first.
+  it.each([
+    { order: "/api/me answers before the refused request", meDelay: 0, refusalDelay: 30 },
+    { order: "the refused request answers first", meDelay: 30, refusalDelay: 0 },
+  ])(
+    "moves a Viewer whose grant was removed to the no-access state with the toast when $order",
+    async ({ meDelay, refusalDelay }) => {
+      me = makeMe({ envs: { e1: "viewer" } });
+      const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+      let flipped = false;
+      const inner = globalThis.fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (req: Request) => {
+          const path = new URL(req.url).pathname;
+          if (path === "/api/env/e1/containers" && !flipped) {
+            return Response.json({ items: [], nodes: [] });
+          }
+          if (flipped && (path === "/api/env/e1/summary" || path === "/api/env/e1/containers")) {
+            await sleep(refusalDelay);
+            return problem(404, "environment_not_found");
+          }
+          if (flipped && path === "/api/me") await sleep(meDelay);
+          if (flipped && path === "/api/environments") return Response.json({ items: [] });
+          return inner(req);
+        }),
+      );
+      const router = renderAt("/env/e1");
+      expect(await screen.findByRole("heading", { name: "Lab host" })).toBeTruthy();
+
+      // The grant is withdrawn while the page is open.
+      flipped = true;
+      me = makeMe({ envs: {}, administrators: ["admin"] });
+      // The dashboard's summary is older than its stale time, so the next page reads it.
+      queryClient.setQueryData(["env", "e1", "summary"], SUMMARY, { updatedAt: 0 });
+      fireEvent.click(await screen.findByRole("link", { name: "Containers" }));
+
+      expect(
+        await screen.findByRole("heading", {
+          name: "You don't have access to any environments yet",
+        }),
+      ).toBeTruthy();
+      expect(router.state.location.pathname).toBe("/");
+      expect(screen.getByText("Your access changed. Showing what you can see now.")).toBeTruthy();
+    },
+  );
+
+  it("shows the plain Page not found without the skeleton while /api/me is read again for an environment the user never held", async () => {
+    me = makeMe({ envs: { e2: "viewer" } });
+    stub.environments = () => Response.json({ items: [SECOND] });
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let refused = false;
+    let heldReads = 0;
+    stub.summary = () => {
+      refused = true;
+      return problem(404, "environment_not_found");
+    };
+    const inner = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (refused && new URL(req.url).pathname === "/api/me") {
+          heldReads++;
+          await held;
+        }
+        return inner(req);
+      }),
+    );
+    renderAt("/env/e1");
+    // The read of /api/me is under way and the answer is not held back for it.
+    await waitFor(() => expect(heldReads).toBeGreaterThanOrEqual(1));
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeTruthy();
+    expect(screen.queryByLabelText("Checking what you can see")).toBeNull();
+    release?.();
+    await waitFor(() => expect(meReads()).toBeGreaterThanOrEqual(2));
+    expect(screen.getByRole("heading", { name: "Page not found" })).toBeTruthy();
+    expect(screen.queryByText("Your access changed. Showing what you can see now.")).toBeNull();
+  });
+
+  it("shows the refusal toast and re-renders from the new /api/me when an action is refused", async () => {
+    me = makeMe({ envs: { e1: "operator" } });
+    stub.summary = () => problem(503, "environment_offline", { reason: "unreachable" });
+    stub.reconnect = () => {
+      me = makeMe({ envs: { e1: "viewer" } });
+      return problem(403, "about:blank");
+    };
+    renderAt("/env/e1");
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(
+      await screen.findByText(
+        "You no longer have permission to do that. Your access may have changed.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() => expect(meReads()).toBeGreaterThanOrEqual(2));
   });
 });

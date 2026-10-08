@@ -1,0 +1,70 @@
+{
+  "schedule": {
+    "title": "Scheduled backups",
+    "enabled": "Back up automatically",
+    "frequency": {
+      "label": "How often",
+      "daily": "Every day",
+      "weekly": "Every week"
+    },
+    "time": {
+      "label": "Time (UTC)",
+      "invalid": "Use a 24-hour time like 03:00."
+    },
+    "keep": {
+      "label": "Keep the newest",
+      "helper": "Older backups are deleted.",
+      "invalid": "Enter a number from 1 to 365."
+    },
+    "location": {
+      "label": "Location",
+      "helper": "Backups are written inside the container. Mount a volume or a host folder here to keep them off this host."
+    },
+    "passphrase": {
+      "label": "Passphrase",
+      "confirm": "Confirm passphrase",
+      "helper": "Stored encrypted in Bayplan so backups can run unattended. Anyone who can read /data and the master key can read it.",
+      "saved": "Saved. Leave empty to keep it.",
+      "show": "Show passphrase",
+      "hide": "Hide passphrase",
+      "tooShort": "Use at least {{min}} characters.",
+      "mismatch": "The passphrases don't match.",
+      "required": "Enter a passphrase to turn scheduled backups on."
+    },
+    "save": "Save schedule",
+    "saving": "Saving…",
+    "done": "Schedule saved.",
+    "status": {
+      "last": "Last backup {{time}}, {{size}}.",
+      "next": "Next backup {{time}}.",
+      "failed": "Last backup failed {{time}}: {{reason}}.",
+      "none": "No backup has run yet."
+    },
+    "files": {
+      "title": "Saved backups",
+      "file": "File",
+      "size": "Size",
+      "created": "Created",
+      "download": "Download",
+      "downloadAria": "Download {{name}}",
+      "actions": "Actions",
+      "downloadFailed": "Couldn't download the backup. Try again.",
+      "empty": "No scheduled backups yet.",
+      "loadFailed": "Couldn't load the saved backups."
+    },
+    "weekday": {
+      "label": "Day",
+      "day": {
+        "0": "Sunday",
+        "1": "Monday",
+        "2": "Tuesday",
+        "3": "Wednesday",
+        "4": "Thursday",
+        "5": "Friday",
+        "6": "Saturday"
+      }
+    },
+    "cancel": "Cancel",
+    "failed": "Couldn't save the schedule. Try again."
+  }
+}

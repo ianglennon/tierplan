@@ -5,6 +5,11 @@ environment and the host owner allows it. This page is for the other cases: the 
 bell says "{n} agents need a manual update", an update failed, or an update was
 interrupted.
 
+Switching automatic updates, updating one agent and updating every agent that is behind
+need **Admin** on the environment (`environments.configure`), as do instance admins. The
+requests go to `PATCH /api/env/{envId}`, `POST /api/env/{envId}/agents/{agentId}/update` and
+`POST /api/env/{envId}/update-agents`.
+
 ## When an update is manual
 
 The bell lists an agent here when it is older than the server and Bayplan cannot update it:

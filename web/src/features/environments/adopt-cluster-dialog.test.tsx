@@ -8,15 +8,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { AdoptClusterDialog } from "@/features/environments/adopt-cluster-dialog";
+import { meQueryOptions } from "@/hooks/use-me";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
 const ENV = { id: "e2", name: "edge swarm", pendingClusterId: "x3k2m9t0q4w5e6r7t8y9u0i1o" };
 
 let posts: { path: string; csrf: string | null }[];
 let answer: () => Response | Promise<Response>;
+let me = makeMe({ instanceAdmin: true });
 
 beforeEach(() => {
   posts = [];
+  me = makeMe({ instanceAdmin: true });
   answer = () => Response.json({ clusterId: ENV.pendingClusterId });
   setCsrfToken("csrf-1");
   vi.stubGlobal(
@@ -24,7 +28,8 @@ beforeEach(() => {
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
       if (req.method === "POST") posts.push({ path, csrf: req.headers.get("X-CSRF-Token") });
-      if (path === "/api/environments/e2/adopt-cluster") return answer();
+      if (path === "/api/me") return Response.json(me);
+      if (path === "/api/env/e2/adopt-cluster") return answer();
       return Response.json({ items: [] });
     }),
   );
@@ -39,6 +44,8 @@ afterEach(() => {
 });
 
 function show(environment: Partial<typeof ENV> = {}, onOpenChange = vi.fn()) {
+  // Who is signed in is read from the cache the app fills at sign-in.
+  queryClient.setQueryData(meQueryOptions.queryKey, me);
   render(
     <QueryClientProvider client={queryClient}>
       <AdoptClusterDialog
@@ -86,7 +93,7 @@ describe("AdoptClusterDialog", () => {
     expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    expect(posts).toEqual([{ path: "/api/environments/e2/adopt-cluster", csrf: "csrf-1" }]);
+    expect(posts).toEqual([{ path: "/api/env/e2/adopt-cluster", csrf: "csrf-1" }]);
 
     await act(async () => release(Response.json({ clusterId: ENV.pendingClusterId })));
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
@@ -130,6 +137,19 @@ describe("AdoptClusterDialog", () => {
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toContain("already manages that cluster"),
     );
+  });
+
+  it("is offered to an env Admin of that environment, and to nobody who lacks environments.configure on it", () => {
+    me = makeMe({ envs: { e2: "admin" } });
+    show();
+    expect(screen.getByRole("dialog", { name: "Adopt the new cluster?" })).toBeTruthy();
+    cleanup();
+
+    // A Viewer of it, and an Admin of some other environment, get nothing to confirm.
+    me = makeMe({ envs: { e2: "viewer", e9: "admin" } });
+    show();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(posts).toHaveLength(0);
   });
 
   it("closes on Cancel without posting", () => {

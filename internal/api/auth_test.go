@@ -11,12 +11,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/access"
 	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -64,10 +66,17 @@ type authFixture struct {
 	// dataInfo and acctVault feed the account routes (plan 14). A test sets them
 	// before calling build; the defaults are a persisted directory and the
 	// environment-keyed vault.
-	dataInfo  datadir.Info
+	dataInfo datadir.Info
+	// backupDir is where the scheduled backups are listed from (plan 03-27); it is
+	// not made until a test writes into it.
+	backupDir string
+	// scheduler is told when a test saves the backup schedule.
+	scheduler interface{ Notify() }
 	acctVault *vault.Vault
 	// proxy feeds the proxy items of GET /api/warnings (plan 02-25); nil means none.
 	proxy *httpx.ProxyObserver
+	// refusals feeds the refusal_burst items of GET /api/warnings (plan 03-10); nil means none.
+	refusals *auth.RefusalCoalescer
 	// pwLimiter is the per-user throttle on POST /api/me/password; nil means none.
 	pwLimiter *auth.IPLimiter
 	// localHost feeds GET /api/local-host (plan 15).
@@ -120,11 +129,26 @@ type authFixture struct {
 	settingsAgents api.SettingsAgents
 	// envWarningsNow is the clock of GET /api/environments/warnings; nil means the wall clock.
 	envWarningsNow func() time.Time
+	// inviteTTL is BAYPLAN_INVITE_TTL as the access service sees it; zero is the 72 hour
+	// default. inviteLimiter throttles the public invite routes per address and
+	// inviteAudit records their refusals; nil means a generous limiter and the writer
+	// itself (plan 03-11).
+	inviteTTL     time.Duration
+	inviteLimiter *auth.IPLimiter
+	inviteAudit   httpx.Auditor
+	// access is the service behind the user and invite routes, built with the router.
+	access *access.Service
+	// restore is what the restore routes (plan 03-25) restart through and keep
+	// their upload in; build creates it on first use and keeps it across builds.
+	restore *restoreHook
+	// unknown is the registry of agents refused unknown_agent that the unknown-agents
+	// route and the warnings read (plan 03-28); newAuthFixture makes one.
+	unknown *agents.UnknownAgents
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	t.Helper()
-	f := &authFixture{st: storetest.New(t), clk: &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, logs: &bytes.Buffer{}}
+	f := &authFixture{st: storetest.New(t), clk: &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, logs: &bytes.Buffer{}, unknown: agents.NewUnknownAgents()}
 	log := slog.New(slog.NewJSONHandler(f.logs, nil))
 	v, err := vault.LoadOrCreate(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)), t.TempDir(), slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -133,10 +157,8 @@ func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	f.v = v
 	f.acctVault = v
 	f.dataInfo = datadir.Info{Path: t.TempDir(), Persisted: true}
+	f.backupDir = filepath.Join(t.TempDir(), "backups")
 	f.aud = audit.NewWriter(f.st, v, log, f.clk.now)
-	if err := rbac.SeedAdminRole(context.Background(), f.st); err != nil {
-		t.Fatal(err)
-	}
 	if f.inst, err = instance.Load(context.Background(), f.st, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -171,6 +193,17 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterAccount(r, api.AccountDeps{
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
 		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
+		Checker: checker, Refusals: refusalSource(f.refusals), Now: f.clk.now, Unknown: f.unknown,
+	})
+	f.access = access.New(f.st, f.aud, checker, f.inviteTTL)
+	f.access.Now = f.clk.now
+	inviteLimiter := f.inviteLimiter
+	if inviteLimiter == nil {
+		inviteLimiter = auth.NewIPLimiter(time.Second, 1000, 10*time.Minute, f.clk.now)
+	}
+	api.RegisterAccess(r, api.AccessDeps{
+		Access: f.access, Store: f.st, Checker: checker, Instance: f.inst, Sessions: f.sess,
+		Limiter: inviteLimiter, AnonAudit: f.inviteAudit, Now: f.clk.now, Log: log,
 	})
 	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, AgentAllowInsecure: f.agentAllowInsecure, Log: log})
 	api.RegisterLocalHost(r, f.localHost)
@@ -213,8 +246,11 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			MaxStreamsPerUser: f.envStreamMaxStreams, MaxLifetime: f.envStreamMaxLifetime, Log: log,
 		})
 	}
-	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Now: f.clk.now, Log: log})
-	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Log: log})
+	api.RegisterUnknownAgents(r, api.UnknownAgentsDeps{Unknown: f.unknown, Store: f.st, Now: f.clk.now, Log: log})
+	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Refusals: f.aud, Now: f.clk.now, Log: log})
+	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Checker: checker, Refusals: f.aud, Log: log})
+	api.RegisterBackup(r, api.BackupDeps{Store: f.st, Vault: f.v, Audit: f.aud, Instance: f.inst, DataDir: f.dataInfo.Path, Dir: f.backupDir, Scheduler: f.scheduler, AppVersion: "v9.9.9", Now: f.clk.now, Log: log})
+	api.RegisterRestore(r, f.restoreDeps(log))
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +273,7 @@ func (f *authFixture) addUser(t *testing.T, name string, admin bool) string {
 		t.Fatal(err)
 	}
 	if admin {
-		if err := rbac.AssignGlobalRole(ctx, tx, f.st.Q, rbac.PrincipalUser, id, rbac.AdminRoleID); err != nil {
+		if err := rbac.GrantInstanceAdminTx(ctx, tx, f.st.Q, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -298,9 +334,10 @@ func loginBody(user, password string, remember bool) string {
 
 type loginResp struct {
 	User struct {
-		ID       string `json:"id"`
-		Username string `json:"username"`
-		Role     string `json:"role"`
+		ID            string `json:"id"`
+		Username      string `json:"username"`
+		DisplayName   string `json:"displayName"`
+		InstanceAdmin bool   `json:"instanceAdmin"`
 	} `json:"user"`
 	CSRFToken string `json:"csrfToken"`
 }
@@ -368,8 +405,11 @@ func TestLoginSignsInWithABrowserSessionCookieAndReturnsTheUserAndCSRFToken(t *t
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.User.ID != "id-admin" || got.User.Username != "admin" || got.User.Role != "admin" || got.CSRFToken == "" {
+	if got.User.ID != "id-admin" || got.User.Username != "admin" || !got.User.InstanceAdmin || got.CSRFToken == "" {
 		t.Fatalf("body = %+v", got)
+	}
+	if strings.Contains(rec.Body.String(), `"role"`) {
+		t.Fatalf("body = %s, want no role field", rec.Body)
 	}
 	c := sessionCookie(rec)
 	if c == nil || c.Name != "bayplan_session" || c.Value == "" {
@@ -645,15 +685,69 @@ func TestLoginRejectsAnOversizedBodyFieldsWithoutTouchingTheAccount(t *testing.T
 
 type meResp struct {
 	User struct {
-		ID       string `json:"id"`
-		Username string `json:"username"`
-		Role     string `json:"role"`
+		ID            string `json:"id"`
+		Username      string `json:"username"`
+		DisplayName   string `json:"displayName"`
+		InstanceAdmin bool   `json:"instanceAdmin"`
 	} `json:"user"`
 	CSRFToken   string `json:"csrfToken"`
 	Permissions struct {
 		Global       []string            `json:"global"`
 		Environments map[string][]string `json:"environments"`
 	} `json:"permissions"`
+	Access map[string]struct {
+		Role    string   `json:"role"`
+		Extras  []string `json:"extras"`
+		Sources []struct {
+			Kind     string `json:"kind"`
+			TeamID   string `json:"teamId"`
+			TeamName string `json:"teamName"`
+		} `json:"sources"`
+	} `json:"access"`
+	Requirements map[string]struct {
+		Kind string `json:"kind"`
+		Role string `json:"role"`
+	} `json:"requirements"`
+	Administrators []string `json:"administrators"`
+}
+
+// getMe signs name in and returns the decoded /api/me body and the raw body.
+func (f *authFixture) getMe(t *testing.T, name string) (meResp, string) {
+	t.Helper()
+	cookie, _ := f.signIn(t, name, false)
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/me", cookie: cookie})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/me as %s: %d %s", name, rec.Code, rec.Body)
+	}
+	var got meResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	return got, rec.Body.String()
+}
+
+// addTeam makes a team of the named users and returns its ID.
+func (f *authFixture) addTeam(t *testing.T, name string, members ...string) string {
+	t.Helper()
+	id := "team-" + name
+	if _, err := f.st.Write.Exec(`INSERT INTO teams (id, name, created_at, updated_at) VALUES (?, ?, 0, 0)`, id, name); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range members {
+		if _, err := f.st.Write.Exec(`INSERT INTO team_members (team_id, user_id, created_at) VALUES (?, ?, 0)`, id, "id-"+m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return id
+}
+
+// addTeamRole gives a team a role on one environment.
+func (f *authFixture) addTeamRole(t *testing.T, teamID, envID, role string) {
+	t.Helper()
+	if _, err := f.st.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
+		VALUES (?, 'team', ?, ?, ?, 0)`, "ra-"+teamID+"-"+envID, teamID, role, envID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestMeReturnsTheUserCSRFTokenAndEffectivePermissions(t *testing.T) {
@@ -667,7 +761,7 @@ func TestMeReturnsTheUserCSRFTokenAndEffectivePermissions(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.User.ID != "id-admin" || got.User.Username != "admin" || got.User.Role != "admin" || got.CSRFToken != csrf {
+	if got.User.ID != "id-admin" || got.User.Username != "admin" || !got.User.InstanceAdmin || got.CSRFToken != csrf {
 		t.Fatalf("body = %+v, want the user and the same CSRF token the sign-in returned", got)
 	}
 
@@ -705,8 +799,114 @@ func TestMeForAUserWithNoRoleHasEmptyPermissionListsNotNull(t *testing.T) {
 	}
 	var got meResp
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
-	if got.User.Role != "" {
-		t.Fatalf("role = %q, want empty", got.User.Role)
+	if got.User.InstanceAdmin {
+		t.Fatal("a user with no grant is not an instance admin")
+	}
+	if !strings.Contains(rec.Body.String(), `"access":{}`) || !strings.Contains(rec.Body.String(), `"administrators":["admin"]`) {
+		t.Fatalf("body = %s, want empty access and the administrators", rec.Body)
+	}
+}
+
+func TestMeForTheFirstAdminIsAnInstanceAdminWithOneAllEnvironmentsEntry(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	got, raw := f.getMe(t, "admin")
+	if !got.User.InstanceAdmin || got.User.DisplayName != "" {
+		t.Fatalf("user = %+v", got.User)
+	}
+	var generic struct {
+		User map[string]any `json:"user"`
+	}
+	if err := json.Unmarshal([]byte(raw), &generic); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := generic.User["role"]; has {
+		t.Fatalf("user = %v, want no role field", generic.User)
+	}
+	if len(got.Access) != 1 {
+		t.Fatalf("access = %+v, want only %q", got.Access, "*")
+	}
+	all := got.Access["*"]
+	var wantExtras []string
+	for _, p := range rbac.All() {
+		if p.Scope == rbac.ScopeEnvironment && p.Extra {
+			wantExtras = append(wantExtras, string(p.Name))
+		}
+	}
+	slices.Sort(wantExtras)
+	if all.Role != "admin" || !slices.Equal(all.Extras, wantExtras) || len(all.Sources) != 1 || all.Sources[0].Kind != "instance" {
+		t.Fatalf("access[*] = %+v, want admin, extras %v and the one source instance", all, wantExtras)
+	}
+	if len(got.Requirements) != len(rbac.All()) {
+		t.Fatalf("%d requirements for %d permissions", len(got.Requirements), len(rbac.All()))
+	}
+	for perm, want := range map[string]struct{ kind, role string }{
+		"containers.exec":        {"extra", "operator"},
+		"environments.read":      {"role", "viewer"},
+		"environments.configure": {"role", "admin"},
+		"users.manage":           {"instance", ""},
+	} {
+		if r := got.Requirements[perm]; r.Kind != want.kind || r.Role != want.role {
+			t.Errorf("requirements[%s] = %+v, want %+v", perm, r, want)
+		}
+	}
+	if !strings.Contains(raw, `"administrators":[]`) {
+		t.Fatalf("body = %s, want administrators as an empty array", raw)
+	}
+}
+
+func TestMeShowsATeamAndADirectGrantAsSourcesOfTheHigherRole(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addUser(t, "dev", false)
+	f.addEnvRole(t, "dev", "env-a", "viewer")
+	team := f.addTeam(t, "ops", "dev")
+	f.addTeamRole(t, team, "env-a", "operator")
+
+	got, raw := f.getMe(t, "dev")
+	if got.User.InstanceAdmin {
+		t.Fatal("dev is not an instance admin")
+	}
+	a, ok := got.Access["env-a"]
+	if !ok || len(got.Access) != 1 {
+		t.Fatalf("access = %+v, want only env-a", got.Access)
+	}
+	if a.Role != "operator" || len(a.Extras) != 0 {
+		t.Fatalf("access[env-a] = %+v, want operator with no extras", a)
+	}
+	if len(a.Sources) != 2 || a.Sources[0].Kind != "team" || a.Sources[0].TeamName != "ops" || a.Sources[0].TeamID != team || a.Sources[1].Kind != "direct" {
+		t.Fatalf("sources = %+v, want team ops then direct", a.Sources)
+	}
+	if !strings.Contains(raw, `"extras":[]`) || !strings.Contains(raw, `"administrators":[]`) {
+		t.Fatalf("body = %s, want empty arrays, not null", raw)
+	}
+}
+
+func TestMeListsTheActiveInstanceAdminsOnlyForAUserWithNoEnvironmentAccess(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addInstanceAdmin(t, "zed")
+	f.addInstanceAdmin(t, "gone")
+	f.addInstanceAdmin(t, "off")
+	f.addUser(t, "nobody", false)
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", "env-a", "viewer")
+	if _, err := f.st.Write.Exec(`UPDATE users SET deleted_at = 1 WHERE id = 'id-gone'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.Write.Exec(`UPDATE users SET disabled = 1 WHERE id = 'id-off'`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := f.getMe(t, "nobody")
+	if want := []string{"admin", "zed"}; !slices.Equal(got.Administrators, want) {
+		t.Fatalf("administrators = %v, want %v (sorted, without the disabled and the deleted)", got.Administrators, want)
+	}
+	if len(got.Access) != 0 {
+		t.Fatalf("access = %+v, want none", got.Access)
+	}
+	if got, _ := f.getMe(t, "viewer"); len(got.Administrators) != 0 {
+		t.Fatalf("a user with access was told the administrators: %v", got.Administrators)
+	}
+	if got, _ := f.getMe(t, "zed"); len(got.Administrators) != 0 {
+		t.Fatalf("an instance admin was told the administrators: %v", got.Administrators)
 	}
 }
 
@@ -885,4 +1085,13 @@ func TestMutationFromAnotherOriginIsRefusedBeforeLogin(t *testing.T) {
 	if f.sessionCount(t) != 0 {
 		t.Fatal("a cross-origin login created a session")
 	}
+}
+
+// refusalSource keeps a nil coalescer a nil interface, so the warnings handler
+// sees "none" rather than a typed nil.
+func refusalSource(c *auth.RefusalCoalescer) interface{ Bursts(time.Time) []auth.Burst } {
+	if c == nil {
+		return nil
+	}
+	return c
 }

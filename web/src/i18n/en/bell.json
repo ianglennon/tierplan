@@ -48,6 +48,12 @@
         "review": "Review"
       }
     },
+    "refusalBurst": {
+      "title_one": "{{count}} request was refused",
+      "title_other": "{{count}} requests were refused",
+      "description": "{{user}} was refused {{count}} times in the last minute. Look at the audit log.",
+      "link": "View audit log"
+    },
     "proxy": {
       "docs": "Reverse proxy docs",
       "untrustedForwarded": {
@@ -62,6 +68,19 @@
         "title": "WebSocket connections are failing",
         "body": "Agents or terminals can't connect through your proxy. Check that it passes the Upgrade headers."
       }
+    },
+    "backupFailed": {
+      "title": "The scheduled backup failed",
+      "description": "{{reason}}. The last good backup was {{time}}.",
+      "descriptionNoTime": "{{reason}}.",
+      "link": "Open backups"
+    },
+    "unknownAgents": {
+      "title_one": "{{count}} agent isn't known to this Bayplan",
+      "title_other": "{{count}} agents aren't known to this Bayplan",
+      "description_one": "It was installed after the backup you restored.",
+      "description_other": "They were installed after the backup you restored.",
+      "link": "View"
     }
   }
 }

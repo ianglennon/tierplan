@@ -22,6 +22,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { updateProblemKey } from "@/features/environments/update-problem";
+import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastError } from "@/lib/toast";
 
@@ -36,9 +37,16 @@ interface AgentUpdatesCardProps {
 // "Update agents automatically", and, while it is off, Update all agents ({n}) and
 // the progress "Updating agents ({done} of {total})" while an update rolls through
 // the nodes. A host whose owner turned self-update off, or whose agent Bayplan
-// cannot update, gets its manual command here. The page shows it only to someone
-// holding environments.manage and only for an agent environment; the server checks.
+// cannot update, gets its manual command here. It is for someone holding
+// environments.configure on this environment (D-07) and only for an agent
+// environment; the server checks. Without the permission it renders nothing and
+// reads nothing.
 export function AgentUpdatesCard({ env }: AgentUpdatesCardProps) {
+  const allowed = usePermission("environments.configure", env.id);
+  return allowed ? <AgentUpdatesBody env={env} /> : null;
+}
+
+function AgentUpdatesBody({ env }: AgentUpdatesCardProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const switchId = useId();

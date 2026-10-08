@@ -206,6 +206,7 @@ func copyDetails(d map[string]string) map[string]string {
 // times a few hundred bytes. audit.Writer repairs a cut multi-byte character.
 func trimmed(e audit.Entry) audit.Entry {
 	e.TargetID = cut(e.TargetID, maxPendingName)
+	e.EnvID = cut(e.EnvID, maxPendingName)
 	e.Reason = cut(e.Reason, maxPendingReason)
 	e.UserAgent = cut(e.UserAgent, maxPendingAgent)
 	e.Actor.ID = cut(e.Actor.ID, maxPendingName)

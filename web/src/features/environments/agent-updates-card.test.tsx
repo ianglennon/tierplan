@@ -11,7 +11,9 @@ import { environmentsQuery } from "@/api/environments";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AgentUpdatesCard } from "@/features/environments/agent-updates-card";
+import { meQueryOptions } from "@/hooks/use-me";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
 const NOW = new Date("2026-10-03T12:00:00Z");
 
@@ -67,8 +69,10 @@ let agents: ReturnType<typeof agent>[];
 let patchAnswer: () => Response | Promise<Response>;
 let updateAllAnswer: () => Response | Promise<Response>;
 let client: QueryClient;
+let me = makeMe({ instanceAdmin: true });
 
 beforeEach(() => {
+  me = makeMe({ instanceAdmin: true });
   sent = [];
   autoUpdate = true;
   envType = "swarm";
@@ -96,10 +100,11 @@ beforeEach(() => {
               .catch(() => undefined)
           : undefined;
       sent.push({ method: req.method, path, body });
+      if (path === "/api/me") return Response.json(me);
       if (path === "/api/environments" && req.method === "GET") {
         return Response.json({ items: [environment(autoUpdate, envType)] });
       }
-      if (path === "/api/environments/e2" && req.method === "PATCH") {
+      if (path === "/api/env/e2" && req.method === "PATCH") {
         const res = await patchAnswer();
         if (res.ok) autoUpdate = (body as { autoUpdate: boolean }).autoUpdate;
         return res;
@@ -107,7 +112,7 @@ beforeEach(() => {
       if (path === "/api/env/e2/agents") {
         return Response.json({ items: agents, manualCleanup: { swarm: "", standalone: "" } });
       }
-      if (path === "/api/environments/e2/update-agents") return updateAllAnswer();
+      if (path === "/api/env/e2/update-agents") return updateAllAnswer();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -129,6 +134,7 @@ function Harness() {
 }
 
 async function mount() {
+  client.setQueryData(meQueryOptions.queryKey, me);
   render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
@@ -144,6 +150,33 @@ async function mount() {
 const posts = () => sent.filter((s) => s.method === "POST");
 const reads = () => sent.filter((s) => s.method === "GET" && s.path === "/api/env/e2/agents");
 const updateAll = () => screen.queryByRole("button", { name: /^Update all agents/ });
+
+describe("AgentUpdatesCard permission", () => {
+  it("shows to an env Admin of that environment", async () => {
+    me = makeMe({ envs: { e2: "admin" } });
+    await mount();
+    expect(screen.getByRole("heading", { level: 3, name: "Agent updates" })).toBeTruthy();
+  });
+
+  it("renders nothing for a Viewer of the environment, or an Admin of another one", async () => {
+    for (const who of [makeMe({ envs: { e2: "viewer" } }), makeMe({ envs: { e9: "admin" } })]) {
+      me = who;
+      client.clear();
+      client.setQueryData(meQueryOptions.queryKey, me);
+      render(
+        <QueryClientProvider client={client}>
+          <TooltipProvider>
+            <Harness />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(sent.some((s) => s.path === "/api/environments")).toBe(true));
+      expect(screen.queryByRole("heading", { name: "Agent updates" })).toBeNull();
+      expect(screen.queryByRole("switch")).toBeNull();
+      cleanup();
+    }
+  });
+});
 
 describe("AgentUpdatesCard", () => {
   it("has the switch on with the helper, and no update buttons, while automatic updates are on", async () => {
@@ -239,7 +272,7 @@ describe("AgentUpdatesCard", () => {
       fireEvent.click(button);
       await vi.advanceTimersByTimeAsync(50);
     });
-    expect(posts().map((p) => p.path)).toEqual(["/api/environments/e2/update-agents"]);
+    expect(posts().map((p) => p.path)).toEqual(["/api/env/e2/update-agents"]);
     expect(screen.getByText("Updating agents (0 of 3)")).toBeTruthy();
 
     // The list is read again every few seconds while anything is updating.

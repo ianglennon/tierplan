@@ -35,12 +35,17 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 interface LoginSearch {
   next?: string;
   expired?: boolean;
+  // password-set: the visitor just chose a password with an invite or reset link,
+  // which does not sign them in (UI-SPEC "Invite and reset page"). backup-restored:
+  // the setup wizard restored a backup and the visitor now signs in with one of
+  // its accounts (D-30). Anything else is ignored.
+  notice?: "password-set" | "backup-restored";
 }
 
 function LoginPage() {
   const t = useT();
   const router = useRouter();
-  const { next, expired } = Route.useSearch();
+  const { next, expired, notice } = Route.useSearch();
   const { data: instance } = useQuery(instanceQuery);
   useDocumentTitle(t("auth.login.tabTitle"));
 
@@ -99,6 +104,18 @@ function LoginPage() {
         <Alert role="status">
           <Info aria-hidden="true" />
           <AlertDescription>{t("auth.login.expired")}</AlertDescription>
+        </Alert>
+      ) : null}
+      {notice === "password-set" ? (
+        <Alert role="status">
+          <Info aria-hidden="true" />
+          <AlertDescription>{t("invite.login.passwordSet")}</AlertDescription>
+        </Alert>
+      ) : null}
+      {notice === "backup-restored" ? (
+        <Alert role="status">
+          <Info aria-hidden="true" />
+          <AlertDescription>{t("restore.done.notice")}</AlertDescription>
         </Alert>
       ) : null}
       {errorKey ? (
@@ -182,6 +199,10 @@ export const Route = createFileRoute("/login")({
   validateSearch: (search: Record<string, unknown>): LoginSearch => ({
     next: typeof search.next === "string" ? search.next : undefined,
     expired: search.expired === true || search.expired === "true" ? true : undefined,
+    notice:
+      search.notice === "password-set" || search.notice === "backup-restored"
+        ? search.notice
+        : undefined,
   }),
   beforeLoad: async ({ search }) => {
     const instance = await loadInstance();

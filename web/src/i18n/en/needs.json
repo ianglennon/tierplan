@@ -1,0 +1,31 @@
+{
+  "needs": {
+    "role": {
+      "viewer": "Needs Viewer",
+      "operator": "Needs Operator",
+      "admin": "Needs Admin"
+    },
+    "extra": {
+      "containers": {
+        "exec": "Needs the container shell permission"
+      },
+      "secrets": {
+        "reveal": "Needs the reveal secrets permission"
+      },
+      "volumes": {
+        "delete": "Needs the delete volumes permission"
+      },
+      "janitor": {
+        "policy": "Needs the janitor policy permission"
+      },
+      "generic": "Needs the {{permission}} permission"
+    },
+    "instance": "Only an instance admin can do this",
+    "lastAdmin": "Bayplan needs at least one active instance admin",
+    "ownAccount": "You can't do this to your own account here",
+    "typeToConfirm": {
+      "label": "Type {{name}} to confirm",
+      "hint": "Type {{name}} to enable this button"
+    }
+  }
+}

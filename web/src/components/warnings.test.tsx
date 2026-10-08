@@ -23,6 +23,7 @@ import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { meQueryOptions } from "@/hooks/use-me";
 import { formatClock } from "@/lib/format";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 
 // Whether the page counts as "plain HTTP from another host" is decided by
@@ -30,11 +31,10 @@ import { splitPermissions } from "@/test-permissions";
 let plainHttp = false;
 vi.mock("@/components/auth-layout", () => ({ isPlainHttpRemote: () => plainHttp }));
 
-const ADMIN = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ADMIN = makeMe({
+  instanceAdmin: true,
   permissions: { global: ["settings.read", "settings.write"], environments: {} },
-};
+});
 const VIEWER = { ...ADMIN, permissions: { global: [], environments: {} } };
 // Reads every environment and may finish setting one up, but has no say over the instance.
 const OPERATOR = {
@@ -58,7 +58,7 @@ interface Sent {
 
 let sent: Sent[] = [];
 let me = ADMIN;
-let items: Array<Record<string, string>> = [];
+let items: Array<Record<string, string | number>> = [];
 let ackStatus = 204;
 // What GET /api/environments/warnings answers, how, and when (a gate holds the
 // answer back to show the first-load state).
@@ -133,6 +133,8 @@ function makeRouter() {
     routeTree: root.addChildren([
       page("/"),
       page("/environments"),
+      page("/audit"),
+      page("/settings/backup"),
       page("/env/$envId"),
       page("/settings/environments"),
       page("/settings/environments/$envId"),
@@ -791,5 +793,129 @@ describe("HealthBell environment items", () => {
       );
     });
     await waitFor(() => expect(envWarningsCalls().length).toBeGreaterThan(1));
+  });
+});
+
+describe("HealthBell refusal bursts", () => {
+  it("lists a burst for an instance admin with the user, the count and a link to the audit log", async () => {
+    items = [{ id: "refusal_burst", subject: "mallory", count: 12 }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("12 requests were refused")).toBeTruthy();
+    expect(
+      screen.getByText("mallory was refused 12 times in the last minute. Look at the audit log."),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "View audit log" });
+    expect(link.getAttribute("href")).toContain("/audit");
+    expect(link.getAttribute("href")).toContain("action=permission.denied");
+    // Derived from live state: there is nothing to dismiss.
+    expect(screen.queryByRole("button", { name: /dismiss|acknowledge/i })).toBeNull();
+  });
+
+  it("says a single refusal in the singular", async () => {
+    items = [{ id: "refusal_burst", subject: "mallory", count: 1 }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("1 request was refused")).toBeTruthy();
+  });
+
+  it("shows the unchanged empty bell when no burst or other condition holds", async () => {
+    renderWarnings();
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+  });
+});
+
+describe("HealthBell failed scheduled backups", () => {
+  const TWO_DAYS_AGO = new Date(Date.now() - 2 * 86_400_000).toISOString();
+
+  it("lists the failure for an instance admin with the reason, when the last good backup was, and a link to the backups", async () => {
+    items = [{ id: "backup_failed", subject: "no space left on device", since: TWO_DAYS_AGO }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The scheduled backup failed")).toBeTruthy();
+    expect(
+      screen.getByText("no space left on device. The last good backup was 2 d ago."),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open backups" });
+    expect(link.getAttribute("href")).toContain("/settings/backup");
+    // Derived from live state: there is nothing to dismiss.
+    expect(screen.queryByRole("button", { name: /dismiss|acknowledge/i })).toBeNull();
+  });
+
+  it("gives only the reason when there has never been a good backup", async () => {
+    items = [{ id: "backup_failed", subject: "no space left on device" }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("no space left on device.")).toBeTruthy();
+  });
+
+  it("follows the link to the backup page and closes the list", async () => {
+    items = [{ id: "backup_failed", subject: "boom", since: TWO_DAYS_AGO }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    fireEvent.click(await screen.findByRole("link", { name: "Open backups" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/backup"));
+    await waitFor(() => expect(screen.queryByText("The scheduled backup failed")).toBeNull());
+  });
+
+  it("counts with the other items", async () => {
+    items = [
+      { id: "backup_failed", subject: "boom" },
+      { id: "key_backup", keyPath: "/data/bayplan.key" },
+    ];
+    renderWarnings();
+    expect(await screen.findByRole("button", { name: "Warnings, 2 items" })).toBeTruthy();
+  });
+
+  it("shows nothing for someone who is not an instance admin, and nothing when no failure is current", async () => {
+    me = VIEWER;
+    items = [{ id: "backup_failed", subject: "boom" }];
+    renderWarnings();
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+    expect(screen.queryByText("The scheduled backup failed")).toBeNull();
+  });
+});
+
+describe("HealthBell agents not known after a restore", () => {
+  it("lists how many agents are not known with the reason and a link to Settings > Environments", async () => {
+    items = [{ id: "unknown_agents", count: 3 }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("3 agents aren't known to this Bayplan")).toBeTruthy();
+    expect(screen.getByText("They were installed after the backup you restored.")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "View" });
+    expect(link.getAttribute("href")).toContain("/settings/environments");
+    // Derived from what agents tried lately: there is nothing to dismiss.
+    expect(screen.queryByRole("button", { name: /dismiss|acknowledge/i })).toBeNull();
+  });
+
+  it("says it in the singular for one agent", async () => {
+    items = [{ id: "unknown_agents", count: 1 }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("1 agent isn't known to this Bayplan")).toBeTruthy();
+    expect(screen.getByText("It was installed after the backup you restored.")).toBeTruthy();
+  });
+
+  it("follows the link to the environments settings and closes the list", async () => {
+    items = [{ id: "unknown_agents", count: 2 }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    fireEvent.click(await screen.findByRole("link", { name: "View" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/environments"));
+    await waitFor(() =>
+      expect(screen.queryByText("2 agents aren't known to this Bayplan")).toBeNull(),
+    );
+  });
+
+  it("shows nothing for someone who is not an instance admin", async () => {
+    me = VIEWER;
+    items = [{ id: "unknown_agents", count: 2 }];
+    renderWarnings();
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+    expect(screen.queryByText(/aren't known to this Bayplan/)).toBeNull();
   });
 });

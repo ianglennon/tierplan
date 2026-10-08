@@ -1,0 +1,33 @@
+{
+  "invite": {
+    "tabTitle": "Set your password",
+    "checking": "Checking your link",
+    "invite": {
+      "heading": "Set your password",
+      "body": "{{username}}, choose a password to finish setting up your account on {{instance}}."
+    },
+    "reset": {
+      "heading": "Choose a new password",
+      "body": "{{username}}, choose a new password for {{instance}}."
+    },
+    "password": {
+      "label": "New password",
+      "helper": "At least 12 characters. A long passphrase works well."
+    },
+    "confirm": {
+      "label": "Confirm new password"
+    },
+    "show": "Show password",
+    "hide": "Hide password",
+    "submit": "Set password",
+    "pending": "Setting password…",
+    "invalid": {
+      "heading": "This link doesn't work",
+      "body": "It may have expired, been used already or been replaced by a newer link. Ask an administrator for a new one.",
+      "action": "Go to sign-in"
+    },
+    "login": {
+      "passwordSet": "Password set. Sign in to continue."
+    }
+  }
+}

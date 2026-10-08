@@ -27,7 +27,8 @@ import {
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { usePermission } from "@/hooks/use-me";
+import { canManageEnvironments } from "@/features/settings/tabs";
+import { useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { isMacPlatform, shortcutLabel, switchTarget } from "@/lib/env-nav";
 import { cn } from "@/lib/utils";
@@ -171,7 +172,7 @@ interface EnvCommandItemsProps {
   pathname: string;
   // Closes whatever holds the list.
   onChosen: () => void;
-  // Manage environments is for settings holders and belongs to the sidebar.
+  // Manage environments is for those who administer an environment and belongs to the sidebar.
   showManage?: boolean;
 }
 
@@ -280,11 +281,10 @@ export function EnvSwitcher() {
   const { state, isMobile } = useSidebar();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  // Manage environments leads to Settings, which is for these two (the sidebar
-  // uses the same test for its Settings item). The server checks each page.
-  const canReadSettings = usePermission("settings.read");
-  const canManageEnvironments = usePermission("environments.manage");
-  const canSettings = canReadSettings || canManageEnvironments;
+  // Manage environments leads to Settings > Environments, which is for an instance
+  // admin or an env Admin of at least one environment. The server checks the page.
+  const { data: me } = useMe();
+  const canManage = canManageEnvironments(me);
 
   // The list query keeps its last data when a refetch fails, so a failure keeps
   // the last known name and the list adds the notice.
@@ -354,7 +354,7 @@ export function EnvSwitcher() {
                 selectedId={selected?.id}
                 pathname={pathname}
                 onChosen={() => changeOpen(false)}
-                showManage={canSettings}
+                showManage={canManage}
               />
               <div
                 className={cn(

@@ -4,77 +4,115 @@
 package rbac
 
 // Permission is one registered resource.action permission (D-46). The Go
-// registry below is the only place permissions are defined; the database holds
-// which roles are granted which names, never what a name means.
+// registry below is the only place permissions and role grants are defined: a
+// role holds a permission when it is at least the permission's MinRole, so the
+// database never says what a role may do (D-15b).
 type Permission struct {
 	Name  Perm
 	Scope Scope
-	// Dangerous marks permissions Phase 3's AUTH-07 treats specially: exec,
-	// secret reveal, volume delete and janitor policy.
+	// MinRole is the lowest environment role that holds the permission. It is
+	// RoleNone for a global permission, which no environment role holds: only an
+	// instance admin does (D-01).
+	MinRole Role
+	// Extra marks a permission outside the role matrix that an Operator holds
+	// only when the assignment carries it explicitly (D-15). An Admin holds it
+	// always and a Viewer never.
+	Extra bool
+	// Dangerous marks permissions AUTH-07 treats specially: exec, secret
+	// reveal, volume delete, janitor policy, and the instance-admin-only
+	// tokens, deletes and backups.
 	Dangerous   bool
 	Description string
 }
 
 // Registered permission names.
 const (
-	PermEnvironmentsRead   Perm = "environments.read"
-	PermEnvironmentsCreate Perm = "environments.create"
-	PermEnvironmentsManage Perm = "environments.manage"
-	PermEnvironmentsToken  Perm = "environments.token"
-	PermEnvironmentsRevoke Perm = "environments.revoke"
-	PermEnvironmentsDelete Perm = "environments.delete"
-	PermContainersRead     Perm = "containers.read"
-	PermImagesRead         Perm = "images.read"
-	PermVolumesRead        Perm = "volumes.read"
-	PermNetworksRead       Perm = "networks.read"
-	PermAuditRead          Perm = "audit.read"
-	PermSettingsRead       Perm = "settings.read"
-	PermSettingsWrite      Perm = "settings.write"
-	PermContainersExec     Perm = "containers.exec"
-	PermSecretsReveal      Perm = "secrets.reveal"
-	PermVolumesDelete      Perm = "volumes.delete"
-	PermJanitorPolicy      Perm = "janitor.policy"
+	PermEnvironmentsRead      Perm = "environments.read"
+	PermEnvironmentsCreate    Perm = "environments.create"
+	PermEnvironmentsManage    Perm = "environments.manage"
+	PermEnvironmentsToken     Perm = "environments.token"
+	PermEnvironmentsRevoke    Perm = "environments.revoke"
+	PermEnvironmentsDelete    Perm = "environments.delete"
+	PermEnvironmentsConfigure Perm = "environments.configure"
+	PermEnvironmentsAccess    Perm = "environments.access"
+	PermEnvironmentsAudit     Perm = "environments.audit"
+	PermContainersRead        Perm = "containers.read"
+	PermImagesRead            Perm = "images.read"
+	PermVolumesRead           Perm = "volumes.read"
+	PermNetworksRead          Perm = "networks.read"
+	PermAuditRead             Perm = "audit.read"
+	PermSettingsRead          Perm = "settings.read"
+	PermSettingsWrite         Perm = "settings.write"
+	PermUsersManage           Perm = "users.manage"
+	PermTeamsManage           Perm = "teams.manage"
+	PermBackupManage          Perm = "backup.manage"
+	PermContainersExec        Perm = "containers.exec"
+	PermSecretsReveal         Perm = "secrets.reveal"
+	PermVolumesDelete         Perm = "volumes.delete"
+	PermJanitorPolicy         Perm = "janitor.policy"
 )
 
-// registry lists every permission. environments.read stays scoped to one
+// Registry is a list of permissions. The Checker consults one, so a test can
+// give it a registry of its own; production uses DefaultRegistry.
+type Registry []Permission
+
+// defaultRegistry lists every permission. environments.read stays scoped to one
 // environment, so the overview and the global health stream show only what the
-// caller may read; the rest of environment administration is global and split
-// as D-49 asks (environments.write is retired). The Dangerous entries that no
-// route uses yet are registered now so Phase 3 can rely on the flag.
-var registry = []Permission{
-	{Name: PermEnvironmentsRead, Scope: ScopeEnvironment, Description: "View an environment"},
+// caller may read. The enrolment permissions that Phase 2 made global
+// (create, manage, token, revoke, delete) stay global until the plan that
+// rescopes their routes; environments.configure, .access and .audit are the
+// environment-scoped ones an environment Admin holds (D-07, D-12).
+var defaultRegistry = Registry{
+	{Name: PermEnvironmentsRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View an environment"},
 	{Name: PermEnvironmentsCreate, Scope: ScopeGlobal, Description: "Add environments"},
-	{Name: PermEnvironmentsManage, Scope: ScopeGlobal, Description: "Rename environments and manage their agents"},
+	{Name: PermEnvironmentsManage, Scope: ScopeGlobal, Description: "Fold the local host into an environment"},
 	{Name: PermEnvironmentsToken, Scope: ScopeGlobal, Dangerous: true, Description: "Show or rotate an environment's join token"},
-	{Name: PermEnvironmentsRevoke, Scope: ScopeGlobal, Description: "Revoke, block and unblock agents"},
+	{Name: PermEnvironmentsRevoke, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Revoke, block and unblock this environment's agents"},
 	{Name: PermEnvironmentsDelete, Scope: ScopeGlobal, Dangerous: true, Description: "Remove environments"},
-	{Name: PermContainersRead, Scope: ScopeEnvironment, Description: "View containers"},
-	{Name: PermImagesRead, Scope: ScopeEnvironment, Description: "View images"},
-	{Name: PermVolumesRead, Scope: ScopeEnvironment, Description: "View volumes"},
-	{Name: PermNetworksRead, Scope: ScopeEnvironment, Description: "View networks"},
+	{Name: PermEnvironmentsConfigure, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Rename an environment, manage its agents and auto-update, adopt a changed cluster"},
+	{Name: PermEnvironmentsAccess, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "See and change who has access to an environment"},
+	{Name: PermEnvironmentsAudit, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Read the audit log for an environment"},
+	{Name: PermContainersRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View containers"},
+	{Name: PermImagesRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View images"},
+	{Name: PermVolumesRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View volumes"},
+	{Name: PermNetworksRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View networks"},
 	{Name: PermAuditRead, Scope: ScopeGlobal, Description: "Read the audit log"},
 	{Name: PermSettingsRead, Scope: ScopeGlobal, Description: "View settings"},
 	{Name: PermSettingsWrite, Scope: ScopeGlobal, Description: "Change settings"},
-	{Name: PermContainersExec, Scope: ScopeEnvironment, Dangerous: true, Description: "Open a shell in a container"},
-	{Name: PermSecretsReveal, Scope: ScopeEnvironment, Dangerous: true, Description: "Reveal secret values"},
-	{Name: PermVolumesDelete, Scope: ScopeEnvironment, Dangerous: true, Description: "Delete volumes"},
-	{Name: PermJanitorPolicy, Scope: ScopeEnvironment, Dangerous: true, Description: "Change cleanup policy"},
+	{Name: PermUsersManage, Scope: ScopeGlobal, Description: "Create, change, disable and delete users"},
+	{Name: PermTeamsManage, Scope: ScopeGlobal, Description: "Create teams and change their members"},
+	{Name: PermBackupManage, Scope: ScopeGlobal, Dangerous: true, Description: "Back up and restore Bayplan"},
+	{Name: PermContainersExec, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Open a shell in a container"},
+	{Name: PermSecretsReveal, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Reveal secret values"},
+	{Name: PermVolumesDelete, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Delete volumes"},
+	{Name: PermJanitorPolicy, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Change cleanup policy"},
 }
 
-// All returns a copy of every registered permission, in registry order.
-func All() []Permission {
-	return append([]Permission(nil), registry...)
+// DefaultRegistry returns a copy of the registry production runs with.
+func DefaultRegistry() Registry {
+	return append(Registry(nil), defaultRegistry...)
 }
 
-// Lookup finds a registered permission by name.
-func Lookup(p Perm) (Permission, bool) {
-	for _, r := range registry {
-		if r.Name == p {
-			return r, true
+// All returns a copy of every permission, in registry order.
+func (r Registry) All() []Permission {
+	return append([]Permission(nil), r...)
+}
+
+// Lookup finds a permission by name.
+func (r Registry) Lookup(p Perm) (Permission, bool) {
+	for _, e := range r {
+		if e.Name == p {
+			return e, true
 		}
 	}
 	return Permission{}, false
 }
+
+// All returns a copy of every registered permission, in registry order.
+func All() []Permission { return defaultRegistry.All() }
+
+// Lookup finds a registered permission by name.
+func Lookup(p Perm) (Permission, bool) { return defaultRegistry.Lookup(p) }
 
 // Require returns the Requirement for a registered permission, with the scope
 // the registry declares. It panics for an unknown name, so a typo fails at

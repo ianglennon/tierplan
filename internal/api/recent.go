@@ -11,6 +11,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -23,10 +24,34 @@ type RecentDeps struct {
 	Store   *store.Store
 	Envs    *envs.Service
 	Checker *rbac.Checker
+	// Refusals records the permission.denied entry of the 404 given for an
+	// environment the caller has no grant on (D-08). It is the router's refusal
+	// auditor, so the entry is coalesced like the policy gate's own and a flood of
+	// probes cannot fill the log. Nil means the refusal is not audited.
+	Refusals httpx.Auditor
 	// Now stamps a use. Nil means time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+}
+
+const (
+	// recentRecordRoute is the route as the policy gate names it in a refusal's
+	// target (method and chi pattern), so this refusal reads like the gate's.
+	recentRecordRoute = "PUT /api/me/recent-environments/{envId}"
+	// reasonEnvNotVisible is the reason httpx's policy gate gives the same refusal.
+	reasonEnvNotVisible = "environment_not_visible"
+	// maxAuditedEnvID is how much of the URL's environment ID a refusal records; it
+	// is the size the policy gate and audit.Writer cut to.
+	maxAuditedEnvID = 128
+)
+
+// RecordRecentInput is the environment a user used, and the caller's origin for the
+// audit entry of a refusal.
+type RecordRecentInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
 // RecentEnvironmentsBody lists the environments a user used last.
@@ -106,7 +131,7 @@ func RegisterRecent(r *httpx.Router, d RecentDeps) {
 			"Only the newest 3 per user are kept. An environment that does not exist and one the user cannot read both answer " +
 			"404 environment_not_found, so the answer never says which exist.",
 		Tags: []string{"environments"},
-	}, rbac.SelfService, func(ctx context.Context, in *EnvironmentPathInput) (*struct{}, error) {
+	}, rbac.SelfService, func(ctx context.Context, in *RecordRecentInput) (*struct{}, error) {
 		p, err := userOf(ctx)
 		if err != nil {
 			return nil, err
@@ -118,7 +143,28 @@ func RegisterRecent(r *httpx.Router, d RecentDeps) {
 		// Unreadable and unknown are the same answer. The permission is checked
 		// first and the registry second, so neither is reached for a caller who
 		// may not read the environment.
-		if !canRead(perEnv, in.EnvID) || !d.Envs.Known(ctx, in.EnvID) {
+		if !canRead(perEnv, in.EnvID) {
+			// A caller with no grant is audited exactly as the policy gate audits
+			// it on an /api/env route (D-08), through the same coalescer, so probing
+			// IDs through here leaves the same trace. A readable environment that
+			// is gone is not: the gate does not audit that either.
+			if d.Refusals != nil {
+				envID := in.EnvID
+				if len(envID) > maxAuditedEnvID {
+					envID = envID[:maxAuditedEnvID]
+				}
+				if err := d.Refusals.Record(ctx, audit.Entry{
+					Actor: p.AuditActor(), Action: audit.ActionPermissionDenied, Result: audit.ResultDenied,
+					Reason: reasonEnvNotVisible, TargetType: "route", TargetID: recentRecordRoute, EnvID: envID,
+					IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+				}); err != nil {
+					// A refusal nobody can see must not look like a normal one.
+					return nil, internal("audit the refusal", err)
+				}
+			}
+			return nil, httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
+		}
+		if !d.Envs.Known(ctx, in.EnvID) {
 			return nil, httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
 		}
 		tx, err := d.Store.Write.BeginTx(ctx, nil)

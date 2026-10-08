@@ -131,22 +131,96 @@ func (q *Queries) LastAuditHMAC(ctx context.Context) ([]byte, error) {
 }
 
 const listAuditActors = `-- name: ListAuditActors :many
-SELECT DISTINCT actor_name FROM audit_log ORDER BY actor_name LIMIT 200
+SELECT a.actor_name, CAST(MAX(COALESCE(u.deleted_at IS NOT NULL, 0)) AS INTEGER) AS deleted
+FROM audit_log a
+LEFT JOIN users u ON u.id = a.actor_id
+WHERE CAST(?1 AS INTEGER) = 0
+   OR (CAST(?2 AS INTEGER) = 1 AND a.env_id IS NOT NULL)
+   OR a.env_id IN (SELECT value FROM json_each(CAST(?3 AS TEXT)))
+GROUP BY a.actor_name
+ORDER BY a.actor_name LIMIT 200
 `
 
-func (q *Queries) ListAuditActors(ctx context.Context) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listAuditActors)
+type ListAuditActorsParams struct {
+	Scoped int64
+	AnyEnv int64
+	Envs   string
+}
+
+type ListAuditActorsRow struct {
+	ActorName string
+	Deleted   int64
+}
+
+// The distinct actor names, under the same scope as ListAuditPage, each with
+// whether the user behind it has been deleted.
+func (q *Queries) ListAuditActors(ctx context.Context, arg ListAuditActorsParams) ([]ListAuditActorsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditActors, arg.Scoped, arg.AnyEnv, arg.Envs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []ListAuditActorsRow
 	for rows.Next() {
-		var actor_name string
-		if err := rows.Scan(&actor_name); err != nil {
+		var i ListAuditActorsRow
+		if err := rows.Scan(&i.ActorName, &i.Deleted); err != nil {
 			return nil, err
 		}
-		items = append(items, actor_name)
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditChain = `-- name: ListAuditChain :many
+SELECT seq, id, ts, actor_type, actor_id, actor_name, "action", target_type, target_id, env_id, result, reason, ip, user_agent, details, key_id, prev_hmac, hmac FROM audit_log WHERE seq > ? ORDER BY seq ASC LIMIT ?
+`
+
+type ListAuditChainParams struct {
+	Seq   int64
+	Limit int64
+}
+
+// Every field an entry's HMAC covers, plus the chain links, in sequence order and
+// paged by sequence. audit.Rekey walks the whole chain with it inside one
+// transaction.
+func (q *Queries) ListAuditChain(ctx context.Context, arg ListAuditChainParams) ([]AuditLog, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditChain, arg.Seq, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.Seq,
+			&i.ID,
+			&i.Ts,
+			&i.ActorType,
+			&i.ActorID,
+			&i.ActorName,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.EnvID,
+			&i.Result,
+			&i.Reason,
+			&i.Ip,
+			&i.UserAgent,
+			&i.Details,
+			&i.KeyID,
+			&i.PrevHmac,
+			&i.Hmac,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -209,14 +283,19 @@ func (q *Queries) ListAuditForVerify(ctx context.Context, arg ListAuditForVerify
 }
 
 const listAuditPage = `-- name: ListAuditPage :many
-SELECT seq, id, ts, actor_type, actor_id, actor_name, "action", target_type, target_id, env_id, result, reason, ip, user_agent, details, key_id, prev_hmac, hmac FROM audit_log
-WHERE (CAST(?1 AS TEXT) = '' OR actor_name = ?1)
-  AND (json_array_length(?2) = 0 OR action IN (SELECT value FROM json_each(?2)))
-  AND (CAST(?3 AS INTEGER) = 0 OR ts >= ?3)
-  AND (CAST(?4 AS INTEGER) = 0 OR ts <= ?4)
-  AND (CAST(?5 AS INTEGER) = 0 OR seq < ?5)
-ORDER BY seq DESC
-LIMIT ?6
+SELECT a.seq, a.id, a.ts, a.actor_type, a.actor_id, a.actor_name, a."action", a.target_type, a.target_id, a.env_id, a.result, a.reason, a.ip, a.user_agent, a.details, a.key_id, a.prev_hmac, a.hmac, CAST(COALESCE(u.deleted_at IS NOT NULL, 0) AS INTEGER) AS actor_deleted
+FROM audit_log a
+LEFT JOIN users u ON u.id = a.actor_id
+WHERE (CAST(?1 AS TEXT) = '' OR a.actor_name = ?1)
+  AND (json_array_length(?2) = 0 OR a.action IN (SELECT value FROM json_each(?2)))
+  AND (CAST(?3 AS INTEGER) = 0 OR a.ts >= ?3)
+  AND (CAST(?4 AS INTEGER) = 0 OR a.ts <= ?4)
+  AND (CAST(?5 AS INTEGER) = 0 OR a.seq < ?5)
+  AND (CAST(?6 AS INTEGER) = 0
+       OR (CAST(?7 AS INTEGER) = 1 AND a.env_id IS NOT NULL)
+       OR a.env_id IN (SELECT value FROM json_each(CAST(?8 AS TEXT))))
+ORDER BY a.seq DESC
+LIMIT ?9
 `
 
 type ListAuditPageParams struct {
@@ -225,28 +304,62 @@ type ListAuditPageParams struct {
 	FromTs  int64
 	ToTs    int64
 	Cursor  int64
+	Scoped  int64
+	AnyEnv  int64
+	Envs    string
 	Lim     int64
+}
+
+type ListAuditPageRow struct {
+	Seq          int64
+	ID           string
+	Ts           int64
+	ActorType    string
+	ActorID      string
+	ActorName    string
+	Action       string
+	TargetType   string
+	TargetID     string
+	EnvID        sql.NullString
+	Result       string
+	Reason       string
+	Ip           string
+	UserAgent    string
+	Details      string
+	KeyID        string
+	PrevHmac     []byte
+	Hmac         []byte
+	ActorDeleted int64
 }
 
 // actions is a JSON array of action keys, not sqlc.slice: sqlc numbers a slice
 // placeholder as an anonymous "?" among numbered ones, which collides as soon as
-// two actions are given.
-func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([]AuditLog, error) {
+// two actions are given. envs is a JSON array of environment IDs the same way.
+// A scoped read (an env Admin, D-09) keeps only entries on one of envs, or on any
+// environment when any_env is set; an entry with no environment, an instance-level
+// event, never matches. The scope is part of the WHERE clause, so it applies
+// before the cursor and the limit and a page is never short of entries.
+// actor_deleted is a display-time join to the user tombstone (D-22c): the signed
+// row is never rewritten when a user is deleted.
+func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([]ListAuditPageRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAuditPage,
 		arg.Actor,
 		arg.Actions,
 		arg.FromTs,
 		arg.ToTs,
 		arg.Cursor,
+		arg.Scoped,
+		arg.AnyEnv,
+		arg.Envs,
 		arg.Lim,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []AuditLog
+	var items []ListAuditPageRow
 	for rows.Next() {
-		var i AuditLog
+		var i ListAuditPageRow
 		if err := rows.Scan(
 			&i.Seq,
 			&i.ID,
@@ -266,6 +379,7 @@ func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([
 			&i.KeyID,
 			&i.PrevHmac,
 			&i.Hmac,
+			&i.ActorDeleted,
 		); err != nil {
 			return nil, err
 		}
@@ -289,4 +403,26 @@ func (q *Queries) MaxSeqBefore(ctx context.Context, ts int64) (int64, error) {
 	var seq int64
 	err := row.Scan(&seq)
 	return seq, err
+}
+
+const updateAuditChain = `-- name: UpdateAuditChain :exec
+UPDATE audit_log SET key_id = ?, prev_hmac = ?, hmac = ? WHERE seq = ?
+`
+
+type UpdateAuditChainParams struct {
+	KeyID    string
+	PrevHmac []byte
+	Hmac     []byte
+	Seq      int64
+}
+
+// Re-signs one entry: the only columns Rekey ever changes.
+func (q *Queries) UpdateAuditChain(ctx context.Context, arg UpdateAuditChainParams) error {
+	_, err := q.db.ExecContext(ctx, updateAuditChain,
+		arg.KeyID,
+		arg.PrevHmac,
+		arg.Hmac,
+		arg.Seq,
+	)
+	return err
 }

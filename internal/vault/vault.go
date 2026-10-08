@@ -48,6 +48,13 @@ const (
 	LabelVaultAEAD = "bayplan/vault-aead/v1"
 	LabelCSRF      = "bayplan/csrf/v1"
 
+	// Sealing contexts that more than one package must agree on. The CA key
+	// context is followed by the environment ID. Like the labels they are part
+	// of the on-disk format: a ciphertext only opens under the context it was
+	// sealed with.
+	ContextAgentCA        = "agent-ca/v1/"
+	ContextBackupSchedule = "backup-schedule/v1"
+
 	keyLen         = 32
 	keyIDDomain    = "bayplan/key-id/v1"
 	keyIDPrefix    = "k1-"
@@ -78,11 +85,11 @@ var (
 
 // Vault is the loaded master key. It is safe for concurrent use.
 type Vault struct {
-	keys   map[string][]byte // key ID to master key
 	active string
 	source string
 
-	mu      sync.Mutex
+	mu      sync.Mutex        // guards keys and subkeys
+	keys    map[string][]byte // key ID to master key
 	subkeys map[string][]byte // keyID + "\x00" + label
 }
 
@@ -105,6 +112,30 @@ func load(configKey, dataDir string, log *slog.Logger, create bool) (*Vault, err
 	if log == nil {
 		log = slog.Default()
 	}
+	v, err := loadActive(configKey, dataDir, log, create)
+	if err != nil {
+		return nil, err
+	}
+	addOldKey(v, dataDir, log)
+	return v, nil
+}
+
+// addOldKey makes the key a rotation kept as bayplan.key.old readable, so
+// values and audit attestations it produced still open and verify (D-33). The
+// file is a convenience, never a requirement: one that is missing, unreadable
+// or not a key is logged and skipped, and never stops a start.
+func addOldKey(v *Vault, dataDir string, log *slog.Logger) {
+	key, err := ReadKeyFile(dataDir, OldKeyFile)
+	switch {
+	case err == nil:
+		_, _ = v.AddKey(key) // cannot fail: ReadKeyFile checked the length
+	case errors.Is(err, fs.ErrNotExist):
+	default:
+		log.Warn("ignoring the previous encryption key file: "+err.Error(), "path", filepath.Join(dataDir, OldKeyFile))
+	}
+}
+
+func loadActive(configKey, dataDir string, log *slog.Logger, create bool) (*Vault, error) {
 	if configKey != "" {
 		key, err := decodeKey(configKey)
 		if err != nil {
@@ -250,6 +281,60 @@ func warnIfBroad(path string, log *slog.Logger) {
 	}
 }
 
+// New returns a vault holding exactly key, which must be 32 bytes. It is for
+// code that has a key in hand (a restore, a rotation, tests); the server loads
+// its key with LoadOrCreate.
+func New(key []byte, source string) (*Vault, error) {
+	if len(key) != keyLen {
+		return nil, fmt.Errorf("vault: the key must be exactly %d bytes, got %d", keyLen, len(key))
+	}
+	return newVault(append([]byte(nil), key...), source), nil
+}
+
+// GenerateKey returns 32 fresh random bytes from the system CSPRNG.
+func GenerateKey() ([]byte, error) {
+	key := make([]byte, keyLen)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate encryption key: %w", err)
+	}
+	return key, nil
+}
+
+// AddKey makes key readable by this vault without changing the active key, and
+// returns its ID. It lets one vault open values and verify audit entries that an
+// older key produced. Adding a key the vault already holds is a no-op.
+func (v *Vault) AddKey(key []byte) (string, error) {
+	if len(key) != keyLen {
+		return "", fmt.Errorf("vault: the key must be exactly %d bytes, got %d", keyLen, len(key))
+	}
+	id := keyID(key)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if _, ok := v.keys[id]; !ok {
+		v.keys[id] = append([]byte(nil), key...)
+	}
+	return id, nil
+}
+
+// Succeed returns a new vault whose active key is key and that still holds every
+// key v holds, so it can open what v sealed and verify what v signed. v is not
+// changed. A master-key rotation uses it to seal under the new key and check the
+// old key's attestation in the same run.
+func (v *Vault) Succeed(key []byte) (*Vault, error) {
+	next, err := New(key, v.source)
+	if err != nil {
+		return nil, err
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for id, k := range v.keys {
+		if _, ok := next.keys[id]; !ok {
+			next.keys[id] = append([]byte(nil), k...)
+		}
+	}
+	return next, nil
+}
+
 func newVault(key []byte, source string) *Vault {
 	id := keyID(key)
 	return &Vault{
@@ -287,13 +372,13 @@ func (v *Vault) Subkey(label string) []byte {
 // SubkeyFor derives the subkey for label from the key with the given ID, for
 // verifying data written under an older key. The result is a copy.
 func (v *Vault) SubkeyFor(id, label string) ([]byte, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	master, ok := v.keys[id]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, id)
 	}
 	cacheKey := id + "\x00" + label
-	v.mu.Lock()
-	defer v.mu.Unlock()
 	sub, ok := v.subkeys[cacheKey]
 	if !ok {
 		var err error

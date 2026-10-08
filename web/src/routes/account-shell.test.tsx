@@ -10,17 +10,13 @@ import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ADMIN = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ADMIN = makeMe({
+  instanceAdmin: true,
   permissions: { global: ["settings.read", "settings.write"], environments: {} },
-};
-const VIEWER = {
-  user: { id: "u2", username: "viewer", role: "" },
-  csrfToken: "csrf-2",
-  permissions: { global: [], environments: {} },
-};
+});
+const VIEWER = makeMe({ csrfToken: "csrf-2", permissions: { global: [], environments: {} } });
 
 let me = ADMIN;
 let warnings: Array<Record<string, string>> = [];
@@ -39,6 +35,26 @@ beforeEach(() => {
         return Response.json({ instanceName: "Lab", needsSetup: false, rememberDays: 30 });
       }
       if (path === "/api/me") return Response.json(me);
+      if (path === "/api/me/profile") {
+        return Response.json({
+          username: "viewer",
+          displayName: "",
+          email: "",
+          updatedAt: "2026-10-07T10:00:00Z",
+        });
+      }
+      if (path === "/api/me/sessions") {
+        return Response.json([
+          {
+            id: "c".repeat(32),
+            userAgent: "curl/8.5.0",
+            ip: "203.0.113.9",
+            createdAt: "2026-10-01T10:00:00Z",
+            lastSeenAt: "2026-10-01T10:00:00Z",
+            current: true,
+          },
+        ]);
+      }
       if (path === "/api/warnings") {
         warningRequests++;
         return Response.json({ items: warnings });
@@ -77,7 +93,7 @@ function renderAt(path: string) {
 }
 
 describe("account and warnings in the app shell", () => {
-  it("puts Change password between the role and the theme choice, and opens the dialog", async () => {
+  it("puts Sessions and Change password between the role and the theme choice, and opens the dialogs", async () => {
     renderAt("/");
     const trigger = await screen.findByRole("button", { name: "User menu" });
     fireEvent.keyDown(trigger, { key: "Enter" });
@@ -85,10 +101,35 @@ describe("account and warnings in the app shell", () => {
     const labels = within(menu)
       .getAllByRole("menuitem")
       .map((i) => i.textContent);
-    expect(labels).toEqual(["Change password", "Log out"]);
+    expect(labels).toEqual(["Profile", "Sessions", "Change password", "Log out"]);
     const text = menu.textContent ?? "";
-    expect(text.indexOf("Admin")).toBeLessThan(text.indexOf("Change password"));
+    expect(text.indexOf("Instance admin")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("Instance admin")).toBeLessThan(text.indexOf("Profile"));
+    expect(text.indexOf("Profile")).toBeLessThan(text.indexOf("Sessions"));
+    expect(text.indexOf("Sessions")).toBeLessThan(text.indexOf("Change password"));
     expect(text.indexOf("Change password")).toBeLessThan(text.indexOf("Theme"));
+
+    // Profile opens outside the menu content too, and focus comes back to the trigger.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Profile" }));
+    const profileDialog = await screen.findByRole("dialog", { name: "Profile" });
+    expect(await within(profileDialog).findByLabelText("Display name")).toBeTruthy();
+    fireEvent.click(within(profileDialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    await screen.findByRole("menu");
+
+    // Sessions opens outside the menu content, so closing the menu keeps it open.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sessions" }));
+    const sessions = await screen.findByRole("dialog", { name: "Your sessions" });
+    expect(await within(sessions).findByText("This session")).toBeTruthy();
+    fireEvent.click(within(sessions).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    await screen.findByRole("menu");
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Change password" }));
     const dialog = await screen.findByRole("dialog", { name: "Change password" });
@@ -124,6 +165,16 @@ describe("account and warnings in the app shell", () => {
     expect(screen.queryByRole("button", { name: /^Warnings/ })).toBeNull();
     expect(screen.queryByText(/^Data isn't being persisted\./)).toBeNull();
     expect(warningRequests).toBe(0);
+  });
+
+  it("shows the user menu of anyone but an instance admin no role line", async () => {
+    me = VIEWER;
+    renderAt("/");
+    const trigger = await screen.findByRole("button", { name: "User menu" });
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    const menu = await screen.findByRole("menu");
+    expect(menu.textContent).toContain("viewer");
+    expect(menu.textContent).not.toContain("Instance admin");
   });
 
   it("mounts one toast region for the signed-in pages", async () => {

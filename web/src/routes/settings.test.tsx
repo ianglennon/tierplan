@@ -11,26 +11,18 @@ import { queryClient } from "@/api/query-client";
 import { Toaster } from "@/components/ui/sonner";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
 const SOCKET = "/var/run/docker.sock";
 
-const ADMIN = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
-  permissions: {
-    global: ["environments.manage", "environments.create", "settings.read"],
-    environments: {},
-  },
-};
-const VIEWER = {
-  user: { id: "u2", username: "viewer", role: "" },
-  csrfToken: "csrf-1",
-  permissions: { global: [], environments: {} },
-};
+const ADMIN = makeMe({ instanceAdmin: true });
+const VIEWER = makeMe({ permissions: { global: [], environments: {} } });
 
 // A user who may read environments but nothing in Settings.
+// It holds a grant on every environment: a user with none sees the no-access
+// state instead (D-08).
 const READER = {
-  ...VIEWER,
+  ...makeMe({ allEnvironments: "viewer" }),
   permissions: { global: [], environments: { "*": ["environments.read"] } },
 };
 
@@ -81,12 +73,28 @@ let environments: ReturnType<typeof environment>[];
 let host: Record<string, unknown>;
 let patchAnswer: (body: Record<string, unknown>) => Response | Promise<Response>;
 let deleteAnswer: () => Response | Promise<Response>;
+let users: Record<string, unknown>[];
+
+function userRow(over: Record<string, unknown> = {}) {
+  return {
+    id: "u1",
+    username: "alice",
+    displayName: "",
+    email: "",
+    instanceAdmin: false,
+    status: "active",
+    teams: [],
+    teamCount: 0,
+    ...over,
+  };
+}
 
 beforeEach(() => {
   calls = [];
   me = ADMIN;
   environments = [environment()];
   host = localHost({ managed: true });
+  users = [userRow({ id: "u0", username: "admin", instanceAdmin: true })];
   setCsrfToken(null);
   patchAnswer = (body) => {
     const env = environments[0];
@@ -111,10 +119,9 @@ beforeEach(() => {
       if (path === "/api/me") return Response.json(me);
       if (path === "/api/environments") return Response.json({ items: environments });
       if (path === "/api/local-host") return Response.json(host);
-      if (path === "/api/environments/e1") {
-        if (req.method === "PATCH") return patchAnswer(call.body ?? {});
-        if (req.method === "DELETE") return deleteAnswer();
-      }
+      if (path === "/api/users") return Response.json(users);
+      if (path === "/api/env/e1" && req.method === "PATCH") return patchAnswer(call.body ?? {});
+      if (path === "/api/environments/e1" && req.method === "DELETE") return deleteAnswer();
       if (path === "/api/version") {
         return Response.json({
           commit: "",
@@ -174,13 +181,61 @@ describe("Settings layout", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/general"));
   });
 
-  it("opens the Environments tab from /settings for a user with only environments.manage (WR-19)", async () => {
-    me = { ...ADMIN, permissions: { global: ["environments.manage"], environments: {} } };
+  it("opens the Environments tab from /settings for an env Admin who holds no installation-wide permission (WR-19, D-07)", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
     const router = renderAt("/settings");
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/environments"));
     expect(await main().findByText("lab-1")).toBeTruthy();
     expect(screen.queryByText("You don't have permission to view this page")).toBeNull();
-    expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
+    // The one tab is Environments: no General, no About.
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Environments"]);
+  });
+
+  it("gives an env Admin only the environments they administer, with Rename but no Remove host", async () => {
+    environments = [
+      environment(),
+      environment({ id: "e2", name: "edge", kind: "agent", isSelfHost: false }),
+      environment({ id: "e3", name: "build", kind: "agent", isSelfHost: false }),
+    ];
+    me = makeMe({ envs: { e1: "admin", e2: "viewer", e3: "operator" } });
+    renderAt("/settings/environments");
+    await screen.findByRole("tab", { name: "Environments" });
+    await main().findByText("lab-1");
+    expect(main().queryByText("edge")).toBeNull();
+    expect(main().queryByText("build")).toBeNull();
+    expect(main().getByRole("button", { name: "Rename lab-1" })).toBeTruthy();
+    expect(main().queryByRole("button", { name: /^Remove host/ })).toBeNull();
+  });
+
+  it("leaves opting the host in to instance admins: an env Admin is not offered Manage this host", async () => {
+    environments = [environment({ id: "e2", name: "edge", kind: "agent", isSelfHost: false })];
+    host = localHost({ managed: false });
+    me = makeMe({ envs: { e2: "admin" } });
+    renderAt("/settings/environments");
+    await screen.findByRole("tab", { name: "Environments" });
+    await main().findByText("edge");
+    expect(main().queryByRole("button", { name: "Manage this host" })).toBeNull();
+    cleanup();
+    queryClient.clear();
+
+    me = ADMIN;
+    renderAt("/settings/environments");
+    await screen.findByRole("tab", { name: "Environments" });
+    expect(await main().findByRole("button", { name: "Manage this host" })).toBeTruthy();
+  });
+
+  it("shows an env Admin of two of three environments those two", async () => {
+    environments = [
+      environment({ id: "e1", name: "alpha", kind: "agent", isSelfHost: false }),
+      environment({ id: "e2", name: "beta", kind: "agent", isSelfHost: false }),
+      environment({ id: "e3", name: "gamma", kind: "agent", isSelfHost: false }),
+    ];
+    me = makeMe({ envs: { e1: "admin", e2: "admin", e3: "viewer" } });
+    renderAt("/settings/environments");
+    await screen.findByRole("tab", { name: "Environments" });
+    await main().findByText("alpha");
+    expect(main().getByText("beta")).toBeTruthy();
+    expect(main().queryByText("gamma")).toBeNull();
   });
 
   it("sends a user with neither permission from /settings to the home page (WR-19)", async () => {
@@ -189,6 +244,17 @@ describe("Settings layout", () => {
     const router = renderAt("/settings");
     await screen.findByText("No environments yet");
     expect(router.state.location.pathname).toBe("/environments");
+  });
+
+  it("hides the Environments tab, and sends /settings elsewhere, from a Viewer or Operator of every environment", async () => {
+    for (const role of ["viewer", "operator"] as const) {
+      me = makeMe({ allEnvironments: role });
+      renderAt("/settings/environments");
+      expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
+      expect(screen.queryByRole("tab", { name: "Environments" })).toBeNull();
+      cleanup();
+      queryClient.clear();
+    }
   });
 
   it("hides the Environments tab from a user who may add environments but not manage them", async () => {
@@ -201,11 +267,86 @@ describe("Settings layout", () => {
     expect(screen.queryByRole("tab", { name: "Environments" })).toBeNull();
   });
 
-  it("renders no permission without environments.manage, and asks the server for nothing", async () => {
+  it("renders no permission without environments.configure on any environment, and asks the server for nothing", async () => {
     me = VIEWER;
     renderAt("/settings/environments");
     expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
     expect(calls.some((c) => c.path === "/api/local-host")).toBe(false);
+  });
+});
+
+describe("Backup tab", () => {
+  it("shows the Backup tab to an instance admin and opens the page", async () => {
+    const router = renderAt("/settings/backup");
+    const tab = await screen.findByRole("tab", { name: "Backup" });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(tab.getAttribute("href")).toBe("/settings/backup");
+    expect(router.state.location.pathname).toBe("/settings/backup");
+    expect(await screen.findByRole("heading", { name: "Download a backup" })).toBeTruthy();
+    await waitFor(() => expect(document.title).toBe("Backup · Lab"));
+  });
+
+  it("keeps the Backup tab from anyone without backup.manage and says so on a direct visit", async () => {
+    me = {
+      ...ADMIN,
+      permissions: { global: ["settings.read"], environments: {} },
+    };
+    renderAt("/settings/general");
+    await screen.findByRole("tab", { name: "General" });
+    expect(screen.queryByRole("tab", { name: "Backup" })).toBeNull();
+    cleanup();
+    queryClient.clear();
+
+    renderAt("/settings/backup");
+    expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Download a backup" })).toBeNull();
+  });
+});
+
+describe("Access tab", () => {
+  it("shows the Access tab to an instance admin between Environments and Backup", async () => {
+    renderAt("/settings/general");
+    await screen.findByRole("tab", { name: "Access" });
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "General",
+      "Environments",
+      "Access",
+      "Backup",
+      "About",
+    ]);
+  });
+
+  it("opens the Users sub-tab from /settings/access and lists the users from the API", async () => {
+    users = [
+      userRow({ id: "u0", username: "admin", instanceAdmin: true }),
+      userRow({ id: "u1", username: "carol", status: "invite_pending" }),
+    ];
+    const router = renderAt("/settings/access");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/access/users"));
+    const tab = await screen.findByRole("tab", { name: "Access" });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(await main().findByText("carol")).toBeTruthy();
+    expect(main().getByText("admin")).toBeTruthy();
+    expect(main().getByText("Invite pending")).toBeTruthy();
+    expect(main().getByText("Instance admin")).toBeTruthy();
+    expect(main().getByRole("tab", { name: "Users" }).getAttribute("aria-selected")).toBe("true");
+    await waitFor(() => expect(document.title).toBe("Users · Lab"));
+  });
+
+  it("keeps the Access tab from anyone without users.manage and asks the server for no users", async () => {
+    me = {
+      ...ADMIN,
+      permissions: { global: ["settings.read"], environments: {} },
+    };
+    renderAt("/settings/general");
+    await screen.findByRole("tab", { name: "General" });
+    expect(screen.queryByRole("tab", { name: "Access" })).toBeNull();
+    cleanup();
+    queryClient.clear();
+
+    renderAt("/settings/access/users");
+    expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
+    expect(calls.some((c) => c.path === "/api/users")).toBe(false);
   });
 });
 
@@ -279,7 +420,7 @@ describe("rename", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const patch = writes("PATCH");
     expect(patch).toHaveLength(1);
-    expect(patch[0]?.path).toBe("/api/environments/e1");
+    expect(patch[0]?.path).toBe("/api/env/e1");
     expect(patch[0]?.body).toEqual({ name: "production" });
     expect(patch[0]?.csrf).toBe("csrf-1");
     expect(await main().findByText("production")).toBeTruthy();

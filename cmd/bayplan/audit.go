@@ -88,5 +88,9 @@ func runAuditVerify(cmd *cobra.Command) error {
 		return fmt.Errorf("%w: %s", errAuditBroken, msg)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "audit chain OK: %d entries\n", res.Entries)
+	if res.AttestationsUnchecked > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "%d key rotation attestation(s) not checked: the previous key is not loaded\n",
+			res.AttestationsUnchecked)
+	}
 	return nil
 }

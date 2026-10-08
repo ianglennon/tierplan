@@ -102,7 +102,7 @@ func TestHelloRefusesWhatItShouldWithTheSpecificCode(t *testing.T) {
 		{"an agent row that no longer exists", func(t *testing.T, srv *tunneltest.Server, _ tunneltest.Environment, id tunneltest.Identity) tunneltest.Agent {
 			srv.Exec(t, `DELETE FROM agents WHERE id = ?`, id.AgentID)
 			return tunneltest.Agent{Identity: &id}
-		}, wire.ReasonAuthRejected},
+		}, wire.ReasonUnknownAgent},
 		{"a certificate past its NotAfter at the server clock", func(_ *testing.T, srv *tunneltest.Server, _ tunneltest.Environment, id tunneltest.Identity) tunneltest.Agent {
 			srv.Clock.Advance(31 * 24 * time.Hour)
 			return tunneltest.Agent{Identity: &id}

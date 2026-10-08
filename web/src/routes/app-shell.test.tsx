@@ -10,12 +10,12 @@ import { api, setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ME = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ME = makeMe({
+  instanceAdmin: true,
   permissions: { global: [], environments: { "*": ["environments.read"] } },
-};
+});
 
 interface Sent {
   path: string;
@@ -25,6 +25,8 @@ interface Sent {
 
 let sent: Sent[] = [];
 let meStatus = 200;
+// Who /api/me answers for; the default only reads.
+let account: typeof ME = ME;
 // What GET /api/environments/warnings answers; the bell of a reader lists it.
 let envWarnings: unknown[] = [];
 
@@ -39,7 +41,7 @@ function stubApi() {
       }
       if (path === "/api/me") {
         return meStatus === 200
-          ? Response.json(ME)
+          ? Response.json(account)
           : Response.json({ status: meStatus }, { status: meStatus });
       }
       if (path === "/api/auth/logout") {
@@ -89,6 +91,7 @@ const sourceLinks = () => screen.queryAllByRole("link", SOURCE_LINK);
 beforeEach(() => {
   sent = [];
   meStatus = 200;
+  account = ME;
   envWarnings = [];
   setCsrfToken(null);
   setViewport(1024);
@@ -109,6 +112,46 @@ async function openUserMenu() {
   fireEvent.keyDown(trigger, { key: "Enter" });
   return trigger;
 }
+
+describe("Settings in the sidebar", () => {
+  const sidebar = () => document.querySelector("[data-slot=sidebar]") as HTMLElement;
+
+  it("shows Settings to an env Admin who holds no installation-wide permission, and not to a Viewer", async () => {
+    account = makeMe({ envs: { e1: "admin" } });
+    renderAt("/");
+    await screen.findByText("No environments yet");
+    expect(await within(sidebar()).findByRole("link", { name: "Settings" })).toBeTruthy();
+    cleanup();
+    queryClient.clear();
+
+    account = makeMe({ envs: { e1: "viewer" } });
+    renderAt("/");
+    await screen.findByText("No environments yet");
+    expect(within(sidebar()).queryByRole("link", { name: "Settings" })).toBeNull();
+  });
+});
+
+describe("Audit in the sidebar", () => {
+  const sidebar = () => document.querySelector("[data-slot=sidebar]") as HTMLElement;
+
+  async function auditLinkFor(who: ReturnType<typeof makeMe>) {
+    account = who;
+    renderAt("/");
+    await screen.findByText("No environments yet");
+    const present = within(sidebar()).queryByRole("link", { name: "Audit" }) !== null;
+    cleanup();
+    queryClient.clear();
+    return present;
+  }
+
+  it("shows Audit to an instance admin and to an env Admin, not to an Operator or a Viewer (D-09)", async () => {
+    expect(await auditLinkFor(makeMe({ instanceAdmin: true }))).toBe(true);
+    expect(await auditLinkFor(makeMe({ envs: { e1: "admin" } }))).toBe(true);
+    expect(await auditLinkFor(makeMe({ allEnvironments: "admin" }))).toBe(true);
+    expect(await auditLinkFor(makeMe({ envs: { e1: "operator" } }))).toBe(false);
+    expect(await auditLinkFor(makeMe({ envs: { e1: "viewer" } }))).toBe(false);
+  });
+});
 
 describe("app shell", () => {
   it("shows the no-environments landing with the UI-SPEC copy", async () => {
@@ -217,7 +260,7 @@ describe("user menu", () => {
     renderAt("/");
     await openUserMenu();
     expect(await screen.findByText("admin")).toBeTruthy();
-    expect(screen.getByText("Admin")).toBeTruthy();
+    expect(screen.getByText("Instance admin")).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: "Light" })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: "Dark" })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: "System" })).toBeTruthy();

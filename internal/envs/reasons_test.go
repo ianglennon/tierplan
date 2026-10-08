@@ -55,11 +55,11 @@ func TestReasonForNeverReturnsTextAnAgentWrote(t *testing.T) {
 	}
 }
 
-func TestIsReasonKnowsExactlyTheFifteenD40CodesAndTheCertificateIssue(t *testing.T) {
+func TestIsReasonKnowsExactlyTheD40CodesUnknownAgentAndTheCertificateIssue(t *testing.T) {
 	codes := []string{
 		ReasonAgentOffline, ReasonTLSUntrusted, ReasonAuthRejected, ReasonCertExpired, ReasonRevoked, ReasonBlocked,
 		ReasonVersionIncompatible, ReasonClockSkew, ReasonTimeout, ReasonNotAManager, ReasonNoQuorum, ReasonClusterChanged,
-		ReasonEngineUnreachable, ReasonUnsupportedEngine, ReasonAgentPolicyDenied,
+		ReasonEngineUnreachable, ReasonUnsupportedEngine, ReasonAgentPolicyDenied, ReasonUnknownAgent,
 	}
 	seen := map[string]bool{}
 	for _, c := range codes {
@@ -71,8 +71,8 @@ func TestIsReasonKnowsExactlyTheFifteenD40CodesAndTheCertificateIssue(t *testing
 			t.Errorf("IsReason(%q) = false", c)
 		}
 	}
-	if len(codes) != 15 {
-		t.Errorf("%d codes, D-40 has 15", len(codes))
+	if len(codes) != 16 {
+		t.Errorf("%d codes, D-40 has 15 and D-31 adds unknown_agent", len(codes))
 	}
 	if !IsReason(IssueCertExpiring) {
 		t.Errorf("IsReason(%q) = false", IssueCertExpiring)

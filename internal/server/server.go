@@ -15,12 +15,15 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/access"
 	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
+	"github.com/ianglennon/bayplan/internal/backup"
 	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
@@ -53,6 +56,11 @@ const (
 // It is a variable so an internal test can shorten it.
 var readTimeout = 30 * time.Second
 
+// maxHeaderBytes caps the request line and headers. The net/http default is
+// 1 MiB, which let a caller put megabytes into a path segment (an environment ID
+// in a refusal, for one). 64 KiB is far above any real cookie or URL.
+const maxHeaderBytes = 64 << 10
+
 // newHTTPServer returns the http.Server Bayplan serves with. huma already caps
 // JSON bodies (MaxBodyBytes), so no MaxBytesReader is added here.
 func newHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
@@ -61,23 +69,26 @@ func newHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 		TLSConfig:         tlsCfg,
 	}
 }
 
 // Server is the assembled application.
 type Server struct {
-	cfg     config.Config
-	log     *slog.Logger
-	dataDir datadir.Info
-	store   *store.Store
-	vault   *vault.Vault
-	audit   *audit.Writer
-	setup   *auth.SetupGate
-	inst    *instance.Instance
-	session *auth.Sessions
-	envs    *envs.Service
-	monitor *envs.Monitor
+	// refusals folds a signed-in user's repeated refusals into one audit entry.
+	refusals *auth.RefusalCoalescer
+	cfg      config.Config
+	log      *slog.Logger
+	dataDir  datadir.Info
+	store    *store.Store
+	vault    *vault.Vault
+	audit    *audit.Writer
+	setup    *auth.SetupGate
+	inst     *instance.Instance
+	session  *auth.Sessions
+	envs     *envs.Service
+	monitor  *envs.Monitor
 	// snapshots caches the resource lists per environment for a few seconds.
 	// The events hub invalidates it on every Docker event.
 	snapshots *envs.Snapshots
@@ -102,41 +113,79 @@ type Server struct {
 	// tlsConfig is nil when the server speaks plain HTTP (D-12).
 	tlsConfig *tls.Config
 
+	// unlock releases the data-directory lock; Close calls it last.
+	unlock func() error
+	// keepLock makes Close leave the lock held. A restore sets it before it closes
+	// the server: nothing may take the data directory between the database swap and
+	// the re-exec, which drops the lock by closing its close-on-exec descriptor.
+	keepLock atomic.Bool
+	// restart carries a restore's request to restart the process.
+	restart *restarter
+
 	// stopBackground ends the nightly audit prune and waits for it, so Close
 	// never closes the database under a running prune.
 	stopBackground context.CancelFunc
 	background     sync.WaitGroup
 }
 
-// NewRouter wires every operation. It takes plain dependencies so the
-// `openapi` subcommand can build the same handlers without a database or a
-// socket.
-//
-// agentConnect serves the agent WebSocket at /agent/connect. It is the one route
-// outside the policy besides the probes and the setup page, because the handshake
-// inside it is its own authentication. Nil mounts a handler that answers 404,
-// which is what the `openapi` subcommand and the router-walk tests pass: the route
-// exists in every router, so its exemption is always checked.
-func NewRouter(opts httpx.Options, sys api.SystemDeps, setup api.SetupDeps, authDeps api.AuthDeps, account api.AccountDeps, localHost api.LocalHostDeps, environments api.EnvironmentsDeps, agentsDeps api.AgentsDeps, dashboard api.DashboardDeps, events api.EventsDeps, envStream api.EnvStreamDeps, recent api.RecentDeps, auditDeps api.AuditDeps, settings api.SettingsDeps, agentConnect http.Handler) *httpx.Router {
-	r := httpx.New(opts)
+// RouterDeps are the dependencies of every route group. One struct, because a
+// positional list of this length is where a swapped pair of arguments of the same
+// type goes unnoticed (RESEARCH Pitfall 10). The zero value builds the same
+// routes with no database or socket, which is what the `openapi` subcommand and
+// the router-walk tests use.
+type RouterDeps struct {
+	Options       httpx.Options
+	System        api.SystemDeps
+	Setup         api.SetupDeps
+	Auth          api.AuthDeps
+	Account       api.AccountDeps
+	Access        api.AccessDeps
+	LocalHost     api.LocalHostDeps
+	Environments  api.EnvironmentsDeps
+	Agents        api.AgentsDeps
+	UnknownAgents api.UnknownAgentsDeps
+	Dashboard     api.DashboardDeps
+	Events        api.EventsDeps
+	EnvStream     api.EnvStreamDeps
+	Recent        api.RecentDeps
+	Audit         api.AuditDeps
+	Settings      api.SettingsDeps
+	Backup        api.BackupDeps
+	Restore       api.RestoreDeps
+	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
+	// route outside the policy besides the probes and the setup page, because the
+	// handshake inside it is its own authentication. Nil mounts a handler that
+	// answers 404: the route exists in every router, so its exemption is always
+	// checked.
+	AgentConnect http.Handler
+}
+
+// NewRouter wires every operation.
+func NewRouter(d RouterDeps) *httpx.Router {
+	r := httpx.New(d.Options)
+	agentConnect := d.AgentConnect
 	if agentConnect == nil {
 		agentConnect = http.NotFoundHandler()
 	}
 	r.AgentConnect(agentConnect)
-	api.RegisterSystem(r, sys)
-	api.RegisterSetup(r, setup)
-	api.RegisterAuth(r, authDeps)
-	api.RegisterAccount(r, account)
-	api.RegisterSettings(r, settings)
-	api.RegisterLocalHost(r, localHost)
-	api.RegisterEnvironments(r, environments)
-	api.RegisterAgents(r, agentsDeps)
-	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: environments.Envs, Checker: environments.Checker, Agents: agentsDeps, Log: environments.Log})
-	api.RegisterDashboard(r, dashboard)
-	api.RegisterEvents(r, events)
-	api.RegisterEnvStream(r, envStream)
-	api.RegisterRecent(r, recent)
-	api.RegisterAudit(r, auditDeps)
+	api.RegisterSystem(r, d.System)
+	api.RegisterSetup(r, d.Setup)
+	api.RegisterAuth(r, d.Auth)
+	api.RegisterAccount(r, d.Account)
+	api.RegisterAccess(r, d.Access)
+	api.RegisterSettings(r, d.Settings)
+	api.RegisterLocalHost(r, d.LocalHost)
+	api.RegisterEnvironments(r, d.Environments)
+	api.RegisterAgents(r, d.Agents)
+	api.RegisterUnknownAgents(r, d.UnknownAgents)
+	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Agents: d.Agents, Log: d.Environments.Log})
+	api.RegisterDashboard(r, d.Dashboard)
+	api.RegisterEvents(r, d.Events)
+	api.RegisterEnvStream(r, d.EnvStream)
+	api.RegisterRecent(r, d.Recent)
+	api.RegisterAudit(r, d.Audit)
+	api.RegisterBackup(r, d.Backup)
+	api.RegisterRestore(r, d.Restore)
 	return r
 }
 
@@ -145,6 +194,13 @@ type Option func(*buildOptions)
 
 type buildOptions struct {
 	selfContainerID string
+	refusalClock    func() time.Time
+}
+
+// WithRefusalClock replaces the clock of the refusal coalescer, which decides
+// when a minute of repeated refusals has closed. It exists for tests.
+func WithRefusalClock(now func() time.Time) Option {
+	return func(o *buildOptions) { o.refusalClock = now }
 }
 
 // WithSelfContainerID supplies the ID of the container Bayplan runs in. The
@@ -155,11 +211,38 @@ func WithSelfContainerID(id string) Option {
 	return func(o *buildOptions) { o.selfContainerID = id }
 }
 
+// checkActiveKey refuses to start on a master key other than the one the
+// database was last rotated to (app_meta active_key_id). A database that was
+// never rotated names none and is not checked. When the key comes from
+// BAYPLAN_ENCRYPTION_KEY the usual cause is a variable that still holds the old
+// key, and bayplan.key.new holds the one to use.
+func checkActiveKey(ctx context.Context, st *store.Store, vlt *vault.Vault, dataDir string) error {
+	active, err := backup.ActiveKeyID(ctx, st)
+	if err != nil {
+		return fmt.Errorf("read the active key: %w", err)
+	}
+	if active == "" || active == vlt.KeyID() {
+		return nil
+	}
+	if vlt.KeySource() == "env" {
+		newFile := filepath.Join(dataDir, vault.NewKeyFile)
+		if key, rerr := vault.ReadKeyFile(dataDir, vault.NewKeyFile); rerr == nil && vault.KeyIDOf(key) == active {
+			return fmt.Errorf("the master key was rotated and BAYPLAN_ENCRYPTION_KEY still holds the old one (%s). "+
+				"Set BAYPLAN_ENCRYPTION_KEY to the contents of %s, restart Bayplan, then delete the file", vlt.KeyID(), newFile)
+		}
+		return fmt.Errorf("the master key was rotated to %s but BAYPLAN_ENCRYPTION_KEY holds %s: set it to the key that "+
+			"`bayplan key rotate` wrote to %s", active, vlt.KeyID(), newFile)
+	}
+	return fmt.Errorf("the database was rotated to the master key %s but %s holds %s: restore the key file that "+
+		"matches the database (the previous one is kept as %s after a rotation)",
+		active, filepath.Join(dataDir, vault.KeyFile), vlt.KeyID(), vault.OldKeyFile)
+}
+
 // Build prepares the data directory, loads (or on first start generates) the
 // master key, opens and migrates the database and assembles the server. It logs the effective configuration with secrets
 // redacted. A migration failure (or a database newer than this binary) is
 // returned as an error so `serve` exits non-zero before it listens (D-82, D-84).
-func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Option) (*Server, error) {
+func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Option) (srv *Server, err error) {
 	var bo buildOptions
 	for _, opt := range opts {
 		opt(&bo)
@@ -188,6 +271,121 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 			"path", info.Path, "reason", info.Reason)
 	}
 
+	// One server per data directory, and no offline `bayplan restore` beside it:
+	// the lock is held until Close, and by every error path below it. It comes
+	// before the key and the database, so a refused start writes nothing.
+	unlock, err := datadir.Lock(info.Path)
+	if err != nil {
+		return nil, fmt.Errorf("another Bayplan is using the data directory %s: %w", info.Path, err)
+	}
+	defer func() {
+		if err != nil {
+			_ = unlock()
+		}
+	}()
+
+	// A rotation that a crash cut short is finished or discarded before the key
+	// is loaded: LoadOrCreate would otherwise mint a fresh key beside a
+	// half-swapped pair of key files (D-33).
+	recovered, err := vault.RecoverRotation(ctx, info.Path, cfg.EncryptionKey != "", func(ctx context.Context) (string, error) {
+		return backup.StoredActiveKeyID(ctx, info.Path)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("recover an interrupted key rotation: %w", err)
+	}
+	if recovered {
+		log.Warn("finished or discarded a master-key rotation that was interrupted")
+	}
+
+	// A restore from the web UI leaves its marker when it swaps the database. The
+	// restored database gets one start: if it cannot start, the snapshot taken
+	// before the swap goes back and the old state starts instead (T-03-105).
+	marker, pending, merr := backup.ReadMarker(info.Path)
+	if merr != nil {
+		log.Error("a restore was pending but its marker cannot be read; starting without the safety net", "error", merr)
+		_ = backup.RemoveMarker(info.Path)
+		pending = false
+	}
+	// Nothing staged or uploaded before this start is of any use to it.
+	if err := backup.ClearStaging(info.Path); err != nil {
+		log.Warn("could not clear the restore staging directory", "error", err)
+	}
+
+	srv, err = assemble(ctx, cfg, log, bo, info, unlock, socketPath)
+	// Only a failure caused by the restored data goes back to the snapshot. A bad
+	// TLS pair, a mistyped key variable or a cancelled start says nothing about
+	// the restored database, so the restore keeps its one try for the next start.
+	if err != nil && pending && !errors.Is(err, errRestoredState) {
+		log.Error("the start failed for a reason unrelated to the restored data; the restore is kept and tried again at the next start", "error", err)
+	} else if err != nil && pending {
+		log.Error("the restored database could not start; going back to the pre-restore snapshot", "error", err)
+		if rbErr := rollbackRestore(ctx, cfg, log, info.Path, marker, err); rbErr != nil {
+			return nil, fmt.Errorf("%w (and going back to the snapshot failed: %w)", err, rbErr)
+		}
+		pending = false
+		srv, err = assemble(ctx, cfg, log, bo, info, unlock, socketPath)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if pending {
+		if err := backup.RemoveMarker(info.Path); err != nil {
+			log.Warn("restore completed but its marker could not be removed", "error", err)
+		} else {
+			log.Info("restore completed", "snapshot", marker.Snapshot)
+		}
+	}
+	return srv, nil
+}
+
+// errRestoredState marks a start failure that comes from the data a restore put
+// in place: the database cannot be opened, is on a key this instance does not
+// hold, cannot be migrated or does not load.
+var errRestoredState = errors.New("the restored data cannot start")
+
+// restoredStateError wraps err so that errors.Is(err, errRestoredState) holds
+// while the message stays exactly err's own.
+type restoredStateError struct{ err error }
+
+func (e restoredStateError) Error() string      { return e.err.Error() }
+func (e restoredStateError) Unwrap() error      { return e.err }
+func (restoredStateError) Is(target error) bool { return target == errRestoredState }
+
+// rollbackRestore puts the pre-restore snapshot back as the database and records
+// backup.failed (stage restore_boot) in its audit chain. The audit entry is best
+// effort: a rollback that worked is not undone because the note about it did not.
+func rollbackRestore(ctx context.Context, cfg config.Config, log *slog.Logger, dir string, m backup.Marker, cause error) error {
+	if err := backup.RollbackRestore(dir, m); err != nil {
+		return err
+	}
+	vlt, err := vault.LoadOrCreate(cfg.EncryptionKey, dir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		log.Error("could not record the failed restore: load the encryption key", "error", err)
+		return nil
+	}
+	st, err := store.Open(ctx, dir)
+	if err != nil {
+		log.Error("could not record the failed restore: open the database", "error", err)
+		return nil
+	}
+	defer func() { _ = st.Close() }()
+	if err := audit.NewWriter(st, vlt, log, nil).Record(ctx, audit.Entry{
+		Actor:      audit.SystemRestore,
+		Action:     audit.ActionBackupFailed,
+		TargetType: "backup",
+		Result:     audit.ResultFailure,
+		Reason:     "restore_boot",
+		Details:    map[string]string{"stage": "restore_boot", "error": cause.Error()},
+	}); err != nil {
+		log.Error("could not record the failed restore", "error", err)
+	}
+	return nil
+}
+
+// assemble loads the master key, opens and migrates the database and builds the
+// server on the prepared, locked data directory. It closes what it opened when it
+// fails, and leaves the lock to its caller.
+func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo buildOptions, info datadir.Info, unlock func() error, socketPath string) (srv *Server, err error) {
 	// The master key comes before the database: a bad BAYPLAN_ENCRYPTION_KEY
 	// should stop startup before anything is written (D-13).
 	vlt, err := vault.LoadOrCreate(cfg.EncryptionKey, info.Path, log)
@@ -199,7 +397,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 
 	st, err := store.Open(ctx, info.Path)
 	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+		return nil, restoredStateError{fmt.Errorf("open database: %w", err)}
+	}
+	// A database rotated to another key cannot be opened with this one, so say
+	// so before anything is migrated or written (D-33).
+	if err := checkActiveKey(ctx, st, vlt, info.Path); err != nil {
+		_ = st.Close()
+		return nil, restoredStateError{err}
 	}
 	res, err := store.Migrate(ctx, st, store.MigrateOptions{
 		AppVersion: buildinfo.Get().Version,
@@ -208,7 +412,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	})
 	if err != nil {
 		_ = st.Close()
-		return nil, fmt.Errorf("migration failed: %w", err)
+		return nil, restoredStateError{fmt.Errorf("migration failed: %w", err)}
 	}
 	attrs := []any{"from", res.From, "to", res.To}
 	if res.SnapshotPath != "" {
@@ -225,13 +429,6 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		return st.Ready(ctx)
 	}
 
-	// The admin role holds every registered permission, re-synced at every
-	// start so a new permission reaches admins on upgrade (D-45).
-	if err := rbac.SeedAdminRole(ctx, st); err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("seed admin role: %w", err)
-	}
-
 	aud := audit.NewWriter(st, vlt, log, nil)
 
 	// While no user exists every start mints a fresh setup token, writes it to
@@ -240,7 +437,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	gate := auth.NewSetupGate(st, info.Path, log)
 	if err := gate.Init(ctx); err != nil {
 		_ = st.Close()
-		return nil, fmt.Errorf("initialise the setup gate: %w", err)
+		return nil, restoredStateError{fmt.Errorf("initialise the setup gate: %w", err)}
 	}
 
 	// The instance name and public URL come from the settings table, with
@@ -249,7 +446,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	inst, err := instance.Load(ctx, st, cfg)
 	if err != nil {
 		_ = st.Close()
-		return nil, fmt.Errorf("load instance settings: %w", err)
+		return nil, restoredStateError{fmt.Errorf("load instance settings: %w", err)}
 	}
 
 	// HTTPS comes from a supplied pair or a generated self-signed certificate
@@ -272,6 +469,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 
 	sessions := auth.NewSessions(st, vlt, cfg.SessionIdleTimeout, cfg.SessionRememberLifetime, nil)
 	checker := rbac.NewChecker(st)
+	accessSvc := access.New(st, aud, checker, cfg.InviteTTL)
 
 	// Sign-in: 10 attempts at once, then one every 2 seconds, per client address.
 	// This is protection against stuffing across usernames; the per-account lock
@@ -287,6 +485,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	// recorded (D-49, T-01-35). Signed-in actors pass straight through.
 	anonAudit := auth.NewAuditThrottle(aud, auth.NewIPLimiter(6*time.Second, 20, 10*time.Minute, nil), log, nil)
 	login.SetAnonymousAuditor(anonAudit)
+
+	// A signed-in user's refusals are different: the first of each kind is written
+	// in full before the answer goes out, and identical repeats inside a minute
+	// become one "refused xN" entry, so a refreshing tab cannot flood the single
+	// write connection or the log (D-20). Everything else, anonymous refusals
+	// included, passes through to the anonymous throttle.
+	refusals := auth.NewRefusalCoalescer(anonAudit, log, bo.refusalClock)
 
 	// The environment registry and its health monitors. Nothing is added here:
 	// the local host becomes an environment only when an admin asks (D-19).
@@ -400,28 +605,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
-	router := NewRouter(httpx.Options{
-		Fallback:       spa,
-		Checker:        checker,
-		Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, inst.CookieScope, nil),
-		EnvResolver:    envSvc,
-		Auditor:        anonAudit,
-		MutationGuard:  auth.NewCSRFGuard(sessions),
-		TrustedProxies: cfg.TrustedProxies,
-		Proxy:          proxyObs,
-		PublicOrigin:   inst.PublicOrigin,
-		Logger:         log,
-		// Strict-Transport-Security when the request came over TLS or the
-		// public URL is https, which also covers a TLS-terminating proxy (D-37).
-		// Not for Bayplan's own self-signed certificate: a browser pinned to it
-		// could not click through a regenerated one (WR-09).
-		HSTS: func(r *http.Request) bool {
-			if r.TLS != nil {
-				return !cfg.TLSSelfSigned
-			}
-			return inst.Secure()
-		},
-	}, api.SystemDeps{Ready: ready}, api.SetupDeps{
+	// The wizard restore routes share the setup routes' gate, limiter and audit.
+	setupDeps := api.SetupDeps{
 		Gate: gate,
 		// 5 attempts at once, then one every 12 seconds, per client address (D-05).
 		Limiter:   auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
@@ -433,34 +618,101 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Sessions:  sessions,
 		SPA:       spa,
 		Log:       log,
-	}, api.AuthDeps{
-		Login:    login,
-		Sessions: sessions,
-		Instance: inst,
-		Store:    st,
-		Checker:  checker,
-		Log:      log,
-	}, api.AccountDeps{
-		Sessions: sessions,
-		Instance: inst,
-		Store:    st,
-		Audit:    aud,
-		DataDir:  info,
-		Vault:    vlt,
-		Proxy:    proxyObs,
-		// Five password-change attempts per user at once, then one every 12
-		// seconds (T-01-60): ample for a person, slow for a guesser.
-		Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
-		Log:     log,
-	}, api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
-		api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
-		api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
-		api.EventsDeps{Aggregator: aggregator, Log: log},
-		api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
-		api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
-		api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
-		api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log}, tunnelHub.Handler())
+	}
+	restart := newRestarter()
+
+	// Scheduled backups go to BAYPLAN_BACKUP_DIR, or the backups folder of the data
+	// directory, which the pre-migration and pre-restore snapshots share (D-32).
+	backupDir := cfg.BackupDir
+	if backupDir == "" {
+		backupDir = filepath.Join(info.Path, "backups")
+	}
+	// A process killed in the middle of a backup leaves the unencrypted copy of the
+	// database it was working on; the start removes the old ones.
+	backup.SweepWorkFiles(info.Path, backupDir, time.Now(), log)
+	backups := &backup.Scheduler{
+		Store: st, Vault: vlt, Audit: aud, Dir: backupDir, DataDir: info.Path, Log: log,
+		AppVersion:   func() string { return buildinfo.Get().Version },
+		InstanceName: inst.Name, PublicURL: inst.PublicURL,
+	}
+
+	router := NewRouter(RouterDeps{
+		Options: httpx.Options{
+			Fallback:       spa,
+			Checker:        checker,
+			Authenticator:  auth.NewAuthenticator(st, cfg.SessionIdleTimeout, inst.CookieScope, nil),
+			EnvResolver:    envSvc,
+			Auditor:        refusals,
+			MutationGuard:  auth.NewCSRFGuard(sessions),
+			TrustedProxies: cfg.TrustedProxies,
+			Proxy:          proxyObs,
+			PublicOrigin:   inst.PublicOrigin,
+			Logger:         log,
+			// Strict-Transport-Security when the request came over TLS or the
+			// public URL is https, which also covers a TLS-terminating proxy (D-37).
+			// Not for Bayplan's own self-signed certificate: a browser pinned to it
+			// could not click through a regenerated one (WR-09).
+			HSTS: func(r *http.Request) bool {
+				if r.TLS != nil {
+					return !cfg.TLSSelfSigned
+				}
+				return inst.Secure()
+			},
+		},
+		System: api.SystemDeps{Ready: ready},
+		Setup:  setupDeps,
+		Auth: api.AuthDeps{
+			Login:    login,
+			Sessions: sessions,
+			Instance: inst,
+			Store:    st,
+			Checker:  checker,
+			Log:      log,
+		},
+		Account: api.AccountDeps{
+			Sessions: sessions,
+			Instance: inst,
+			Store:    st,
+			Audit:    aud,
+			DataDir:  info,
+			Vault:    vlt,
+			Proxy:    proxyObs,
+			Checker:  checker,
+			Refusals: refusals,
+			Unknown:  agentSvc.Unknown(),
+			// Five password-change attempts per user at once, then one every 12
+			// seconds (T-01-60): ample for a person, slow for a guesser.
+			Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
+			Log:     log,
+		},
+		Access: api.AccessDeps{
+			Access: accessSvc, Store: st, Checker: checker, Instance: inst, Sessions: sessions,
+			// Opening or using a link: 5 attempts at once, then one every 12 seconds,
+			// per client address, like the setup token (T-03-40).
+			Limiter:   auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
+			AnonAudit: anonAudit,
+			Log:       log,
+		},
+		LocalHost:     api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
+		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
+		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
+		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
+		Dashboard:     api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
+		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
+		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
+		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
+		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
+		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log},
+		Backup:        api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
+		Restore: api.RestoreDeps{
+			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
+			Setup: setupDeps, DataDir: info.Path, AppVersion: buildinfo.Get().Version, Log: log,
+			// Five tries at once, then one every 12 seconds, per signed-in user.
+			Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
+			Restart: func(swap func(context.Context) error) bool { return restart.request(RestartRequest{Swap: swap}) },
+		},
+		AgentConnect: tunnelHub.Handler(),
+	})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		tunnelHub.Close()
@@ -470,7 +722,10 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		_ = st.Close()
 		return nil, err
 	}
-	srv := &Server{
+	srv = &Server{
+		unlock:     unlock,
+		restart:    restart,
+		refusals:   refusals,
 		cfg:        cfg,
 		log:        log,
 		dataDir:    info,
@@ -498,11 +753,14 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	bg, stop := context.WithCancel(ctx)
 	srv.stopBackground = stop
 	srv.background.Go(func() { audit.RunNightly(bg, srv.audit, cfg.AuditRetentionDays, log) })
+	// Scheduled backups wait for the next instant the saved schedule names.
+	srv.background.Go(func() { backups.Run(bg) })
 	// Expired sessions are refused on lookup; this hourly sweep only keeps the table small.
 	srv.background.Go(func() { auth.RunSessionCleanup(bg, st, cfg.SessionIdleTimeout, nil) })
 	// Suppressed anonymous refusals are written every minute, and once more when
 	// bg ends, which is before Close shuts the database.
 	srv.background.Go(func() { anonAudit.Run(bg, time.Minute) })
+	srv.background.Go(func() { refusals.Run(bg, 10*time.Second) })
 	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { broker.Run(bg) })
 	srv.background.Go(func() { clusters.Run(bg) })
@@ -523,6 +781,10 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 
 // Store is the migrated database, for the dependencies later plans add.
 func (s *Server) Store() *store.Store { return s.store }
+
+// Refusals is the coalescer of signed-in users' refusals. Tests sweep it to close
+// a window without waiting a minute.
+func (s *Server) Refusals() *auth.RefusalCoalescer { return s.refusals }
 
 // Vault is the loaded master key, for the dependencies later plans add.
 func (s *Server) Vault() *vault.Vault { return s.vault }
@@ -600,11 +862,24 @@ func (s *Server) Close() error {
 	s.aggregator.Close()
 	s.hub.Close()
 	s.monitor.StopAll()
-	return s.store.Close()
+	// The lock goes last: until the database is closed, an offline restore must
+	// still be kept out. A restore that is about to swap the database and re-exec
+	// keeps it, so no one can take the directory in between (T-03-106).
+	err := s.store.Close()
+	if s.keepLock.Load() {
+		return err
+	}
+	return errors.Join(err, s.unlock())
 }
 
 // DataDir reports the prepared data directory, for the admin banner (plan 14).
 func (s *Server) DataDir() datadir.Info { return s.dataDir }
+
+// Routes lists every route the server registered behind the policy, with the
+// requirement each one declares. The enforcement test calls every one of them as
+// every principal archetype, so a route cannot be added without it being proven
+// refused for whoever lacks its requirement.
+func (s *Server) Routes() []httpx.RouteRecord { return s.router.Routes() }
 
 // Handler is the root HTTP handler: the router behind StripBasePath, so a
 // request under the public URL's path reaches the same routes whether or not a
@@ -613,14 +888,39 @@ func (s *Server) Handler() http.Handler {
 	return httpx.StripBasePath(s.inst.BasePath)(s.router.Handler())
 }
 
-// Run serves until ctx is cancelled, then shuts down gracefully within 10s.
+// Run serves until ctx is cancelled, then shuts down gracefully within 10s. When
+// a restore asks for a restart it stops serving the same way, closes the database
+// but not the data-directory lock, and returns a *RestartError (errors.Is
+// ErrRestart); the caller then runs Restart.
 func (s *Server) Run(ctx context.Context) error {
 	defer func() { _ = s.Close() }()
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen on %s (BAYPLAN_LISTEN): %w", s.cfg.Listen, err)
 	}
-	return s.serve(ctx, ln)
+	return s.run(ctx, ln)
+}
+
+func (s *Server) run(ctx context.Context, ln net.Listener) error {
+	err := s.serve(ctx, ln)
+	req, restart := s.restart.take()
+	if !restart {
+		return err
+	}
+	if ctx.Err() != nil {
+		// A stop signal arrived as well. A process that was told to stop does not
+		// start another one; the staged restore is cleared at the next start.
+		s.log.Warn("a restore asked for a restart but Bayplan is stopping; the restore was not applied")
+		return err
+	}
+	if err != nil {
+		s.log.Warn("the server stopped with an error while a restore was waiting for it", "error", err)
+	}
+	s.keepLock.Store(true)
+	if cerr := s.Close(); cerr != nil {
+		s.log.Warn("closing the server for a restore", "error", cerr)
+	}
+	return &RestartError{Request: req}
 }
 
 func (s *Server) serve(ctx context.Context, ln net.Listener) error {
@@ -654,13 +954,29 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 		}
 		return err
 	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		if err := srv.Shutdown(shutdown); err != nil {
-			return fmt.Errorf("graceful shutdown: %w", err)
-		}
-		return nil
+		return s.shutdown(srv, false)
+	case <-s.restart.requested():
+		// The request that asked for the restart is still being answered; Shutdown
+		// waits for it, so the browser gets its 202 before the listener goes.
+		return s.shutdown(srv, true)
 	}
+}
+
+// shutdown stops the HTTP server gracefully. For a restart a connection that does
+// not finish in time is cut instead of failing the restart: the process is about
+// to be replaced anyway.
+func (s *Server) shutdown(srv *http.Server, restarting bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		if restarting {
+			s.log.Warn("some connections were still open at the restart and were closed", "error", err)
+			_ = srv.Close()
+			return nil
+		}
+		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+	return nil
 }
 
 // settingsAgents gives the settings routes what they know of agents: the agents

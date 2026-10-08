@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { KeyRound, LogOut } from "lucide-react";
+import { KeyRound, LogOut, MonitorSmartphone, UserRound } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -17,13 +17,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ChangePasswordDialog } from "@/features/account/change-password-dialog";
+import { ProfileDialog } from "@/features/account/profile-dialog";
+import { SessionsDialog } from "@/features/account/sessions-dialog";
 import { useSignOut } from "@/features/account/sign-out";
 import { useT } from "@/i18n/use-t";
 import { getTheme, setTheme, type ThemeMode } from "@/lib/theme";
 
 interface UserMenuProps {
   username: string;
-  role: string;
+  instanceAdmin: boolean;
 }
 
 // Initials only (UI-SPEC): the first two characters of the username.
@@ -38,12 +40,14 @@ const THEMES: ReadonlyArray<{ mode: ThemeMode; key: string }> = [
 ];
 
 // UserMenu is the header menu on every signed-in page: who is signed in, the
-// theme choice, Change password (D-34) and Log out (AUTH-03, D-63).
-export function UserMenu({ username, role }: UserMenuProps) {
+// theme choice, Profile (D-24), Sessions (D-23), Change password (D-34) and Log out (AUTH-03, D-63).
+export function UserMenu({ username, instanceAdmin }: UserMenuProps) {
   const t = useT();
   const signOut = useSignOut();
   const [theme, setThemeState] = useState<ThemeMode>(getTheme);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   function chooseTheme(value: string) {
@@ -73,13 +77,19 @@ export function UserMenu({ username, role }: UserMenuProps) {
             <span className="truncate text-sm font-medium text-foreground" title={username}>
               {username}
             </span>
-            {role ? (
-              <span className="text-xs text-muted-foreground">
-                {role === "admin" ? t("shell.userMenu.roleAdmin") : role}
-              </span>
+            {instanceAdmin ? (
+              <span className="text-xs text-muted-foreground">{t("shell.userMenu.roleAdmin")}</span>
             ) : null}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => setProfileOpen(true)}>
+            <UserRound aria-hidden="true" />
+            {t("sessions.menu.profile")}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setSessionsOpen(true)}>
+            <MonitorSmartphone aria-hidden="true" />
+            {t("sessions.menu.sessions")}
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setChangePasswordOpen(true)}>
             <KeyRound aria-hidden="true" />
             {t("shell.userMenu.changePassword")}
@@ -106,6 +116,12 @@ export function UserMenu({ username, role }: UserMenuProps) {
       <ChangePasswordDialog
         open={changePasswordOpen}
         onOpenChange={setChangePasswordOpen}
+        returnFocusRef={triggerRef}
+      />
+      <ProfileDialog open={profileOpen} onOpenChange={setProfileOpen} returnFocusRef={triggerRef} />
+      <SessionsDialog
+        open={sessionsOpen}
+        onOpenChange={setSessionsOpen}
         returnFocusRef={triggerRef}
       />
     </>

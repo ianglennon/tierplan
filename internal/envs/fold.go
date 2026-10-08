@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -150,12 +151,18 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 	if _, err := q.DeleteEnvironment(ctx, p.localID); err != nil {
 		return fmt.Errorf("retire the local environment: %w", err)
 	}
+	// The retired environment's ID is never used again, so what was granted on it
+	// goes with it rather than staying behind pointing at nothing.
+	grants, err := deleteEnvironmentGrants(ctx, q, p.localID)
+	if err != nil {
+		return err
+	}
 	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
 		Actor: actor, Action: audit.ActionEnvironmentLocalFolded, TargetType: targetEnvironment, TargetID: swarmEnvID,
 		EnvID: swarmEnvID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
 		Details: map[string]string{
 			"swarm": swarm.Name, "local": local.Name, "local_environment": p.localID,
-			"node": p.nodeID, "socket": local.SocketPath,
+			"node": p.nodeID, "socket": local.SocketPath, "grants": strconv.FormatInt(grants, 10),
 		},
 	}); err != nil {
 		return fmt.Errorf("audit local host folded: %w", err)

@@ -149,7 +149,7 @@ func TestAPendingEnvironmentIsALongWaitOnlyAfterSevenDays(t *testing.T) {
 	}
 }
 
-func TestAFoldOfferIsAnItemOnlyForSomeoneWhoMayManageEnvironments(t *testing.T) {
+func TestAFoldOfferIsAnItemOnlyForAnInstanceAdmin(t *testing.T) {
 	f := newFoldFix(t, nil)
 
 	_, got := f.warnings(t, f.cookie, f.csrf)
@@ -163,12 +163,13 @@ func TestAFoldOfferIsAnItemOnlyForSomeoneWhoMayManageEnvironments(t *testing.T) 
 		t.Fatalf("the admin's fold items = %+v (all %+v), want one naming the swarm environment", fold, got)
 	}
 
-	f.addUserWithGlobalPerms(t, "reader", "environments.read")
+	f.addUser(t, "reader", false)
+	f.addEnvRole(t, "reader", "", "viewer")
 	cookie, csrf := f.signIn(t, "reader", false)
 	_, got = f.warnings(t, cookie, csrf)
 	for _, w := range got {
 		if w.ID == "fold_offered" {
-			t.Fatalf("someone without environments.manage was told of the fold: %+v", got)
+			t.Fatalf("someone who is not an instance admin was told of the fold: %+v", got)
 		}
 	}
 }

@@ -25,7 +25,7 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, username, password_hash, created_at, updated_at, password_changed_at, failed_count, locked_until, disabled FROM users WHERE id = ?
+SELECT id, username, password_hash, created_at, updated_at, password_changed_at, failed_count, locked_until, disabled, instance_admin, display_name, email, deleted_at, last_login_at FROM users WHERE id = ?
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
@@ -41,12 +41,17 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 		&i.FailedCount,
 		&i.LockedUntil,
 		&i.Disabled,
+		&i.InstanceAdmin,
+		&i.DisplayName,
+		&i.Email,
+		&i.DeletedAt,
+		&i.LastLoginAt,
 	)
 	return i, err
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, password_hash, created_at, updated_at, password_changed_at, failed_count, locked_until, disabled FROM users WHERE username = ?
+SELECT id, username, password_hash, created_at, updated_at, password_changed_at, failed_count, locked_until, disabled, instance_admin, display_name, email, deleted_at, last_login_at FROM users WHERE username = ?
 `
 
 // Usernames are stored lowercase; callers lower-case before looking up (D-35).
@@ -63,24 +68,13 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.FailedCount,
 		&i.LockedUntil,
 		&i.Disabled,
+		&i.InstanceAdmin,
+		&i.DisplayName,
+		&i.Email,
+		&i.DeletedAt,
+		&i.LastLoginAt,
 	)
 	return i, err
-}
-
-const getUserGlobalRole = `-- name: GetUserGlobalRole :one
-SELECT role_id FROM role_assignments
-WHERE principal_type = 'user' AND principal_id = ? AND env_id IS NULL
-ORDER BY created_at, id
-LIMIT 1
-`
-
-// The role a user holds across the whole installation (an assignment with no
-// environment). Phase 1 has one such role per user.
-func (q *Queries) GetUserGlobalRole(ctx context.Context, principalID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getUserGlobalRole, principalID)
-	var role_id string
-	err := row.Scan(&role_id)
-	return role_id, err
 }
 
 const insertUser = `-- name: InsertUser :exec
@@ -107,6 +101,37 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) error {
 		arg.PasswordChangedAt,
 	)
 	return err
+}
+
+const listActiveInstanceAdmins = `-- name: ListActiveInstanceAdmins :many
+SELECT username FROM users
+WHERE instance_admin = 1 AND disabled = 0 AND deleted_at IS NULL
+ORDER BY username
+`
+
+// The usernames of the instance admins who can still sign in: not disabled and
+// not tombstoned. A signed-in user with no access is told whom to ask (D-08).
+func (q *Queries) ListActiveInstanceAdmins(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveInstanceAdmins)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var username string
+		if err := rows.Scan(&username); err != nil {
+			return nil, err
+		}
+		items = append(items, username)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockUser = `-- name: LockUser :exec
@@ -144,6 +169,39 @@ UPDATE users SET failed_count = 0, locked_until = NULL WHERE id = ?
 // count and the lock together.
 func (q *Queries) ResetLoginFailures(ctx context.Context, id string) error {
 	_, err := q.db.ExecContext(ctx, resetLoginFailures, id)
+	return err
+}
+
+const setUserInstanceAdmin = `-- name: SetUserInstanceAdmin :execrows
+UPDATE users SET instance_admin = ?, updated_at = ? WHERE id = ?
+`
+
+type SetUserInstanceAdminParams struct {
+	InstanceAdmin int64
+	UpdatedAt     int64
+	ID            string
+}
+
+func (q *Queries) SetUserInstanceAdmin(ctx context.Context, arg SetUserInstanceAdminParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setUserInstanceAdmin, arg.InstanceAdmin, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setUserLastLogin = `-- name: SetUserLastLogin :exec
+UPDATE users SET last_login_at = ? WHERE id = ?
+`
+
+type SetUserLastLoginParams struct {
+	LastLoginAt sql.NullInt64
+	ID          string
+}
+
+// Stamps a successful sign-in (UTC unix nanoseconds).
+func (q *Queries) SetUserLastLogin(ctx context.Context, arg SetUserLastLoginParams) error {
+	_, err := q.db.ExecContext(ctx, setUserLastLogin, arg.LastLoginAt, arg.ID)
 	return err
 }
 

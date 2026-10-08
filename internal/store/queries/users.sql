@@ -31,14 +31,20 @@ UPDATE users SET failed_count = 0, locked_until = NULL WHERE id = ?;
 -- name: UnlockUserByUsername :execrows
 UPDATE users SET failed_count = 0, locked_until = NULL WHERE username = ?;
 
--- name: GetUserGlobalRole :one
--- The role a user holds across the whole installation (an assignment with no
--- environment). Phase 1 has one such role per user.
-SELECT role_id FROM role_assignments
-WHERE principal_type = 'user' AND principal_id = ? AND env_id IS NULL
-ORDER BY created_at, id
-LIMIT 1;
-
 -- name: UpdatePassword :exec
 -- Stores a new password hash and stamps when it changed (D-34).
 UPDATE users SET password_hash = ?, password_changed_at = ?, updated_at = ? WHERE id = ?;
+
+-- name: SetUserInstanceAdmin :execrows
+UPDATE users SET instance_admin = ?, updated_at = ? WHERE id = ?;
+
+-- name: ListActiveInstanceAdmins :many
+-- The usernames of the instance admins who can still sign in: not disabled and
+-- not tombstoned. A signed-in user with no access is told whom to ask (D-08).
+SELECT username FROM users
+WHERE instance_admin = 1 AND disabled = 0 AND deleted_at IS NULL
+ORDER BY username;
+
+-- name: SetUserLastLogin :exec
+-- Stamps a successful sign-in (UTC unix nanoseconds).
+UPDATE users SET last_login_at = ? WHERE id = ?;

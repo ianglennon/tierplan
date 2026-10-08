@@ -141,9 +141,9 @@ type CompleteSetupInput struct {
 
 // SetupUserBody is the admin the completion created.
 type SetupUserBody struct {
-	ID       string `json:"id" doc:"The user's ID"`
-	Username string `json:"username" doc:"The lower-cased username"`
-	Role     string `json:"role" doc:"The user's global role"`
+	ID            string `json:"id" doc:"The user's ID"`
+	Username      string `json:"username" doc:"The lower-cased username"`
+	InstanceAdmin bool   `json:"instanceAdmin" doc:"Always true: the first user is the instance admin (D-01)"`
 }
 
 // CompleteSetupBody is the signed-in state the SPA needs after setup.
@@ -383,8 +383,8 @@ func (d SetupDeps) complete(ctx context.Context, in *CompleteSetupInput) (*Compl
 	}); err != nil {
 		return internal("insert user", err)
 	}
-	if err := rbac.AssignGlobalRole(ctx, tx, d.Store.Q, rbac.PrincipalUser, id, rbac.AdminRoleID); err != nil {
-		return internal("assign admin role", err)
+	if err := rbac.GrantInstanceAdminTx(ctx, tx, d.Store.Q, id); err != nil {
+		return internal("grant instance admin", err)
 	}
 	if err := d.Instance.SetTx(ctx, tx, d.Store.Q, c.instanceName, c.publicURL); err != nil {
 		return internal("store instance settings", err)
@@ -421,7 +421,7 @@ func (d SetupDeps) complete(ctx context.Context, in *CompleteSetupInput) (*Compl
 		SetCookie:    d.Sessions.Cookie(rawSession, false, d.Instance.CookieScope()),
 		CacheControl: "no-store",
 		Body: CompleteSetupBody{
-			User:            SetupUserBody{ID: id, Username: c.username, Role: rbac.AdminRoleID},
+			User:            SetupUserBody{ID: id, Username: c.username, InstanceAdmin: true},
 			CSRFToken:       d.Sessions.CSRFToken(idHash),
 			InstanceName:    c.instanceName,
 			PublicURL:       d.Instance.PublicURL(),

@@ -4,7 +4,7 @@ Bayplan is an open-source, web-based manager for Docker: many Docker Swarm clust
 
 Licence: [AGPL-3.0-or-later](LICENSE). Anyone who runs a modified version as a network service must offer its users the source.
 
-**Status: pre-release.** No version has been published yet; the first release will be v0.1.0, and breaking changes are allowed between 0.x minors. This build lets you install Bayplan, sign in, and look at the Docker host it runs on: a dashboard, containers, images, volumes and networks (read-only), a live event feed, an audit log and settings. Managing stacks and other hosts comes later.
+**Status: pre-release.** No version has been published yet; the first release will be v0.1.0, and breaking changes are allowed between 0.x minors. This build lets you install Bayplan, sign in, and look at the Docker host it runs on: a dashboard, containers, images, volumes and networks (read-only), a live event feed, an audit log and settings, users and teams with Viewer, Operator and Admin roles per environment, and encrypted backups you can restore. Managing stacks and other hosts comes later.
 
 ## Before you install
 
@@ -66,6 +66,8 @@ The container starts as root, and only for a moment. Bayplan fixes the ownership
 4. After setup, Bayplan asks whether to manage the Docker host it runs on. Nothing is managed until an admin says yes. Choosing yes is the step that gives Bayplan control of the host.
 5. Later, sign in at the same address with the account you created. After five failed attempts an account locks for 30 minutes (see [Operations](#operations) to clear a lock).
 
+Once you are in, [docs/access.md](docs/access.md) explains how to invite teammates, put them in teams and give them the Viewer, Operator or Admin role on each environment.
+
 Anyone who can read the container log or `/data` can read the setup token until setup is finished; the token file is deleted when setup completes. Claim a new instance promptly, and do not expose port 7480 to a network you do not trust before you have.
 
 ## Requirements
@@ -103,8 +105,13 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `BAYPLAN_LOGIN_LOCKOUT` | `30m` | no | How long a locked account stays locked. |
 | `BAYPLAN_SESSION_IDLE_TIMEOUT` | `12h` | no | Idle time after which a session ends. |
 | `BAYPLAN_SESSION_REMEMBER_LIFETIME` | `720h` | no | Lifetime of a "keep me signed in" session. |
+| `BAYPLAN_INVITE_TTL` | `72h` | no | How long a one-time invite or password reset link works, from `1h` to `720h`. |
 | `BAYPLAN_AUDIT_RETENTION_DAYS` | `365` | no | Days to keep audit entries; `0` keeps them forever. |
 | `BAYPLAN_SKIP_PRE_MIGRATE_BACKUP` | `false` | no | Do not snapshot the database before a migration. |
+| `BAYPLAN_RESTORE_RESTART` | `exec` | no | How Bayplan restarts after a restore from the web UI. `exec` replaces the process with a fresh Bayplan, so the container keeps running. `exit` stops with status 0 after the swap and relies on the container's restart policy (`unless-stopped` or `always`) to start it again. |
+| `BAYPLAN_BACKUP_MAX_UPLOAD` | `1GiB` | no | The largest backup file the web UI accepts for a restore, from `1MiB` to `64GiB`, in bytes or with a `KiB`, `MiB` or `GiB` suffix. A reverse proxy in front of Bayplan needs an upload limit at least this large. |
+| `BAYPLAN_BACKUP_DIR` | `<data>/backups` | no | The folder scheduled backups are written into. Mount a volume or a host folder here to keep backups off the data volume. Only scheduled `bayplan-backup-*.bayplan` files in it are ever listed, served or deleted. `bayplan backup` with no `--out` also writes here, as `bayplan-manual-<date>-<time>.bayplan`, which retention leaves alone and the Backup page does not list. |
+| `BAYPLAN_BACKUP_PASSPHRASE_FILE` | unset | n/a | Used by the command-line `bayplan backup` and `bayplan restore`, not by the server: the file holding the backup passphrase. Without it the commands read the first line of standard input. The passphrase is never a flag. |
 | `BAYPLAN_TLS_CERT_FILE` | unset | no | Path to a TLS certificate in PEM form. Needs `BAYPLAN_TLS_KEY_FILE`. |
 | `BAYPLAN_TLS_KEY_FILE` | unset | no | Path to the TLS private key in PEM form. Needs `BAYPLAN_TLS_CERT_FILE`. |
 | `BAYPLAN_TLS_SELF_SIGNED` | `false` | no | Serve a generated self-signed certificate. Cannot be combined with the two file settings. |
@@ -157,16 +164,11 @@ Bayplan needs to be reachable from the host over `wss://` with a certificate the
 ## Data and backups
 
 - Mount `/data` as a **named volume or a bind mount**. Data written to an unmounted `/data` is lost when the container is removed. Bayplan warns in the log and to admins in the app when `/data` is not a mount point or sits on tmpfs. It cannot tell an anonymous volume from a named one, so it gives **no warning for an anonymous volume**. An anonymous volume is easy to lose: a replacement container gets a new, empty one, and `docker run --rm` or `docker rm -v` deletes it.
+- **Back up Bayplan** from **Settings > Backup**, or with `docker exec -i <container> bayplan backup --out - > file.bayplan`. A backup is one encrypted file that holds users, teams, access, settings, environments and the audit log, and restores onto a new install through the setup wizard, **Settings > Backup** or `bayplan restore`. It can also run on a schedule. [docs/backup.md](docs/backup.md) covers what it holds, the three ways to restore, agents after a restore and rotating the master key.
 - **Back up `/data/bayplan.key` together with the database** (`/data/bayplan.db`). The key encrypts stored secrets and keys the audit log's integrity chain. Lose it and those secrets cannot be read and `bayplan audit verify` cannot check the log. Bayplan shows a reminder until an admin acknowledges it. A backup that holds both the key and the database holds everything, so protect it like a password store. If you supply `BAYPLAN_ENCRYPTION_KEY` yourself, no key file is written and you keep that value safe.
 - Before it applies a database migration to an existing database, Bayplan writes a snapshot to `/data/backups` and keeps the newest three. If the volume has less than twice the database's size free, it refuses to start rather than fill the volume; `BAYPLAN_SKIP_PRE_MIGRATE_BACKUP=true` skips the snapshot.
 - **Downgrades are refused.** A database written by a newer schema stops an older binary at startup, naming both versions and the newest snapshot.
-- Upgrade by replacing the container on the same volume:
-
-  ```sh
-  docker pull ghcr.io/ianglennon/bayplan:0.1
-  docker rm -f bayplan
-  docker run -d --name bayplan ... ghcr.io/ianglennon/bayplan:0.1
-  ```
+- **Upgrading** means replacing the container on the same volume. [docs/upgrade.md](docs/upgrade.md) covers `docker run` and compose, what happens on start, how to check the audit chain afterwards and how to roll back. Bayplan never checks for new versions itself.
 
 ## Operations
 
@@ -177,6 +179,11 @@ Run these with `docker exec <container> bayplan ...`. Each drops to UID 1000 fir
 | `bayplan healthcheck` | Exits 0 when the local server answers `/healthz`. This is the image's `HEALTHCHECK`. |
 | `bayplan setup-token` | Prints the active setup token. Exits 1 once setup is complete. |
 | `bayplan user unlock <name>` | Clears a locked account, for when the only admin is locked out. Recorded in the audit log as `system:cli`. Exits 1 if there is no such user. |
+| `bayplan user reset-password <name>` | Ends every session of a user and prints a one-time link that lets them choose a new password, for when the only admin has forgotten theirs. The link is built from the stored public URL and base path; with none stored it is printed as `/invite#token=…` to open on your Bayplan address. Recorded in the audit log as `system:cli`. Exits 1 if there is no such user or the user is disabled. |
+| `bayplan backup [--out <file>\|-]` | Writes an encrypted `.bayplan` backup while Bayplan runs, by default as `bayplan-manual-<date>-<time>.bayplan` in `BAYPLAN_BACKUP_DIR` or `<data>/backups`, never replacing a file. The passphrase comes from the file named by `BAYPLAN_BACKUP_PASSPHRASE_FILE` or from standard input, never from a flag. Recorded in the audit log as `system:cli`. See [docs/backup.md](docs/backup.md). |
+| `bayplan restore [--yes] <file>` | Restores a backup into the data directory. Run it as a one-off container on the same volume with Bayplan stopped: it refuses while Bayplan holds the data directory. Without `--yes` it only shows what the file holds. Saves the current database as `backups/prerestore-<time>.db` first. |
+| `bayplan key rotate` | Replaces the master key, re-encrypts every stored secret and re-signs the audit log. Run it as a one-off container with Bayplan stopped. The old key is kept as `bayplan.key.old`; with `BAYPLAN_ENCRYPTION_KEY` the new key is written to `bayplan.key.new` for you to set. |
+| `bayplan permissions` | Prints the role-to-permission matrix, generated from the permission registry. It is the source of [docs/permissions.md](docs/permissions.md). |
 | `bayplan audit verify` | Recomputes the audit log's HMAC chain and names the first broken entry. Exits 1 on a broken chain. It cannot see entries deleted from the end of the log; see the threat model. |
 | `bayplan version` | Prints the version and commit. |
 
@@ -191,6 +198,10 @@ The source code, version and commit are linked from **Settings > About**, as the
 - [SECURITY.md](SECURITY.md): reporting a vulnerability, privately.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and sending changes.
 - [docs/reverse-proxy.md](docs/reverse-proxy.md): running Bayplan behind Caddy, nginx or Traefik, at the root or a subpath.
+- [docs/access.md](docs/access.md): instance admins, roles, teams, invite and reset links, sessions.
+- [docs/permissions.md](docs/permissions.md): what each role may do, generated from the code.
+- [docs/backup.md](docs/backup.md): backups, the three ways to restore, agents after a restore and rotating the master key.
+- [docs/upgrade.md](docs/upgrade.md): moving to a newer version and going back.
 - [docs/agent.md](docs/agent.md): installing, securing, troubleshooting and removing the agent on a remote host or swarm.
 - [docs/agent-updates.md](docs/agent-updates.md): updating and removing agents by hand.
 - [docs/threat-model.md](docs/threat-model.md): what Bayplan protects, what it does not, and the risks that remain.

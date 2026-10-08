@@ -90,7 +90,7 @@ export class AgentActionError extends Error {
 // answers 204. The reason is optional and kept in the audit log.
 export async function revokeAgent(envId: string, agentId: string, reason?: string): Promise<void> {
   const { error, response } = await api.POST(
-    "/api/environments/{envId}/agents/{agentId}/revoke",
+    "/api/env/{envId}/agents/{agentId}/revoke",
     reason
       ? { params: { path: { envId, agentId } }, body: { reason } }
       : { params: { path: { envId, agentId } } },
@@ -100,7 +100,7 @@ export async function revokeAgent(envId: string, agentId: string, reason?: strin
 
 // unblockAgent lets a revoked node's host enrol again, as a new agent (D-09).
 export async function unblockAgent(envId: string, agentId: string): Promise<void> {
-  const { error, response } = await api.POST("/api/environments/{envId}/agents/{agentId}/unblock", {
+  const { error, response } = await api.POST("/api/env/{envId}/agents/{agentId}/unblock", {
     params: { path: { envId, agentId } },
   });
   if (!response.ok) throw new AgentActionError(error, response);
@@ -135,7 +135,7 @@ export class UpdateActionError extends Error {
 // service, which rolls every node, so this is the same as updating all of them.
 // The server answers 202: the update is started, not finished.
 export async function updateAgent(envId: string, agentId: string): Promise<void> {
-  const { error, response } = await api.POST("/api/environments/{envId}/agents/{agentId}/update", {
+  const { error, response } = await api.POST("/api/env/{envId}/agents/{agentId}/update", {
     params: { path: { envId, agentId } },
   });
   if (!response.ok) throw new UpdateActionError(error, response);
@@ -144,7 +144,7 @@ export async function updateAgent(envId: string, agentId: string): Promise<void>
 // updateAllAgents starts the updates every agent that is behind needs, and says
 // how many it sent: one for a swarm, one per agent otherwise, 0 for none needed.
 export async function updateAllAgents(envId: string): Promise<number> {
-  const { data, error, response } = await api.POST("/api/environments/{envId}/update-agents", {
+  const { data, error, response } = await api.POST("/api/env/{envId}/update-agents", {
     params: { path: { envId } },
   });
   if (!response.ok) throw new UpdateActionError(error, response);
@@ -153,7 +153,7 @@ export async function updateAllAgents(envId: string): Promise<number> {
 
 // setAutoUpdate switches the environment's automatic agent updates (D-28).
 export async function setAutoUpdate(envId: string, autoUpdate: boolean): Promise<void> {
-  const { error, response } = await api.PATCH("/api/environments/{envId}", {
+  const { error, response } = await api.PATCH("/api/env/{envId}", {
     params: { path: { envId } },
     body: { autoUpdate },
   });

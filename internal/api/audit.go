@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -20,6 +21,10 @@ import (
 
 // Stable problem types of the audit routes.
 const problemInvalidTimeRange = "invalid_time_range"
+
+// reasonNoAuditScope is the reason a refused read of the audit log is audited
+// with: the caller is neither an instance admin nor an Admin of any environment.
+const reasonNoAuditScope = "no_audit_scope"
 
 // auditPageDefault and auditPageMax are the page sizes of GET /api/audit (D-43).
 const (
@@ -36,10 +41,30 @@ type AuditDeps struct {
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// Checker decides who reads what of the log: an instance admin everything, an
+	// Admin of environments the entries on those environments (D-09). Nil means
+	// nobody reads it, which is only for a router that serves nothing.
+	Checker *rbac.Checker
+	// Refusals records the permission.denied entry of a refused read. It is the
+	// router's own auditor, so these refusals are coalesced like any other (D-20).
+	// Nil records nothing, like a router without one.
+	Refusals httpx.Auditor
+}
+
+// auditCaller is read only to record a refusal in the audit log; it is not part
+// of the contract.
+type auditCaller struct {
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// AuditActorsInput is the (empty) query of GET /api/audit/actors.
+type AuditActorsInput struct {
+	auditCaller
 }
 
 // AuditFilterInput holds the filters the list and the export share.
 type AuditFilterInput struct {
+	auditCaller
 	User   string   `query:"user" maxLength:"128" doc:"Only entries by this actor, matched exactly against the actor name"`
 	Action []string `query:"action,explode" maxItems:"50" doc:"Only entries of these action types; repeat the parameter to give several"`
 	From   string   `query:"from" format:"date-time" doc:"Only entries at or after this time (RFC 3339)"`
@@ -92,6 +117,8 @@ type AuditEntryDTO struct {
 	IP         string            `json:"ip"`
 	UserAgent  string            `json:"userAgent"`
 	Details    map[string]string `json:"details"`
+	// ActorDeleted is worked out when the entry is read; the entry itself is never rewritten.
+	ActorDeleted bool `json:"actorDeleted" doc:"True when the user behind the entry has since been deleted. The entry itself is unchanged"`
 }
 
 // AuditListBody is one page of the audit log.
@@ -107,10 +134,16 @@ type AuditListOutput struct {
 	Body         AuditListBody
 }
 
+// AuditActorDTO is one actor name the log holds.
+type AuditActorDTO struct {
+	Name    string `json:"name" doc:"The actor's name as recorded"`
+	Deleted bool   `json:"deleted" doc:"True when the user behind the name has since been deleted"`
+}
+
 // AuditActorsOutput lists the actor names seen.
 type AuditActorsOutput struct {
 	CacheControl string `header:"Cache-Control"`
-	Body         []string
+	Body         []AuditActorDTO
 }
 
 // ExportAuditInput is the query of GET /api/audit/export.
@@ -129,14 +162,76 @@ func auditEntryDTO(r audit.Row) AuditEntryDTO {
 		ActorType: r.ActorType, Actor: r.ActorName, Action: r.Action,
 		TargetType: r.TargetType, Target: r.TargetID, Env: env,
 		Result: r.Result, Reason: r.Reason, IP: r.IP, UserAgent: r.UserAgent, Details: r.Details,
+		ActorDeleted: r.ActorDeleted,
 	}
 }
 
+// auditScope works out what the caller may read: everything for an instance admin,
+// otherwise the entries on the environments where they hold environments.audit
+// (Admin), or on every environment for an Admin of all of them. Instance-level
+// events have no environment, so a delegated Admin never reads them. A caller
+// with no such scope is refused with 403 and the refusal is audited with reason
+// no_audit_scope; if it cannot be written the answer is 500, as for any refusal
+// (D-49).
+func auditScope(ctx context.Context, d AuditDeps, route, userAgent string) (audit.Filter, error) {
+	p := httpx.PrincipalFrom(ctx)
+	if p == nil {
+		return audit.Filter{}, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+	}
+	var acc rbac.Access
+	if d.Checker != nil {
+		var err error
+		if acc, err = d.Checker.Access(ctx, p); err != nil {
+			d.Log.Error("audit request failed", "step", "resolve audit scope", "error", err)
+			return audit.Filter{}, huma.Error500InternalServerError("internal error")
+		}
+	}
+	if acc.InstanceAdmin {
+		return audit.Filter{}, nil
+	}
+	perm, _ := rbac.Lookup(rbac.PermEnvironmentsAudit)
+	scope := audit.Filter{Scoped: true}
+	if acc.For("").Allows(perm) {
+		scope.AnyEnv = true
+	}
+	for envID := range acc.Envs {
+		if envID != rbac.AllEnvironments && acc.For(envID).Allows(perm) {
+			scope.Envs = append(scope.Envs, envID)
+		}
+	}
+	if scope.AnyEnv || len(scope.Envs) > 0 {
+		slices.Sort(scope.Envs)
+		return scope, nil
+	}
+	if d.Refusals != nil {
+		if err := d.Refusals.Record(ctx, audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionPermissionDenied, Result: audit.ResultDenied,
+			Reason: reasonNoAuditScope, TargetType: "route", TargetID: route,
+			IP: httpx.ClientIP(ctx), UserAgent: userAgent,
+		}); err != nil {
+			d.Log.Error("could not audit a refused audit read; refusing with 500", "error", err)
+			return audit.Filter{}, huma.Error500InternalServerError("internal error")
+		}
+	}
+	return audit.Filter{}, httpx.Problem(http.StatusForbidden, "", "You do not have permission to do this.")
+}
+
+// scoped adds the caller's scope to the filters they asked for.
+func scoped(ctx context.Context, d AuditDeps, route, userAgent string, f audit.Filter) (audit.Filter, error) {
+	scope, err := auditScope(ctx, d, route, userAgent)
+	if err != nil {
+		return audit.Filter{}, err
+	}
+	f.Scoped, f.Envs, f.AnyEnv = scope.Scoped, scope.Envs, scope.AnyEnv
+	return f, nil
+}
+
 // RegisterAudit registers the audit log routes: the filtered list, the actor
-// list behind the user filter and the CSV or JSON export. All need audit.read,
-// which only the seeded admin holds in Phase 1 (D-43); the policy refuses
-// anyone else with 403 and audits the denial (D-49). Reading the log is not
-// itself audited.
+// list behind the user filter and the CSV or JSON export. They are open to any
+// signed-in user and the handler works out the scope of the caller (D-09): an
+// instance admin reads the whole log, an Admin of environments reads the entries
+// on those environments, and anyone else is refused with 403 and the refusal is
+// audited (D-49). Reading the log is not itself audited.
 func RegisterAudit(r *httpx.Router, d AuditDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
@@ -144,7 +239,9 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	need := rbac.Requirement{Perm: rbac.PermAuditRead, Scope: rbac.ScopeGlobal}
+	// SelfService, like the environment list: the policy only needs a signed-in
+	// caller, and the handler narrows what that caller may read.
+	need := rbac.SelfService
 	fail := func(what string, err error) error {
 		d.Log.Error("audit request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
@@ -158,11 +255,17 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 		Description: "Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an " +
 			"inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated " +
 			"or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. " +
-			"Needs audit.read.",
+			"An instance admin reads every entry. An Admin of one or more environments (environments.audit) reads only the " +
+			"entries on those environments, or on every environment when they are Admin of all of them, never an instance-level " +
+			"event such as a sign-in or a settings change; the scope is applied before paging. Anyone else gets 403, audited as " +
+			"permission.denied with reason no_audit_scope.",
 		Tags: []string{"audit"},
 	}, need, func(ctx context.Context, in *ListAuditInput) (*AuditListOutput, error) {
 		f, err := in.filter()
 		if err != nil {
+			return nil, err
+		}
+		if f, err = scoped(ctx, d, "GET /api/audit", in.UserAgent, f); err != nil {
 			return nil, err
 		}
 		limit := in.Limit
@@ -190,14 +293,24 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 		Method:      http.MethodGet,
 		Path:        "/api/audit/actors",
 		Summary:     "List the actor names in the audit log",
-		Description: "The distinct actor names seen, sorted, at most 200, for the user filter. Needs audit.read.",
-		Tags:        []string{"audit"},
-	}, need, func(ctx context.Context, _ *struct{}) (*AuditActorsOutput, error) {
-		names, err := audit.Actors(ctx, d.Store)
+		Description: "The distinct actor names seen, sorted, at most 200, for the user filter, each marked when the user behind it " +
+			"has been deleted. Under the same scope as the list: an Admin of environments sees only the actors of entries on " +
+			"those environments. 403 as for the list.",
+		Tags: []string{"audit"},
+	}, need, func(ctx context.Context, in *AuditActorsInput) (*AuditActorsOutput, error) {
+		scope, err := auditScope(ctx, d, "GET /api/audit/actors", in.UserAgent)
+		if err != nil {
+			return nil, err
+		}
+		actors, err := audit.Actors(ctx, d.Store, scope)
 		if err != nil {
 			return nil, fail("list actors", err)
 		}
-		return &AuditActorsOutput{CacheControl: "no-store", Body: names}, nil
+		body := make([]AuditActorDTO, len(actors))
+		for i, a := range actors {
+			body[i] = AuditActorDTO{Name: a.Name, Deleted: a.Deleted}
+		}
+		return &AuditActorsOutput{CacheControl: "no-store", Body: body}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -208,7 +321,8 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 		Description: "Streams every entry matching the filters, newest first, as a download named " +
 			"bayplan-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab " +
 			"or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are " +
-			"reads and are not audited. Needs audit.read.",
+			"reads and are not audited. Under the same scope as the list: an Admin of environments exports only the entries on " +
+			"those environments. 403 as for the list.",
 		Tags: []string{"audit"},
 		Responses: map[string]*huma.Response{"200": {
 			Description: "The export",
@@ -221,6 +335,9 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 	}, need, func(ctx context.Context, in *ExportAuditInput) (*huma.StreamResponse, error) {
 		f, err := in.filter()
 		if err != nil {
+			return nil, err
+		}
+		if f, err = scoped(ctx, d, "GET /api/audit/export", in.UserAgent, f); err != nil {
 			return nil, err
 		}
 		contentType, ext, write := "text/csv; charset=utf-8", "csv", audit.ExportCSV

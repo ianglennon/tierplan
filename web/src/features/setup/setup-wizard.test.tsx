@@ -9,12 +9,19 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as outcome from "@/features/backup/restore-outcome";
 import { SetupWizard } from "@/features/setup/setup-wizard";
 import { resetBasePathForTests } from "@/lib/base-path";
 import "@/i18n";
+
+// The poll after the restart is replaced by a promise the test settles.
+vi.mock("@/features/backup/restore-outcome", async (original) => ({
+  ...(await original<typeof import("@/features/backup/restore-outcome")>()),
+  waitForRestoreOutcome: vi.fn(),
+}));
 
 interface Call {
   url: string;
@@ -63,7 +70,7 @@ function stubApi(opts: {
       return (
         opts.complete?.() ??
         Response.json({
-          user: { id: "1", username: "admin", role: "admin" },
+          user: { id: "1", username: "admin", instanceAdmin: true },
           csrfToken: "c",
           instanceName: "Lab",
           publicUrl: "https://b.example",
@@ -401,7 +408,7 @@ describe("SetupWizard", () => {
 
     release(
       Response.json({
-        user: { id: "1", username: "admin", role: "admin" },
+        user: { id: "1", username: "admin", instanceAdmin: true },
         csrfToken: "c",
         instanceName: "Lab",
         publicUrl: "https://b.example",
@@ -409,5 +416,312 @@ describe("SetupWizard", () => {
       }),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/welcome"));
+  });
+});
+
+// The wizard's restore branch (D-30, path 1).
+describe("SetupWizard restore branch", () => {
+  const SUMMARY = {
+    appVersion: "v0.1.0",
+    chainVerified: true,
+    counts: { users: 2, teams: 1, environments: 3, auditEntries: 40 },
+    created: "2026-10-07T10:30:00Z",
+    instanceName: "Old lab",
+    older: false,
+    publicUrl: "",
+    publicUrlDiffers: false,
+    schema: 12,
+  };
+  const BACKUP_PASS = "correct horse battery";
+  const file = () => new File(["bytes"], "lab.bayplan");
+
+  interface Seen {
+    method: string;
+    path: string;
+    token: string | null;
+    body: unknown;
+    csrf: string | null;
+  }
+  let seen: Seen[];
+  let answers: Record<string, () => Response | Promise<Response>>;
+
+  beforeEach(() => {
+    seen = [];
+    answers = {
+      "/api/setup/token": () =>
+        Response.json({ defaultInstanceName: "lab-box", publicUrl: "", publicUrlLocked: false }),
+      "/api/setup/restore/upload": () =>
+        Response.json({ uploadId: "up-1", size: 5, expiresAt: "x" }, { status: 201 }),
+      "/api/setup/restore/check": () => Response.json(SUMMARY),
+      "/api/setup/restore/apply": () => Response.json({ restarting: true }, { status: 202 }),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (typeof input === "string") {
+          const path = new URL(input, window.location.origin).pathname;
+          const headers = new Headers(init?.headers);
+          const method = init?.method ?? "GET";
+          seen.push({
+            method,
+            path,
+            token: headers.get("X-Setup-Token"),
+            body: init?.body,
+            csrf: headers.get("X-CSRF-Token"),
+          });
+          const answer = answers[`${method} ${path}`] ?? answers[path];
+          return (answer ?? (() => Response.json({}, { status: 404 })))();
+        }
+        const req = input as Request;
+        const path = new URL(req.url).pathname;
+        seen.push({
+          method: req.method,
+          path,
+          token: req.headers.get("X-Setup-Token"),
+          body: await req.clone().json(),
+          csrf: req.headers.get("X-CSRF-Token"),
+        });
+        return (answers[path] ?? (() => Response.json({}, { status: 404 })))();
+      }),
+    );
+    vi.mocked(outcome.waitForRestoreOutcome).mockReset();
+  });
+
+  async function renderRestoreWizard() {
+    const root = createRootRoute({ component: SetupWizard });
+    const home = createRoute({ getParentRoute: () => root, path: "/" });
+    const setup = createRoute({ getParentRoute: () => root, path: "/setup" });
+    const login = createRoute({ getParentRoute: () => root, path: "/login" });
+    const router = createRouter({
+      routeTree: root.addChildren([home, setup, login]),
+      history: createMemoryHistory({ initialEntries: ["/setup"] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("Step 1 of 4");
+    return { router };
+  }
+
+  async function openRestore() {
+    const view = await renderRestoreWizard();
+    await passToken();
+    fireEvent.click(screen.getByRole("button", { name: "Restore from a backup" }));
+    await screen.findByRole("heading", { name: "Restore from a backup" });
+    return view;
+  }
+
+  function chooseAndCheck() {
+    fireEvent.change(field("Backup file"), { target: { files: [file()] } });
+    fireEvent.change(field("Passphrase"), { target: { value: BACKUP_PASS } });
+    click("Check backup");
+  }
+
+  it("offers 'Restoring an existing Bayplan? Restore from a backup' under the admin form, the last words a link", async () => {
+    stubApi({});
+    await renderRestoreWizard();
+    await passToken();
+    const link = screen.getByRole("button", { name: "Restore from a backup" });
+    expect(link.closest("p")?.textContent).toBe(
+      "Restoring an existing Bayplan? Restore from a backup",
+    );
+    expect(link.textContent).toBe("Restore from a backup");
+    expect(screen.queryByText("Restoring an existing Bayplan?")).not.toBeNull();
+  });
+
+  it("switches step 2 to the restore form without leaving the route, reading Step 2 of 2", async () => {
+    const { router } = await openRestore();
+    expect(router.state.location.pathname).toBe("/setup");
+    expect(screen.getByText("Step 2 of 2")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Upload a backup file and enter its passphrase. Bayplan checks it before changing anything.",
+      ),
+    ).toBeTruthy();
+    expect(field("Backup file")).toBeTruthy();
+    expect(field("Passphrase")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Check backup" })).toBeTruthy();
+    // The admin form is gone while the restore form shows.
+    expect(screen.queryByLabelText("Username")).toBeNull();
+  });
+
+  it("goes Back to the admin form with the values typed there still in place", async () => {
+    await renderRestoreWizard();
+    await passToken();
+    type("Username", "Admin");
+    type("Password", PASSWORD);
+    fireEvent.click(screen.getByRole("button", { name: "Restore from a backup" }));
+    await screen.findByRole("heading", { name: "Restore from a backup" });
+    click("Back");
+    await screen.findByText("Create the admin account");
+    expect(screen.getByText("Step 2 of 4")).toBeTruthy();
+    expect(field("Username").value).toBe("Admin");
+    expect(field("Password").value).toBe(PASSWORD);
+  });
+
+  it("uploads with the setup token in a header, checks with it in the body, and shows the summary with Restore backup as the primary action", async () => {
+    await openRestore();
+    expect(seen.filter((s) => s.path.includes("/restore/"))).toHaveLength(0);
+    chooseAndCheck();
+    await screen.findByText("What's in this backup");
+
+    const upload = seen.find((s) => s.path === "/api/setup/restore/upload");
+    expect(upload?.token).toBe("tok-123");
+    expect(upload?.csrf).toBeNull();
+    expect(seen.find((s) => s.path === "/api/setup/restore/check")?.body).toEqual({
+      uploadId: "up-1",
+      passphrase: BACKUP_PASS,
+      setupToken: "tok-123",
+    });
+    expect(screen.getByText("From Old lab")).toBeTruthy();
+    expect(screen.getByText("2 users, 1 team, 3 environments, 40 audit entries")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose another file" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restore backup" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Check backup" })).toBeNull();
+    // A fresh install has nothing to lose: no type-to-confirm.
+    expect(screen.queryByLabelText(/^Type .* to confirm$/)).toBeNull();
+  });
+
+  it("restores on one press: waits for the restart, then goes to /login with the restored notice", async () => {
+    let settle: (o: outcome.RestoreOutcome) => void = () => {};
+    vi.mocked(outcome.waitForRestoreOutcome).mockImplementation(
+      () => new Promise((resolve) => (settle = resolve)),
+    );
+    const { router } = await openRestore();
+    chooseAndCheck();
+    await screen.findByText("What's in this backup");
+    click("Restore backup");
+
+    const status = await screen.findByRole("status");
+    expect(within(status).getByText("Restoring…")).toBeTruthy();
+    expect(seen.find((s) => s.path === "/api/setup/restore/apply")?.body).toEqual({
+      uploadId: "up-1",
+      passphrase: BACKUP_PASS,
+      setupToken: "tok-123",
+    });
+
+    settle("restored");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    expect(router.state.location.search).toEqual({ notice: "backup-restored" });
+  });
+
+  it("shows the same messages as the Backup page for a bad backup, and keeps the form", async () => {
+    answers["/api/setup/restore/check"] = () =>
+      problem(422, { type: "backup_unreadable", detail: "x" });
+    await openRestore();
+    chooseAndCheck();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Couldn't open this backup. Check the passphrase, and that the file isn't damaged.",
+    );
+    expect(field("Backup file")).toBeTruthy();
+    expect(screen.getByText("Step 2 of 2")).toBeTruthy();
+  });
+
+  it("reads any 413 as a cut-off upload", async () => {
+    answers["/api/setup/restore/upload"] = () => new Response("too big", { status: 413 });
+    await openRestore();
+    chooseAndCheck();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "The upload was cut off. If Bayplan runs behind a reverse proxy, check its upload size limit.",
+    );
+  });
+
+  it("says there were too many attempts when the wizard's check or restore is rate limited", async () => {
+    answers["/api/setup/restore/check"] = () => problem(429, { type: "rate_limited", detail: "x" });
+    await openRestore();
+    chooseAndCheck();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Too many attempts. Wait a minute and try again.",
+    );
+
+    answers["/api/setup/restore/check"] = () => Response.json(SUMMARY);
+    answers["/api/setup/restore/apply"] = () => problem(429, { type: "rate_limited", detail: "x" });
+    click("Check backup");
+    await screen.findByText("What's in this backup");
+    click("Restore backup");
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe(
+        "The restore didn't finish and nothing was changed. Too many attempts. Wait a minute and try again.",
+      ),
+    );
+  });
+
+  it("treats a 409 setup_complete as setup already done and leaves the wizard", async () => {
+    answers["/api/setup/restore/upload"] = () => problem(409, { type: "setup_complete" });
+    const { router } = await openRestore();
+    chooseAndCheck();
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+  });
+
+  it("says nothing was changed, with the server's reason, when apply is refused", async () => {
+    answers["/api/setup/restore/apply"] = () =>
+      problem(500, { type: "internal", detail: "The database could not be prepared." });
+    await openRestore();
+    chooseAndCheck();
+    await screen.findByText("What's in this backup");
+    click("Restore backup");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The restore didn't finish and nothing was changed.");
+    expect(alert.textContent).toContain("The database could not be prepared.");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("says Bayplan went back to the snapshot when it came back still asking for setup", async () => {
+    vi.mocked(outcome.waitForRestoreOutcome).mockResolvedValue("rolled_back");
+    const { router } = await openRestore();
+    chooseAndCheck();
+    await screen.findByText("What's in this backup");
+    click("Restore backup");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("The restore failed and Bayplan went back to the snapshot.");
+    expect(router.state.location.pathname).toBe("/setup");
+  });
+
+  it("holds the setup token and the passphrase in memory only", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    await openRestore();
+    chooseAndCheck();
+    await screen.findByText("What's in this backup");
+    expect(setItem).not.toHaveBeenCalled();
+    expect(window.location.href).not.toContain("tok-123");
+    expect(window.location.href).not.toContain(BACKUP_PASS);
+    for (const s of seen) expect(s.path).not.toContain("tok-123");
+  });
+
+  it("clears the file and passphrase on Choose another file", async () => {
+    await openRestore();
+    chooseAndCheck();
+    await screen.findByText("What's in this backup");
+    click("Choose another file");
+    expect(field("Passphrase").value).toBe("");
+    expect(screen.getByText("No file chosen")).toBeTruthy();
+  });
+
+  it("discards the staged upload with the setup token when the file is given up, ignoring a 404", async () => {
+    answers["DELETE /api/setup/restore/upload"] = () => problem(404, { type: "not_found" });
+    await openRestore();
+    chooseAndCheck();
+    await screen.findByText("What's in this backup");
+    expect(seen.filter((s) => s.method === "DELETE")).toHaveLength(0);
+    click("Choose another file");
+    await waitFor(() => expect(seen.filter((s) => s.method === "DELETE")).toHaveLength(1));
+    const discard = seen.find((s) => s.method === "DELETE");
+    expect(discard?.path).toBe("/api/setup/restore/upload");
+    expect(discard?.token).toBe("tok-123");
+    expect(field("Passphrase").value).toBe("");
+  });
+
+  it("discards the staged upload when the wizard's check fails", async () => {
+    answers["/api/setup/restore/check"] = () =>
+      problem(422, { type: "backup_unreadable", detail: "x" });
+    await openRestore();
+    chooseAndCheck();
+    await screen.findByRole("alert");
+    await waitFor(() => expect(seen.filter((s) => s.method === "DELETE")).toHaveLength(1));
   });
 });

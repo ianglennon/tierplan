@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,19 +17,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/privdrop"
 	"github.com/ianglennon/bayplan/internal/server"
 )
 
 func main() {
 	if err := newRoot().Execute(); err != nil {
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 
@@ -67,6 +66,10 @@ func newRoot() *cobra.Command {
 		newAuditCmd(),
 		newSetupTokenCmd(),
 		newUserCmd(),
+		newBackupCmd(),
+		newRestoreCmd(),
+		newKeyCmd(),
+		newPermissionsCmd(),
 		&cobra.Command{
 			Use:   "healthcheck",
 			Short: "Exit 0 if the local server answers /healthz, else 1 (for the container HEALTHCHECK)",
@@ -106,7 +109,7 @@ func loadConfig(cmd *cobra.Command) (config.Config, error) {
 // writeOpenAPI needs no configuration, data directory or socket: it builds the
 // router with no dependencies.
 func writeOpenAPI(w io.Writer) error {
-	doc, err := json.MarshalIndent(server.NewRouter(httpx.Options{}, api.SystemDeps{}, api.SetupDeps{}, api.AuthDeps{}, api.AccountDeps{}, api.LocalHostDeps{}, api.EnvironmentsDeps{}, api.AgentsDeps{}, api.DashboardDeps{}, api.EventsDeps{}, api.EnvStreamDeps{}, api.RecentDeps{}, api.AuditDeps{}, api.SettingsDeps{}, nil).API().OpenAPI(), "", "  ")
+	doc, err := json.MarshalIndent(server.NewRouter(server.RouterDeps{}).API().OpenAPI(), "", "  ")
 	if err != nil {
 		return err
 	}
@@ -118,7 +121,7 @@ func writeOpenAPI(w io.Writer) error {
 // drop privileges, but Drop neither creates nor chowns /data for them. The
 // healthcheck is among them: the image runs it as root every 30 seconds, and
 // it only probes /healthz (WR-08).
-var noDataDir = map[string]bool{"version": true, "openapi": true, "help": true, "completion": true, "healthcheck": true}
+var noDataDir = map[string]bool{"version": true, "openapi": true, "permissions": true, "help": true, "completion": true, "healthcheck": true}
 
 // dropPrivileges reads Bayplan's own container ID and then, when started as
 // root, joins the Docker socket's group, fixes /data and becomes UID and GID
@@ -169,5 +172,18 @@ func runServe(cmd *cobra.Command, selfID string) error {
 	if err != nil {
 		return err
 	}
-	return srv.Run(ctx)
+	return finishRun(srv.Run(ctx), cfg.RestoreRestart)
+}
+
+// finishRun turns what Run returned into the process's end. A restore asks for a
+// restart by returning a *server.RestartError: the swap runs here, with the
+// database closed and the data-directory lock still held, and then the process is
+// replaced by a new Bayplan ("exec") or ends with status 0 ("exit"), leaving the
+// start to the container's restart policy.
+func finishRun(err error, mode string) error {
+	var re *server.RestartError
+	if errors.As(err, &re) {
+		return server.Restart(mode, re.Request)
+	}
+	return err
 }

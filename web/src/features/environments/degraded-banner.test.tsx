@@ -16,6 +16,7 @@ import { setCsrfToken } from "@/api/client";
 import type { EnvironmentItem } from "@/api/environments";
 import { EnvDegradedBanner } from "@/features/environments/degraded-banner";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 
 type Issue = { code: string; node?: string; since?: string };
@@ -51,16 +52,16 @@ const MIXED: Issue[] = [
 
 let permissions: { global: string[]; environments: Record<string, string[]> };
 
+// A signed-in user built by role, for a test about who holds a role on the environment.
+let account: ReturnType<typeof makeMe> | undefined;
+
 function me() {
-  return {
-    user: { id: "u1", username: "admin", role: "admin" },
-    csrfToken: "csrf-1",
-    permissions,
-  };
+  return account ?? makeMe({ instanceAdmin: true, permissions });
 }
 
 beforeEach(() => {
   setCsrfToken(null);
+  account = undefined;
   permissions = { global: [], environments: { "*": ["environments.read"] } };
   vi.stubGlobal(
     "fetch",
@@ -144,20 +145,30 @@ describe("EnvDegradedBanner", () => {
     expect(screen.queryByText(/more issue/)).toBeNull();
   });
 
-  it("links View nodes to the environment's settings for environments.manage", async () => {
-    permissions = splitPermissions(["environments.read", "environments.manage"]);
+  it("links View nodes to the environment's settings for environments.configure on it", async () => {
+    permissions = splitPermissions(["environments.read", "environments.configure"]);
     await mount(degraded(MIXED));
     const link = await screen.findByRole("link", { name: "View nodes" });
     expect(link.getAttribute("href")).toBe("/settings/environments/e1");
   });
 
-  it("links View nodes for a settings.read holder too", async () => {
-    permissions = { global: ["settings.read"], environments: { "*": ["environments.read"] } };
+  it("links View nodes for an env Admin of that environment, and not for a Viewer of it or an Admin of another", async () => {
+    account = makeMe({ envs: { e1: "admin" } });
     await mount(degraded(MIXED));
     expect(await screen.findByRole("link", { name: "View nodes" })).toBeTruthy();
+    cleanup();
+
+    for (const other of [makeMe({ envs: { e1: "viewer" } }), makeMe({ envs: { e9: "admin" } })]) {
+      account = other;
+      await mount(degraded(MIXED));
+      await screen.findByRole("alert");
+      await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+      expect(screen.queryByRole("link", { name: "View nodes" })).toBeNull();
+      cleanup();
+    }
   });
 
-  it("leaves View nodes out without either permission", async () => {
+  it("leaves View nodes out without environments.configure", async () => {
     await mount(degraded(MIXED));
     await screen.findByRole("alert");
     // The permission read has to settle before the absence means anything.

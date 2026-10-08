@@ -179,6 +179,9 @@ type Service struct {
 	// can skip all but one write a minute.
 	seenMu sync.Mutex
 	seen   map[string]time.Time
+
+	// unknown is the agents refused unknown_agent lately (D-31).
+	unknown *UnknownAgents
 }
 
 // NewService returns the service. now defaults to time.Now.
@@ -186,8 +189,12 @@ func NewService(st *store.Store, v *vault.Vault, w *audit.Writer, now func() tim
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{st: st, v: v, aud: w, now: now, seen: map[string]time.Time{}}
+	return &Service{st: st, v: v, aud: w, now: now, seen: map[string]time.Time{}, unknown: NewUnknownAgents()}
 }
+
+// Unknown is the list of agents refused unknown_agent, which the Settings page and
+// the bell show to instance admins (D-31).
+func (s *Service) Unknown() *UnknownAgents { return s.unknown }
 
 // WithKicker tells the service who closes sessions after a revoke. Without one a
 // revoke still commits and is honoured at the next hello. Call it before the
@@ -565,6 +572,8 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	if err := tx.Commit(); err != nil {
 		return tunnel.EnrolResult{}, fmt.Errorf("commit: %w", err)
 	}
+	// An agent listed as unknown that has now enrolled with the same key is known.
+	s.unknown.Forget(envID, KeyFingerprint(req.Pub))
 	return tunnel.EnrolResult{AgentID: agentID, EnvID: envID, Cert: leaf.DER, NotAfter: leaf.NotAfter}, nil
 }
 
@@ -1179,7 +1188,22 @@ func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.He
 	row, err := s.st.RQ.GetAgent(ctx, agentID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return tunnel.HelloResult{}, reject("unknown_agent")
+		// The certificate is this environment's own and the agent is not in the
+		// database: it was enrolled after the backup this server was restored from
+		// (D-31). Only a holder of the certificate's key is told so, and only that
+		// holder is listed for an administrator; anyone else gets the uniform
+		// auth_rejected (T-03-115).
+		if !authn.Verify(pub, req.Transcript, req.Sig) {
+			return tunnel.HelloResult{}, reject("bad_signature")
+		}
+		s.unknown.Record(UnknownAgent{
+			EnvID: envID, Node: cleanName(agentID), IP: req.IP, LastAttempt: s.now().UTC(), Key: KeyFingerprint(pub),
+		})
+		return tunnel.HelloResult{}, &tunnel.Refusal{
+			Code:        wire.ReasonUnknownAgent,
+			Detail:      "this agent was enrolled after the backup this Bayplan was restored from",
+			AuditReason: wire.ReasonUnknownAgent,
+		}
 	case err != nil:
 		return tunnel.HelloResult{}, fmt.Errorf("load the agent: %w", err)
 	}

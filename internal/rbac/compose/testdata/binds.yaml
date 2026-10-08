@@ -1,0 +1,41 @@
+services:
+  app:
+    image: example/app:1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /run/docker.sock:/run/docker.sock:ro
+      - "//./pipe/docker_engine://./pipe/docker_engine"
+      - /:/host
+      - /var:/v
+      - /var/run:/vr
+      - /run:/r
+      - /etc/ssl:/ssl:ro
+      - /proc:/p
+      - /sys/fs:/s
+      - /dev:/d
+      - /boot:/b
+      - /root/.ssh:/ssh
+      - /var/lib/docker/volumes:/vols
+      - /etc/../etc/passwd:/pw
+      - /var/run/:/vr2
+      - /home/me/docker.sock:/sock
+      - ./data:/data
+      - ../shared:/shared
+      - /srv/app:/srv/app
+      - /var/log/app:/logs
+      - data:/data2
+      - /anonymous
+      - type: bind
+        source: /var/run/docker.sock
+        target: /sock
+      - type: bind
+        source: /etc
+        target: /hostetc
+      - type: bind
+        source: /srv/ok
+        target: /ok
+      - type: volume
+        source: named
+        target: /named
+      - type: tmpfs
+        target: /tmp

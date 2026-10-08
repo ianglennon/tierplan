@@ -133,8 +133,9 @@ func StillAuthorized(ctx context.Context) bool {
 	return fn(ctx)
 }
 
-// recheck builds the closure Guarded stores for StillAuthorized: the same three
-// checks authorize makes, for this principal, requirement and environment.
+// recheck builds the closure Guarded stores for StillAuthorized: the same checks
+// authorize makes, in the same order (session, visibility, environment, then
+// permission), for this principal, requirement and environment.
 func (r *Router) recheck(route string, p *rbac.Principal, need rbac.Requirement, envID string) func(context.Context) bool {
 	return func(ctx context.Context) bool {
 		deny := func(why string, err error) bool {
@@ -149,14 +150,23 @@ func (r *Router) recheck(route string, p *rbac.Principal, need rbac.Requirement,
 				return deny("session", err)
 			}
 		}
+		if r.opts.Checker == nil {
+			return deny("no checker", nil)
+		}
 		if need.Perm != "" && need.Scope == rbac.ScopeEnvironment {
+			// The same order as authorize (D-08): a user whose last grant on the
+			// environment is gone no longer sees it, so the stream ends before the
+			// environment is even looked up (D-10).
+			if p.Type == rbac.PrincipalUser {
+				ea, err := r.opts.Checker.EnvAccess(ctx, p, envID)
+				if err != nil || ea.Role == rbac.RoleNone {
+					return deny("visibility", err)
+				}
+			}
 			e, err := r.opts.EnvResolver.Resolve(ctx, envID)
 			if err != nil || !e.Enabled {
 				return deny("environment", ignoreEnvState(err))
 			}
-		}
-		if r.opts.Checker == nil {
-			return deny("no checker", nil)
 		}
 		d := r.opts.Checker.Check(ctx, p, need, envID)
 		if d.Err != nil || !d.Allowed {
@@ -243,7 +253,14 @@ const (
 const (
 	reasonOriginMismatch = "origin_mismatch"
 	reasonCSRF           = "csrf"
+	// reasonEnvNotVisible is audited when a signed-in caller with no grant on an
+	// environment asks for it and is answered 404 (D-08).
+	reasonEnvNotVisible = "environment_not_visible"
 )
+
+// detailEnvNotFound is the one detail string an unseen and a missing environment
+// share, so the two answers are byte-identical.
+const detailEnvNotFound = "environment not found"
 
 // envPathPrefix is where D-48 puts environment-scoped routes.
 const envPathPrefix = "/api/env/{envId}"
@@ -408,13 +425,20 @@ func (r *Router) originOK(req *http.Request) (ok bool, got, want string) {
 
 // authorize is the one policy gate every route passes through. In order it
 // authenticates, applies the Origin guard and MutationGuard to mutations,
-// answers 401 to an anonymous caller of a protected route, resolves the
-// environment for environment-scoped routes, and asks the Checker. It writes
-// the response itself when the request must not proceed and reports ok=false.
+// answers 401 to an anonymous caller of a protected route, and then, for an
+// environment-scoped route, decides visibility from the caller's grants alone
+// (D-08): a user with no grant on the environment is answered 404
+// environment_not_found, the same answer as for an ID that does not exist, and is
+// audited as permission.denied with reason environment_not_visible. Only a
+// caller who can see the environment learns whether it exists and is enabled (404
+// for a gone one, 409 for a disabled one, D-48 as narrowed by D-08); then the
+// Checker is asked and a role that is too low is answered 403. It writes the
+// response itself when the request must not proceed and reports ok=false.
 //
-// Denials (401, 403) are audited as permission.denied (D-49); if that write
-// fails the answer is 500 and the request is still refused. Allowed requests
-// are not audited here: allowed mutations are audited by their handlers.
+// Denials (401, 403, and the 404 for an unseen environment) are audited as
+// permission.denied (D-49); if that write fails the answer is 500 and the request
+// is still refused. Allowed requests are not audited here: allowed mutations are
+// audited by their handlers.
 func (r *Router) authorize(w http.ResponseWriter, req *http.Request, need rbac.Requirement, envID string) (*rbac.Principal, *Env, bool) {
 	ctx := req.Context()
 
@@ -458,10 +482,30 @@ func (r *Router) authorize(w http.ResponseWriter, req *http.Request, need rbac.R
 
 	var env *Env
 	if need.Perm != "" && need.Scope == rbac.ScopeEnvironment {
+		// Visibility comes from the grant alone and is decided before any lookup,
+		// so a caller cannot tell an environment they have no grant on from one
+		// that does not exist (D-08). System principals hold no environment grants
+		// and fall through to the Checker.
+		if p.Type == rbac.PrincipalUser {
+			if r.opts.Checker == nil {
+				r.deny(w, req, p, http.StatusForbidden, "", rbac.ReasonForbidden, envID, "You do not have permission to do this.")
+				return nil, nil, false
+			}
+			ea, err := r.opts.Checker.EnvAccess(ctx, p, envID)
+			if err != nil {
+				r.opts.Logger.Error("permission check failed", "error", err)
+				writeProblem(w, http.StatusInternalServerError, "internal error")
+				return nil, nil, false
+			}
+			if ea.Role == rbac.RoleNone {
+				r.deny(w, req, p, http.StatusNotFound, problemEnvNotFound, reasonEnvNotVisible, envID, detailEnvNotFound)
+				return nil, nil, false
+			}
+		}
 		e, err := r.opts.EnvResolver.Resolve(ctx, envID)
 		switch {
 		case errors.Is(err, ErrEnvNotFound):
-			writeProblemType(w, http.StatusNotFound, problemEnvNotFound, "environment not found")
+			writeProblemType(w, http.StatusNotFound, problemEnvNotFound, detailEnvNotFound)
 			return nil, nil, false
 		case errors.Is(err, ErrEnvDisabled) || (err == nil && !e.Enabled):
 			writeProblemType(w, http.StatusConflict, problemEnvDisabled, "environment is disabled")
@@ -501,6 +545,18 @@ func (r *Router) publicOrigin() string {
 	return r.opts.PublicOrigin()
 }
 
+// maxAuditedEnvID is how much of a path's environment ID a refusal records. The
+// ID is whatever the caller put in the URL, so it is cut before it reaches the
+// audit pipeline's keys and queues; audit.Writer cuts to the same size.
+const maxAuditedEnvID = 128
+
+func truncateEnvID(id string) string {
+	if len(id) > maxAuditedEnvID {
+		return id[:maxAuditedEnvID]
+	}
+	return id
+}
+
 // deny writes the refusal and records it. Without an Auditor (the openapi
 // subcommand, which serves nothing) the denial is still written. With one, a
 // failed write turns the response into a 500: a refusal nobody can see is not
@@ -522,7 +578,7 @@ func (r *Router) deny(w http.ResponseWriter, req *http.Request, p *rbac.Principa
 			Reason:     reason,
 			TargetType: "route",
 			TargetID:   req.Method + " " + pattern,
-			EnvID:      envID,
+			EnvID:      truncateEnvID(envID),
 			IP:         ClientIP(req.Context()),
 			UserAgent:  req.UserAgent(),
 		})

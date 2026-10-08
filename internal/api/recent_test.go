@@ -6,9 +6,12 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/ianglennon/bayplan/internal/audit"
 )
 
 // The per-user last-used record (plan 02-12, ENV-06, D-31): kept on the server so it
@@ -195,5 +198,73 @@ func TestRecentEnvironmentsNeedASession(t *testing.T) {
 		if rec := f.call(t, c); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s without a session = %d, want 401", c.method, c.path, rec.Code)
 		}
+	}
+}
+
+// D-08 says the 404 for an environment the caller cannot see is still audited as a
+// refusal. The policy gate does that on every /api/env route; this route is
+// self-service, so it has to do it itself (T-03-19).
+
+// deniedRows reads the permission.denied entries with the environment they name.
+func (f *agentFix) deniedRows(t *testing.T) []struct{ Actor, Target, Reason, Env string } {
+	t.Helper()
+	rows, err := f.st.Read.Query(`SELECT actor_id, target_id, reason, COALESCE(env_id, '') FROM audit_log WHERE action = ? ORDER BY seq`,
+		audit.ActionPermissionDenied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []struct{ Actor, Target, Reason, Env string }
+	for rows.Next() {
+		var r struct{ Actor, Target, Reason, Env string }
+		if err := rows.Scan(&r.Actor, &r.Target, &r.Reason, &r.Env); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestRecentUsingAnEnvironmentTheCallerCannotSeeIsAuditedAsPermissionDeniedLikeThePolicyGate(t *testing.T) {
+	f := newAgentFix(t)
+	secret := f.srv.NewEnvironment(t, "Secret").ID
+	f.addUser(t, "nobody", false)
+	cookie, csrf := f.signIn(t, "nobody", false)
+	put := func(id string) *httptest.ResponseRecorder {
+		return f.call(t, authReq{method: http.MethodPut, path: "/api/me/recent-environments/" + id, cookie: cookie, csrf: csrf})
+	}
+	const missing = "00000000-0000-7000-8000-000000000000"
+
+	for _, id := range []string{secret, missing} {
+		if rec := put(id); rec.Code != http.StatusNotFound {
+			t.Fatalf("PUT %s = %d %s, want 404", id, rec.Code, rec.Body)
+		}
+	}
+	got := f.deniedRows(t)
+	if len(got) != 2 {
+		t.Fatalf("permission.denied entries = %+v, want one for the hidden environment and one for the unknown ID", got)
+	}
+	for i, id := range []string{secret, missing} {
+		want := struct{ Actor, Target, Reason, Env string }{
+			"id-nobody", "PUT /api/me/recent-environments/{envId}", "environment_not_visible", id,
+		}
+		if got[i] != want {
+			t.Errorf("entry %d = %+v, want %+v", i, got[i], want)
+		}
+	}
+}
+
+func TestRecentAnEnvironmentTheCallerMayReadButIsGoneIsNotAuditedAsARefusal(t *testing.T) {
+	f := newAgentFix(t)
+	// The administrator may read every environment, so an unknown ID is a plain
+	// 404, which the policy gate does not audit either.
+	if rec := f.use(t, "00000000-0000-7000-8000-000000000000"); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Fatalf("PUT = %d %s (%s), want 404 environment_not_found", rec.code, rec.body, rec.ptyp)
+	}
+	if got := f.deniedRows(t); len(got) != 0 {
+		t.Fatalf("permission.denied entries = %+v, want none", got)
 	}
 }

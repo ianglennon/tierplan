@@ -37,6 +37,11 @@
         "text": "The agent's certificate expired before it could renew.",
         "hint": "Reinstall the agent with a fresh join token. It enrols again with a new certificate."
       },
+      "unknown_agent": {
+        "text": "{{node}} was installed after the last backup.",
+        "textGeneric": "An agent was installed after the last backup.",
+        "hint": "Reinstall the agent with the command from Show install command."
+      },
       "cert_expiring": {
         "text": "The agent's certificate on {{node}} is about to expire.",
         "textGeneric": "An agent certificate is about to expire.",

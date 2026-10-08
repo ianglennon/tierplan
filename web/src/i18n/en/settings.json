@@ -5,6 +5,8 @@
     "tabs": {
       "general": "General",
       "environments": "Environments",
+      "access": "Access",
+      "backup": "Backup",
       "about": "About"
     },
     "saved": "Settings saved.",

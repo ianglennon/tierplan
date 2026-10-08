@@ -1,0 +1,128 @@
+{
+  "grants": {
+    "role": {
+      "admin": {
+        "label": "Admin",
+        "description": "Everything an Operator can do, plus create and delete stacks, networks, volumes, secrets and configs, manage nodes and agents, and give access on this environment. Includes every extra permission."
+      },
+      "operator": {
+        "label": "Operator",
+        "description": "Day-to-day operations. Deploy, update and redeploy stacks, start, stop, restart and scale, and pull images."
+      },
+      "viewer": {
+        "label": "Viewer",
+        "description": "Read only. See everything and read logs. Environment variable values stay hidden."
+      },
+      "none": "No access",
+      "pickerLabel": "Role"
+    },
+    "extra": {
+      "legend": "Extra permissions",
+      "helper": "Not part of the role. Each one is granted on its own.",
+      "none": "None",
+      "adminNote": "Included with Admin.",
+      "viewerNote": "Viewers are read only, so they can't hold extra permissions.",
+      "containerShell": {
+        "label": "Container shell",
+        "description": "Open a terminal inside containers."
+      },
+      "revealSecrets": {
+        "label": "Reveal secrets",
+        "description": "Show the values of secrets and hidden environment variables."
+      },
+      "deleteVolumes": {
+        "label": "Delete volumes",
+        "description": "Delete volumes and the data in them."
+      },
+      "janitorPolicy": {
+        "label": "Change janitor policy",
+        "description": "Change what the janitor cleans up and when."
+      }
+    },
+    "scope": {
+      "all": "All environments",
+      "allDescription": "Applies to every environment, including ones you add later."
+    },
+    "source": {
+      "label": "Comes from",
+      "list": "Where the access comes from",
+      "instance": "Instance admin",
+      "all": "All environments",
+      "team": "Team {{name}}",
+      "direct": "Direct",
+      "teamLink": "Open team {{name}}"
+    },
+    "card": {
+      "title": "Access",
+      "teamTitle": "Access",
+      "caption": "What {{username}} can do on each environment, and why.",
+      "teamCaption": "What members of {{team}} get on each environment.",
+      "loading": "Loading access",
+      "loadFailed": "Couldn't load access.",
+      "loadFailedBody": "Check the connection and try again.",
+      "retry": "Retry",
+      "add": "Add access",
+      "empty": "{{username}} has no access to any environment.",
+      "teamEmpty": "{{team}} has no access to any environment yet.",
+      "effectiveLabel": "Access of {{username}} by environment",
+      "columns": {
+        "environment": "Environment",
+        "role": "Role",
+        "extras": "Extra permissions",
+        "source": "Comes from",
+        "actions": "Actions"
+      },
+      "inherited": "Inherited",
+      "adminSummary": "Admin on every environment, with every extra permission",
+      "direct": {
+        "title": "Direct access",
+        "teamTitle": "Grants",
+        "label": "Direct access of {{subject}}",
+        "empty": "No direct access.",
+        "actionsFor": "Actions for {{environment}}",
+        "edit": "Edit",
+        "remove": "Remove access…"
+      },
+      "comesFromTeam": "Comes from Team {{name}}"
+    },
+    "dialog": {
+      "addTitle": "Add access",
+      "editTitle": "Edit access",
+      "addBody": "Give {{subject}} a role on an environment.",
+      "editBody": "Change what {{subject}} can do on {{environment}}.",
+      "who": "Who",
+      "environment": "Environment",
+      "environmentPlaceholder": "Choose an environment",
+      "environmentLoading": "Loading environments",
+      "environmentsFailed": "Couldn't load the environments. Close this and try again.",
+      "noEnvironments": "There are no environments to give access to yet.",
+      "existing": "{{subject}} already has {{role}} here. Saving replaces it.",
+      "cancel": "Cancel",
+      "add": "Add access",
+      "save": "Save access",
+      "pending": "Saving…",
+      "saved": "Access saved.",
+      "errors": {
+        "viewerExtras": "Viewers can't have extra permissions.",
+        "forbidden": "You can't give that access.",
+        "stale": "This changed while you were looking at it. Reload the page and try again.",
+        "gone": "That person, team or environment no longer exists. Reload the page and try again.",
+        "generic": "Couldn't save access. Try again."
+      }
+    },
+    "remove": {
+      "title": "Remove access?",
+      "body": "{{subject}} loses {{role}} on {{environment}}.",
+      "ownAdmin": "You will lose access to manage {{environment}}.",
+      "cancel": "Cancel",
+      "confirm": "Remove access",
+      "pending": "Removing…",
+      "done": "Access removed.",
+      "gone": "That access was already removed. The list is up to date now.",
+      "failed": "Couldn't remove access. Try again."
+    },
+    "setup": {
+      "button": "Set up access"
+    }
+  }
+}

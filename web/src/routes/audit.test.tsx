@@ -10,17 +10,16 @@ import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
-const ADMIN = {
-  user: { id: "u1", username: "admin", role: "admin" },
-  csrfToken: "csrf-1",
+const ADMIN = makeMe({
+  instanceAdmin: true,
   permissions: { global: ["audit.read", "settings.read"], environments: {} },
-};
-const VIEWER = {
-  user: { id: "u2", username: "viewer", role: "" },
-  csrfToken: "csrf-1",
-  permissions: { global: [], environments: {} },
-};
+});
+const VIEWER = makeMe({ permissions: { global: [], environments: {} } });
+// An env Admin of e1 holds environments.audit there and nothing installation-wide (D-09).
+const ENV_ADMIN = makeMe({ envs: { e1: "admin" } });
+const OPERATOR = makeMe({ envs: { e1: "operator" } });
 
 const LONG_AGENT = `Mozilla/5.0 ${"VeryLongUserAgentToken/1.0.0-".repeat(30)}`;
 
@@ -50,6 +49,8 @@ interface Call {
 }
 
 let me: typeof ADMIN;
+// What GET /api/audit/actors answers.
+let actors: { name: string; deleted: boolean }[];
 let calls: Call[];
 let answer: (call: Call) => Response | Promise<Response>;
 
@@ -59,6 +60,7 @@ const lastList = () => listCalls()[listCalls().length - 1]?.search as URLSearchP
 beforeEach(() => {
   calls = [];
   me = ADMIN;
+  actors = ["admin", "alice", "bob"].map((name) => ({ name, deleted: false }));
   answer = () => Response.json({ items: [entry()], nextCursor: null, retentionDays: 90 });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -88,7 +90,7 @@ beforeEach(() => {
           ],
         });
       }
-      if (url.pathname === "/api/audit/actors") return Response.json(["admin", "alice", "bob"]);
+      if (url.pathname === "/api/audit/actors") return Response.json(actors);
       if (url.pathname === "/api/audit") return answer(call);
       if (url.pathname === "/api/version") {
         return Response.json({
@@ -332,6 +334,100 @@ describe("expanding a row", () => {
   });
 });
 
+describe("refused requests", () => {
+  const FIRST = "2026-10-01T04:30:05Z";
+  const LAST = "2026-10-01T04:30:58Z";
+
+  function refusal(over: Record<string, unknown> = {}) {
+    return entry({
+      action: "permission.denied",
+      result: "denied",
+      actor: "mallory",
+      targetType: "route",
+      target: "GET /api/audit",
+      reason: "forbidden",
+      ...over,
+    });
+  }
+
+  it("shows a coalesced refusal as one row with a x11 badge and the first time", async () => {
+    answer = () =>
+      Response.json({
+        items: [
+          refusal({
+            time: "2026-10-01T04:31:10Z",
+            details: { coalesced: "true", count: "11", first: FIRST, last: LAST },
+          }),
+        ],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    const row = (await screen.findByText("Permission denied")).closest("tr") as HTMLElement;
+    const badge = within(row).getByText("×11");
+    expect(badge.className).toContain("tabular-nums");
+    expect(badge.className).toContain("text-xs");
+    // The Time column shows the first refusal's time, not the summary's.
+    expect(within(row).getByRole("time").getAttribute("datetime")).toBe(FIRST);
+  });
+
+  it("expands to First refused, Last refused and Count without the raw coalesced keys", async () => {
+    answer = () =>
+      Response.json({
+        items: [
+          refusal({
+            details: { coalesced: "true", count: "11", first: FIRST, last: LAST, other: "kept" },
+          }),
+        ],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show details for Permission denied" }),
+    );
+    const hide = await screen.findByRole("button", { name: "Hide details for Permission denied" });
+    const view = within(
+      document.getElementById(hide.getAttribute("aria-controls") as string) as HTMLElement,
+    );
+    expect(view.getByText("First refused").nextElementSibling?.textContent).toContain("04:30:05");
+    expect(view.getByText("Last refused").nextElementSibling?.textContent).toContain("04:30:58");
+    expect(view.getByText("Count").nextElementSibling?.textContent).toBe("11");
+    expect(view.queryByText("coalesced: true")).toBeNull();
+    expect(view.queryByText("count: 11")).toBeNull();
+    expect(view.queryByText(`first: ${FIRST}`)).toBeNull();
+    // A detail that is not part of the burst is still listed.
+    expect(view.getByText("other: kept")).toBeTruthy();
+  });
+
+  it("explains an environment the user cannot see as answered as not found", async () => {
+    answer = () =>
+      Response.json({
+        items: [refusal({ reason: "environment_not_visible", environment: "env-1" })],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show details for Permission denied" }),
+    );
+    expect(
+      await screen.findByText("Environment not visible to this user (answered as not found)."),
+    ).toBeTruthy();
+  });
+
+  it("shows an ordinary refusal with no badge and its reason as recorded", async () => {
+    answer = () => Response.json({ items: [refusal()], nextCursor: null, retentionDays: 90 });
+    renderAt("/audit");
+    const row = (await screen.findByText("Permission denied")).closest("tr") as HTMLElement;
+    expect(within(row).queryByText(/^×/)).toBeNull();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show details for Permission denied" }),
+    );
+    expect(await screen.findByText("forbidden")).toBeTruthy();
+  });
+});
+
 describe("Load more", () => {
   it("fetches the next 50 with the cursor and appends them until there is no cursor", async () => {
     answer = (call) =>
@@ -532,5 +628,175 @@ describe("permission", () => {
     const link = await within(sidebar).findByRole("link", { name: "Audit" });
     expect(link.getAttribute("href")).toBe("/audit");
     expect(within(sidebar).getByRole("link", { name: "Settings" })).toBeTruthy();
+  });
+});
+
+describe("the audit log for an env Admin (D-09)", () => {
+  const CAPTION = "Showing entries for the environments you administer.";
+
+  it("opens for an env Admin and says the entries are those of the environments they administer", async () => {
+    me = ENV_ADMIN;
+    renderAt("/audit");
+    expect(await screen.findByRole("heading", { level: 1, name: "Audit log" })).toBeTruthy();
+    expect(await screen.findByText(CAPTION)).toBeTruthy();
+    expect(await screen.findByText("Signed in")).toBeTruthy();
+  });
+
+  it("does not show the caption to an instance admin, who sees every entry", async () => {
+    renderAt("/audit");
+    await screen.findByText("Signed in");
+    expect(screen.queryByText(CAPTION)).toBeNull();
+  });
+
+  it("shows the no-permission page to an Operator, a Viewer and a user with no access", async () => {
+    for (const who of [OPERATOR, VIEWER]) {
+      me = who;
+      renderAt("/audit");
+      await screen.findByText("You don't have permission to view this page");
+      expect(screen.queryByRole("heading", { level: 1, name: "Audit log" })).toBeNull();
+      cleanup();
+      queryClient.clear();
+    }
+  });
+});
+
+describe("the new actions and deleted users", () => {
+  it("shows every Phase 3 action by its label and an unknown one by its key", async () => {
+    const actions = [
+      "user.created",
+      "access.granted",
+      "automation.resumed",
+      "backup.schedule_updated",
+      "audit.reanchored",
+      "key.rotated",
+      "user.teleported",
+    ];
+    answer = () =>
+      Response.json({
+        items: actions.map((action, i) => entry({ id: `e${i}`, seq: 20 - i, action })),
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    for (const label of [
+      "Created user",
+      "Granted access",
+      "Resumed automation",
+      "Changed backup schedule",
+      "Re-anchored audit log",
+      "Rotated master key",
+      "user.teleported",
+    ]) {
+      expect(await screen.findByText(label), label).toBeTruthy();
+    }
+  });
+
+  it("shows a deleted user as the name followed by (deleted) in muted text, in rows", async () => {
+    answer = () =>
+      Response.json({
+        items: [
+          entry({ id: "a", seq: 2, actor: "alice", actorDeleted: true }),
+          entry({ id: "b", seq: 1, actor: "bob", actorDeleted: false }),
+        ],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    const marker = await screen.findByText("(deleted)");
+    expect(marker.className).toContain("text-muted-foreground");
+    const row = marker.closest("tr") as HTMLElement;
+    expect(row.textContent).toContain("alice (deleted)");
+    // Only the deleted user's row carries it.
+    expect(screen.getAllByText("(deleted)")).toHaveLength(1);
+    expect(screen.getAllByRole("row").filter((r) => r.textContent?.includes("bob"))).toHaveLength(
+      1,
+    );
+  });
+
+  it("lists a deleted user the same way in the User filter", async () => {
+    actors = [
+      { name: "alice", deleted: true },
+      { name: "bob", deleted: false },
+    ];
+    renderAt("/audit");
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: /Any user/ }));
+    const deleted = await screen.findByRole("button", { name: "alice (deleted)" });
+    expect(within(deleted).getByText("(deleted)").className).toContain("text-muted-foreground");
+    expect(screen.getByRole("button", { name: "bob" })).toBeTruthy();
+    // Choosing it filters by the plain name.
+    fireEvent.click(deleted);
+    await waitFor(() => expect(lastList().get("user")).toBe("alice"));
+  });
+});
+
+describe("the scoped view of an env Admin (D-09)", () => {
+  it("offers only the actions that can carry an environment in the Action filter", async () => {
+    me = ENV_ADMIN;
+    renderAt("/audit");
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: /Any action/ }));
+    for (const label of [
+      "Permission denied",
+      "Granted access",
+      "Renamed environment",
+      "Paused automation",
+    ]) {
+      expect(await screen.findByRole("checkbox", { name: label }), label).toBeTruthy();
+    }
+    for (const label of [
+      "Signed in",
+      "Created user",
+      "Exported backup",
+      "Updated settings",
+      "Rotated master key",
+    ]) {
+      expect(screen.queryByRole("checkbox", { name: label }), label).toBeNull();
+    }
+  });
+
+  it("offers every action to an instance admin", async () => {
+    renderAt("/audit");
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: /Any action/ }));
+    for (const label of ["Signed in", "Created user", "Exported backup", "Granted access"]) {
+      expect(await screen.findByRole("checkbox", { name: label }), label).toBeTruthy();
+    }
+  });
+
+  it("keeps an action from the address in the filter even when it is not one an env Admin is offered", async () => {
+    me = ENV_ADMIN;
+    renderAt("/audit?action=auth.login");
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: /1 action/ }));
+    const box = await screen.findByRole("checkbox", { name: "Signed in" });
+    expect(box.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("fills the Environment column with the environment's name", async () => {
+    me = ENV_ADMIN;
+    answer = () =>
+      Response.json({
+        items: [entry({ action: "environment.renamed", environment: "e1" })],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    const row = (await screen.findByText("Renamed environment")).closest("tr") as HTMLElement;
+    expect(within(row).getByText("lab-1")).toBeTruthy();
+    expect(within(row).queryByText("—")).toBeNull();
+  });
+
+  it("shows the plain empty state with Clear filters when the scoped view has no entries", async () => {
+    me = ENV_ADMIN;
+    answer = () => Response.json({ items: [], nextCursor: null, retentionDays: 90 });
+    const router = renderAt("/audit?range=30d");
+    expect(await screen.findByText("No audit entries match these filters.")).toBeTruthy();
+    expect(screen.getByText("Showing entries for the environments you administer.")).toBeTruthy();
+    const buttons = screen.getAllByRole("button", { name: "Clear filters" });
+    fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+    await waitFor(() =>
+      expect((router.state.location.search as Record<string, unknown>).range).toBe("24h"),
+    );
   });
 });

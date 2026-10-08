@@ -28,12 +28,14 @@ import {
 import { FullPageState, NoPermission } from "@/components/full-page-state";
 import { useNow } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { EnvEventsProvider } from "@/features/dashboard/events";
 import { AdoptClusterDialog } from "@/features/environments/adopt-cluster-dialog";
 import { EnvDegradedBanner } from "@/features/environments/degraded-banner";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import { isKnownReason, ReasonText } from "@/features/environments/reason-text";
+import { useAccessRefetching } from "@/hooks/use-access-refetch";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatClock, formatRelative } from "@/lib/format";
@@ -160,7 +162,7 @@ interface ProblemLinks {
   envId: string;
   // Whether this state offers the node list at all (a revoked environment does).
   settings: boolean;
-  canManage: boolean;
+  canConfigure: boolean;
   canDelete: boolean;
   t: ReturnType<typeof useT>;
 }
@@ -170,9 +172,9 @@ interface ProblemLinks {
 // there. The Remove card is /settings/environments/$envId#remove (plan 29 builds
 // it; until then the link lands on the page). Undefined when the caller may do
 // neither, so the page has no empty row of actions.
-function problemActions({ envId, settings, canManage, canDelete, t }: ProblemLinks) {
+function problemActions({ envId, settings, canConfigure, canDelete, t }: ProblemLinks) {
   const links: ReactNode[] = [];
-  if (settings && canManage) {
+  if (settings && canConfigure) {
     links.push(
       <Button key="settings" asChild variant="secondary">
         <Link to="/settings/environments/$envId" params={{ envId }}>
@@ -196,7 +198,7 @@ function problemActions({ envId, settings, canManage, canDelete, t }: ProblemLin
 interface ClusterChangedProps extends StateProps {
   // The environment as the list knows it, for the cluster ID the dialog names.
   item: EnvironmentItem | undefined;
-  canManage: boolean;
+  canConfigure: boolean;
   canDelete: boolean;
 }
 
@@ -204,12 +206,12 @@ interface ClusterChangedProps extends StateProps {
 // different cluster, so Bayplan refused them and changed nothing. Someone who may
 // manage the environment can adopt the new cluster (the primary action); someone
 // who may delete it can remove it instead (D-14).
-function ClusterChangedPage({ envId, name, item, canManage, canDelete }: ClusterChangedProps) {
+function ClusterChangedPage({ envId, name, item, canConfigure, canDelete }: ClusterChangedProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const heading = t("fullpage.clusterChanged.heading");
-  const links = problemActions({ envId, settings: false, canManage, canDelete, t }) ?? [];
+  const links = problemActions({ envId, settings: false, canConfigure, canDelete, t }) ?? [];
   return (
     <>
       <PageTitle page={heading} />
@@ -219,9 +221,9 @@ function ClusterChangedPage({ envId, name, item, canManage, canDelete }: Cluster
         heading={heading}
         body={t("fullpage.clusterChanged.body", { name })}
         action={
-          canManage || links.length > 0 ? (
+          canConfigure || links.length > 0 ? (
             <>
-              {canManage ? (
+              {canConfigure ? (
                 <Button ref={trigger} type="button" onClick={() => setOpen(true)}>
                   {t("fullpage.clusterChanged.adopt")}
                 </Button>
@@ -231,7 +233,7 @@ function ClusterChangedPage({ envId, name, item, canManage, canDelete }: Cluster
           ) : undefined
         }
       />
-      {canManage ? (
+      {canConfigure ? (
         <AdoptClusterDialog
           environment={{ id: envId, name, pendingClusterId: item?.pendingClusterId }}
           open={open}
@@ -258,11 +260,14 @@ function EnvironmentLayout() {
   const summary = useQuery(summaryQuery(envId));
   const environments = useQuery(environmentsQuery);
   useRecordRecent(envId);
+  const accessRefetching = useAccessRefetching();
   const [attempted, setAttempted] = useState<{ envId: string; at: number } | undefined>();
 
   const item = environments.data?.items?.find((e) => e.id === envId);
   const name = item?.name ?? t("dashboard.environmentFallback");
-  const canManage = usePermission("environments.manage");
+  // Adopting a changed cluster and opening the environment's settings need
+  // environments.configure on it (D-07).
+  const canConfigure = usePermission("environments.configure", envId);
   const canDelete = usePermission("environments.delete");
 
   const retry = useMutation({
@@ -307,6 +312,21 @@ function EnvironmentLayout() {
     const stale = shown ? live !== shown : isProblemState(live);
     if (stale) void refetch();
   }, [live, shown, settled, failure, refetch]);
+
+  // The server just refused this environment and the app is reading who the user
+  // is now (D-10). Until it knows, the content is a skeleton: neither "Page not
+  // found" nor the no-access state may flash before the move.
+  if ((failure === "forbidden" || failure === "not_found") && accessRefetching) {
+    return (
+      <output
+        aria-label={t("noaccess.checking")}
+        className="mx-auto flex w-full max-w-7xl flex-col gap-4"
+      >
+        <Skeleton className="h-8 w-48" aria-hidden="true" />
+        <Skeleton className="h-48 w-full" aria-hidden="true" />
+      </output>
+    );
+  }
 
   // A failing environment never breaks the shell or other routes (D-26): only
   // this environment's own pages are replaced by a full-page state.
@@ -361,7 +381,7 @@ function EnvironmentLayout() {
           tone="offline"
           heading={heading}
           body={t("fullpage.revoked.body", { name })}
-          action={problemActions({ envId, settings: true, canManage, canDelete, t })}
+          action={problemActions({ envId, settings: true, canConfigure, canDelete, t })}
         />
       </>
     );
@@ -372,7 +392,7 @@ function EnvironmentLayout() {
         envId={envId}
         name={name}
         item={item}
-        canManage={canManage}
+        canConfigure={canConfigure}
         canDelete={canDelete}
       />
     );

@@ -1,0 +1,73 @@
+{
+  "restore": {
+    "title": "Restore from a backup",
+    "body": "Replace everything in this Bayplan with the contents of a backup file.",
+    "file": {
+      "label": "Backup file",
+      "helper": "A .bayplan file.",
+      "choose": "Choose a file",
+      "none": "No file chosen"
+    },
+    "passphrase": {
+      "label": "Passphrase",
+      "show": "Show passphrase",
+      "hide": "Hide passphrase"
+    },
+    "check": {
+      "submit": "Check backup",
+      "pending": "Checking…"
+    },
+    "summary": {
+      "title": "What's in this backup",
+      "from": "From {{name}}",
+      "made": "Made {{date}}",
+      "version": "Bayplan {{version}}",
+      "users_one": "{{count}} user",
+      "users_other": "{{count}} users",
+      "teams_one": "{{count}} team",
+      "teams_other": "{{count}} teams",
+      "environments_one": "{{count}} environment",
+      "environments_other": "{{count}} environments",
+      "auditEntries_one": "{{count}} audit entry",
+      "auditEntries_other": "{{count}} audit entries",
+      "chooseAnother": "Choose another file",
+      "restore": "Restore backup",
+      "older": "This backup is from an older Bayplan and is upgraded while restoring.",
+      "publicUrl": "Restored public URL: {{url}}.",
+      "publicUrlDiffers": "This isn't the address you're using now. After you sign in, check Settings → General, or set BAYPLAN_PUBLIC_URL."
+    },
+    "confirm": {
+      "title": "Restore this backup?",
+      "body": "This replaces all users, teams, access, settings, environments and audit entries in this Bayplan with the backup's. Everyone is signed out, including you. Bayplan saves a snapshot first, so you can go back.",
+      "cancel": "Cancel",
+      "confirm": "Restore backup",
+      "pending": "Applying backup…"
+    },
+    "errors": {
+      "unreadable": "Couldn't open this backup. Check the passphrase, and that the file isn't damaged.",
+      "newer": "This backup is from a newer Bayplan ({{version}}). Upgrade this Bayplan, then try again.",
+      "newerUnnamed": "This backup is from a newer Bayplan. Upgrade this Bayplan, then try again.",
+      "notABackup": "That isn't a Bayplan backup file.",
+      "cutOff": "The upload was cut off. If Bayplan runs behind a reverse proxy, check its upload size limit.",
+      "busy": "Another restore is being prepared. Try again in a few minutes.",
+      "rateLimited": "Too many attempts. Wait a minute and try again.",
+      "check": "Couldn't check this backup. Check the container logs, then try again."
+    },
+    "failed": {
+      "nothingChanged": "The restore didn't finish and nothing was changed.",
+      "rolledBack": "The restore failed and Bayplan went back to the snapshot.",
+      "timeout": "Bayplan hasn't come back yet. Reload this page in a minute. If it doesn't load, check the container logs."
+    },
+    "overlay": {
+      "title": "Restoring…",
+      "body": "Don't close this page. This takes a moment."
+    },
+    "done": {
+      "heading": "Backup restored",
+      "body": "You were signed out. Sign in with an account from the backup.",
+      "action": "Go to sign-in",
+      "agents": "Agents reconnect on their own once your public URL points at this Bayplan. Agents installed after the backup was taken are listed under Settings → Environments.",
+      "notice": "Backup restored. Sign in with an account from the backup."
+    }
+  }
+}

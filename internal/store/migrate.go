@@ -100,6 +100,10 @@ func embeddedTarget() (int64, error) {
 	return highest, nil
 }
 
+// TargetSchema is the highest schema version this binary embeds. A restore
+// compares a backup's schema with it before doing any work (D-30).
+func TargetSchema() (int64, error) { return embeddedTarget() }
+
 // Migrate brings the database to this binary's schema version (D-82 to D-84).
 //
 // Before applying pending migrations to an existing database it writes a

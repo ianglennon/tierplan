@@ -160,7 +160,7 @@ type EnvironmentBody struct {
 	AutoUpdate       *bool                            `json:"autoUpdate,omitempty" doc:"Whether Bayplan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent"`
 	EngineVersion    *string                          `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
 	LastSeen         *string                          `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
-	PendingClusterID string                           `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/environments/{envId}/adopt-cluster binds the environment to"`
+	PendingClusterID string                           `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to"`
 	FoldOffered      bool                             `json:"foldOffered,omitempty" doc:"True on both the local socket environment and the swarm environment while this Bayplan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice"`
 }
 
@@ -425,14 +425,15 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "updateEnvironment",
 		Method:      http.MethodPatch,
-		Path:        "/api/environments/{envId}",
+		Path:        "/api/env/{envId}",
 		Summary:     "Rename an environment or switch its automatic agent updates",
-		Description: "Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.manage. 422 invalid_name unless the " +
+		Description: "Send name, autoUpdate or both; at least one is required (422 nothing_to_change). Needs environments.configure on the environment " +
+			"(env Admin or instance admin); an environment the caller cannot see answers 404 environment_not_found. 422 invalid_name unless the " +
 			"name is 1 to 64 characters. Audited as environment.renamed with the old and new name, and environment.auto_update_changed when autoUpdate changed " +
 			"the setting. autoUpdate applies to agent environments only (404 environment_not_found for the local socket); switching it on looks at the " +
 			"environment's connected agents at once.",
 		Tags: []string{"environments"},
-	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateEnvironmentInput) (*EnvironmentOutput, error) {
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsConfigure, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *UpdateEnvironmentInput) (*EnvironmentOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
@@ -441,22 +442,30 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemNothingToChange, "Send a name, autoUpdate or both.")
 		}
 		ip := httpx.ClientIP(ctx)
-		if in.Body.AutoUpdate != nil {
-			if d.Agents == nil {
-				return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot manage agent environments.")
+		// The whole body is checked before anything is written, so a request that
+		// fails does not leave half of it applied and audited.
+		if in.Body.Name != nil {
+			if err := envs.CheckName(*in.Body.Name); err != nil {
+				return nil, fail("rename environment", err)
 			}
-			// Checked first, so a name sent with it is not applied when the switch cannot be.
+		}
+		if in.Body.AutoUpdate != nil && d.Agents == nil {
+			return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot manage agent environments.")
+		}
+		if in.Body.AutoUpdate != nil {
+			// First, so a name sent with it is not applied when the switch cannot be.
 			if err := d.Agents.SetAutoUpdate(ctx, p.AuditActor(), in.EnvID, *in.Body.AutoUpdate, ip, in.UserAgent); err != nil {
 				return nil, fail("set auto-update", err)
-			}
-			if *in.Body.AutoUpdate && d.Updater != nil {
-				go d.Updater.Sweep(in.EnvID)
 			}
 		}
 		if in.Body.Name != nil {
 			if _, err := d.Envs.Rename(ctx, p.AuditActor(), in.EnvID, *in.Body.Name, ip, in.UserAgent); err != nil {
 				return nil, fail("rename environment", err)
 			}
+		}
+		// Only now that the whole request has worked are the agents looked at.
+		if in.Body.AutoUpdate != nil && *in.Body.AutoUpdate && d.Updater != nil {
+			go d.Updater.Sweep(in.EnvID)
 		}
 		e, err := d.Envs.Get(ctx, in.EnvID)
 		if err != nil {

@@ -23,7 +23,7 @@
     },
     "userMenu": {
       "trigger": "User menu",
-      "roleAdmin": "Admin",
+      "roleAdmin": "Instance admin",
       "changePassword": "Change password",
       "theme": "Theme",
       "light": "Light",

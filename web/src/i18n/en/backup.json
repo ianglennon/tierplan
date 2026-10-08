@@ -1,0 +1,27 @@
+{
+  "backup": {
+    "tabTitle": "Backup",
+    "title": "Back up and restore Bayplan",
+    "intro": "A backup holds users, teams, access, settings, environments and the audit log, and the same for anything added in later releases. It doesn't hold the master key, sessions or pending links. Keep the backup passphrase safe: Bayplan can't recover it.",
+    "download": {
+      "title": "Download a backup",
+      "passphrase": "Passphrase",
+      "passphraseHelper": "At least {{min}} characters.",
+      "confirm": "Confirm passphrase",
+      "show": "Show passphrase",
+      "hide": "Hide passphrase",
+      "submit": "Download backup",
+      "pending": "Preparing backup…",
+      "done": "Backup downloaded.",
+      "tooShort": "Use at least {{min}} characters.",
+      "mismatch": "The passphrases don't match.",
+      "failed": "Couldn't create the backup. Check the container logs, then try again."
+    },
+    "masterKey": {
+      "trigger": "Master key",
+      "body": "Rotate the master key from the command line while Bayplan is stopped:",
+      "codeLabel": "the key rotate command",
+      "note": "The old key is kept as bayplan.key.old until you delete it."
+    }
+  }
+}

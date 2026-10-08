@@ -4,8 +4,8 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
 import { queryClient } from "@/api/query-client";
-import { SETTINGS_TABS } from "@/features/settings/tabs";
-import { hasPermission, meQueryOptions } from "@/hooks/use-me";
+import { visibleSettingsTabs } from "@/features/settings/tabs";
+import { meQueryOptions } from "@/hooks/use-me";
 
 // /settings has no page of its own: it opens the first tab the user may see,
 // the same list the tab bar shows (WR-19). A user with no Settings permission
@@ -14,7 +14,7 @@ import { hasPermission, meQueryOptions } from "@/hooks/use-me";
 export const Route = createFileRoute("/_app/settings/")({
   beforeLoad: async () => {
     const me = await queryClient.ensureQueryData(meQueryOptions);
-    const tab = SETTINGS_TABS.find((candidate) => hasPermission(me, candidate.perm));
+    const [tab] = visibleSettingsTabs(me);
     throw redirect({ to: tab?.to ?? "/", replace: true });
   },
 });

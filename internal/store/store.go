@@ -119,11 +119,30 @@ func restrictFiles(dbPath string) {
 	}
 }
 
+// FileURI returns the SQLite file: URI that opens the database at path, with
+// query as its parameters. It is the only place a SQLite file: URI is built.
+//
+// The path is made absolute first. A relative one would put its first segment
+// in the URI authority (file://.devdata/bayplan.db), which SQLite refuses with
+// "invalid uri authority" (UAT gap G-03-4); BAYPLAN_DATA_DIR is commonly
+// relative (./.devdata under make dev). url.URL escapes the characters in the
+// path that SQLite's URI parser treats as syntax (?, #, %), so an unusual
+// directory name still works.
+func FileURI(path, query string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve database path: %w", err)
+	}
+	u := url.URL{Scheme: "file", Path: abs, RawQuery: query}
+	return u.String(), nil
+}
+
 func openPool(absPath, query string) (*sql.DB, error) {
-	// url.URL escapes characters in the path that SQLite's URI parser treats
-	// as syntax (?, #, %), so an unusual data directory name still works.
-	u := url.URL{Scheme: "file", Path: absPath, RawQuery: query}
-	db, err := sql.Open("sqlite", u.String())
+	dsn, err := FileURI(absPath, query)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -150,4 +169,16 @@ func (s *Store) Ready(ctx context.Context) error {
 		return fmt.Errorf("database schema is at version %d, this binary needs %d", got, target)
 	}
 	return nil
+}
+
+// SchemaVersion returns the highest schema migration applied to the database,
+// read from the goose bookkeeping table. It is the version a backup records, so
+// a restore knows what migrations the file still needs.
+func (s *Store) SchemaVersion(ctx context.Context) (int64, error) {
+	var v sql.NullInt64
+	err := s.Read.QueryRowContext(ctx, `SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&v)
+	if err != nil {
+		return 0, fmt.Errorf("read schema version: %w", err)
+	}
+	return v.Int64, nil
 }

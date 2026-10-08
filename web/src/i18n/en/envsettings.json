@@ -215,6 +215,20 @@
       "pending": "Removing…",
       "failed": "Couldn't remove the environment. Try again.",
       "done": "{{name}} was removed."
+    },
+    "unknownAgents": {
+      "title": "Agents Bayplan doesn't know",
+      "body": "These agents were installed after the backup was taken, so this Bayplan refused them. Reinstall each one with its environment's install command.",
+      "tableLabel": "Agents Bayplan doesn't know",
+      "columns": {
+        "node": "Node",
+        "environment": "Environment",
+        "lastAttempt": "Last attempt",
+        "ip": "IP address",
+        "actions": "Actions"
+      },
+      "showInstall": "Show install command",
+      "showInstallAria": "Show install command for {{node}} on {{environment}}"
     }
   }
 }

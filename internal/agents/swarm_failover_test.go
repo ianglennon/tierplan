@@ -404,7 +404,7 @@ func TestSwarmRevokeBlocksReenrol(t *testing.T) {
 	if !ok || !old.Connected || old.Status != "active" {
 		t.Fatalf("the worker's agent = %+v (found %v), want connected and active", old, ok)
 	}
-	revokePath := "/api/environments/" + f.env.ID + "/agents/" + old.ID
+	revokePath := "/api/env/" + f.env.ID + "/agents/" + old.ID
 
 	// Revoke: the session ends within a second, the row says why and that it is blocked.
 	code, body := f.srv.Do(http.MethodPost, revokePath+"/revoke", map[string]string{"reason": "swarm test"})

@@ -8,6 +8,7 @@ import { instanceQuery } from "@/api/instance";
 import type { components } from "@/api/schema";
 
 export type Me = components["schemas"]["MeBody"];
+export type Requirement = components["schemas"]["RequirementBody"];
 
 // The ["me"] query: who is signed in, their CSRF token and their effective
 // permissions. A 401 is thrown, so route guards can send the browser to /login
@@ -55,6 +56,33 @@ export function hasPermission(me: Me | undefined, perm: string, envId?: string):
   return (envs["*"] ?? []).includes(perm) || (envs[envId] ?? []).includes(perm);
 }
 
+// isInstanceAdmin is true for an instance admin: Admin on every environment and
+// the only holder of the installation-wide permissions (D-01). Like
+// hasPermission it only decides what to show.
+export function isInstanceAdmin(me: Me | undefined): boolean {
+  return me?.user.instanceAdmin === true;
+}
+
+// hasNoEnvironmentAccess is true for a signed-in user who holds no grant on any
+// environment and is not an instance admin: the one case the whole app shows the
+// no-access state (D-08). Like hasPermission it only decides what to show.
+export function hasNoEnvironmentAccess(me: Me | undefined): boolean {
+  return me !== undefined && !isInstanceAdmin(me) && Object.keys(me.access).length === 0;
+}
+
+export function useInstanceAdmin(): boolean {
+  const { data } = useMe();
+  return isInstanceAdmin(data);
+}
+
+// requirementFor says what a permission asks of a caller (role, extra or
+// instance), as /api/me lists it from the server's registry, so a disabled
+// control can say what it needs (D-19). It is undefined for a name the server
+// does not register, and while the user is not loaded.
+export function requirementFor(me: Me | undefined, perm: string): Requirement | undefined {
+  return me?.requirements[perm];
+}
+
 // usePermission only decides what to show. The server enforces every
 // permission, so hiding a control is never the access control (D-50).
 export function usePermission(perm: string, envId?: string): boolean {
@@ -76,6 +104,23 @@ export function hasAnyEnvironmentPermission(me: Me | undefined, perm: string): b
 export function useAnyEnvironmentPermission(perm: string): boolean {
   const { data } = useMe();
   return hasAnyEnvironmentPermission(data, perm);
+}
+
+// canReadAudit is true for whoever the audit log opens for: an instance admin,
+// who reads every entry, and an env Admin, who reads the entries of the
+// environments they administer (D-09). Operators and Viewers hold neither. Like
+// hasPermission it only decides what to show; the server scopes the read.
+export function canReadAudit(me: Me | undefined): boolean {
+  return (
+    hasPermission(me, "audit.read") ||
+    isInstanceAdmin(me) ||
+    hasAnyEnvironmentPermission(me, "environments.audit")
+  );
+}
+
+export function useCanReadAudit(): boolean {
+  const { data } = useMe();
+  return canReadAudit(data);
 }
 
 // useDocumentTitle sets the tab title to "{page} · {instance name}", or just
