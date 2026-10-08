@@ -17,6 +17,9 @@ const ADMIN = makeMe({
   permissions: { global: ["audit.read", "settings.read"], environments: {} },
 });
 const VIEWER = makeMe({ permissions: { global: [], environments: {} } });
+// An env Admin of e1 holds environments.audit there and nothing installation-wide (D-09).
+const ENV_ADMIN = makeMe({ envs: { e1: "admin" } });
+const OPERATOR = makeMe({ envs: { e1: "operator" } });
 
 const LONG_AGENT = `Mozilla/5.0 ${"VeryLongUserAgentToken/1.0.0-".repeat(30)}`;
 
@@ -622,5 +625,34 @@ describe("permission", () => {
     const link = await within(sidebar).findByRole("link", { name: "Audit" });
     expect(link.getAttribute("href")).toBe("/audit");
     expect(within(sidebar).getByRole("link", { name: "Settings" })).toBeTruthy();
+  });
+});
+
+describe("the audit log for an env Admin (D-09)", () => {
+  const CAPTION = "Showing entries for the environments you administer.";
+
+  it("opens for an env Admin and says the entries are those of the environments they administer", async () => {
+    me = ENV_ADMIN;
+    renderAt("/audit");
+    expect(await screen.findByRole("heading", { level: 1, name: "Audit log" })).toBeTruthy();
+    expect(await screen.findByText(CAPTION)).toBeTruthy();
+    expect(await screen.findByText("Signed in")).toBeTruthy();
+  });
+
+  it("does not show the caption to an instance admin, who sees every entry", async () => {
+    renderAt("/audit");
+    await screen.findByText("Signed in");
+    expect(screen.queryByText(CAPTION)).toBeNull();
+  });
+
+  it("shows the no-permission page to an Operator, a Viewer and a user with no access", async () => {
+    for (const who of [OPERATOR, VIEWER]) {
+      me = who;
+      renderAt("/audit");
+      await screen.findByText("You don't have permission to view this page");
+      expect(screen.queryByRole("heading", { level: 1, name: "Audit log" })).toBeNull();
+      cleanup();
+      queryClient.clear();
+    }
   });
 });

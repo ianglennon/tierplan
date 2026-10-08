@@ -131,6 +131,28 @@ describe("Settings in the sidebar", () => {
   });
 });
 
+describe("Audit in the sidebar", () => {
+  const sidebar = () => document.querySelector("[data-slot=sidebar]") as HTMLElement;
+
+  async function auditLinkFor(who: ReturnType<typeof makeMe>) {
+    account = who;
+    renderAt("/");
+    await screen.findByText("No environments yet");
+    const present = within(sidebar()).queryByRole("link", { name: "Audit" }) !== null;
+    cleanup();
+    queryClient.clear();
+    return present;
+  }
+
+  it("shows Audit to an instance admin and to an env Admin, not to an Operator or a Viewer (D-09)", async () => {
+    expect(await auditLinkFor(makeMe({ instanceAdmin: true }))).toBe(true);
+    expect(await auditLinkFor(makeMe({ envs: { e1: "admin" } }))).toBe(true);
+    expect(await auditLinkFor(makeMe({ allEnvironments: "admin" }))).toBe(true);
+    expect(await auditLinkFor(makeMe({ envs: { e1: "operator" } }))).toBe(false);
+    expect(await auditLinkFor(makeMe({ envs: { e1: "viewer" } }))).toBe(false);
+  });
+});
+
 describe("app shell", () => {
   it("shows the no-environments landing with the UI-SPEC copy", async () => {
     renderAt("/");

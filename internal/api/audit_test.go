@@ -315,3 +315,146 @@ func TestAuditReadingAndExportingAreNotAudited(t *testing.T) {
 		t.Errorf("allowed reads wrote %d entries (D-49)", after-before)
 	}
 }
+
+// logIn appends one entry on an environment ("" for an instance-level event)
+// with a chosen result, for the scoped-read tests.
+func (f *auditFix) logIn(t *testing.T, at time.Time, actor, action, envID string, result audit.Result) {
+	t.Helper()
+	w := audit.NewWriter(f.st, f.v, slog.New(slog.DiscardHandler), func() time.Time { return at })
+	err := w.Record(context.Background(), audit.Entry{
+		Actor:  audit.Actor{Type: audit.ActorUser, ID: "id-" + actor, Name: actor},
+		Action: action, TargetType: "route", TargetID: "t-" + action, EnvID: envID,
+		Result: result, Reason: "r", IP: "198.51.100.7", UserAgent: "ua",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// scopeFix is the audit log of two environments and instance-level events, read
+// by people with different access (D-09).
+type scopeFix struct{ *auditFix }
+
+const (
+	scopeEnvA = "env-a"
+	scopeEnvB = "env-b"
+)
+
+func newScopeFix(t *testing.T) *scopeFix {
+	t.Helper()
+	f := &scopeFix{newAuditFix(t)}
+	at := time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC)
+	f.logIn(t, at, "bob", "auth.login", "", audit.ResultSuccess)
+	f.logIn(t, at, "dana", "user.created", "", audit.ResultSuccess)
+	f.logIn(t, at, "alice", "environment.renamed", scopeEnvA, audit.ResultSuccess)
+	f.logIn(t, at, "vera", "permission.denied", scopeEnvA, audit.ResultDenied)
+	f.logIn(t, at, "erin", "access.granted", scopeEnvB, audit.ResultSuccess)
+	f.addEnvUser(t, "carol", scopeEnvA, "admin")
+	f.addEnvUser(t, "oscar", scopeEnvA, "operator")
+	f.addEnvUser(t, "vince", scopeEnvA, "viewer")
+	return f
+}
+
+// as signs the user in and reads path.
+func (f *scopeFix) as(t *testing.T, user, path string) *authRecorder {
+	t.Helper()
+	cookie, csrf := f.signIn(t, user, false)
+	rec := f.call(t, authReq{method: http.MethodGet, path: path, cookie: cookie, csrf: csrf})
+	return &authRecorder{rec.Code, rec.Body.String(), rec.Header()}
+}
+
+// actions lists the action keys of a page, newest first, leaving out the
+// sign-ins the test itself causes.
+func (r auditListResp) actions(skip string) []string {
+	var out []string
+	for _, it := range r.Items {
+		if it.Action != skip {
+			out = append(out, it.Action)
+		}
+	}
+	return out
+}
+
+func TestAuditScopeAnEnvAdminSeesTheirEnvironmentsEntriesAndNoInstanceLevelEvents(t *testing.T) {
+	f := newScopeFix(t)
+
+	carol := f.as(t, "carol", "/api/audit").list(t)
+	if got := fmt.Sprint(carol.actions("")); got != "[permission.denied environment.renamed]" {
+		t.Errorf("an env Admin of A reads %s, want the refusal and the rename on A and nothing else", got)
+	}
+	for _, it := range carol.Items {
+		if it.Environment == nil || *it.Environment != scopeEnvA {
+			t.Errorf("entry %s has environment %v, want only %s", it.Action, it.Environment, scopeEnvA)
+		}
+	}
+
+	admin := f.get(t, "/api/audit", f.cookie).list(t)
+	have := map[string]bool{}
+	for _, a := range admin.actions("") {
+		have[a] = true
+	}
+	for _, want := range []string{"auth.login", "user.created", "environment.renamed", "permission.denied", "access.granted"} {
+		if !have[want] {
+			t.Errorf("an instance admin does not see %s", want)
+		}
+	}
+}
+
+func TestAuditScopeActorsAndBothExportsHoldOnlyTheScopedEntries(t *testing.T) {
+	f := newScopeFix(t)
+
+	var names []string
+	rec := f.as(t, "carol", "/api/audit/actors")
+	if rec.code != http.StatusOK || json.Unmarshal([]byte(rec.body), &names) != nil || fmt.Sprint(names) != "[alice vera]" {
+		t.Errorf("actors of an env Admin of A = %d %s, want [alice vera]", rec.code, rec.body)
+	}
+
+	rec = f.as(t, "carol", "/api/audit/export?format=json")
+	var rows []map[string]any
+	if rec.code != http.StatusOK || json.Unmarshal([]byte(rec.body), &rows) != nil || len(rows) != 2 {
+		t.Fatalf("json export = %d %s, want the 2 entries on A", rec.code, rec.body)
+	}
+	for _, r := range rows {
+		if r["environment"] != scopeEnvA {
+			t.Errorf("json export holds %v, want only entries on %s", r, scopeEnvA)
+		}
+	}
+
+	rec = f.as(t, "carol", "/api/audit/export?format=csv")
+	recs, err := csv.NewReader(strings.NewReader(rec.body)).ReadAll()
+	if err != nil || len(recs) != 3 {
+		t.Fatalf("csv export = %d rows, %v\n%s, want a header and the 2 entries on A", len(recs), err, rec.body)
+	}
+	for _, row := range recs[1:] {
+		if row[7] != scopeEnvA {
+			t.Errorf("csv export holds %v, want only entries on %s", row, scopeEnvA)
+		}
+	}
+}
+
+func TestAuditScopeAnOperatorAndAViewerAreRefusedAndTheRefusalIsAudited(t *testing.T) {
+	f := newScopeFix(t)
+	for _, tc := range []struct{ user, path string }{
+		{"oscar", "/api/audit"}, {"vince", "/api/audit/actors"}, {"oscar", "/api/audit/export?format=csv"},
+	} {
+		before := len(f.audits(t, audit.ActionPermissionDenied))
+		rec := f.as(t, tc.user, tc.path)
+		if rec.code != http.StatusForbidden {
+			t.Errorf("%s %s: status = %d, want 403: %s", tc.user, tc.path, rec.code, rec.body)
+		}
+		for _, leak := range []string{"alice", "environment.renamed", "bob"} {
+			if strings.Contains(rec.body, leak) {
+				t.Errorf("%s %s: the refusal leaked %q: %s", tc.user, tc.path, leak, rec.body)
+			}
+		}
+		denied := f.audits(t, audit.ActionPermissionDenied)
+		if len(denied) != before+1 {
+			t.Fatalf("%s %s: permission.denied entries went from %d to %d, want one more", tc.user, tc.path, before, len(denied))
+		}
+		last := denied[len(denied)-1]
+		if last.ActorID != "id-"+tc.user || last.Result != "denied" || last.Reason != "no_audit_scope" ||
+			!strings.HasPrefix(last.TargetID, "GET /api/audit") {
+			t.Errorf("%s %s: refusal entry = %+v, want reason no_audit_scope on the route", tc.user, tc.path, last)
+		}
+	}
+}

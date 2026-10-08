@@ -148,12 +148,20 @@ const (
 	kindSelf
 	kindGlobal
 	kindEnv
+	// kindAudit is a SelfService route whose handler works out the caller's
+	// scope: the audit log (D-09). It is open to an instance admin and to anyone
+	// who holds environments.audit on at least one environment, and refuses the
+	// rest with reason no_audit_scope.
+	kindAudit
 )
 
 func classify(rec httpx.RouteRecord) (kind, rbac.Permission) {
 	switch {
 	case rec.Exempt || rec.Req.Public:
 		return kindSkip, rbac.Permission{}
+	case rec.Req.SelfService && rec.Req.Perm == "" && strings.HasPrefix(rec.Path, "/api/audit"):
+		reg, _ := rbac.Lookup(rbac.PermEnvironmentsAudit)
+		return kindAudit, reg
 	case rec.Req.SelfService && rec.Req.Perm == "":
 		return kindSelf, rbac.Permission{}
 	}
@@ -196,6 +204,14 @@ func expect(a servertest.Archetype, k kind, reg rbac.Permission, envID string) o
 	switch k {
 	case kindSelf:
 		return allowed
+	case kindAudit:
+		// Written out from the grant table, not from the Checker: the audit log
+		// opens for an instance admin and for a holder of environments.audit on
+		// any environment, which is Admin on A, on B or on all of them.
+		if g.InstanceAdmin || max(g.OnA, g.OnB, g.OnAll) >= reg.MinRole {
+			return allowed
+		}
+		return forbidden
 	case kindGlobal:
 		if g.InstanceAdmin {
 			return allowed
@@ -310,6 +326,9 @@ func TestEveryRouteRefusesEveryArchetypeThatLacksItsRequirement(t *testing.T) {
 						t.Errorf("%s: audit row target %q result %q, want %q denied", who, after.target, after.result, rec.Method+" "+rec.Path)
 					}
 					wantReason := map[outcome]string{unauthorized: "unauthenticated", forbidden: "forbidden", notVisible: "environment_not_visible"}[want]
+					if k == kindAudit && want == forbidden {
+						wantReason = "no_audit_scope"
+					}
 					if after.reason != wantReason {
 						t.Errorf("%s: audit reason %q, want %q", who, after.reason, wantReason)
 					}
@@ -322,7 +341,7 @@ func TestEveryRouteRefusesEveryArchetypeThatLacksItsRequirement(t *testing.T) {
 	}
 
 	// The walk must have found each shape, or it proved nothing.
-	for _, k := range []kind{kindSelf, kindGlobal, kindEnv} {
+	for _, k := range []kind{kindSelf, kindGlobal, kindEnv, kindAudit} {
 		if judged[k] == 0 {
 			t.Errorf("no route of kind %d was judged: the harness did not reach the registered routes", k)
 		}
