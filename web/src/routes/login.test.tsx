@@ -251,6 +251,18 @@ describe("/login", () => {
     expect(screen.getByLabelText("Username")).toBeTruthy();
   });
 
+  it("shows the backup-restored notice after a restore from the setup wizard", async () => {
+    stubApi({});
+    renderAt("/login?notice=backup-restored");
+    const notice = await screen.findByText(
+      "Backup restored. Sign in with an account from the backup.",
+    );
+    expect(notice.closest("[role=status]")).toBeTruthy();
+    // The form is still there: the notice does not sign anyone in.
+    expect(screen.getByLabelText("Username")).toBeTruthy();
+    expect(screen.queryByText("Password set. Sign in to continue.")).toBeNull();
+  });
+
   it.each(["other", "", "Password-Set", "password-set,x"])(
     "shows no notice for the unknown notice value %j",
     async (value) => {
