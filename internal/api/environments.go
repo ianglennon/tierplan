@@ -442,22 +442,30 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemNothingToChange, "Send a name, autoUpdate or both.")
 		}
 		ip := httpx.ClientIP(ctx)
-		if in.Body.AutoUpdate != nil {
-			if d.Agents == nil {
-				return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot manage agent environments.")
+		// The whole body is checked before anything is written, so a request that
+		// fails does not leave half of it applied and audited.
+		if in.Body.Name != nil {
+			if err := envs.CheckName(*in.Body.Name); err != nil {
+				return nil, fail("rename environment", err)
 			}
-			// Checked first, so a name sent with it is not applied when the switch cannot be.
+		}
+		if in.Body.AutoUpdate != nil && d.Agents == nil {
+			return nil, httpx.Problem(http.StatusConflict, problemAgentsUnavailable, "This server cannot manage agent environments.")
+		}
+		if in.Body.AutoUpdate != nil {
+			// First, so a name sent with it is not applied when the switch cannot be.
 			if err := d.Agents.SetAutoUpdate(ctx, p.AuditActor(), in.EnvID, *in.Body.AutoUpdate, ip, in.UserAgent); err != nil {
 				return nil, fail("set auto-update", err)
-			}
-			if *in.Body.AutoUpdate && d.Updater != nil {
-				go d.Updater.Sweep(in.EnvID)
 			}
 		}
 		if in.Body.Name != nil {
 			if _, err := d.Envs.Rename(ctx, p.AuditActor(), in.EnvID, *in.Body.Name, ip, in.UserAgent); err != nil {
 				return nil, fail("rename environment", err)
 			}
+		}
+		// Only now that the whole request has worked are the agents looked at.
+		if in.Body.AutoUpdate != nil && *in.Body.AutoUpdate && d.Updater != nil {
+			go d.Updater.Sweep(in.EnvID)
 		}
 		e, err := d.Envs.Get(ctx, in.EnvID)
 		if err != nil {

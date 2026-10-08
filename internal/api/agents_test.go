@@ -1262,3 +1262,25 @@ func TestAnEnvAdminCannotAddDeleteFoldOrReadTheTokenOfTheirOwnEnvironment(t *tes
 		t.Errorf("token status as an instance admin: %d %s, want 200", rec.code, rec.body)
 	}
 }
+
+// WR-B-04: a PATCH whose name is invalid changes nothing, even when its autoUpdate
+// half would have been valid.
+func TestAPatchWithAnInvalidNameDoesNotApplyOrAuditTheAutoUpdateSwitch(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Production")
+	path := "/api/env/" + env.ID
+
+	for _, name := range []string{"", "   ", strings.Repeat("n", 65)} {
+		body, _ := json.Marshal(map[string]any{"autoUpdate": false, "name": name})
+		rec := f.req(t, http.MethodPatch, path, string(body))
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "invalid_name" {
+			t.Fatalf("PATCH with name %q: %d type %q %s, want 422 invalid_name", name, rec.code, rec.ptyp, rec.body)
+		}
+		if got := f.environmentView(t, env.ID); got.AutoUpdate == nil || !*got.AutoUpdate {
+			t.Fatalf("PATCH with name %q switched auto-update off although it failed", name)
+		}
+		if got := f.audits(t, audit.ActionEnvironmentAutoUpdateChanged); len(got) != 0 {
+			t.Fatalf("PATCH with name %q audited an auto-update change: %+v", name, got)
+		}
+	}
+}

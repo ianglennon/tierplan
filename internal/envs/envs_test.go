@@ -748,3 +748,16 @@ func TestASlowSnapshotNeitherFlapsTheEngineNorDelaysStop(t *testing.T) {
 		t.Errorf("Stop took %s with a snapshot in flight, want under 500ms", d)
 	}
 }
+
+func TestCheckNameAppliesTheRenameRuleWithoutWriting(t *testing.T) {
+	for _, bad := range []string{"", "   ", strings.Repeat("x", 65)} {
+		if err := CheckName(bad); !errors.Is(err, ErrInvalidName) {
+			t.Errorf("CheckName(%q) = %v, want ErrInvalidName", bad, err)
+		}
+	}
+	for _, good := range []string{"a", " Lab ", strings.Repeat("x", 64)} {
+		if err := CheckName(good); err != nil {
+			t.Errorf("CheckName(%q) = %v, want nil", good, err)
+		}
+	}
+}

@@ -670,6 +670,16 @@ func detail(res dockerx.ProbeResult, err error) string {
 	return err.Error()
 }
 
+// CheckName reports ErrInvalidName when name, trimmed, is not 1 to 64 characters.
+// Rename applies the same rule; a caller that does other work with the rename
+// calls it first so a bad name stops the request before anything is written.
+func CheckName(name string) error {
+	if !validName(strings.TrimSpace(name)) {
+		return ErrInvalidName
+	}
+	return nil
+}
+
 // Rename changes an environment's name and audits the old and new one.
 func (s *Service) Rename(ctx context.Context, actor audit.Actor, id, name, ip, ua string) (Environment, error) {
 	name = strings.TrimSpace(name)
