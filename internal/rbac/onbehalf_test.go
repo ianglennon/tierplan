@@ -136,3 +136,41 @@ func TestAccessQSeesTheChangesOfTheTransactionItRunsIn(t *testing.T) {
 		t.Errorf("outside the transaction alice has %v, want the uncommitted deletion unseen", outside.For("env-a").Role)
 	}
 }
+
+func TestOnBehalfEffectivePermissionsAreTheOwnersAndAgreeWithCheck(t *testing.T) {
+	f := newMatrixFx(t)
+	f.addUser(t, "alice")
+	f.assign(t, "user", "alice", "operator", "env-a")
+	ctx := context.Background()
+
+	_, ownerEnv, err := f.c.EffectivePermissions(ctx, user("alice"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := rbac.OnBehalf("system:gitsync", "alice")
+	global, onBehalfEnv, err := f.c.EffectivePermissions(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(global) != 0 || len(onBehalfEnv["env-a"]) == 0 || len(onBehalfEnv["env-a"]) != len(ownerEnv["env-a"]) {
+		t.Fatalf("on behalf = %v %v, owner = %v", global, onBehalfEnv, ownerEnv)
+	}
+	for _, perm := range onBehalfEnv["env-a"] {
+		if !check(f, p, perm, "env-a").Allowed {
+			t.Errorf("EffectivePermissions lists %s but Check refuses it", perm)
+		}
+	}
+	forged := &rbac.Principal{Type: rbac.PrincipalSystem, ID: "system:unknown", OnBehalfOf: "alice"}
+	if g, e, err := f.c.EffectivePermissions(ctx, forged); err != nil || len(g) != 0 || len(e) != 0 {
+		t.Errorf("a forged principal lists %v %v, %v", g, e, err)
+	}
+}
+
+func TestOnBehalfAPlainSystemPrincipalStillHoldsOnlyItsOwnEmptySet(t *testing.T) {
+	f := newMatrixFx(t)
+	f.instanceAdmin(t, "root")
+	// system:gitsync acting for no one never borrows an owner's rights.
+	if d := check(f, rbac.System("system:gitsync"), permRead, "env-a"); d.Allowed {
+		t.Errorf("a system principal with no owner was allowed: %+v", d)
+	}
+}

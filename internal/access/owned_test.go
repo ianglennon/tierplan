@@ -234,3 +234,169 @@ func TestOwnedRowThatNeedsEnvAdminPausesWhenItsOwnerIsOnlyAnOperator(t *testing.
 		t.Errorf("the Admin's automation is %s, want active", got)
 	}
 }
+
+func (f *ownedFixture) setUser(t *testing.T, id, set string) {
+	t.Helper()
+	f.exec(t, `UPDATE users SET `+set+` WHERE id = ?`, id)
+}
+
+func TestOwnedRowFollowsADisabledOwnerAndComesBackWhenTheyDoAndStillQualify(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.assign(t, "alice", "operator", "env-a")
+	f.register(t, syncResource("alice"))
+
+	f.setUser(t, "alice", "disabled = 1")
+	if n := f.recheck(t, "alice"); n != 1 || f.state(t, kindTestSync, "r1") != "paused_disabled" {
+		t.Fatalf("after disabling: changed %d, state %s, want 1 and paused_disabled", n, f.state(t, kindTestSync, "r1"))
+	}
+	if _, _, err := f.svc.RunAs(f.ctx, kindTestSync, "r1", "system:gitsync"); !errors.Is(err, access.ErrOwnerLacksPermission) {
+		t.Errorf("RunAs for a disabled owner = %v", err)
+	}
+
+	f.setUser(t, "alice", "disabled = 0")
+	if n := f.recheck(t, "alice"); n != 1 || f.state(t, kindTestSync, "r1") != "active" {
+		t.Fatalf("after re-enabling: changed %d, state %s, want 1 and active", n, f.state(t, kindTestSync, "r1"))
+	}
+	if f.auditCount(t, "automation.paused") != 1 || f.auditCount(t, "automation.resumed") != 1 {
+		t.Errorf("entries: %d paused, %d resumed, want 1 each", f.auditCount(t, "automation.paused"), f.auditCount(t, "automation.resumed"))
+	}
+}
+
+func TestOwnedRowOfAnOwnerWhoWasDisabledAndLostTheGrantStaysPausedForTheNewReason(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.assign(t, "alice", "operator", "env-a")
+	f.register(t, syncResource("alice"))
+	f.setUser(t, "alice", "disabled = 1")
+	f.recheck(t, "alice")
+
+	f.unassign(t, "alice")
+	f.setUser(t, "alice", "disabled = 0")
+	if n := f.recheck(t, "alice"); n != 1 || f.state(t, kindTestSync, "r1") != "paused_lacks_permission" {
+		t.Fatalf("changed %d, state %s, want 1 and paused_lacks_permission", n, f.state(t, kindTestSync, "r1"))
+	}
+	if f.auditCount(t, "automation.resumed") != 0 {
+		t.Error("a row that is still paused was reported as resumed")
+	}
+}
+
+func TestOwnedRowOfADeletedOwnerPausesAndNeverResumesByItself(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.assign(t, "alice", "admin", "env-a")
+	f.register(t, syncResource("alice"))
+
+	f.setUser(t, "alice", "deleted_at = 5")
+	if n := f.recheck(t, "alice"); n != 1 || f.state(t, kindTestSync, "r1") != "paused_deleted" {
+		t.Fatalf("changed %d, state %s, want 1 and paused_deleted", n, f.state(t, kindTestSync, "r1"))
+	}
+	// Even if the tombstone were somehow lifted with the grant intact, only a
+	// transfer of ownership revives the row.
+	f.setUser(t, "alice", "deleted_at = NULL")
+	if n := f.recheck(t, "alice"); n != 0 || f.state(t, kindTestSync, "r1") != "paused_deleted" {
+		t.Fatalf("later recheck changed %d, state %s, want 0 and paused_deleted", n, f.state(t, kindTestSync, "r1"))
+	}
+	if _, _, err := f.svc.RunAs(f.ctx, kindTestSync, "r1", "system:gitsync"); !errors.Is(err, access.ErrOwnerLacksPermission) {
+		t.Errorf("RunAs = %v, want ErrOwnerLacksPermission", err)
+	}
+}
+
+func TestOwnedRowOfAnInstanceAdminWithNoAssignmentsIsActiveOnAnyEnvironment(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "root")
+	f.setUser(t, "root", "instance_admin = 1")
+	for _, env := range []string{"env-a", "env-never-seen"} {
+		r := syncResource("root")
+		r.ResourceID, r.EnvID = "r-"+env, env
+		f.register(t, r)
+	}
+	if n := f.recheck(t, "root"); n != 0 {
+		t.Fatalf("recheck changed %d rows of an instance admin", n)
+	}
+	if _, _, err := f.svc.RunAs(f.ctx, kindTestSync, "r-env-never-seen", "system:webhook"); err != nil {
+		t.Errorf("RunAs for an instance admin: %v", err)
+	}
+}
+
+func TestOwnedRowOfAnUnregisteredKindIsPausedAndNeverRun(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "root")
+	f.setUser(t, "root", "instance_admin = 1")
+	f.inTx(t, func(_ *sql.Tx, q *sqlc.Queries) error {
+		return q.InsertOwnedResource(f.ctx, sqlc.InsertOwnedResourceParams{
+			Kind: kindUnknown, ResourceID: "x", EnvID: "env-a", Name: "gone", OwnerID: "root", State: "active", CreatedAt: 1, UpdatedAt: 1,
+		})
+	})
+	if n := f.recheck(t, "root"); n != 1 || f.state(t, kindUnknown, "x") != "paused_lacks_permission" {
+		t.Fatalf("changed %d, state %s, want 1 and paused_lacks_permission", n, f.state(t, kindUnknown, "x"))
+	}
+	if _, _, err := f.svc.RunAs(f.ctx, kindUnknown, "x", "system:gitsync"); !errors.Is(err, access.ErrOwnerLacksPermission) {
+		t.Errorf("RunAs of an unregistered kind = %v, want ErrOwnerLacksPermission", err)
+	}
+}
+
+func TestOwnedRecheckOfAnOwnerWithNoRowsChangesNothingAndTwiceWritesEntriesOnce(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addUser(t, "bob")
+	f.assign(t, "alice", "operator", "env-a")
+	f.register(t, syncResource("alice"))
+
+	if n := f.recheck(t, "bob"); n != 0 {
+		t.Errorf("an owner with no rows changed %d", n)
+	}
+	if n := f.recheck(t); n != 0 {
+		t.Errorf("no owners changed %d", n)
+	}
+	if n := f.recheck(t, "alice"); n != 0 {
+		t.Errorf("a qualifying owner changed %d rows", n)
+	}
+	if f.auditCount(t, "automation.paused")+f.auditCount(t, "automation.resumed") != 0 {
+		t.Fatal("a recheck that changed nothing wrote an entry")
+	}
+
+	f.unassign(t, "alice")
+	if first, second := f.recheck(t, "alice"), f.recheck(t, "alice"); first != 1 || second != 0 {
+		t.Errorf("rechecks changed %d then %d, want 1 then 0", first, second)
+	}
+	if n := f.auditCount(t, "automation.paused"); n != 1 {
+		t.Errorf("%d automation.paused entries after two rechecks, want 1", n)
+	}
+}
+
+func TestOwnedRegistrationRefusesAnUnknownKindAnOwnerWhoLacksThePermissionAndAnUnlistedActor(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "viewer")
+	f.assign(t, "viewer", "viewer", "env-a")
+	f.addUser(t, "alice")
+	f.assign(t, "alice", "operator", "env-a")
+	f.register(t, syncResource("alice"))
+
+	tx, err := f.st.Write.BeginTx(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := f.st.Q.WithTx(tx)
+	if err := f.svc.RegisterOwnedTx(f.ctx, tx, q, access.OwnedResource{Kind: kindUnknown, ResourceID: "z", EnvID: "env-a", OwnerID: "alice"}); !errors.Is(err, access.ErrUnknownOwnedKind) {
+		t.Errorf("an unregistered kind = %v", err)
+	}
+	if err := f.svc.RegisterOwnedTx(f.ctx, tx, q, access.OwnedResource{Kind: kindTestSync, ResourceID: "v", EnvID: "env-a", OwnerID: "viewer"}); !errors.Is(err, access.ErrOwnerLacksPermission) {
+		t.Errorf("a Viewer owner = %v", err)
+	}
+	if err := f.svc.RegisterOwnedTx(f.ctx, tx, q, access.OwnedResource{Kind: kindTestSync, ResourceID: "e", EnvID: "env-b", OwnerID: "alice"}); !errors.Is(err, access.ErrOwnerLacksPermission) {
+		t.Errorf("an Operator of another environment = %v", err)
+	}
+	if err := f.svc.RegisterOwnedTx(f.ctx, tx, q, access.OwnedResource{Kind: kindTestSync, ResourceID: "n", EnvID: "env-a", OwnerID: "nobody"}); !errors.Is(err, access.ErrOwnerLacksPermission) {
+		t.Errorf("an owner who does not exist = %v", err)
+	}
+	_ = tx.Rollback()
+
+	if _, _, err := f.svc.RunAs(f.ctx, kindTestSync, "r1", "system:nobody"); !errors.Is(err, access.ErrUnknownSystemPrincipal) {
+		t.Errorf("an unlisted system principal = %v", err)
+	}
+	if _, _, err := f.svc.RunAs(f.ctx, kindTestSync, "missing", "system:gitsync"); !errors.Is(err, access.ErrNotFound) {
+		t.Errorf("a resource that is not recorded = %v", err)
+	}
+}
