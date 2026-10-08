@@ -208,6 +208,54 @@ func TestSchedulerWritesADailyBackupAtTheSetTimeThatOpensWithThePassphrase(t *te
 	}
 }
 
+// A scheduled backup must work when BAYPLAN_DATA_DIR and the backups folder
+// are relative, the form make dev uses (UAT gap G-03-4, plan 03-27).
+func TestSchedulerRunsWithARelativeDataDirectory(t *testing.T) {
+	f := newSchedFixture(t, time.Date(2026, 10, 8, 1, 0, 0, 0, time.UTC))
+	abs := f.exportFixture.dir
+	t.Chdir(filepath.Dir(abs))
+	rel := "./" + filepath.Base(abs)
+	f.sch.DataDir = rel
+	f.sch.Dir = filepath.Join(rel, "backups")
+	f.dir = f.sch.Dir
+	if _, err := f.saveSchedule(t, dailyAt3(exportPass)); err != nil {
+		t.Fatal(err)
+	}
+	f.runOnce(t)
+
+	const name = "bayplan-backup-20261008-0300.bayplan"
+	var ok int64
+	var file, runErr string
+	if err := f.st.Read.QueryRow(`SELECT ok, file_name, error FROM backup_runs`).Scan(&ok, &file, &runErr); err != nil {
+		t.Fatal(err)
+	}
+	if ok != 1 || file != name {
+		t.Fatalf("run ok=%d file=%q error=%q; want ok=1 %s", ok, file, runErr, name)
+	}
+	bf, err := os.Open(filepath.Join(f.dir, name)) //nolint:gosec // the backup the scheduler just wrote
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = bf.Close() }()
+	if _, err := backup.Open(bf, []byte(exportPass)); err != nil {
+		t.Fatalf("the scheduled backup does not open with the saved passphrase: %v", err)
+	}
+	entries, err := os.ReadDir(rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".bayplan-backup-") {
+			t.Errorf("the data directory kept the work directory %q", e.Name())
+		}
+	}
+	for _, n := range f.names(t) {
+		if strings.HasPrefix(n, ".bayplan-schedule-") {
+			t.Errorf("the backups folder kept the temporary file %q", n)
+		}
+	}
+}
+
 func TestSchedulerDoesNothingWhileTheScheduleIsOff(t *testing.T) {
 	f := newSchedFixture(t, time.Date(2026, 10, 8, 1, 0, 0, 0, time.UTC))
 	stop := f.run(t)

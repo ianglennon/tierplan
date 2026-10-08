@@ -183,6 +183,37 @@ func TestBackupDefaultsToTheBackupsFolderOfTheDataDirectory(t *testing.T) {
 	readBackup(t, file, cliPass)
 }
 
+// BAYPLAN_DATA_DIR is commonly relative (./.devdata under make dev); the backup
+// must work from it, to --out and to the default folder (UAT gap G-03-4).
+func TestBackupWorksWithARelativeDataDirectory(t *testing.T) {
+	abs, _ := seedDataDir(t, 1)
+	t.Chdir(filepath.Dir(abs))
+	rel := "./" + filepath.Base(abs)
+
+	out := filepath.Join(rel, "b.bayplan")
+	if _, errOut, err := runCLIWith(t, rel, cliPass+"\n", "", "backup", "--out", out); err != nil || strings.Contains(errOut, "invalid uri authority") {
+		t.Fatalf("backup --out = %v, stderr %q", err, errOut)
+	}
+	file, err := os.ReadFile(out) //nolint:gosec // a path the test made
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBackup(t, file, cliPass)
+
+	if _, errOut, err := runCLIWith(t, rel, cliPass+"\n", "", "backup"); err != nil || strings.Contains(errOut, "invalid uri authority") {
+		t.Fatalf("backup = %v, stderr %q", err, errOut)
+	}
+	matches, err := filepath.Glob(filepath.Join(rel, "backups", "bayplan-backup-*.bayplan"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("backups in the data directory = %v, %v; want one", matches, err)
+	}
+	file, err = os.ReadFile(matches[0]) //nolint:gosec // a path the test made
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBackup(t, file, cliPass)
+}
+
 func TestBackupRefusesABrokenChainUnlessAllowed(t *testing.T) {
 	dir, st := seedDataDir(t, 3)
 	if _, err := st.Write.Exec("UPDATE audit_log SET action = 'x' || substr(action, 2) WHERE seq = 2"); err != nil {
