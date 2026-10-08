@@ -5258,6 +5258,57 @@
         ]
       }
     },
+    "/api/users/{userId}/invite": {
+      "post": {
+        "description": "For a user who has not yet set a password. The new link replaces the previous one, which stops working at once, and is valid for BAYPLAN_INVITE_TTL. A user who has already set a password answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.",
+        "operationId": "regenerateInvite",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Replace a user's invite link",
+        "tags": [
+          "users"
+        ]
+      }
+    },
     "/api/version": {
       "get": {
         "operationId": "getVersion",

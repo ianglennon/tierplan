@@ -22,6 +22,8 @@ const (
 	problemUsernameTaken    = "username_taken"
 	problemUsernameReserved = "username_reserved"
 	problemInvalidLink      = "invalid_link"
+	problemNotInvited       = "not_invited"
+	problemUserNotFound     = "user_not_found"
 )
 
 // invalidLinkDetail is the one message every unusable link carries: expired,

@@ -201,8 +201,62 @@ func (s *Service) AcceptLink(ctx context.Context, token, password, actorIP, user
 	return nil
 }
 
-// RegenerateInvite replaces an invited user's link with a new one. Not yet
-// implemented.
-func (s *Service) RegenerateInvite(_ context.Context, _ audit.Actor, _ string) (string, Link, error) {
-	return "", Link{}, errors.New("access: not implemented")
+// Option adjusts one call of a service method.
+type Option func(*options)
+
+type options struct{ ip, userAgent string }
+
+// WithOrigin records where the request came from in the audit entry: the
+// admin's address and user agent.
+func WithOrigin(ip, userAgent string) Option {
+	return func(o *options) { o.ip, o.userAgent = ip, userAgent }
+}
+
+// RegenerateInvite replaces an invited user's link with a new one and returns
+// the user's name and the link, in one transaction with its audit entry
+// (D-22a). The old link stops working: a user holds one link at a time. A user
+// who has already set a password is ErrNotInvited, and one who does not exist or
+// is deleted is ErrNotFound; neither changes anything. actor is the admin; the
+// caller has already checked users.manage. The audit entry holds the username
+// and the expiry, never the token.
+func (s *Service) RegenerateInvite(ctx context.Context, actor audit.Actor, userID string, opts ...Option) (string, Link, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	tx, err := s.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return "", Link{}, fmt.Errorf("access: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.Store.Q.WithTx(tx)
+
+	u, err := q.GetUserByID(ctx, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", Link{}, ErrNotFound
+	}
+	if err != nil {
+		return "", Link{}, fmt.Errorf("access: read user: %w", err)
+	}
+	if u.DeletedAt.Valid {
+		return "", Link{}, ErrNotFound
+	}
+	if u.PasswordHash != "" {
+		return "", Link{}, ErrNotInvited
+	}
+	link, err := s.issueLinkTx(ctx, q, u.ID, LinkInvite, actor.ID)
+	if err != nil {
+		return "", Link{}, err
+	}
+	if err := s.Audit.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: audit.ActionUserInviteRegenerated, TargetType: "user", TargetID: u.ID,
+		Result: audit.ResultSuccess, IP: o.ip, UserAgent: o.userAgent,
+		Details: map[string]string{"username": u.Username, "expires_at": link.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00")},
+	}); err != nil {
+		return "", Link{}, fmt.Errorf("access: audit invite regenerated: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", Link{}, fmt.Errorf("access: commit: %w", err)
+	}
+	return u.Username, link, nil
 }

@@ -63,3 +63,26 @@ export async function createUser(input: NewUser): Promise<CreateUserResult> {
     return { kind: "error" };
   }
 }
+
+export type RegenerateResult =
+  | { kind: "ok"; link: OneTimeLink }
+  | { kind: "not_invited" }
+  | { kind: "error" };
+
+// regenerateInvite replaces a user's invite link; the old one stops working at
+// once. Like createUser it hands the link to the caller and keeps it nowhere
+// else. A user who is gone (404) is an error to the caller: the list is read
+// again either way.
+export async function regenerateInvite(userId: string): Promise<RegenerateResult> {
+  try {
+    const { data, error, response } = await api.POST("/api/users/{userId}/invite", {
+      params: { path: { userId } },
+    });
+    if (data) return { kind: "ok", link: data };
+    const problem = readProblem(error, response);
+    if (problem.status === 409 && problem.type === "not_invited") return { kind: "not_invited" };
+    return { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}

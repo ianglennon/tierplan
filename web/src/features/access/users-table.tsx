@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { EllipsisVertical } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
-import { type UserSummary, usersQuery } from "@/api/users";
+import { type OneTimeLink, type UserSummary, usersQuery } from "@/api/users";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +22,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CreateUserDialog } from "@/features/access/create-user-dialog";
 import { InstanceAdminBadge } from "@/features/access/instance-admin-badge";
+import { OneTimeLinkDialog } from "@/features/access/one-time-link-dialog";
+import { RegenerateInviteDialog } from "@/features/access/regenerate-invite-dialog";
 import { UserStatusBadge } from "@/features/access/user-status-badge";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { useT } from "@/i18n/use-t";
@@ -42,6 +51,51 @@ function matches(user: UserSummary, query: string): boolean {
   return [user.username, user.displayName, user.email].some((v) => v.toLowerCase().includes(q));
 }
 
+// canRegenerate says whether a user is still waiting on an invite: only then is
+// there a link to replace.
+function canRegenerate(user: UserSummary): boolean {
+  return user.status === "invite_pending" || user.status === "invite_expired";
+}
+
+interface RowActionsProps {
+  user: UserSummary;
+  onRegenerate: (user: UserSummary) => void;
+}
+
+// RowActions is the "Actions for {username}" menu. It holds only what the user
+// can use right now, and a user with nothing to offer gets no trigger at all.
+function RowActions({ user, onRegenerate }: RowActionsProps) {
+  const t = useT();
+  if (!canRegenerate(user)) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="max-md:size-11"
+          aria-label={t("users.actionsFor", { username: user.username })}
+        >
+          <EllipsisVertical aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => onRegenerate(user)}>
+          {t("users.actions.regenerate")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// An invite link just made, held here until its dialog is closed and not a
+// moment longer.
+interface IssuedLink {
+  username: string;
+  link: OneTimeLink;
+}
+
 // UsersTable is Settings > Access > Users (D-25): a search field and Create user,
 // the caption, and a dense table of every user with their status. The list is
 // searched in the browser and never paged. It renders names, display names and
@@ -51,6 +105,9 @@ export function UsersTable() {
   const query = useQuery(usersQuery);
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const [regenerateFor, setRegenerateFor] = useState<UserSummary | null>(null);
+  const [issued, setIssued] = useState<IssuedLink | null>(null);
 
   const all = query.data ?? [];
   const failed = query.isError && !query.data;
@@ -95,7 +152,15 @@ export function UsersTable() {
           <span className="text-muted-foreground">{t("users.neverSignedIn")}</span>
         ),
     },
+    {
+      id: "actions",
+      header: t("users.columns.actions"),
+      className: "w-12 text-right",
+      cell: (u) => <RowActions user={u} onRegenerate={setRegenerateFor} />,
+    },
   ];
+
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey });
 
   return (
     <div className="flex flex-col gap-4">
@@ -208,6 +273,23 @@ export function UsersTable() {
       ) : null}
 
       <CreateUserDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <RegenerateInviteDialog
+        user={regenerateFor}
+        onClose={() => setRegenerateFor(null)}
+        onGenerated={(user, link) => {
+          setRegenerateFor(null);
+          setIssued({ username: user.username, link });
+          // An expired invite is pending again.
+          refresh();
+        }}
+        onStale={refresh}
+      />
+      <OneTimeLinkDialog
+        title="invite"
+        username={issued?.username ?? ""}
+        link={issued?.link ?? null}
+        onClose={() => setIssued(null)}
+      />
     </div>
   );
 }

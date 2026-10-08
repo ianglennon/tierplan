@@ -109,6 +109,19 @@ func summaryOfAccess(u access.UserSummary) UserSummaryBody {
 	return b
 }
 
+// RegenerateInviteInput names the user whose invite is replaced.
+type RegenerateInviteInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	UserID    string `path:"userId" doc:"The user's ID"`
+}
+
+// RegenerateInviteOutput wraps the new link for huma.
+type RegenerateInviteOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         LinkBody
+}
+
 func registerUsers(r *httpx.Router, d AccessDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "listUsers",
@@ -166,6 +179,36 @@ func registerUsers(r *httpx.Router, d AccessDeps) {
 				User: summaryOf(u, d.now(), true),
 				Link: LinkBody{URL: linkURL(d.Instance, link.Token), ExpiresAt: link.ExpiresAt.UTC().Format(time.RFC3339)},
 			},
+		}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "regenerateInvite",
+		Method:      http.MethodPost,
+		Path:        "/api/users/{userId}/invite",
+		Summary:     "Replace a user's invite link",
+		Description: "For a user who has not yet set a password. The new link replaces the previous one, which " +
+			"stops working at once, and is valid for BAYPLAN_INVITE_TTL. A user who has already set a password " +
+			"answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.",
+		Tags: []string{"users"},
+	}, rbac.Requirement{Perm: rbac.PermUsersManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RegenerateInviteInput) (*RegenerateInviteOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		_, link, err := d.Access.RegenerateInvite(ctx, p.AuditActor(), in.UserID, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent))
+		switch {
+		case errors.Is(err, access.ErrNotFound):
+			return nil, httpx.Problem(http.StatusNotFound, problemUserNotFound, "That user doesn't exist.")
+		case errors.Is(err, access.ErrNotInvited):
+			return nil, httpx.Problem(http.StatusConflict, problemNotInvited, "That user has already set a password, so there is no invite to replace.")
+		case err != nil:
+			d.Log.Error("regenerate invite failed", "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		return &RegenerateInviteOutput{
+			CacheControl: "no-store",
+			Body:         LinkBody{URL: linkURL(d.Instance, link.Token), ExpiresAt: link.ExpiresAt.UTC().Format(time.RFC3339)},
 		}, nil
 	})
 }
