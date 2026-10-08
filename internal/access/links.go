@@ -206,7 +206,10 @@ func (s *Service) AcceptLink(ctx context.Context, token, password, actorIP, user
 // Option adjusts one call of a service method.
 type Option func(*options)
 
-type options struct{ ip, userAgent string }
+type options struct {
+	ip, userAgent string
+	reassign      []Reassignment
+}
 
 // WithOrigin records where the request came from in the audit entry: the
 // admin's address and user agent.

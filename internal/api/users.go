@@ -57,6 +57,25 @@ type UserDetailOutput struct {
 	Body         UserDetailBody
 }
 
+// DeleteUserInput names the user to delete, and optionally who takes over the
+// automations they own.
+type DeleteUserInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	UserID    string `path:"userId" doc:"The user's ID"`
+	// Body is a pointer so that it is optional: a delete with no body hands nothing over.
+	Body *struct {
+		Reassign []ReassignBody `json:"reassign,omitempty" maxItems:"200" doc:"Automations the user owns and who takes each over. Whatever is not listed is paused as owner deleted"`
+	}
+}
+
+// ReassignBody hands one automation of a user who is being deleted to another user.
+type ReassignBody struct {
+	Kind       string `json:"kind" minLength:"1" maxLength:"64" doc:"The automation's kind, as the owned list gives it"`
+	ResourceID string `json:"resourceId" minLength:"1" maxLength:"256" doc:"The automation's ID within its kind"`
+	OwnerID    string `json:"ownerId" minLength:"1" maxLength:"64" doc:"The ID of the user who takes it over"`
+}
+
 // UserIDInput names one user in the path, with the caller's origin for the audit entry.
 type UserIDInput struct {
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
@@ -407,16 +426,26 @@ func registerUserLifecycle(r *httpx.Router, d AccessDeps) {
 		Description: "Turns the user into a tombstone and cannot be undone: they are disabled, their password, email and " +
 			"display name are cleared, instance admin is turned off, and their sessions, links, direct access and team " +
 			"memberships are removed in one step. Their username stays reserved, so creating it again answers 409 " +
-			"username_reserved. The automations they own pause. The last active instance admin cannot be deleted: 409 " +
-			"last_instance_admin. A user who is already deleted answers 404 user_not_found.",
+			"username_reserved. The automations they own pause as owner deleted, except those listed in the optional reassign " +
+			"body, which go to the user named for each in the same step; a user who could not run one answers 422 " +
+			"owner_not_eligible, one that is not the deleted user's answers 404 automation_not_found, and nothing is deleted. " +
+			"The last active instance admin cannot be deleted: 409 last_instance_admin. A user who is already deleted " +
+			"answers 404 user_not_found.",
 		Tags: []string{"users"},
-	}, manage, func(ctx context.Context, in *UserIDInput) (*struct{}, error) {
+	}, manage, func(ctx context.Context, in *DeleteUserInput) (*struct{}, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
-		if err := d.Access.DeleteUser(ctx, p.AuditActor(), in.UserID, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent)); err != nil {
-			return nil, lifecycleError(d, "delete user", err)
+		var reassign []access.Reassignment
+		if in.Body != nil {
+			for _, r := range in.Body.Reassign {
+				reassign = append(reassign, access.Reassignment{Kind: r.Kind, ResourceID: r.ResourceID, OwnerID: r.OwnerID})
+			}
+		}
+		if err := d.Access.DeleteUser(ctx, p.AuditActor(), in.UserID,
+			access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent), access.WithReassign(reassign)); err != nil {
+			return nil, ownedError(d, "delete user", err)
 		}
 		return nil, nil
 	})

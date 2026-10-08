@@ -1175,7 +1175,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a user
-         * @description Turns the user into a tombstone and cannot be undone: they are disabled, their password, email and display name are cleared, instance admin is turned off, and their sessions, links, direct access and team memberships are removed in one step. Their username stays reserved, so creating it again answers 409 username_reserved. The automations they own pause. The last active instance admin cannot be deleted: 409 last_instance_admin. A user who is already deleted answers 404 user_not_found.
+         * @description Turns the user into a tombstone and cannot be undone: they are disabled, their password, email and display name are cleared, instance admin is turned off, and their sessions, links, direct access and team memberships are removed in one step. Their username stays reserved, so creating it again answers 409 username_reserved. The automations they own pause as owner deleted, except those listed in the optional reassign body, which go to the user named for each in the same step; a user who could not run one answers 422 owner_not_eligible, one that is not the deleted user's answers 404 automation_not_found, and nothing is deleted. The last active instance admin cannot be deleted: 409 last_instance_admin. A user who is already deleted answers 404 user_not_found.
          */
         delete: operations["deleteUser"];
         options?: never;
@@ -1822,6 +1822,10 @@ export interface components {
             email?: string;
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
+        };
+        DeleteUserInputBody: {
+            /** @description Automations the user owns and who takes each over. Whatever is not listed is paused as owner deleted */
+            reassign?: components["schemas"]["ReassignBody"][] | null;
         };
         DenialBody: {
             /**
@@ -2663,6 +2667,14 @@ export interface components {
             updatedAt: string;
             /** @description The lower-cased username. It can never be changed */
             username: string;
+        };
+        ReassignBody: {
+            /** @description The automation's kind, as the owned list gives it */
+            kind: string;
+            /** @description The ID of the user who takes it over */
+            ownerId: string;
+            /** @description The automation's ID within its kind */
+            resourceId: string;
         };
         RecentEnvironmentsBody: {
             /** @description Up to 3 environment IDs, most recently used first */
@@ -5577,7 +5589,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DeleteUserInputBody"];
+            };
+        };
         responses: {
             /** @description No Content */
             204: {

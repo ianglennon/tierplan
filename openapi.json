@@ -855,6 +855,23 @@
         ],
         "type": "object"
       },
+      "DeleteUserInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "reassign": {
+            "description": "Automations the user owns and who takes each over. Whatever is not listed is paused as owner deleted",
+            "items": {
+              "$ref": "#/components/schemas/ReassignBody"
+            },
+            "maxItems": 200,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "DenialBody": {
         "additionalProperties": false,
         "properties": {
@@ -3021,6 +3038,35 @@
           "displayName",
           "email",
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ReassignBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "The automation's kind, as the owned list gives it",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "ownerId": {
+            "description": "The ID of the user who takes it over",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "resourceId": {
+            "description": "The automation's ID within its kind",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "resourceId",
+          "ownerId"
         ],
         "type": "object"
       },
@@ -7837,7 +7883,7 @@
     },
     "/api/users/{userId}": {
       "delete": {
-        "description": "Turns the user into a tombstone and cannot be undone: they are disabled, their password, email and display name are cleared, instance admin is turned off, and their sessions, links, direct access and team memberships are removed in one step. Their username stays reserved, so creating it again answers 409 username_reserved. The automations they own pause. The last active instance admin cannot be deleted: 409 last_instance_admin. A user who is already deleted answers 404 user_not_found.",
+        "description": "Turns the user into a tombstone and cannot be undone: they are disabled, their password, email and display name are cleared, instance admin is turned off, and their sessions, links, direct access and team memberships are removed in one step. Their username stays reserved, so creating it again answers 409 username_reserved. The automations they own pause as owner deleted, except those listed in the optional reassign body, which go to the user named for each in the same step; a user who could not run one answers 422 owner_not_eligible, one that is not the deleted user's answers 404 automation_not_found, and nothing is deleted. The last active instance admin cannot be deleted: 409 last_instance_admin. A user who is already deleted answers 404 user_not_found.",
         "operationId": "deleteUser",
         "parameters": [
           {
@@ -7851,6 +7897,15 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteUserInputBody"
+              }
+            }
+          }
+        },
         "responses": {
           "204": {
             "description": "No Content"

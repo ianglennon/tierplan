@@ -246,12 +246,27 @@ type ProfileInput struct {
 	UpdatedAt          time.Time
 }
 
+// Reassignment hands one automation of a user who is being deleted to another
+// user (D-22).
+type Reassignment struct {
+	Kind, ResourceID, OwnerID string
+}
+
+// WithReassign tells DeleteUser which of the deleted user's automations go to
+// whom. Each must belong to the user being deleted and the new owner must be able
+// to run it, or the whole delete is refused. What is not listed is paused.
+func WithReassign(r []Reassignment) Option {
+	return func(o *options) { o.reassign = r }
+}
+
 // DeleteUser turns a user into a tombstone (D-22c): disabled, deleted_at set,
 // password, email and display name cleared and instance admin off, with their
 // sessions, links, direct assignments and team memberships removed, all in one
 // transaction. The username stays reserved and the delete cannot be undone. The
-// automations they own pause as "owner deleted". The last active instance admin
-// cannot be deleted (ErrLastInstanceAdmin). A user who is already a tombstone is
+// automations they own pause as "owner deleted", except those WithReassign hands
+// to an eligible user in the same transaction, before the tombstone: if any hand-over is refused
+// (ErrNotEligible, or ErrOwnedNotFound for one that is not the user's) nothing
+// is deleted. The last active instance admin cannot be deleted (ErrLastInstanceAdmin). A user who is already a tombstone is
 // ErrNotFound.
 func (s *Service) DeleteUser(ctx context.Context, actor audit.Actor, id string, opts ...Option) error {
 	o := optionsOf(opts)
@@ -265,6 +280,19 @@ func (s *Service) DeleteUser(ctx context.Context, actor audit.Actor, id string, 
 	u, err := liveUserTx(ctx, q, id)
 	if err != nil {
 		return err
+	}
+	for _, r := range o.reassign {
+		row, err := q.GetOwnedResource(ctx, sqlc.GetOwnedResourceParams{Kind: r.Kind, ResourceID: r.ResourceID})
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && row.OwnerID != id) {
+			// Only what this user owns can be handed over from their deletion.
+			return ErrOwnedNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("access: read owned %s %s: %w", r.Kind, r.ResourceID, err)
+		}
+		if err := s.transferTx(ctx, tx, q, actor, r.Kind, r.ResourceID, r.OwnerID, o); err != nil {
+			return err
+		}
 	}
 	n, err := q.TombstoneUser(ctx, sqlc.TombstoneUserParams{
 		DeletedAt: sql.NullInt64{Int64: s.now().UnixNano(), Valid: true},
@@ -300,10 +328,9 @@ func (s *Service) DeleteUser(ctx context.Context, actor audit.Actor, id string, 
 	if err := s.Audit.RecordTx(ctx, tx, audit.Entry{
 		Actor: actor, Action: audit.ActionUserDeleted, TargetType: "user", TargetID: id,
 		Result: audit.ResultSuccess, IP: o.ip, UserAgent: o.userAgent,
-		// reassigned is 0 until automations can be handed to another owner.
 		Details: map[string]string{
 			"username": u.Username, "ended": strconv.FormatInt(ended, 10),
-			"paused": strconv.Itoa(paused), "reassigned": "0",
+			"paused": strconv.Itoa(paused), "reassigned": strconv.Itoa(len(o.reassign)),
 		},
 	}); err != nil {
 		return fmt.Errorf("access: audit user deleted: %w", err)
