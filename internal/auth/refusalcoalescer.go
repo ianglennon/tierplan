@@ -24,16 +24,19 @@ const (
 	defaultBurstThreshold = 10
 	defaultBurstKeep      = time.Hour
 	defaultMaxCoalesced   = 4096
-	// defaultMaxPerActor bounds the windows one signed-in user can hold open.
-	// Past it, that user's further refusals of one action and reason share a
-	// single overflow window, so a user cannot make every request a new key.
+	// defaultMaxPerActor bounds the windows one signed-in user can hold open for
+	// one route and reason, which can differ only in the environment ID the
+	// caller put in the URL. Past it, further refusals of that route and reason
+	// share a single overflow window, so a user cannot make every request a new
+	// key. Different routes are different groups, so a user who is refused on
+	// many routes is still written in full on each.
 	defaultMaxPerActor = 32
 	// maxBursts bounds the remembered bursts, whatever their age.
 	maxBursts = 256
 )
 
-// refusalOverflow ends an overflow key. A normal key has five parts and an
-// overflow key four, so the two can never be equal.
+// refusalOverflow ends an overflow key, which a normal key (made of the actor,
+// action, reason, route and environment) never does.
 const refusalOverflow = "\x01overflow"
 
 // Burst is a user's refusals that came fast enough to be worth an admin's
@@ -70,12 +73,13 @@ type RefusalCoalescer struct {
 	burst  int
 	keep   time.Duration
 	maxKey int
-	// maxActor is the open windows one actor may hold before overflowing.
+	// maxActor is the open windows one group (actor, action, reason, route) may
+	// hold before overflowing.
 	maxActor int
 
 	mu         sync.Mutex
 	open       map[string]*refusalWindow
-	actorOpen  map[string]int
+	groupOpen  map[string]int
 	bursts     []Burst
 	fullLogged bool
 }
@@ -83,7 +87,7 @@ type RefusalCoalescer struct {
 // refusalWindow is the first refusal of one key and the repeats since.
 type refusalWindow struct {
 	entry       audit.Entry
-	actor       string
+	group       string
 	first, last time.Time
 	repeats     int
 	burstNoted  bool
@@ -122,9 +126,9 @@ func WithMaxKeys(n int) CoalescerOption {
 	}
 }
 
-// WithMaxPerActor sets how many windows one user may hold open before that user's
-// further refusals fold into one shared window per action and reason. A value
-// below one is ignored.
+// WithMaxPerActor sets how many windows one user may hold open for one route and
+// reason before that user's further refusals fold into one shared window. A
+// value below one is ignored.
 func WithMaxPerActor(n int) CoalescerOption {
 	return func(c *RefusalCoalescer) {
 		if n > 0 {
@@ -146,7 +150,7 @@ func NewRefusalCoalescer(next AuditRecorder, log *slog.Logger, now func() time.T
 		next: next, log: log, now: now,
 		window: defaultCoalesceWindow, burst: defaultBurstThreshold,
 		keep: defaultBurstKeep, maxKey: defaultMaxCoalesced, maxActor: defaultMaxPerActor,
-		open: make(map[string]*refusalWindow), actorOpen: make(map[string]int),
+		open: make(map[string]*refusalWindow), groupOpen: make(map[string]int),
 	}
 	for _, o := range opts {
 		o(c)
@@ -164,18 +168,25 @@ func refusalKey(e audit.Entry) string {
 	return strings.Join([]string{e.Actor.ID, e.Action, e.Reason, e.TargetID, e.EnvID}, "\x00")
 }
 
+// groupKey is what the per-actor cap counts windows by: everything in the key
+// but the environment ID.
+func groupKey(e audit.Entry) string {
+	return strings.Join([]string{e.Actor.ID, e.Action, e.Reason, e.TargetID}, "\x00")
+}
+
 // keyLocked is the window key of e. The caller holds c.mu. A key that is already
 // open is used as it is; a new key from an actor already holding the maximum
-// number of windows becomes that actor's overflow key, which ignores the
-// target and environment, so the number of windows one actor can open, and the
-// full writes they cause, are bounded whatever strings the requests carry.
+// number of windows for the same route and reason becomes that group's overflow
+// key, which ignores the environment, so the number of windows one actor can
+// open per route, and the full writes they cause, are bounded whatever strings
+// the requests carry.
 func (c *RefusalCoalescer) keyLocked(e audit.Entry) (key string, overflow bool) {
 	key = refusalKey(e)
 	if _, ok := c.open[key]; ok {
 		return key, false
 	}
-	if c.actorOpen[e.Actor.ID] >= c.maxActor {
-		return strings.Join([]string{e.Actor.ID, e.Action, e.Reason, refusalOverflow}, "\x00"), true
+	if c.groupOpen[groupKey(e)] >= c.maxActor {
+		return groupKey(e) + "\x00" + refusalOverflow, true
 	}
 	return key, false
 }
@@ -183,7 +194,7 @@ func (c *RefusalCoalescer) keyLocked(e audit.Entry) (key string, overflow bool) 
 // addLocked opens or puts back a window. The caller holds c.mu.
 func (c *RefusalCoalescer) addLocked(key string, w *refusalWindow) {
 	c.open[key] = w
-	c.actorOpen[w.actor]++
+	c.groupOpen[w.group]++
 }
 
 // removeLocked closes a window. The caller holds c.mu.
@@ -193,8 +204,8 @@ func (c *RefusalCoalescer) removeLocked(key string) {
 		return
 	}
 	delete(c.open, key)
-	if c.actorOpen[w.actor]--; c.actorOpen[w.actor] <= 0 {
-		delete(c.actorOpen, w.actor)
+	if c.groupOpen[w.group]--; c.groupOpen[w.group] <= 0 {
+		delete(c.groupOpen, w.group)
 	}
 }
 
@@ -242,7 +253,7 @@ func (c *RefusalCoalescer) Record(ctx context.Context, e audit.Entry) error {
 		if overflow {
 			stored.Details["overflow"] = "true"
 		}
-		c.addLocked(key, &refusalWindow{entry: stored, actor: e.Actor.ID, first: at, last: at})
+		c.addLocked(key, &refusalWindow{entry: stored, group: groupKey(e), first: at, last: at})
 	}
 	return nil
 }

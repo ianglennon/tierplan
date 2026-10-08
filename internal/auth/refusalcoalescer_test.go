@@ -367,3 +367,18 @@ func TestCoalescerPerActorOverflowIsAnOptionAndFreesItsSlotsWhenWindowsClose(t *
 		t.Fatalf("windows after the sweep = %d, want 2", co.Pending())
 	}
 }
+
+// The cap is per route and reason: one user refused on many different routes
+// is still written in full on each of them.
+func TestCoalescerPerActorCapDoesNotFoldDifferentRoutes(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk)
+	for i := range 200 {
+		if err := co.Record(context.Background(), userRefusal("u1", "GET /route-"+strconv.Itoa(i), "forbidden", "env-1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(next.all()); got != 200 {
+		t.Fatalf("rows = %d, want one full row for each of 200 routes", got)
+	}
+}
