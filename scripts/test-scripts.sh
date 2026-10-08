@@ -271,6 +271,15 @@ for variant in loopback-only systemd-missing; do
   fi
 done
 
+# --- Upgrade smoke (D-34): the script parses, refuses to run without its images,
+# and the make target builds the base from a worktree of the ref it is given. The
+# Docker run itself is proved by `make upgrade-smoke`, not here.
+expect pass "upgrade-smoke-syntax" bash -n scripts/upgrade-smoke.sh
+expect fail "upgrade-smoke-missing-image" env BASE_IMAGE=bayplan-no-such-image:none scripts/upgrade-smoke.sh
+expect pass "upgrade-smoke-target" mk upgrade-smoke UPGRADE_BASE_REF=0123abc
+expect_out "upgrade-smoke-target builds the base from a worktree" "git worktree add --detach .devdata/upgrade-base '0123abc'"
+expect_out "upgrade-smoke-target runs the script" "scripts/upgrade-smoke.sh"
+
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"
   exit 1
