@@ -70,6 +70,7 @@ func RegisterAccess(r *httpx.Router, d AccessDeps) {
 	}
 	registerUsers(r, d)
 	registerInvite(r, d)
+	registerSessions(r, d)
 }
 
 // linkURL is the address an admin hands to a user. The token travels in the URL

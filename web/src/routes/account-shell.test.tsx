@@ -35,6 +35,18 @@ beforeEach(() => {
         return Response.json({ instanceName: "Lab", needsSetup: false, rememberDays: 30 });
       }
       if (path === "/api/me") return Response.json(me);
+      if (path === "/api/me/sessions") {
+        return Response.json([
+          {
+            id: "c".repeat(32),
+            userAgent: "curl/8.5.0",
+            ip: "203.0.113.9",
+            createdAt: "2026-10-01T10:00:00Z",
+            lastSeenAt: "2026-10-01T10:00:00Z",
+            current: true,
+          },
+        ]);
+      }
       if (path === "/api/warnings") {
         warningRequests++;
         return Response.json({ items: warnings });
@@ -73,7 +85,7 @@ function renderAt(path: string) {
 }
 
 describe("account and warnings in the app shell", () => {
-  it("puts Change password between the role and the theme choice, and opens the dialog", async () => {
+  it("puts Sessions and Change password between the role and the theme choice, and opens the dialogs", async () => {
     renderAt("/");
     const trigger = await screen.findByRole("button", { name: "User menu" });
     fireEvent.keyDown(trigger, { key: "Enter" });
@@ -81,11 +93,23 @@ describe("account and warnings in the app shell", () => {
     const labels = within(menu)
       .getAllByRole("menuitem")
       .map((i) => i.textContent);
-    expect(labels).toEqual(["Change password", "Log out"]);
+    expect(labels).toEqual(["Sessions", "Change password", "Log out"]);
     const text = menu.textContent ?? "";
     expect(text.indexOf("Instance admin")).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf("Instance admin")).toBeLessThan(text.indexOf("Change password"));
+    expect(text.indexOf("Instance admin")).toBeLessThan(text.indexOf("Sessions"));
+    expect(text.indexOf("Sessions")).toBeLessThan(text.indexOf("Change password"));
     expect(text.indexOf("Change password")).toBeLessThan(text.indexOf("Theme"));
+
+    // Sessions opens outside the menu content, so closing the menu keeps it open.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sessions" }));
+    const sessions = await screen.findByRole("dialog", { name: "Your sessions" });
+    expect(await within(sessions).findByText("This session")).toBeTruthy();
+    fireEvent.click(within(sessions).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    await screen.findByRole("menu");
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Change password" }));
     const dialog = await screen.findByRole("dialog", { name: "Change password" });

@@ -40,6 +40,23 @@ func (q *Queries) DeleteSession(ctx context.Context, idHash []byte) error {
 	return err
 }
 
+const deleteUserSessionByPublicID = `-- name: DeleteUserSessionByPublicID :execrows
+DELETE FROM sessions WHERE user_id = ? AND public_id = ?
+`
+
+type DeleteUserSessionByPublicIDParams struct {
+	UserID   string
+	PublicID sql.NullString
+}
+
+func (q *Queries) DeleteUserSessionByPublicID(ctx context.Context, arg DeleteUserSessionByPublicIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteUserSessionByPublicID, arg.UserID, arg.PublicID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteUserSessionsExcept = `-- name: DeleteUserSessionsExcept :exec
 DELETE FROM sessions WHERE user_id = ? AND id_hash != ?
 `
@@ -54,6 +71,25 @@ type DeleteUserSessionsExceptParams struct {
 func (q *Queries) DeleteUserSessionsExcept(ctx context.Context, arg DeleteUserSessionsExceptParams) error {
 	_, err := q.db.ExecContext(ctx, deleteUserSessionsExcept, arg.UserID, arg.IDHash)
 	return err
+}
+
+const deleteUserSessionsExceptHash = `-- name: DeleteUserSessionsExceptHash :execrows
+DELETE FROM sessions WHERE user_id = ? AND id_hash != ?
+`
+
+type DeleteUserSessionsExceptHashParams struct {
+	UserID string
+	IDHash []byte
+}
+
+// Ends every other session of a user and says how many ended, for "sign out
+// everywhere else".
+func (q *Queries) DeleteUserSessionsExceptHash(ctx context.Context, arg DeleteUserSessionsExceptHashParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteUserSessionsExceptHash, arg.UserID, arg.IDHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getSessionByHash = `-- name: GetSessionByHash :one
@@ -77,12 +113,35 @@ func (q *Queries) GetSessionByHash(ctx context.Context, idHash []byte) (Session,
 	return i, err
 }
 
+const getUserSessionByPublicID = `-- name: GetUserSessionByPublicID :one
+SELECT id_hash, ip, user_agent FROM sessions WHERE user_id = ? AND public_id = ?
+`
+
+type GetUserSessionByPublicIDParams struct {
+	UserID   string
+	PublicID sql.NullString
+}
+
+type GetUserSessionByPublicIDRow struct {
+	IDHash    []byte
+	Ip        string
+	UserAgent string
+}
+
+// Scoped by user, so another user's handle is no row at all (T-03-60).
+func (q *Queries) GetUserSessionByPublicID(ctx context.Context, arg GetUserSessionByPublicIDParams) (GetUserSessionByPublicIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getUserSessionByPublicID, arg.UserID, arg.PublicID)
+	var i GetUserSessionByPublicIDRow
+	err := row.Scan(&i.IDHash, &i.Ip, &i.UserAgent)
+	return i, err
+}
+
 const insertSession = `-- name: InsertSession :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The Bayplan Authors */
 
-INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, absolute_expires_at, remember, ip, user_agent)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, absolute_expires_at, remember, ip, user_agent, public_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertSessionParams struct {
@@ -94,6 +153,7 @@ type InsertSessionParams struct {
 	Remember          int64
 	Ip                string
 	UserAgent         string
+	PublicID          sql.NullString
 }
 
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
@@ -106,8 +166,58 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.Remember,
 		arg.Ip,
 		arg.UserAgent,
+		arg.PublicID,
 	)
 	return err
+}
+
+const listUserSessions = `-- name: ListUserSessions :many
+SELECT CAST(COALESCE(public_id, '') AS TEXT) AS public_id, id_hash, created_at, last_seen_at, ip, user_agent
+FROM sessions
+WHERE user_id = ?
+ORDER BY last_seen_at DESC, created_at DESC, id_hash
+`
+
+type ListUserSessionsRow struct {
+	PublicID   string
+	IDHash     []byte
+	CreatedAt  int64
+	LastSeenAt int64
+	Ip         string
+	UserAgent  string
+}
+
+// A user's sessions, most recently active first, for the session list. public_id
+// is the handle the list names a session by; id_hash only lets the caller tell
+// which row is their own and never leaves the server (T-03-59).
+func (q *Queries) ListUserSessions(ctx context.Context, userID string) ([]ListUserSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUserSessions, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUserSessionsRow
+	for rows.Next() {
+		var i ListUserSessionsRow
+		if err := rows.Scan(
+			&i.PublicID,
+			&i.IDHash,
+			&i.CreatedAt,
+			&i.LastSeenAt,
+			&i.Ip,
+			&i.UserAgent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const touchSession = `-- name: TouchSession :exec

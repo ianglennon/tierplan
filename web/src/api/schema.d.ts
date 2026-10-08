@@ -690,6 +690,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the signed-in user's sessions
+         * @description Every browser the caller is signed in on, most recently active first, with the device, address and last activity, and current set on the one making this request.
+         */
+        get: operations["listMySessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/sessions/revoke-others": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out everywhere else
+         * @description Ends every session of the caller except the one making this request, and says how many ended. Audited as user.sessions_revoked.
+         */
+        post: operations["revokeMyOtherSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/sessions/{publicId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Sign one of the caller's other sessions out
+         * @description That browser's next request answers 401. The session making this request cannot be revoked here: 409 current_session. A handle that is not one of the caller's sessions answers 404 session_not_found. Audited as session.revoked.
+         */
+        delete: operations["revokeMySession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -877,6 +937,46 @@ export interface paths {
          * @description For a user who has not yet set a password. The new link replaces the previous one, which stops working at once, and is valid for BAYPLAN_INVITE_TTL. A user who has already set a password answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.
          */
         post: operations["regenerateInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a user's sessions
+         * @description For an admin on a user's page. No session is marked current. An unknown or deleted user answers 404 user_not_found.
+         */
+        get: operations["listUserSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/sessions/revoke-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * End all of a user's sessions
+         * @description Signs the user out everywhere at once and says how many ended. Nothing is written when they were not signed in anywhere. An unknown or deleted user answers 404 user_not_found. Audited as user.sessions_revoked.
+         */
+        post: operations["revokeUserSessions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1868,6 +1968,33 @@ export interface components {
             hasAgents: boolean;
             /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
             install: components["schemas"]["InstallBody"];
+        };
+        SessionBody: {
+            /**
+             * Format: date-time
+             * @description When the user signed in
+             */
+            createdAt: string;
+            /** @description True for the session making this request. Never true when an admin looks at another user's sessions */
+            current: boolean;
+            /** @description The session's public ID, to revoke it by. It is not the cookie and cannot be used to sign in */
+            id: string;
+            /** @description The address the session was created from; empty when unknown */
+            ip: string;
+            /**
+             * Format: date-time
+             * @description When the session last made a request
+             */
+            lastSeenAt: string;
+            /** @description The user agent the session was created with; empty when the browser sent none */
+            userAgent: string;
+        };
+        SessionsEndedBody: {
+            /**
+             * Format: int64
+             * @description How many sessions ended
+             */
+            ended: number;
         };
         SetInstanceAdminInputBody: {
             /** @description True to make the user an instance admin, false to remove it */
@@ -3546,6 +3673,96 @@ export interface operations {
             };
         };
     };
+    listMySessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeMyOtherSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsEndedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeMySession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's public ID, as the session list gives it */
+                publicId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getSettings: {
         parameters: {
             query?: never;
@@ -3965,6 +4182,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LinkBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listUserSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeUserSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsEndedBody"];
                 };
             };
             /** @description Error */

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { KeyRound, LogOut } from "lucide-react";
+import { KeyRound, LogOut, MonitorSmartphone } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ChangePasswordDialog } from "@/features/account/change-password-dialog";
+import { SessionsDialog } from "@/features/account/sessions-dialog";
 import { useSignOut } from "@/features/account/sign-out";
 import { useT } from "@/i18n/use-t";
 import { getTheme, setTheme, type ThemeMode } from "@/lib/theme";
@@ -38,12 +39,13 @@ const THEMES: ReadonlyArray<{ mode: ThemeMode; key: string }> = [
 ];
 
 // UserMenu is the header menu on every signed-in page: who is signed in, the
-// theme choice, Change password (D-34) and Log out (AUTH-03, D-63).
+// theme choice, Sessions (D-23), Change password (D-34) and Log out (AUTH-03, D-63).
 export function UserMenu({ username, instanceAdmin }: UserMenuProps) {
   const t = useT();
   const signOut = useSignOut();
   const [theme, setThemeState] = useState<ThemeMode>(getTheme);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   function chooseTheme(value: string) {
@@ -78,6 +80,10 @@ export function UserMenu({ username, instanceAdmin }: UserMenuProps) {
             ) : null}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => setSessionsOpen(true)}>
+            <MonitorSmartphone aria-hidden="true" />
+            {t("sessions.menu.sessions")}
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setChangePasswordOpen(true)}>
             <KeyRound aria-hidden="true" />
             {t("shell.userMenu.changePassword")}
@@ -104,6 +110,11 @@ export function UserMenu({ username, instanceAdmin }: UserMenuProps) {
       <ChangePasswordDialog
         open={changePasswordOpen}
         onOpenChange={setChangePasswordOpen}
+        returnFocusRef={triggerRef}
+      />
+      <SessionsDialog
+        open={sessionsOpen}
+        onOpenChange={setSessionsOpen}
         returnFocusRef={triggerRef}
       />
     </>

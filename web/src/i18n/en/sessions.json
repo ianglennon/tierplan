@@ -1,0 +1,42 @@
+{
+  "sessions": {
+    "menu": {
+      "profile": "Profile",
+      "sessions": "Sessions"
+    },
+    "title": "Your sessions",
+    "body": "Everywhere you're signed in to Bayplan.",
+    "tableLabel": "Sessions",
+    "columns": {
+      "device": "Device",
+      "ip": "IP address",
+      "lastActive": "Last active",
+      "actions": "Actions"
+    },
+    "actionsFor": "Actions for {{device}}",
+    "device": "{{browser}} on {{os}}",
+    "unknownDevice": "Unknown device",
+    "missing": "—",
+    "current": "This session",
+    "onlyHere": "You're only signed in here.",
+    "loading": "Loading sessions",
+    "loadFailed": "Couldn't load the sessions.",
+    "loadFailedBody": "Check the connection and try again.",
+    "retry": "Retry",
+    "close": "Close",
+    "revoke": "Revoke",
+    "revokePending": "Revoking…",
+    "revoked": "Session revoked.",
+    "revokeFailed": "Couldn't revoke that session. It may already have ended. Try again, and check the Bayplan logs if it keeps happening.",
+    "others": {
+      "button": "Sign out everywhere else",
+      "title": "Sign out everywhere else?",
+      "body": "Every other session ends. You stay signed in here.",
+      "cancel": "Cancel",
+      "confirm": "Sign out everywhere else",
+      "pending": "Signing out…",
+      "done": "Signed out everywhere else.",
+      "failed": "Couldn't sign out the other sessions. Try again, and check the Bayplan logs if it keeps happening."
+    }
+  }
+}
