@@ -26,7 +26,7 @@ import (
 
 func main() {
 	if err := newRoot().Execute(); err != nil {
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 
@@ -66,6 +66,7 @@ func newRoot() *cobra.Command {
 		newSetupTokenCmd(),
 		newUserCmd(),
 		newBackupCmd(),
+		newRestoreCmd(),
 		newPermissionsCmd(),
 		&cobra.Command{
 			Use:   "healthcheck",
