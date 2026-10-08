@@ -67,6 +67,8 @@ let sent: Record<string, unknown>;
 // answers (plan 03-22).
 let owned: Array<Record<string, unknown>>;
 let eligible: Array<Record<string, unknown>>;
+// Who could take over a given automation, when it differs from the default.
+let eligibleById: Record<string, Array<Record<string, unknown>>>;
 let ownedStatus: number;
 let transferStatus: number;
 
@@ -82,6 +84,7 @@ beforeEach(() => {
   sent = {};
   owned = [];
   eligible = [];
+  eligibleById = {};
   ownedStatus = 200;
   transferStatus = 200;
   write = () => Response.json(user);
@@ -139,8 +142,8 @@ beforeEach(() => {
           ? Response.json(owned)
           : Response.json({ title: "boom" }, { status: ownedStatus });
       }
-      if (/^\/api\/owned\/[^/]+\/[^/]+\/eligible-owners$/.test(path))
-        return Response.json(eligible);
+      const eligibleFor = /^\/api\/owned\/[^/]+\/([^/]+)\/eligible-owners$/.exec(path);
+      if (eligibleFor) return Response.json(eligibleById[eligibleFor[1]] ?? eligible);
       if (/^\/api\/owned\/[^/]+\/[^/]+\/transfer$/.test(path)) {
         sent[`${req.method} ${path}`] = await req.clone().json();
         if (transferStatus !== 200) {
@@ -807,5 +810,165 @@ describe("the Owned automations card (D-14)", () => {
     await screen.findByRole("heading", { level: 2, name: "alice" });
     await waitFor(() => expect(seen).toContain("GET /api/users/u1/owned"));
     expect(screen.queryByRole("region", { name: "Owned automations" })).toBeNull();
+  });
+});
+
+describe("the owned automations in the Disable and Delete dialogs (D-22)", () => {
+  const BOB = { id: "u2", username: "bob", displayName: "" };
+  const DANA = { id: "u3", username: "dana", displayName: "Dana D" };
+
+  it("tells the admin in the Disable dialog how many automations will pause", async () => {
+    owned = [ownedBody(), ownedBody({ resourceId: "r2", name: "Hook r2" })];
+    renderAt(PAGE);
+    fireEvent.click(await screen.findByRole("button", { name: "Disable user" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Disable alice?" });
+    expect(
+      await within(dialog).findByText(
+        "They own 2 automations. These pause until you enable alice again or transfer them.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("uses the singular for one automation in the Disable dialog", async () => {
+    owned = [ownedBody()];
+    renderAt(PAGE);
+    fireEvent.click(await screen.findByRole("button", { name: "Disable user" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Disable alice?" });
+    expect(
+      await within(dialog).findByText(
+        "They own 1 automation. It pauses until you enable alice again or transfer it.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("has no automations alert in the Disable dialog for a user who owns nothing", async () => {
+    renderAt(PAGE);
+    fireEvent.click(await screen.findByRole("button", { name: "Disable user" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Disable alice?" });
+    await waitFor(() => expect(seen).toContain("GET /api/users/u1/owned"));
+    expect(within(dialog).queryByText(/They own/)).toBeNull();
+  });
+
+  const openDelete = async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Delete user…" }));
+    return screen.findByRole("alertdialog", { name: "Delete alice?" });
+  };
+
+  async function chooseOwner(dialog: HTMLElement, automation: string, option: string) {
+    const select = await within(dialog).findByRole("combobox", { name: `Owner of ${automation}` });
+    await waitFor(() => expect((select as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.keyDown(select, { key: "Enter" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: option }), { key: "Enter" });
+  }
+
+  it("lists each automation with an Owner select that starts on Leave paused, and sends only the hand-overs that were chosen", async () => {
+    owned = [ownedBody(), ownedBody({ resourceId: "r2", name: "Hook r2", label: "Webhook" })];
+    eligible = [BOB, DANA];
+    write = () => new Response(null, { status: 204 });
+    renderAt(PAGE);
+    const dialog = await openDelete();
+
+    expect(await within(dialog).findByText("Automations alice owns")).toBeTruthy();
+    const list = within(dialog).getByRole("list", { name: "Automations alice owns" });
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByText("Sync r1")).toBeTruthy();
+    expect(within(rows[0]).getByText(/Test sync/)).toBeTruthy();
+    expect(within(rows[0]).getByText(/Alpha/)).toBeTruthy();
+    expect(within(rows[1]).getByText(/Webhook/)).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        "Only users with enough access to run it are listed. Paused items show “Owner deleted” until someone takes them over.",
+      ),
+    ).toBeTruthy();
+    for (const name of ["Sync r1", "Hook r2"]) {
+      const select = await within(dialog).findByRole("combobox", { name: `Owner of ${name}` });
+      expect(select.textContent).toContain("Leave paused");
+    }
+
+    await chooseOwner(dialog, "Sync r1", "Dana D (dana)");
+    fireEvent.change(within(dialog).getByLabelText("Type alice to confirm"), {
+      target: { value: "alice" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete user" }));
+
+    expect(await screen.findByText("alice was deleted.")).toBeTruthy();
+    expect(sent["DELETE /api/users/u1"]).toEqual({
+      reassign: [{ kind: "test.sync", resourceId: "r1", ownerId: "u3" }],
+    });
+  });
+
+  it("sends no body at all when every automation is left paused", async () => {
+    owned = [ownedBody()];
+    eligible = [BOB];
+    write = () => new Response(null, { status: 204 });
+    renderAt(PAGE);
+    const dialog = await openDelete();
+    await within(dialog).findByRole("combobox", { name: "Owner of Sync r1" });
+    fireEvent.change(within(dialog).getByLabelText("Type alice to confirm"), {
+      target: { value: "alice" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete user" }));
+    expect(await screen.findByText("alice was deleted.")).toBeTruthy();
+    expect(seen).toContain("DELETE /api/users/u1");
+    expect(sent["DELETE /api/users/u1"]).toBeUndefined();
+  });
+
+  it("offers only Leave paused for an automation nobody could take over", async () => {
+    owned = [ownedBody()];
+    eligible = [];
+    renderAt(PAGE);
+    const dialog = await openDelete();
+    const select = await within(dialog).findByRole("combobox", { name: "Owner of Sync r1" });
+    await waitFor(() => expect((select as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.keyDown(select, { key: "Enter" });
+    const options = await screen.findAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual(["Leave paused"]);
+  });
+
+  it("has no automations section in the Delete dialog for a user who owns nothing", async () => {
+    renderAt(PAGE);
+    const dialog = await openDelete();
+    await waitFor(() => expect(seen).toContain("GET /api/users/u1/owned"));
+    expect(within(dialog).queryByText("Automations alice owns")).toBeNull();
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+  });
+
+  it("keeps the dialog open with the reason when a chosen owner lost the access meanwhile, and nothing was deleted", async () => {
+    owned = [ownedBody()];
+    eligible = [BOB];
+    write = () =>
+      Response.json(
+        { status: 422, type: "owner_not_eligible", title: "x", detail: "x" },
+        { status: 422 },
+      );
+    renderAt(PAGE);
+    const dialog = await openDelete();
+    await chooseOwner(dialog, "Sync r1", "bob");
+    fireEvent.change(within(dialog).getByLabelText("Type alice to confirm"), {
+      target: { value: "alice" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete user" }));
+
+    expect(
+      await within(dialog).findByText(
+        "An automation couldn't be handed over: its new owner no longer has enough access. Choose again, or leave it paused.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("alice was deleted.")).toBeNull();
+    expect(screen.getByRole("alertdialog", { name: "Delete alice?" })).toBeTruthy();
+  });
+
+  it("truncates long automation names with a tooltip inside the list and wraps the title", async () => {
+    const long = "L".repeat(140);
+    owned = [ownedBody({ name: long })];
+    eligible = [BOB];
+    renderAt(PAGE);
+    const dialog = await openDelete();
+    const name = await within(dialog).findByText(long);
+    expect(name.className).toContain("truncate");
+    expect(screen.getByRole("heading", { name: "Delete alice?" }).className).toContain(
+      "break-words",
+    );
   });
 });
