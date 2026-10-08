@@ -982,6 +982,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/setup/restore/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore an uploaded backup instead of creating the first admin
+         * @description The setup wizard's restore. Needs the setup token; 409 setup_complete once any user exists. Validates and prepares the backup as the Settings restore does, swaps it in and restarts; the restored accounts then sign in.
+         */
+        post: operations["setupRestoreApply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/restore/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check an uploaded backup during setup
+         * @description The setup wizard's version of the backup check. Needs the setup token; 409 setup_complete once any user exists, 401 for a wrong token, 429 when the address has used its attempts. Otherwise as the Settings check.
+         */
+        post: operations["setupRestoreCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/setup/token": {
         parameters: {
             query?: never;
@@ -2899,6 +2939,22 @@ export interface components {
             publicUrl: string;
             /** @description True when BAYPLAN_PUBLIC_URL fixes the public URL */
             publicUrlLocked: boolean;
+        };
+        SetupRestoreApplyInputBody: {
+            /** @description The passphrase the backup was made with */
+            passphrase: string;
+            /** @description The setup token printed in the container log */
+            setupToken: string;
+            /** @description The ID the upload answered */
+            uploadId: string;
+        };
+        SetupRestoreCheckInputBody: {
+            /** @description The passphrase the backup was made with */
+            passphrase: string;
+            /** @description The setup token printed in the container log */
+            setupToken: string;
+            /** @description The ID the upload answered */
+            uploadId: string;
         };
         SetupUserBody: {
             /** @description The user's ID */
@@ -5203,6 +5259,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CompleteSetupBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setupRestoreApply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRestoreApplyInputBody"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreApplyBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setupRestoreCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRestoreCheckInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreSummaryBody"];
                 };
             };
             /** @description Error */

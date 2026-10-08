@@ -10,6 +10,8 @@ import (
 	"os"
 	"sync"
 	"syscall"
+
+	"github.com/ianglennon/bayplan/internal/config"
 )
 
 // The two ways Bayplan restarts after a restore from the web UI
@@ -17,10 +19,10 @@ import (
 const (
 	// RestartExec replaces the process image with a new Bayplan, so the container's
 	// PID 1 survives and no restart policy is needed.
-	RestartExec = "exec"
+	RestartExec = config.RestoreRestartExec
 	// RestartExit exits 0 after the swap and leaves the start to the container's
 	// restart policy. It is the fallback for an image where exec does not work.
-	RestartExit = "exit"
+	RestartExit = config.RestoreRestartExit
 )
 
 // ErrRestart is what Run returns when a restore asked for a restart: the server

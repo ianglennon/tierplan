@@ -3493,6 +3493,58 @@
         ],
         "type": "object"
       },
+      "SetupRestoreApplyInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "passphrase": {
+            "description": "The passphrase the backup was made with",
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "setupToken": {
+            "description": "The setup token printed in the container log",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "uploadId": {
+            "description": "The ID the upload answered",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "setupToken",
+          "uploadId",
+          "passphrase"
+        ],
+        "type": "object"
+      },
+      "SetupRestoreCheckInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "passphrase": {
+            "description": "The passphrase the backup was made with",
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "setupToken": {
+            "description": "The setup token printed in the container log",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "uploadId": {
+            "description": "The ID the upload answered",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "setupToken",
+          "uploadId",
+          "passphrase"
+        ],
+        "type": "object"
+      },
       "SetupUserBody": {
         "additionalProperties": false,
         "properties": {
@@ -7334,6 +7386,104 @@
           }
         },
         "summary": "Create the first admin, store the instance settings and sign in",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/api/setup/restore/apply": {
+      "post": {
+        "description": "The setup wizard's restore. Needs the setup token; 409 setup_complete once any user exists. Validates and prepares the backup as the Settings restore does, swaps it in and restarts; the restored accounts then sign in.",
+        "operationId": "setupRestoreApply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRestoreApplyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreApplyBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Restore an uploaded backup instead of creating the first admin",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/api/setup/restore/check": {
+      "post": {
+        "description": "The setup wizard's version of the backup check. Needs the setup token; 409 setup_complete once any user exists, 401 for a wrong token, 429 when the address has used its attempts. Otherwise as the Settings check.",
+        "operationId": "setupRestoreCheck",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRestoreCheckInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreSummaryBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Check an uploaded backup during setup",
         "tags": [
           "setup"
         ]

@@ -111,6 +111,19 @@ type setting struct {
 	apply  func(c *Config, raw string) error
 }
 
+// The two ways Bayplan restarts after a restore from the web UI.
+const (
+	RestoreRestartExec = "exec"
+	RestoreRestartExit = "exit"
+)
+
+// The range the backup upload cap accepts: below a mebibyte no real backup
+// would fit, and above 64 GiB a single request body is a way to fill the disk.
+const (
+	minUploadBytes = 1 << 20
+	maxUploadBytes = 64 << 30
+)
+
 // The range BAYPLAN_INVITE_TTL accepts: an hour is the shortest a person can
 // plausibly act on a link they were handed, and 30 days the longest a bearer
 // secret should stay live.
@@ -170,13 +183,16 @@ var settings = []setting{
 			c.SkipPreMigrateBackup, err = strconv.ParseBool(raw)
 			return err
 		}},
-	{env: "BAYPLAN_RESTORE_RESTART", flag: "restore-restart", def: "exec", desc: "how Bayplan restarts after a restore from the web UI: exec or exit",
-		apply: func(c *Config, raw string) error { c.RestoreRestart = raw; return nil }},
-	{env: "BAYPLAN_BACKUP_MAX_UPLOAD", flag: "backup-max-upload", def: "1073741824", desc: "the largest backup file the web UI accepts, in bytes",
-		apply: func(c *Config, raw string) (err error) {
-			c.BackupMaxUpload, err = strconv.ParseInt(raw, 10, 64)
-			return err
+	{env: "BAYPLAN_RESTORE_RESTART", flag: "restore-restart", def: "exec", desc: "how Bayplan restarts after a restore from the web UI: exec replaces the process so the container keeps running, exit stops with status 0 and needs a restart policy",
+		apply: func(c *Config, raw string) error {
+			if raw != RestoreRestartExec && raw != RestoreRestartExit {
+				return fmt.Errorf("%q is not one of %s, %s", raw, RestoreRestartExec, RestoreRestartExit)
+			}
+			c.RestoreRestart = raw
+			return nil
 		}},
+	{env: "BAYPLAN_BACKUP_MAX_UPLOAD", flag: "backup-max-upload", def: "1GiB", desc: "the largest backup file the web UI accepts for a restore, from 1MiB to 64GiB (bytes, or a number with KiB, MiB or GiB)",
+		apply: func(c *Config, raw string) (err error) { c.BackupMaxUpload, err = parseUploadSize(raw); return err }},
 	{env: "BAYPLAN_TLS_CERT_FILE", flag: "tls-cert-file", desc: "path to a TLS certificate (PEM)",
 		apply: func(c *Config, raw string) error { c.TLSCertFile = raw; return nil }},
 	{env: "BAYPLAN_TLS_KEY_FILE", flag: "tls-key-file", desc: "path to the TLS private key (PEM)",
@@ -356,6 +372,35 @@ func parseInt(raw string, minimum int) (int, error) {
 	}
 	if n < minimum {
 		return 0, fmt.Errorf("%d is below the minimum of %d", n, minimum)
+	}
+	return n, nil
+}
+
+// parseUploadSize reads a byte count: a whole number of bytes, or a whole number
+// followed by KiB, MiB or GiB (K, M, G and a space before the unit are accepted;
+// the case does not matter). The result must be between 1 MiB and 64 GiB.
+func parseUploadSize(raw string) (int64, error) {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	mult := int64(1)
+	for _, u := range []struct {
+		suffix string
+		mult   int64
+	}{{"kib", 1 << 10}, {"mib", 1 << 20}, {"gib", 1 << 30}, {"k", 1 << 10}, {"m", 1 << 20}, {"g", 1 << 30}} {
+		if strings.HasSuffix(s, u.suffix) {
+			s, mult = strings.TrimSpace(strings.TrimSuffix(s, u.suffix)), u.mult
+			break
+		}
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n <= 0 || n > maxUploadBytes/mult {
+		if err == nil && n > 0 {
+			return 0, fmt.Errorf("%q is above the maximum of 64GiB", raw)
+		}
+		return 0, fmt.Errorf("%q is not a size such as 512MiB, 2GiB or 1073741824", raw)
+	}
+	n *= mult
+	if n < minUploadBytes {
+		return 0, fmt.Errorf("%q is below the minimum of 1MiB", raw)
 	}
 	return n, nil
 }

@@ -304,6 +304,14 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	}
 
 	srv, err = assemble(ctx, cfg, log, bo, info, unlock, socketPath)
+	if err != nil && pending {
+		log.Error("the restored database could not start; going back to the pre-restore snapshot", "error", err)
+		if rbErr := rollbackRestore(ctx, cfg, log, info.Path, marker, err); rbErr != nil {
+			return nil, fmt.Errorf("%w (and going back to the snapshot failed: %w)", err, rbErr)
+		}
+		pending = false
+		srv, err = assemble(ctx, cfg, log, bo, info, unlock, socketPath)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -315,6 +323,37 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		}
 	}
 	return srv, nil
+}
+
+// rollbackRestore puts the pre-restore snapshot back as the database and records
+// backup.failed (stage restore_boot) in its audit chain. The audit entry is best
+// effort: a rollback that worked is not undone because the note about it did not.
+func rollbackRestore(ctx context.Context, cfg config.Config, log *slog.Logger, dir string, m backup.Marker, cause error) error {
+	if err := backup.RollbackRestore(dir, m); err != nil {
+		return err
+	}
+	vlt, err := vault.LoadOrCreate(cfg.EncryptionKey, dir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		log.Error("could not record the failed restore: load the encryption key", "error", err)
+		return nil
+	}
+	st, err := store.Open(ctx, dir)
+	if err != nil {
+		log.Error("could not record the failed restore: open the database", "error", err)
+		return nil
+	}
+	defer func() { _ = st.Close() }()
+	if err := audit.NewWriter(st, vlt, log, nil).Record(ctx, audit.Entry{
+		Actor:      audit.SystemRestore,
+		Action:     audit.ActionBackupFailed,
+		TargetType: "backup",
+		Result:     audit.ResultFailure,
+		Reason:     "restore_boot",
+		Details:    map[string]string{"stage": "restore_boot", "error": cause.Error()},
+	}); err != nil {
+		log.Error("could not record the failed restore", "error", err)
+	}
+	return nil
 }
 
 // assemble loads the master key, opens and migrates the database and builds the

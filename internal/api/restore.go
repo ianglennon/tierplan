@@ -39,8 +39,15 @@ const (
 	problemUploadNotFound   = "upload_not_found"
 )
 
-// restoreSourceUI is the source recorded in backup.restored for a restore from Settings.
-const restoreSourceUI = "ui"
+// Restore sources recorded in backup.restored.
+const (
+	restoreSourceUI     = "ui"
+	restoreSourceWizard = "wizard"
+)
+
+// SetupTokenHeader carries the setup token on the wizard's raw upload, where
+// there is no JSON body to put it in.
+const SetupTokenHeader = "X-Setup-Token" //nolint:gosec // the name of a header, not a credential
 
 // uploadReadWindow is how long one upload may take to arrive. The server's own
 // read timeout is 30 seconds for a whole request, which a large backup over a
@@ -232,6 +239,57 @@ func RegisterRestore(r *httpx.Router, d RestoreDeps) {
 				"Type the name of this instance to confirm.")
 		}
 		return a.apply(ctx, in.Body.UploadID, in.Body.Passphrase, restoreSourceUI, nil)
+	})
+
+	// The wizard: the same three steps, open to the holder of the setup token for
+	// as long as setup is needed. Every one of them asks the gate first, so the
+	// answer is 409 setup_complete the moment any user exists.
+	r.Guarded(http.MethodPost, "/api/setup/restore/upload", rbac.Public, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		a.serveUpload(w, req, func(ctx context.Context) error {
+			return a.Setup.checkAccess(ctx, req.UserAgent(), req.Header.Get(SetupTokenHeader))
+		})
+	}))
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "setupRestoreCheck",
+		Method:      http.MethodPost,
+		Path:        "/api/setup/restore/check",
+		Summary:     "Check an uploaded backup during setup",
+		Description: "The setup wizard's version of the backup check. Needs the setup token; 409 " + problemSetupComplete +
+			" once any user exists, 401 for a wrong token, 429 when the address has used its attempts. Otherwise as the Settings check.",
+		Tags: []string{"setup"},
+	}, rbac.Public, func(ctx context.Context, in *SetupRestoreCheckInput) (*RestoreSummaryOutput, error) {
+		if err := a.Setup.checkAccess(ctx, in.UserAgent, in.Body.SetupToken); err != nil {
+			return nil, err
+		}
+		return a.check(ctx, in.Body.UploadID, in.Body.Passphrase, in.Origin, audit.Actor{Type: audit.ActorAnonymous}, in.UserAgent)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "setupRestoreApply",
+		Method:        http.MethodPost,
+		Path:          "/api/setup/restore/apply",
+		DefaultStatus: http.StatusAccepted,
+		Summary:       "Restore an uploaded backup instead of creating the first admin",
+		Description: "The setup wizard's restore. Needs the setup token; 409 " + problemSetupComplete + " once any user exists. " +
+			"Validates and prepares the backup as the Settings restore does, swaps it in and restarts; the restored accounts then sign in.",
+		Tags: []string{"setup"},
+	}, rbac.Public, func(ctx context.Context, in *SetupRestoreApplyInput) (*RestoreApplyOutput, error) {
+		if err := a.Setup.checkAccess(ctx, in.UserAgent, in.Body.SetupToken); err != nil {
+			return nil, err
+		}
+		// The gate is asked once more at the last moment: an admin created while the
+		// backup was being prepared would be replaced without being asked.
+		return a.apply(ctx, in.Body.UploadID, in.Body.Passphrase, restoreSourceWizard, func(ctx context.Context) error {
+			needs, err := a.Setup.Gate.Check(ctx)
+			if err != nil {
+				return err
+			}
+			if !needs {
+				return httpx.Problem(http.StatusConflict, problemSetupComplete, "Setup is already complete.")
+			}
+			return nil
+		})
 	})
 }
 
