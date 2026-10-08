@@ -74,6 +74,13 @@
       "description": "{{reason}}. The last good backup was {{time}}.",
       "descriptionNoTime": "{{reason}}.",
       "link": "Open backups"
+    },
+    "unknownAgents": {
+      "title_one": "{{count}} agent isn't known to this Bayplan",
+      "title_other": "{{count}} agents aren't known to this Bayplan",
+      "description_one": "It was installed after the backup you restored.",
+      "description_other": "They were installed after the backup you restored.",
+      "link": "View"
     }
   }
 }

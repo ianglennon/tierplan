@@ -62,6 +62,7 @@ const TEXT_NEEDS: Record<string, string[]> = {
   cert_expiring: ["node"],
   revoked: ["node"],
   blocked: ["node"],
+  unknown_agent: ["node"],
   version_incompatible: ["version"],
   clock_skew: ["node", "offset"],
   timeout: ["node"],

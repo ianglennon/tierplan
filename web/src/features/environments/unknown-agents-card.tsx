@@ -16,8 +16,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Truncated } from "@/features/access/truncated";
 import { InstallDialog } from "@/features/environments/install-dialog";
-import { useInstanceAdmin } from "@/hooks/use-me";
+import { useInstanceAdmin, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
@@ -32,6 +33,8 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 export function UnknownAgentsCard() {
   const t = useT();
   const admin = useInstanceAdmin();
+  // Show install command makes a join token, which is environments.token.
+  const canToken = usePermission("environments.token");
   const unknown = useQuery({ ...unknownAgentsQuery, enabled: admin });
   const [envId, setEnvId] = useState<string | null>(null);
   const trigger = useRef<HTMLElement | null>(null);
@@ -61,29 +64,35 @@ export function UnknownAgentsCard() {
           <TableBody>
             {items.map((a) => (
               <TableRow key={`${a.envId}/${a.node}`}>
-                <TableCell className="font-mono text-xs">{a.node}</TableCell>
-                <TableCell>{a.envName}</TableCell>
+                <TableCell>
+                  <Truncated text={a.node} className="font-mono text-xs" />
+                </TableCell>
+                <TableCell>
+                  <Truncated text={a.envName} />
+                </TableCell>
                 <TableCell>
                   <RelativeTime value={a.lastAttempt} />
                 </TableCell>
                 <TableCell className="font-mono text-xs">{a.ip}</TableCell>
                 <TableCell className="text-right">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className={TOUCH_HEIGHT}
-                    aria-label={t("envsettings.unknownAgents.showInstallAria", {
-                      node: a.node,
-                      environment: a.envName,
-                    })}
-                    onClick={(e) => {
-                      trigger.current = e.currentTarget;
-                      setEnvId(a.envId);
-                    }}
-                  >
-                    {t("envsettings.unknownAgents.showInstall")}
-                  </Button>
+                  {canToken ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className={TOUCH_HEIGHT}
+                      aria-label={t("envsettings.unknownAgents.showInstallAria", {
+                        node: a.node,
+                        environment: a.envName,
+                      })}
+                      onClick={(e) => {
+                        trigger.current = e.currentTarget;
+                        setEnvId(a.envId);
+                      }}
+                    >
+                      {t("envsettings.unknownAgents.showInstall")}
+                    </Button>
+                  ) : null}
                 </TableCell>
               </TableRow>
             ))}

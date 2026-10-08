@@ -43,6 +43,7 @@ const (
 	warningKeyBackup        = "key_backup"
 	warningRefusalBurst     = "refusal_burst"
 	warningBackupFailed     = "backup_failed"
+	warningUnknownAgents    = "unknown_agents"
 	// warningProxyPrefix turns an observer signal kind into a warning ID: the
 	// reverse proxy warnings are proxy_untrusted_forwarded, proxy_url_mismatch and
 	// the third kind with the same prefix (D-53).
@@ -120,7 +121,7 @@ type ChangePasswordOutput struct {
 
 // WarningBody is one instance warning that needs an admin's attention.
 type WarningBody struct {
-	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst,backup_failed" doc:"Which warning this is"`
+	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst,backup_failed,unknown_agents" doc:"Which warning this is"`
 	Reason  string `json:"reason,omitempty" doc:"For data_not_persisted: why the data directory is not persisted"`
 	KeyPath string `json:"keyPath,omitempty" doc:"For key_backup: where the generated encryption key is stored"`
 	IP      string `json:"ip,omitempty" doc:"For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from"`
@@ -128,7 +129,7 @@ type WarningBody struct {
 	Scheme  string `json:"scheme,omitempty" doc:"For proxy_url_mismatch: the scheme the newest request effectively used, http or https"`
 	URL     string `json:"url,omitempty" doc:"For proxy_url_mismatch: the public URL the request should have matched"`
 	Subject string `json:"subject,omitempty" doc:"For refusal_burst: the username that was refused. For backup_failed: why the last scheduled backup failed"`
-	Count   int    `json:"count,omitempty" doc:"For refusal_burst: how many times that user was refused inside one minute"`
+	Count   int    `json:"count,omitempty" doc:"For refusal_burst: how many times that user was refused inside one minute. For unknown_agents: how many agents Bayplan does not know"`
 	// Since is a pointer so that "no good backup yet" leaves it out.
 	Since *time.Time `json:"since,omitempty" doc:"For backup_failed: when the last good scheduled backup finished; absent when there has not been one"`
 }
@@ -309,6 +310,7 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			"Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). " +
 			"refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). " +
 			"backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). " +
+			"unknown_agents is listed, for instance admins only, while agents that were installed after the backup this Bayplan was restored from keep trying; count is how many (D-31). " +
 			"The plain-HTTP warning is the browser's to compute and is not listed.",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*WarningsOutput, error) {
@@ -336,6 +338,11 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			return nil, internal("read the scheduled backup runs", err)
 		}
 		items = append(items, failed...)
+		unknown, err := unknownAgentsWarning(ctx, d)
+		if err != nil {
+			return nil, internal("read the unknown agents", err)
+		}
+		items = append(items, unknown...)
 		return &WarningsOutput{CacheControl: "no-store", Body: WarningsBody{Items: items}}, nil
 	})
 
@@ -480,4 +487,29 @@ func backupFailedItems(ctx context.Context, d AccountDeps) ([]WarningBody, error
 		return nil, err
 	}
 	return []WarningBody{item}, nil
+}
+
+// unknownAgentsWarning is the unknown_agents warning: how many agents are being
+// refused unknown_agent right now, for an active instance admin only (the list
+// names nodes and addresses). It is derived from the in-memory registry, so it
+// empties by itself 24 hours after the agents stop trying (D-31).
+func unknownAgentsWarning(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
+	if d.Unknown == nil || d.Checker == nil {
+		return nil, nil
+	}
+	a, err := d.Checker.Access(ctx, httpx.PrincipalFrom(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if !a.Active || !a.InstanceAdmin {
+		return nil, nil
+	}
+	list, err := unknownAgentItems(ctx, UnknownAgentsDeps{Unknown: d.Unknown, Store: d.Store, Now: d.Now})
+	if err != nil {
+		return nil, err
+	}
+	if len(list) == 0 {
+		return nil, nil
+	}
+	return []WarningBody{{ID: warningUnknownAgents, Count: len(list)}}, nil
 }

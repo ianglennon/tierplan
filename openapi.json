@@ -4669,7 +4669,7 @@
         "additionalProperties": false,
         "properties": {
           "count": {
-            "description": "For refusal_burst: how many times that user was refused inside one minute",
+            "description": "For refusal_burst: how many times that user was refused inside one minute. For unknown_agents: how many agents Bayplan does not know",
             "format": "int64",
             "type": "integer"
           },
@@ -4686,7 +4686,8 @@
               "proxy_url_mismatch",
               "proxy_websocket_failing",
               "refusal_burst",
-              "backup_failed"
+              "backup_failed",
+              "unknown_agents"
             ],
             "type": "string"
           },
@@ -9683,7 +9684,7 @@
     },
     "/api/warnings": {
       "get": {
-        "description": "Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). The plain-HTTP warning is the browser's to compute and is not listed.",
+        "description": "Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). unknown_agents is listed, for instance admins only, while agents that were installed after the backup this Bayplan was restored from keep trying; count is how many (D-31). The plain-HTTP warning is the browser's to compute and is not listed.",
         "operationId": "listWarnings",
         "responses": {
           "200": {

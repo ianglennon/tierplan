@@ -655,6 +655,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Proxy:    proxyObs,
 			Checker:  checker,
 			Refusals: refusals,
+			Unknown:  agentSvc.Unknown(),
 			// Five password-change attempts per user at once, then one every 12
 			// seconds (T-01-60): ample for a person, slow for a guesser.
 			Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
