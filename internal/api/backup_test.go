@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -74,6 +75,50 @@ func TestBackupDownloadByAnInstanceAdminOpensWithThePassphrase(t *testing.T) {
 	head := make([]byte, 16)
 	if _, err := io.ReadFull(body, head); err != nil || string(head) != "SQLite format 3\x00" {
 		t.Fatalf("the database entry starts %q, %v", head, err)
+	}
+}
+
+// A data directory given in the relative form make dev uses (./.devdata) must
+// not break the download: SQLite refuses file://.devdata/... as a URI whose
+// authority is ".devdata" (UAT gap G-03-4).
+func TestBackupDownloadWithARelativeDataDirectoryOpensWithThePassphrase(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	t.Chdir(filepath.Dir(f.dataInfo.Path))
+	f.dataInfo.Path = "./" + filepath.Base(f.dataInfo.Path)
+	f.h = f.build(t)
+	cookie, csrf := f.signIn(t, "admin", false)
+
+	rec := f.exportBackup(t, cookie, csrf, backupPass)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s\nlog: %s", rec.Code, rec.Body, f.logs)
+	}
+	r, err := backup.Open(bytes.NewReader(rec.Body.Bytes()), []byte(backupPass))
+	if err != nil {
+		t.Fatalf("the download does not open with the passphrase: %v", err)
+	}
+	name, body, err := r.Next()
+	if err != nil || name != backup.EntryManifest {
+		t.Fatalf("first entry = %q, %v", name, err)
+	}
+	var m backup.Manifest
+	if err := json.NewDecoder(body).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Format != 1 || !m.ChainVerified {
+		t.Errorf("manifest = %+v", m)
+	}
+	name, body, err = r.Next()
+	if err != nil || name != backup.EntryDB {
+		t.Fatalf("second entry = %q, %v", name, err)
+	}
+	head := make([]byte, 16)
+	if _, err := io.ReadFull(body, head); err != nil || string(head) != "SQLite format 3\x00" {
+		t.Fatalf("the database entry starts %q, %v", head, err)
+	}
+	for _, n := range f.leftovers(t) {
+		if strings.HasPrefix(n, ".bayplan-backup-") || strings.HasPrefix(n, ".bayplan-export-") {
+			t.Errorf("the data directory kept %q", n)
+		}
 	}
 }
 

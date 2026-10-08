@@ -498,3 +498,29 @@ func TestExportAllowsOneAtATime(t *testing.T) {
 		t.Fatalf("the work directory holds %d entries", len(entries))
 	}
 }
+
+// The work directory is the data directory as configured, which may be
+// relative (./.devdata). SQLite refuses file://.devdata/... because ".devdata"
+// would be the URI authority (UAT gap G-03-4).
+func TestExportWorksFromARelativeWorkDirectory(t *testing.T) {
+	f := newExportFixture(t)
+	t.Chdir(filepath.Dir(f.dir))
+	f.dir = "./" + filepath.Base(f.dir)
+
+	_, file, err := f.export(t, exportPass, testOptions)
+	if err != nil {
+		t.Fatalf("Export from %q: %v", f.dir, err)
+	}
+	o := openBackup(t, file, exportPass)
+	var res string
+	if err := o.db.QueryRow("PRAGMA integrity_check").Scan(&res); err != nil || res != "ok" {
+		t.Fatalf("integrity_check = %q, %v", res, err)
+	}
+	entries, err := os.ReadDir(f.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the work directory is not empty: %v", entries)
+	}
+}
