@@ -206,3 +206,31 @@ func TestRecheckOwnedInsideATransactionSeesThatTransactionsOwnChanges(t *testing
 		t.Errorf("state = %s", got)
 	}
 }
+
+func TestOwnedRowThatNeedsEnvAdminPausesWhenItsOwnerIsOnlyAnOperator(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "op")
+	f.assign(t, "op", "operator", "env-a")
+	f.addUser(t, "boss")
+	f.assign(t, "boss", "admin", "env-a")
+	f.register(t, access.OwnedResource{Kind: kindTestSync, ResourceID: "by-op", EnvID: "env-a", Name: "by op", OwnerID: "op"})
+	f.register(t, access.OwnedResource{Kind: kindTestSync, ResourceID: "by-boss", EnvID: "env-a", Name: "by boss", OwnerID: "boss"})
+	f.inTx(t, func(tx *sql.Tx, q *sqlc.Queries) error {
+		for _, id := range []string{"by-op", "by-boss"} {
+			if err := q.SetOwnedNeedsEnvAdmin(f.ctx, sqlc.SetOwnedNeedsEnvAdminParams{NeedsEnvAdmin: 1, UpdatedAt: 2, Kind: kindTestSync, ResourceID: id}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	if n := f.recheck(t, "op", "boss"); n != 1 {
+		t.Fatalf("recheck changed %d rows, want only the Operator's", n)
+	}
+	if got := f.state(t, kindTestSync, "by-op"); got != "paused_lacks_permission" {
+		t.Errorf("the Operator's automation is %s, want paused_lacks_permission", got)
+	}
+	if got := f.state(t, kindTestSync, "by-boss"); got != "active" {
+		t.Errorf("the Admin's automation is %s, want active", got)
+	}
+}
