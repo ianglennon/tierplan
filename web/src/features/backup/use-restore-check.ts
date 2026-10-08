@@ -15,6 +15,8 @@ import {
 export interface CheckSteps {
   upload: (file: File) => Promise<RestoreUpload>;
   check: (uploadId: string, passphrase: string) => Promise<RestoreSummary>;
+  // Removes the staged upload. Best effort; it never throws.
+  discard?: () => Promise<void>;
 }
 
 export interface Checked {
@@ -45,6 +47,18 @@ export function useRestoreCheck(
   const latest = useRef(steps);
   latest.current = steps;
 
+  // Drop the staged file on the server, without waiting for it: a file that is
+  // replaced or given up on should not hold the single upload slot.
+  function discardStaged() {
+    void latest.current.discard?.().catch(() => undefined);
+  }
+
+  // Back to the empty form for another file. The staged upload goes too.
+  function chooseAnother() {
+    discardStaged();
+    reset();
+  }
+
   function reset() {
     setFile(null);
     setPassphrase("");
@@ -58,12 +72,18 @@ export function useRestoreCheck(
     running.current = true;
     setChecking(true);
     setError(null);
+    let staged = false;
     try {
       const upload = await latest.current.upload(file);
+      staged = true;
       const summary = await latest.current.check(upload.uploadId, passphrase);
       setChecked({ uploadId: upload.uploadId, summary });
     } catch (err) {
-      if (!handled?.(err)) setError(restoreProblem(err));
+      if (!handled?.(err)) {
+        setError(restoreProblem(err));
+        // A check that failed leaves its file staged, and the next try uploads again.
+        if (staged) discardStaged();
+      }
       return;
     } finally {
       running.current = false;
@@ -83,7 +103,7 @@ export function useRestoreCheck(
     runCheck,
     // Back to the empty form: the summary goes, and so do the file and the
     // passphrase it was checked with.
-    chooseAnother: reset,
+    chooseAnother,
     reset,
   };
 }

@@ -4,7 +4,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
-import { applyRestore, checkRestore, RestoreError, uploadRestore } from "@/api/backup";
+import {
+  applyRestore,
+  checkRestore,
+  discardRestoreUpload,
+  RestoreError,
+  uploadRestore,
+} from "@/api/backup";
 import { setCsrfToken, suspendSessionReactions } from "@/api/client";
 import { instanceQuery } from "@/api/instance";
 import { queryClient } from "@/api/query-client";
@@ -39,7 +45,11 @@ interface RestorePanelProps {
 export function RestorePanel({ onRestored }: RestorePanelProps) {
   const t = useT();
   const { data: instance } = useQuery(instanceQuery);
-  const form = useRestoreCheck({ upload: uploadRestore, check: checkRestore });
+  const form = useRestoreCheck({
+    upload: uploadRestore,
+    check: checkRestore,
+    discard: discardRestoreUpload,
+  });
   const [dialogOpen, setDialogOpen] = useState(false);
   const [applying, setApplying] = useState(false);
   const [waiting, setWaiting] = useState(false);

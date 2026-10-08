@@ -8,6 +8,7 @@ import { useRef, useState } from "react";
 import {
   applySetupRestore,
   checkSetupRestore,
+  discardSetupRestoreUpload,
   RestoreError,
   uploadSetupRestore,
 } from "@/api/backup";
@@ -57,6 +58,7 @@ export function SetupRestore({ token, onBack }: SetupRestoreProps) {
     {
       upload: (file) => uploadSetupRestore(file, token),
       check: (uploadId, passphrase) => checkSetupRestore(uploadId, passphrase, token),
+      discard: () => discardSetupRestoreUpload(token),
     },
     (err) => (isSetupComplete(err) ? leave() : false),
   );

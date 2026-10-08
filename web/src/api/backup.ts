@@ -170,6 +170,18 @@ export function uploadRestore(file: File): Promise<RestoreUpload> {
   return postFile("/api/backup/restore/upload", file);
 }
 
+// discardRestoreUpload removes the staged file, so one chosen by mistake does not
+// hold the single upload slot until it expires. Best effort: the answer is not
+// read, and a failure (nothing staged, a restore running, no connection) changes
+// nothing for the person.
+export async function discardRestoreUpload(): Promise<void> {
+  try {
+    await api.DELETE("/api/backup/restore/upload");
+  } catch {
+    // Nothing to do: the file expires by itself.
+  }
+}
+
 // checkRestore opens the stored file with the passphrase and says what is in it.
 export async function checkRestore(uploadId: string, passphrase: string): Promise<RestoreSummary> {
   const { data, error, response } = await api.POST("/api/backup/restore/check", {
@@ -196,6 +208,23 @@ export async function applyRestore(
 // raw upload and a member of the body elsewhere, never in the address.
 export function uploadSetupRestore(file: File, setupToken: string): Promise<RestoreUpload> {
   return postFile("/api/setup/restore/upload", file, { "X-Setup-Token": setupToken });
+}
+
+// discardSetupRestoreUpload is the wizard's discardRestoreUpload; the setup token
+// is the credential, as a header, and the answer is not read.
+export async function discardSetupRestoreUpload(setupToken: string): Promise<void> {
+  const headers: Record<string, string> = { "X-Setup-Token": setupToken };
+  const csrf = getCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+  try {
+    await globalThis.fetch(apiUrl("/api/setup/restore/upload"), {
+      method: "DELETE",
+      headers,
+      credentials: "same-origin",
+    });
+  } catch {
+    // Nothing to do: the file expires by itself.
+  }
 }
 
 export async function checkSetupRestore(

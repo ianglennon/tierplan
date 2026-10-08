@@ -436,6 +436,7 @@ describe("SetupWizard restore branch", () => {
   const file = () => new File(["bytes"], "lab.bayplan");
 
   interface Seen {
+    method: string;
     path: string;
     token: string | null;
     body: unknown;
@@ -460,17 +461,21 @@ describe("SetupWizard restore branch", () => {
         if (typeof input === "string") {
           const path = new URL(input, window.location.origin).pathname;
           const headers = new Headers(init?.headers);
+          const method = init?.method ?? "GET";
           seen.push({
+            method,
             path,
             token: headers.get("X-Setup-Token"),
             body: init?.body,
             csrf: headers.get("X-CSRF-Token"),
           });
-          return (answers[path] ?? (() => Response.json({}, { status: 404 })))();
+          const answer = answers[`${method} ${path}`] ?? answers[path];
+          return (answer ?? (() => Response.json({}, { status: 404 })))();
         }
         const req = input as Request;
         const path = new URL(req.url).pathname;
         seen.push({
+          method: req.method,
           path,
           token: req.headers.get("X-Setup-Token"),
           body: await req.clone().json(),
@@ -695,5 +700,28 @@ describe("SetupWizard restore branch", () => {
     click("Choose another file");
     expect(field("Passphrase").value).toBe("");
     expect(screen.getByText("No file chosen")).toBeTruthy();
+  });
+
+  it("discards the staged upload with the setup token when the file is given up, ignoring a 404", async () => {
+    answers["DELETE /api/setup/restore/upload"] = () => problem(404, { type: "not_found" });
+    await openRestore();
+    chooseAndCheck();
+    await screen.findByText("What's in this backup");
+    expect(seen.filter((s) => s.method === "DELETE")).toHaveLength(0);
+    click("Choose another file");
+    await waitFor(() => expect(seen.filter((s) => s.method === "DELETE")).toHaveLength(1));
+    const discard = seen.find((s) => s.method === "DELETE");
+    expect(discard?.path).toBe("/api/setup/restore/upload");
+    expect(discard?.token).toBe("tok-123");
+    expect(field("Passphrase").value).toBe("");
+  });
+
+  it("discards the staged upload when the wizard's check fails", async () => {
+    answers["/api/setup/restore/check"] = () =>
+      problem(422, { type: "backup_unreadable", detail: "x" });
+    await openRestore();
+    chooseAndCheck();
+    await screen.findByRole("alert");
+    await waitFor(() => expect(seen.filter((s) => s.method === "DELETE")).toHaveLength(1));
   });
 });

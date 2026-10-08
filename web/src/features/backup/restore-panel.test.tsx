@@ -57,6 +57,7 @@ beforeEach(() => {
       ),
     "/api/backup/restore/check": () => Response.json(SUMMARY),
     "/api/backup/restore/apply": () => Response.json({ restarting: true }, { status: 202 }),
+    "DELETE /api/backup/restore/upload": () => new Response(null, { status: 204 }),
   };
   vi.stubGlobal(
     "fetch",
@@ -82,7 +83,8 @@ beforeEach(() => {
         csrf: req.headers.get("X-CSRF-Token"),
         body: req.method === "POST" ? await req.clone().json() : undefined,
       });
-      return (answers[path] ?? (() => Response.json({}, { status: 404 })))();
+      const answer = answers[`${req.method} ${path}`] ?? answers[path];
+      return (answer ?? (() => Response.json({}, { status: 404 })))();
     }),
   );
   vi.mocked(outcome.waitForRestoreOutcome).mockReset();
@@ -636,5 +638,43 @@ describe("Restore card file and passphrase", () => {
     expect(
       (card().getByRole("button", { name: "Check backup" }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+
+  // The Settings half of the discard route (partition B, WR-B-02).
+  it("discards the staged upload on Choose another file, and not when it is kept", async () => {
+    renderPage();
+    chooseAndCheck();
+    await card().findByText("What's in this backup");
+    expect(sent.filter((s) => s.method === "DELETE")).toHaveLength(0);
+    fireEvent.click(card().getByRole("button", { name: "Choose another file" }));
+    await waitFor(() =>
+      expect(calls("/api/backup/restore/upload").map((s) => s.method)).toEqual(["POST", "DELETE"]),
+    );
+    expect(sent.find((s) => s.method === "DELETE")?.csrf).toBe("csrf-1");
+  });
+
+  it("discards the staged upload when the check fails, and carries on if the discard itself fails", async () => {
+    answers["/api/backup/restore/check"] = () => problem(422, "backup_unreadable");
+    answers["DELETE /api/backup/restore/upload"] = () => problem(404, "not_found");
+    renderPage();
+    chooseAndCheck();
+    const alert = await card().findByRole("alert");
+    expect(alert.textContent).toBe(UNREADABLE);
+    await waitFor(() =>
+      expect(calls("/api/backup/restore/upload").map((s) => s.method)).toEqual(["POST", "DELETE"]),
+    );
+    // A 404 from the discard is ignored: the form is still usable for another try.
+    expect(card().getByLabelText("Backup file")).toBeTruthy();
+    answers["/api/backup/restore/check"] = () => Response.json(SUMMARY);
+    fireEvent.click(card().getByRole("button", { name: "Check backup" }));
+    await card().findByText("What's in this backup");
+  });
+
+  it("does not discard anything when the upload itself fails", async () => {
+    answers["/api/backup/restore/upload"] = () => problem(413, "upload_too_large");
+    renderPage();
+    chooseAndCheck();
+    await card().findByRole("alert");
+    expect(sent.filter((s) => s.method === "DELETE")).toHaveLength(0);
   });
 });
