@@ -39,7 +39,7 @@ type UserSummaryBody struct {
 	Status            string        `json:"status" enum:"active,disabled,locked,invite_pending,invite_expired,deleted" doc:"Locked, then disabled, then invite expired, then invite pending, then active"`
 	LockedUntil       string        `json:"lockedUntil,omitempty" format:"date-time" doc:"While the account is locked: when the lock ends"`
 	LastLoginAt       string        `json:"lastLoginAt,omitempty" format:"date-time" doc:"When the user last signed in; absent if they never have"`
-	Teams             []TeamRefBody `json:"teams" doc:"The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows"`
+	Teams             []TeamRefBody `json:"teams" doc:"The teams the user belongs to, sorted by name. The users table leaves it empty and shows teamCount; the user's own page fills it in"`
 	TeamCount         int           `json:"teamCount" doc:"How many teams the user belongs to"`
 	LastInstanceAdmin bool          `json:"lastInstanceAdmin" doc:"True for the only instance admin who can still sign in. Demoting, disabling or deleting them answers 409 last_instance_admin, so a screen can show those actions as unavailable"`
 }
@@ -133,11 +133,15 @@ func summaryOfAccess(u access.UserSummary) UserSummaryBody {
 
 // detailOf builds the user page's view of a user.
 func detailOf(u access.UserDetail) UserDetailBody {
-	return UserDetailBody{
+	b := UserDetailBody{
 		UserSummaryBody: summaryOfAccess(u.UserSummary),
 		CreatedAt:       u.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:       u.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
+	for _, t := range u.Teams {
+		b.Teams = append(b.Teams, TeamRefBody{ID: t.ID, Name: t.Name})
+	}
+	return b
 }
 
 // lifecycleError answers the errors the account lifecycle routes share.

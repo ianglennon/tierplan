@@ -8,9 +8,11 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
-// The sub-tabs of Settings > Access, in display order. Teams joins this list
-// with its own screens.
-const ACCESS_TABS = [{ key: "users", to: "/settings/access/users" }] as const;
+// The sub-tabs of Settings > Access, in display order.
+const ACCESS_TABS = [
+  { key: "users", to: "/settings/access/users", label: "users.access.tabs.users" },
+  { key: "teams", to: "/settings/access/teams", label: "teams.tabLabel" },
+] as const;
 
 // Settings > Access (D-25, D-60). Instance admins only: users.manage is global.
 // The sub-tabs are URL-routed like the Settings tabs above them, so the address
@@ -47,7 +49,7 @@ function AccessTab() {
                 activeProps={{ "data-active": true }}
                 inactiveProps={{ "data-active": undefined }}
               >
-                {t(`users.access.tabs.${tab.key}`)}
+                {t(tab.label)}
               </Link>
             </TabsTrigger>
           ))}

@@ -98,3 +98,11 @@ DELETE FROM team_members WHERE user_id = ?;
 -- (T-03-57). Zero rows means the version moved.
 UPDATE users SET display_name = ?, email = ?, updated_at = ?
 WHERE id = ? AND updated_at = ? AND deleted_at IS NULL;
+
+-- name: ListUserTeams :many
+-- The teams a user belongs to, for the user page, sorted by name.
+SELECT t.id, t.name
+FROM team_members m
+JOIN teams t ON t.id = m.team_id
+WHERE m.user_id = ?
+ORDER BY lower(t.name), t.id;

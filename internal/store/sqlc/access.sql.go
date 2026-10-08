@@ -278,6 +278,43 @@ func (q *Queries) InsertUserLink(ctx context.Context, arg InsertUserLinkParams) 
 	return err
 }
 
+const listUserTeams = `-- name: ListUserTeams :many
+SELECT t.id, t.name
+FROM team_members m
+JOIN teams t ON t.id = m.team_id
+WHERE m.user_id = ?
+ORDER BY lower(t.name), t.id
+`
+
+type ListUserTeamsRow struct {
+	ID   string
+	Name string
+}
+
+// The teams a user belongs to, for the user page, sorted by name.
+func (q *Queries) ListUserTeams(ctx context.Context, userID string) ([]ListUserTeamsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUserTeams, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUserTeamsRow
+	for rows.Next() {
+		var i ListUserTeamsRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsersForAdmin = `-- name: ListUsersForAdmin :many
 SELECT u.id, u.username, u.display_name, u.email, u.instance_admin, u.disabled,
        u.locked_until, u.password_hash, u.last_login_at, l.expires_at AS link_expires_at,

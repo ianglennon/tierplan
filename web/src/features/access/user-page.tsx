@@ -16,6 +16,7 @@ import { InstanceAdminBadge } from "@/features/access/instance-admin-badge";
 import { InstanceAdminCard } from "@/features/access/instance-admin-card";
 import { ProfileCard } from "@/features/access/profile-card";
 import { SessionsCard } from "@/features/access/sessions-card";
+import { TeamsCard } from "@/features/access/teams-card";
 import { UserStatusBadge } from "@/features/access/user-status-badge";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -76,7 +77,7 @@ interface UserPageProps {
 // UserPage is Settings > Access > Users > {username}: the breadcrumb, the header
 // (the display name as the title when there is one, else the username, with the
 // status and the instance-admin badge) and the cards, 32px apart: Profile,
-// Instance administrator, Sessions and Account. The page is
+// Instance administrator, Teams, Sessions and Account. The page is
 // for an instance admin, who holds users.manage; the server answers 403 again.
 export function UserPage({ userId }: UserPageProps) {
   const t = useT();
@@ -144,6 +145,7 @@ export function UserPage({ userId }: UserPageProps) {
       </header>
       <ProfileCard user={user} onChanged={changed} />
       <InstanceAdminCard user={user} onChanged={changed} />
+      <TeamsCard user={user} />
       <SessionsCard userId={user.id} username={user.username} />
       <AccountCard user={user} onChanged={changed} onDeleted={deleted} />
     </div>

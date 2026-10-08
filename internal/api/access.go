@@ -70,6 +70,7 @@ func RegisterAccess(r *httpx.Router, d AccessDeps) {
 		d.Log = slog.Default()
 	}
 	registerUsers(r, d)
+	registerTeams(r, d)
 	registerInvite(r, d)
 	registerSessions(r, d)
 	registerProfile(r, d)

@@ -200,6 +200,41 @@
         ],
         "type": "object"
       },
+      "AddTeamMembersInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "userIds": {
+            "description": "The users to add",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "userIds"
+        ],
+        "type": "object"
+      },
+      "AddedBody": {
+        "additionalProperties": false,
+        "properties": {
+          "added": {
+            "description": "How many users were added. Users who were already in the team are not counted and leave no audit entry",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "added"
+        ],
+        "type": "object"
+      },
       "AdoptClusterBody": {
         "additionalProperties": false,
         "properties": {
@@ -721,6 +756,20 @@
           "truncated",
           "nodes",
           "notReporting"
+        ],
+        "type": "object"
+      },
+      "CreateTeamInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "1 to 64 characters; not case-sensitive for uniqueness",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -2650,6 +2699,148 @@
         ],
         "type": "object"
       },
+      "TeamBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the team was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "grantCount": {
+            "description": "How many environment assignments the team holds; 0 shows as No access",
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "description": "The team's ID",
+            "type": "string"
+          },
+          "memberCount": {
+            "description": "How many users are in the team",
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "description": "The team's name; 1 to 64 characters, unique ignoring case",
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "The version of the team a rename is based on; send it back unchanged to PATCH",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "memberCount",
+          "grantCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "TeamDetailBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the team was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "grantCount": {
+            "description": "How many environment assignments the team holds; 0 shows as No access",
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "description": "The team's ID",
+            "type": "string"
+          },
+          "memberCount": {
+            "description": "How many users are in the team",
+            "format": "int64",
+            "type": "integer"
+          },
+          "members": {
+            "description": "The members, sorted by username",
+            "items": {
+              "$ref": "#/components/schemas/TeamMemberBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The team's name; 1 to 64 characters, unique ignoring case",
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "The version of the team a rename is based on; send it back unchanged to PATCH",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "members",
+          "id",
+          "name",
+          "memberCount",
+          "grantCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "TeamMemberBody": {
+        "additionalProperties": false,
+        "properties": {
+          "addedAt": {
+            "description": "When the user joined the team",
+            "format": "date-time",
+            "type": "string"
+          },
+          "displayName": {
+            "description": "The name shown for the user; empty when none was set",
+            "type": "string"
+          },
+          "instanceAdmin": {
+            "description": "True for an instance admin. Membership never grants this",
+            "type": "boolean"
+          },
+          "status": {
+            "description": "The user's status, judged like the users table",
+            "enum": [
+              "active",
+              "disabled",
+              "locked",
+              "invite_pending",
+              "invite_expired",
+              "deleted"
+            ],
+            "type": "string"
+          },
+          "userId": {
+            "description": "The user's ID",
+            "type": "string"
+          },
+          "username": {
+            "description": "The lower-cased username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "username",
+          "displayName",
+          "instanceAdmin",
+          "status",
+          "addedAt"
+        ],
+        "type": "object"
+      },
       "TeamRefBody": {
         "additionalProperties": false,
         "properties": {
@@ -2899,7 +3090,7 @@
             "type": "integer"
           },
           "teams": {
-            "description": "The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows",
+            "description": "The teams the user belongs to, sorted by name. The users table leaves it empty and shows teamCount; the user's own page fills it in",
             "items": {
               "$ref": "#/components/schemas/TeamRefBody"
             },
@@ -2984,7 +3175,7 @@
             "type": "integer"
           },
           "teams": {
-            "description": "The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows",
+            "description": "The teams the user belongs to, sorted by name. The users table leaves it empty and shows teamCount; the user's own page fills it in",
             "items": {
               "$ref": "#/components/schemas/TeamRefBody"
             },
@@ -5610,6 +5801,210 @@
         "summary": "Check the setup token and return the step 3 defaults",
         "tags": [
           "setup"
+        ]
+      }
+    },
+    "/api/teams": {
+      "get": {
+        "description": "Every team, sorted by name ignoring case, with how many members and grants each has. Only an instance admin may manage teams.",
+        "operationId": "listTeams",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TeamBody"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List teams",
+        "tags": [
+          "teams"
+        ]
+      },
+      "post": {
+        "description": "A team name is 1 to 64 characters and unique ignoring case: a name another team holds answers 409 team_name_taken and an empty or too long one answers 422 on body.name. Audited as team.created.",
+        "operationId": "createTeam",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTeamInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a team",
+        "tags": [
+          "teams"
+        ]
+      }
+    },
+    "/api/teams/{teamId}": {
+      "get": {
+        "description": "The team with its members sorted by username. An unknown team answers 404 team_not_found.",
+        "operationId": "getTeam",
+        "parameters": [
+          {
+            "description": "The team's ID",
+            "in": "path",
+            "name": "teamId",
+            "required": true,
+            "schema": {
+              "description": "The team's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read one team and its members",
+        "tags": [
+          "teams"
+        ]
+      }
+    },
+    "/api/teams/{teamId}/members": {
+      "post": {
+        "description": "All or none: a user who does not exist or is deleted answers 404 user_not_found and nothing is added. A user who is already in the team changes nothing and writes no audit entry. Each user added is audited as team.member_added. Membership never makes anyone an instance admin.",
+        "operationId": "addTeamMembers",
+        "parameters": [
+          {
+            "description": "The team's ID",
+            "in": "path",
+            "name": "teamId",
+            "required": true,
+            "schema": {
+              "description": "The team's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddTeamMembersInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddedBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Add users to a team",
+        "tags": [
+          "teams"
         ]
       }
     },

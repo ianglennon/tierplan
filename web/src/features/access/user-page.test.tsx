@@ -639,11 +639,11 @@ describe("the Sessions card (D-23)", () => {
     expect(await within(card).findByText("Chrome on Windows")).toBeTruthy();
   });
 
-  it("sits between the Instance administrator and Account cards", async () => {
+  it("sits between the Teams and Account cards", async () => {
     renderAt(PAGE);
     await screen.findByText("Where alice is signed in.");
     const titles = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
-    expect(titles).toEqual(["Profile", "Instance administrator", "Sessions", "Account"]);
+    expect(titles).toEqual(["Profile", "Instance administrator", "Teams", "Sessions", "Account"]);
   });
 });
 

@@ -835,6 +835,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/teams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List teams
+         * @description Every team, sorted by name ignoring case, with how many members and grants each has. Only an instance admin may manage teams.
+         */
+        get: operations["listTeams"];
+        put?: never;
+        /**
+         * Create a team
+         * @description A team name is 1 to 64 characters and unique ignoring case: a name another team holds answers 409 team_name_taken and an empty or too long one answers 422 on body.name. Audited as team.created.
+         */
+        post: operations["createTeam"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{teamId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one team and its members
+         * @description The team with its members sorted by username. An unknown team answers 404 team_not_found.
+         */
+        get: operations["getTeam"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{teamId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add users to a team
+         * @description All or none: a user who does not exist or is deleted answers 404 user_not_found and nothing is added. A user who is already in the team changes nothing and writes no audit entry. Each user added is audited as team.member_added. Membership never makes anyone an instance admin.
+         */
+        post: operations["addTeamMembers"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users": {
         parameters: {
             query?: never;
@@ -1180,6 +1244,17 @@ export interface components {
             /** @description 1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent */
             name?: string;
         };
+        AddTeamMembersInputBody: {
+            /** @description The users to add */
+            userIds: string[] | null;
+        };
+        AddedBody: {
+            /**
+             * Format: int64
+             * @description How many users were added. Users who were already in the team are not counted and leave no audit entry
+             */
+            added: number;
+        };
         AdoptClusterBody: {
             /** @description The swarm cluster ID the environment is bound to now */
             clusterId: string;
@@ -1379,6 +1454,10 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        CreateTeamInputBody: {
+            /** @description 1 to 64 characters; not case-sensitive for uniqueness */
+            name: string;
         };
         CreateUserBody: {
             /** @description The one-time invite link; it cannot be shown again */
@@ -2179,6 +2258,80 @@ export interface components {
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
         };
+        TeamBody: {
+            /**
+             * Format: date-time
+             * @description When the team was created
+             */
+            createdAt: string;
+            /**
+             * Format: int64
+             * @description How many environment assignments the team holds; 0 shows as No access
+             */
+            grantCount: number;
+            /** @description The team's ID */
+            id: string;
+            /**
+             * Format: int64
+             * @description How many users are in the team
+             */
+            memberCount: number;
+            /** @description The team's name; 1 to 64 characters, unique ignoring case */
+            name: string;
+            /**
+             * Format: date-time
+             * @description The version of the team a rename is based on; send it back unchanged to PATCH
+             */
+            updatedAt: string;
+        };
+        TeamDetailBody: {
+            /**
+             * Format: date-time
+             * @description When the team was created
+             */
+            createdAt: string;
+            /**
+             * Format: int64
+             * @description How many environment assignments the team holds; 0 shows as No access
+             */
+            grantCount: number;
+            /** @description The team's ID */
+            id: string;
+            /**
+             * Format: int64
+             * @description How many users are in the team
+             */
+            memberCount: number;
+            /** @description The members, sorted by username */
+            members: components["schemas"]["TeamMemberBody"][] | null;
+            /** @description The team's name; 1 to 64 characters, unique ignoring case */
+            name: string;
+            /**
+             * Format: date-time
+             * @description The version of the team a rename is based on; send it back unchanged to PATCH
+             */
+            updatedAt: string;
+        };
+        TeamMemberBody: {
+            /**
+             * Format: date-time
+             * @description When the user joined the team
+             */
+            addedAt: string;
+            /** @description The name shown for the user; empty when none was set */
+            displayName: string;
+            /** @description True for an instance admin. Membership never grants this */
+            instanceAdmin: boolean;
+            /**
+             * @description The user's status, judged like the users table
+             * @enum {string}
+             */
+            status: "active" | "disabled" | "locked" | "invite_pending" | "invite_expired" | "deleted";
+            /** @description The user's ID */
+            userId: string;
+            /** @description The lower-cased username */
+            username: string;
+        };
         TeamRefBody: {
             /** @description The team's ID */
             id: string;
@@ -2299,7 +2452,7 @@ export interface components {
              * @description How many teams the user belongs to
              */
             teamCount: number;
-            /** @description The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows */
+            /** @description The teams the user belongs to, sorted by name. The users table leaves it empty and shows teamCount; the user's own page fills it in */
             teams: components["schemas"]["TeamRefBody"][] | null;
             /**
              * Format: date-time
@@ -2340,7 +2493,7 @@ export interface components {
              * @description How many teams the user belongs to
              */
             teamCount: number;
-            /** @description The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows */
+            /** @description The teams the user belongs to, sorted by name. The users table leaves it empty and shows teamCount; the user's own page fills it in */
             teams: components["schemas"]["TeamRefBody"][] | null;
             /** @description The lower-cased username */
             username: string;
@@ -4014,6 +4167,140 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listTeams: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTeamInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    addTeamMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddTeamMembersInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddedBody"];
                 };
             };
             /** @description Error */

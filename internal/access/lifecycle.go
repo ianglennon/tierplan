@@ -35,6 +35,8 @@ type UserDetail struct {
 	CreatedAt time.Time
 	// UpdatedAt is the version a profile save is checked against.
 	UpdatedAt time.Time
+	// Teams are the teams the user belongs to, sorted by name.
+	Teams []TeamRef
 }
 
 // GetUser returns one user. A user who does not exist, or who has been deleted,
@@ -69,6 +71,14 @@ func (s *Service) GetUser(ctx context.Context, id string) (UserDetail, error) {
 		},
 		CreatedAt: time.Unix(0, r.CreatedAt).UTC(),
 		UpdatedAt: time.Unix(0, r.UpdatedAt).UTC(),
+		Teams:     []TeamRef{},
+	}
+	teams, err := s.Store.RQ.ListUserTeams(ctx, id)
+	if err != nil {
+		return UserDetail{}, fmt.Errorf("access: list user teams: %w", err)
+	}
+	for _, t := range teams {
+		d.Teams = append(d.Teams, TeamRef{ID: t.ID, Name: t.Name})
 	}
 	if u.LockedUntil.Valid && u.LockedUntil.Int64 > now.UnixNano() {
 		t := time.Unix(0, u.LockedUntil.Int64).UTC()

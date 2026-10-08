@@ -31,8 +31,10 @@ import { Route as AppEnvEnvIdImagesRouteImport } from './routes/_app/env/$envId/
 import { Route as AppEnvEnvIdNetworksRouteImport } from './routes/_app/env/$envId/networks'
 import { Route as AppEnvEnvIdVolumesRouteImport } from './routes/_app/env/$envId/volumes'
 import { Route as AppSettingsAccessIndexRouteImport } from './routes/_app/settings/access/index'
+import { Route as AppSettingsAccessTeamsRouteImport } from './routes/_app/settings/access/teams'
 import { Route as AppSettingsAccessUsersRouteImport } from './routes/_app/settings/access/users'
 import { Route as AppSettingsEnvironmentsEnvIdRouteImport } from './routes/_app/settings/environments_.$envId'
+import { Route as AppSettingsAccessTeamsTeamIdRouteImport } from './routes/_app/settings/access/teams_.$teamId'
 import { Route as AppSettingsAccessUsersUserIdRouteImport } from './routes/_app/settings/access/users_.$userId'
 
 const AppRoute = AppRouteImport.update({
@@ -144,6 +146,11 @@ const AppSettingsAccessIndexRoute = AppSettingsAccessIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppSettingsAccessRoute,
 } as any)
+const AppSettingsAccessTeamsRoute = AppSettingsAccessTeamsRouteImport.update({
+  id: '/teams',
+  path: '/teams',
+  getParentRoute: () => AppSettingsAccessRoute,
+} as any)
 const AppSettingsAccessUsersRoute = AppSettingsAccessUsersRouteImport.update({
   id: '/users',
   path: '/users',
@@ -154,6 +161,12 @@ const AppSettingsEnvironmentsEnvIdRoute =
     id: '/environments_/$envId',
     path: '/environments/$envId',
     getParentRoute: () => AppSettingsRoute,
+  } as any)
+const AppSettingsAccessTeamsTeamIdRoute =
+  AppSettingsAccessTeamsTeamIdRouteImport.update({
+    id: '/teams_/$teamId',
+    path: '/teams/$teamId',
+    getParentRoute: () => AppSettingsAccessRoute,
   } as any)
 const AppSettingsAccessUsersUserIdRoute =
   AppSettingsAccessUsersUserIdRouteImport.update({
@@ -182,10 +195,12 @@ export interface FileRoutesByFullPath {
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
+  '/settings/access/teams': typeof AppSettingsAccessTeamsRoute
   '/settings/access/users': typeof AppSettingsAccessUsersRoute
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdRoute
   '/env/$envId/': typeof AppEnvEnvIdIndexRoute
   '/settings/access/': typeof AppSettingsAccessIndexRoute
+  '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
 }
 export interface FileRoutesByTo {
@@ -205,10 +220,12 @@ export interface FileRoutesByTo {
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
+  '/settings/access/teams': typeof AppSettingsAccessTeamsRoute
   '/settings/access/users': typeof AppSettingsAccessUsersRoute
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdRoute
   '/env/$envId': typeof AppEnvEnvIdIndexRoute
   '/settings/access': typeof AppSettingsAccessIndexRoute
+  '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
 }
 export interface FileRoutesById {
@@ -233,10 +250,12 @@ export interface FileRoutesById {
   '/_app/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/_app/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/_app/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
+  '/_app/settings/access/teams': typeof AppSettingsAccessTeamsRoute
   '/_app/settings/access/users': typeof AppSettingsAccessUsersRoute
   '/_app/settings/environments_/$envId': typeof AppSettingsEnvironmentsEnvIdRoute
   '/_app/env/$envId/': typeof AppEnvEnvIdIndexRoute
   '/_app/settings/access/': typeof AppSettingsAccessIndexRoute
+  '/_app/settings/access/teams_/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/_app/settings/access/users_/$userId': typeof AppSettingsAccessUsersUserIdRoute
 }
 export interface FileRouteTypes {
@@ -261,10 +280,12 @@ export interface FileRouteTypes {
     | '/env/$envId/images'
     | '/env/$envId/networks'
     | '/env/$envId/volumes'
+    | '/settings/access/teams'
     | '/settings/access/users'
     | '/settings/environments/$envId'
     | '/env/$envId/'
     | '/settings/access/'
+    | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -284,10 +305,12 @@ export interface FileRouteTypes {
     | '/env/$envId/images'
     | '/env/$envId/networks'
     | '/env/$envId/volumes'
+    | '/settings/access/teams'
     | '/settings/access/users'
     | '/settings/environments/$envId'
     | '/env/$envId'
     | '/settings/access'
+    | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
   id:
     | '__root__'
@@ -311,10 +334,12 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/images'
     | '/_app/env/$envId/networks'
     | '/_app/env/$envId/volumes'
+    | '/_app/settings/access/teams'
     | '/_app/settings/access/users'
     | '/_app/settings/environments_/$envId'
     | '/_app/env/$envId/'
     | '/_app/settings/access/'
+    | '/_app/settings/access/teams_/$teamId'
     | '/_app/settings/access/users_/$userId'
   fileRoutesById: FileRoutesById
 }
@@ -482,6 +507,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsAccessIndexRouteImport
       parentRoute: typeof AppSettingsAccessRoute
     }
+    '/_app/settings/access/teams': {
+      id: '/_app/settings/access/teams'
+      path: '/teams'
+      fullPath: '/settings/access/teams'
+      preLoaderRoute: typeof AppSettingsAccessTeamsRouteImport
+      parentRoute: typeof AppSettingsAccessRoute
+    }
     '/_app/settings/access/users': {
       id: '/_app/settings/access/users'
       path: '/users'
@@ -496,6 +528,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsEnvironmentsEnvIdRouteImport
       parentRoute: typeof AppSettingsRoute
     }
+    '/_app/settings/access/teams_/$teamId': {
+      id: '/_app/settings/access/teams_/$teamId'
+      path: '/teams/$teamId'
+      fullPath: '/settings/access/teams/$teamId'
+      preLoaderRoute: typeof AppSettingsAccessTeamsTeamIdRouteImport
+      parentRoute: typeof AppSettingsAccessRoute
+    }
     '/_app/settings/access/users_/$userId': {
       id: '/_app/settings/access/users_/$userId'
       path: '/users/$userId'
@@ -507,14 +546,18 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppSettingsAccessRouteChildren {
+  AppSettingsAccessTeamsRoute: typeof AppSettingsAccessTeamsRoute
   AppSettingsAccessUsersRoute: typeof AppSettingsAccessUsersRoute
   AppSettingsAccessIndexRoute: typeof AppSettingsAccessIndexRoute
+  AppSettingsAccessTeamsTeamIdRoute: typeof AppSettingsAccessTeamsTeamIdRoute
   AppSettingsAccessUsersUserIdRoute: typeof AppSettingsAccessUsersUserIdRoute
 }
 
 const AppSettingsAccessRouteChildren: AppSettingsAccessRouteChildren = {
+  AppSettingsAccessTeamsRoute: AppSettingsAccessTeamsRoute,
   AppSettingsAccessUsersRoute: AppSettingsAccessUsersRoute,
   AppSettingsAccessIndexRoute: AppSettingsAccessIndexRoute,
+  AppSettingsAccessTeamsTeamIdRoute: AppSettingsAccessTeamsTeamIdRoute,
   AppSettingsAccessUsersUserIdRoute: AppSettingsAccessUsersUserIdRoute,
 }
 
