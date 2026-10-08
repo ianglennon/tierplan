@@ -269,6 +269,55 @@ describe("adding access", () => {
   });
 });
 
+describe("Add access over a grant the subject already holds (WR-C-02)", () => {
+  const held = () => grant({ role: "operator", extras: ["containers.exec"] });
+
+  it("previews what lowering it takes away and keeps Save off until the preview has loaded", async () => {
+    let release: (() => void) | undefined;
+    preview = () =>
+      new Promise((resolve) => {
+        release = () => resolve(Response.json({ impact: [] }));
+      });
+    render(<Harness grants={[held()]} />);
+    const dialog = await screen.findByRole("dialog", { name: "Add access" });
+    // The role starts on Viewer, so replacing an Operator grant already lowers it.
+    await chooseEnvironment(dialog, "Alpha");
+    expect(await within(dialog).findByText("What changes")).toBeTruthy();
+    const save = within(dialog).getByRole("button", { name: "Save access" }) as HTMLButtonElement;
+    expect(save.disabled || save.getAttribute("aria-disabled") === "true").toBe(true);
+    fireEvent.click(save);
+    expect(sent.some((s) => s.method === "PUT")).toBe(false);
+    // The preview asks about the grant being replaced.
+    expect(sent.find((s) => s.path === "/api/users/u1/grants/g1/impact")?.body).toEqual({
+      op: "update",
+      role: "viewer",
+      extras: [],
+    });
+
+    release?.();
+    expect(await within(dialog).findByText("No one loses access.")).toBeTruthy();
+    await waitFor(() => {
+      const s = within(dialog).getByRole("button", { name: "Save access" }) as HTMLButtonElement;
+      expect(s.disabled || s.getAttribute("aria-disabled") === "true").toBe(false);
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save access" }));
+    await screen.findByText("Access saved.");
+    expect(sent.find((s) => s.method === "PUT")?.body).toMatchObject({
+      role: "viewer",
+      expected: { role: "operator", extras: ["containers.exec"] },
+    });
+  });
+
+  it("does not preview when the replacing grant raises access", async () => {
+    render(<Harness grants={[grant({ role: "viewer", extras: [] })]} />);
+    const dialog = await screen.findByRole("dialog", { name: "Add access" });
+    await chooseEnvironment(dialog, "Alpha");
+    fireEvent.click(radio(dialog, "Operator"));
+    expect(within(dialog).queryByText("What changes")).toBeNull();
+    expect(sent.some((s) => s.path.endsWith("/impact"))).toBe(false);
+  });
+});
+
 describe("a refused or failed save", () => {
   async function submit(fill?: (dialog: HTMLElement) => void) {
     render(<Harness />);

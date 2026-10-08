@@ -159,10 +159,16 @@ function GrantForm({
   // What would be saved for the role: only an Operator carries extras.
   const sentExtras = role === "operator" ? extras : [];
   // Lowering a grant shows what it takes away first, and Save waits for that to
-  // load: the preview fails closed.
-  const lowering = grant ? takesAwayFrom(grant, role, sentExtras) : false;
-  const [ready, setReady] = useState(false);
-  const waiting = lowering && !ready;
+  // load: the preview fails closed. The grant that counts is the one a save
+  // replaces, whether it is being edited or "Add access" landed on an
+  // environment the subject already holds.
+  const target = grant ?? existing;
+  const lowering = target ? takesAwayFrom(target, role, sentExtras) : false;
+  // Ready is remembered per question, so a preview that loaded for another
+  // grant, role or set of extras never lets this one through.
+  const previewKey = target ? `${target.id}:${role}:${sentExtras.join(",")}` : "";
+  const [readyFor, setReadyFor] = useState<string | null>(null);
+  const waiting = lowering && readyFor !== previewKey;
   const canSave = !loading && env !== "" && subject !== null && !pending && !waiting;
 
   async function save() {
@@ -350,17 +356,17 @@ function GrantForm({
           <RolePicker value={role} onChange={setRole} disabled={pending} />
           <ExtraPermissions role={role} value={extras} onChange={setExtras} disabled={pending} />
         </fieldset>
-        {lowering && grant && subject ? (
+        {lowering && target && subject ? (
           <ImpactPreview
-            // A different role or set of extras is a different question.
-            key={`${role}:${sentExtras.join(",")}`}
+            // A different grant, role or set of extras is a different question.
+            key={previewKey}
             load={() => {
               const change = { op: "update" as const, role, extras: sentExtras };
               return envMode && environment
-                ? previewEnvAccessImpact(environment.id, grant.id, change)
-                : previewGrantImpact(subject.type, subject.id, grant.id, change);
+                ? previewEnvAccessImpact(environment.id, target.id, change)
+                : previewGrantImpact(subject.type, subject.id, target.id, change);
             }}
-            onReadyChange={setReady}
+            onReadyChange={(ready) => setReadyFor(ready ? previewKey : null)}
           />
         ) : null}
         <DialogFooter>
