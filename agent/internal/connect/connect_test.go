@@ -653,6 +653,101 @@ func TestARevokedAgentWithNoJoinTokenWaitsTheMaximumAndSaysOnceThatItNeedsAToken
 	}
 }
 
+// D-31: after Bayplan is restored from a backup, an agent that was installed after
+// the backup holds a certificate the restored environment issued but does not
+// know, and is refused unknown_agent. With a join token the agent drops that
+// identity and enrols again, exactly as for revoked.
+func TestAnUnknownAgentRefusalWithAJoinTokenDiscardsTheIdentityAndEnrolsAgain(t *testing.T) {
+	dir := t.TempDir()
+	saved := enrolledState(t, dir)
+	var mu sync.Mutex
+	var onDiskAtEnrol []bool
+	srv := newFakeServer(t, func(_ int, a wire.Auth) reply {
+		if a.Mode == wire.ModeHello {
+			return reply{refuse: wire.ReasonUnknownAgent}
+		}
+		mu.Lock()
+		onDiskAtEnrol = append(onDiskAtEnrol, !noIdentityOnDisk(dir))
+		mu.Unlock()
+		return reply{cert: []byte("reinstalled-cert-der")}
+	})
+	var logs bytes.Buffer
+	startAgent(t, Config{
+		URL: srv.url(), JoinToken: "bpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+		Log: slog.New(slog.NewTextHandler(&logs, nil)),
+	}, fastEnv())
+
+	first, _ := srv.authN(t, 1)
+	second, _ := srv.authN(t, 2)
+	if first.Mode != wire.ModeHello || second.Mode != wire.ModeEnrol || second.Token != "bpjt_tok" {
+		t.Fatalf("modes = %q then %q (token %q); want hello, refused unknown_agent, then enrol with the token", first.Mode, second.Mode, second.Token)
+	}
+	if bytes.Equal(second.Pub, publicOf(saved.Key)) {
+		t.Error("the re-enrolment presented the old key; it must be a fresh one")
+	}
+	mu.Lock()
+	if len(onDiskAtEnrol) == 0 || onDiskAtEnrol[0] {
+		t.Errorf("identity files still on disk when the agent enrolled again (%v)", onDiskAtEnrol)
+	}
+	mu.Unlock()
+	waitUntil(t, "the new identity to be saved", func() bool {
+		s, ok, _ := state.Load(dir)
+		return ok && string(s.Cert) == "reinstalled-cert-der"
+	})
+	if !strings.Contains(logs.String(), "code=unknown_agent") {
+		t.Errorf("the refusal was not logged:\n%s", logs.String())
+	}
+	if n := srv.attempts(); n != 2 {
+		t.Errorf("the agent made %d attempts, want 2 (hello, then one enrolment)", n)
+	}
+}
+
+// Without a join token the agent keeps its identity, retries at the 60 second
+// maximum and says once what to do.
+func TestAnUnknownAgentRefusalWithNoJoinTokenWaitsTheMaximumAndSaysOnceWhatToDo(t *testing.T) {
+	dir := t.TempDir()
+	saved := enrolledState(t, dir)
+	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonUnknownAgent} })
+	var logs bytes.Buffer
+	sl, err := runUntilSleeps(t, Config{
+		URL: srv.url(), StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)), SocketPath: filepath.Join(dir, "none.sock"),
+		BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+	}, 3)
+	if err != nil {
+		t.Fatalf("Run = %v; a refusal never ends an enrolled agent", err)
+	}
+	for i, d := range sl.all() {
+		if d != 60*time.Second {
+			t.Errorf("wait %d = %v, want the 60s maximum", i+1, d)
+		}
+	}
+	const hint = "this agent was enrolled after the backup this Bayplan was restored from; reinstall it with the environment's install command"
+	if n := strings.Count(logs.String(), "code=unknown_agent"); n != 1 {
+		t.Errorf("the code unknown_agent was logged %d times, want once:\n%s", n, logs.String())
+	}
+	if !strings.Contains(logs.String(), hint) {
+		t.Errorf("the hint is missing from the log:\n%s", logs.String())
+	}
+	got, ok, err := state.Load(dir)
+	if err != nil || !ok || !got.Key.Equal(saved.Key) || string(got.Cert) != "saved-cert-der" {
+		t.Fatalf("the identity changed or went away: %+v %v %v", got, ok, err)
+	}
+	for n := 1; n <= srv.attempts(); n++ {
+		if a, _ := srv.authN(t, n); a.Mode != wire.ModeHello {
+			t.Errorf("attempt %d used mode %q, want hello: with no token there is nothing to enrol with", n, a.Mode)
+		}
+	}
+}
+
+func TestTheHintForUnknownAgentNamesTheBackupAndTheInstallCommand(t *testing.T) {
+	r := &runner{}
+	got := r.hint(wire.ReasonUnknownAgent)
+	const want = "this agent was enrolled after the backup this Bayplan was restored from; reinstall it with the environment's install command"
+	if got != want {
+		t.Errorf("hint = %q, want %q", got, want)
+	}
+}
+
 // An enrolled agent that Bayplan refuses auth_rejected is most often one whose
 // address changed while it was away; the hint says how it is brought back with
 // its identity (G-02-4b).
