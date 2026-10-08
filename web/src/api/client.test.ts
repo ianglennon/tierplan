@@ -3,7 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api, setCsrfToken, setUnauthorizedHandler } from "@/api/client";
+import { api, setAccessChangeHandler, setCsrfToken, setUnauthorizedHandler } from "@/api/client";
 import { resetBasePathForTests } from "@/lib/base-path";
 
 function stubFetch(status: number, body: unknown = {}) {
@@ -14,6 +14,8 @@ function stubFetch(status: number, body: unknown = {}) {
   return fn;
 }
 
+const SUMMARY_BODY = {};
+
 function sentRequest(fn: ReturnType<typeof stubFetch>): Request {
   const first = fn.mock.calls[0];
   if (!first) throw new Error("fetch was not called");
@@ -23,6 +25,7 @@ function sentRequest(fn: ReturnType<typeof stubFetch>): Request {
 beforeEach(() => {
   setCsrfToken(null);
   setUnauthorizedHandler(null);
+  setAccessChangeHandler(null);
   window.history.pushState({}, "", "/");
 });
 
@@ -107,6 +110,81 @@ describe("401 handling", () => {
     stubFetch(401, { status: 401 });
     const { response } = await api.GET("/api/me");
     expect(response.status).toBe(401);
+  });
+});
+
+// 403 and 404 are how the server says access changed (D-08, D-10): an unseen
+// environment is a 404 that looks like a missing one, and a refused action is a
+// 403. The signed-in layout registers the handler that reacts.
+describe("access changes (D-10)", () => {
+  const read = () => api.GET("/api/env/{envId}/summary", { params: { path: { envId: "e1" } } });
+  const mutate = () => api.POST("/api/env/{envId}/reconnect", { params: { path: { envId: "e1" } } });
+
+  it("tells the handler about a 404 environment_not_found on an environment request", async () => {
+    stubFetch(404, { status: 404, type: "environment_not_found" });
+    const handler = vi.fn();
+    setAccessChangeHandler(handler);
+    await read();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith("unseen", "/api/env/e1/summary");
+  });
+
+  it("tells the handler about a 403 on an environment read", async () => {
+    stubFetch(403, { status: 403 });
+    const handler = vi.fn();
+    setAccessChangeHandler(handler);
+    await read();
+    expect(handler).toHaveBeenCalledWith("unseen", "/api/env/e1/summary");
+  });
+
+  it("tells the handler a mutation was refused on a 403", async () => {
+    stubFetch(403, { status: 403 });
+    const handler = vi.fn();
+    setAccessChangeHandler(handler);
+    await mutate();
+    expect(handler).toHaveBeenCalledWith("refused", "/api/env/e1/reconnect");
+  });
+
+  it("ignores a 404 that is about something other than the environment", async () => {
+    stubFetch(404, { status: 404, type: "container_not_found" });
+    const handler = vi.fn();
+    setAccessChangeHandler(handler);
+    await read();
+    await mutate();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("ignores a 403 that is a CSRF or origin failure, which is not a change of access", async () => {
+    const handler = vi.fn();
+    setAccessChangeHandler(handler);
+    stubFetch(403, { status: 403, type: "csrf_failed" });
+    await mutate();
+    stubFetch(403, { status: 403, type: "origin_mismatch" });
+    await mutate();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("ignores a success and the sign-in calls", async () => {
+    const handler = vi.fn();
+    setAccessChangeHandler(handler);
+    stubFetch(200, SUMMARY_BODY);
+    await read();
+    stubFetch(403, { status: 403 });
+    await api.POST("/api/auth/login", { body: { username: "a", password: "b" } });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does nothing, and still returns the response, when no handler is registered", async () => {
+    stubFetch(404, { status: 404, type: "environment_not_found" });
+    const { response } = await read();
+    expect(response.status).toBe(404);
+  });
+
+  it("leaves the body readable for the caller", async () => {
+    stubFetch(404, { status: 404, type: "environment_not_found" });
+    setAccessChangeHandler(vi.fn());
+    const { error } = await read();
+    expect(error).toMatchObject({ type: "environment_not_found" });
   });
 });
 

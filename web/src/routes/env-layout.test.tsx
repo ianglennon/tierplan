@@ -95,6 +95,12 @@ function stubApi() {
       }
       if (path === "/api/environments") return stub.environments();
       if (path === "/api/env/e1/summary") return stub.summary();
+      if (path === "/api/env/e2/summary") {
+        return Response.json({
+          ...SUMMARY,
+          environment: { ...SUMMARY.environment, id: "e2", name: "Second host" },
+        });
+      }
       if (path === "/api/env/e1/reconnect") return stub.reconnect();
       if (path === "/api/env/e1/adopt-cluster" && stub.adopt) return stub.adopt();
       return Response.json({}, { status: 404 });
@@ -652,5 +658,100 @@ describe("degraded banner in the environment layout (D-33)", () => {
     renderAt("/env/e1");
     await screen.findByRole("heading", { name: "Lab host" });
     expect(screen.queryByText(/is degraded/)).toBeNull();
+  });
+});
+
+// D-08 and D-10: an environment the user may not see is a missing page, and when
+// access changes under a user the app refetches who they are and moves them.
+describe("access changes under a user (D-08, D-10)", () => {
+  const SECOND = { ...LAB, id: "e2", name: "Second host" };
+  const meReads = () => sent.filter((s) => s.path === "/api/me").length;
+
+  it("shows the plain Page not found for an environment the user cannot see, and no toast", async () => {
+    me = makeMe({ envs: { e2: "viewer" } });
+    stub.environments = () => Response.json({ items: [SECOND] });
+    stub.summary = () => problem(404, "environment_not_found");
+    renderAt("/env/e1");
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeTruthy();
+    expect(screen.queryByText("You don't have permission to view this page")).toBeNull();
+    await waitFor(() => expect(meReads()).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByText("Your access changed. Showing what you can see now.")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Page not found" })).toBeTruthy();
+  });
+
+  it("moves a user who lost the environment to one they can still see, with the info toast", async () => {
+    me = makeMe({ envs: { e1: "viewer", e2: "viewer" } });
+    stub.environments = () => Response.json({ items: [SECOND] });
+    stub.summary = () => {
+      // The grant is withdrawn: the server now answers as if e1 does not exist.
+      me = makeMe({ envs: { e2: "viewer" } });
+      return problem(404, "environment_not_found");
+    };
+    const router = renderAt("/env/e1");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/env/e2"));
+    expect(await screen.findByText("Your access changed. Showing what you can see now.")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Second host" })).toBeTruthy();
+  });
+
+  it("shows the no-access state when nothing is left to open", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    stub.environments = () => Response.json({ items: [] });
+    stub.summary = () => {
+      me = makeMe({ envs: {}, administrators: ["admin"] });
+      return problem(404, "environment_not_found");
+    };
+    const router = renderAt("/env/e1");
+    expect(
+      await screen.findByRole("heading", { name: "You don't have access to any environments yet" }),
+    ).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/");
+    expect(screen.getByText("Your access changed. Showing what you can see now.")).toBeTruthy();
+  });
+
+  it("shows the skeleton, never the no-access state, while /api/me is read again", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stub.environments = () => Response.json({ items: [] });
+    stub.summary = () => problem(404, "environment_not_found");
+    const inner = globalThis.fetch;
+    let meCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (new URL(req.url).pathname === "/api/me" && ++meCalls === 2) {
+          await held;
+          me = makeMe({ envs: {}, administrators: ["admin"] });
+        }
+        return inner(req);
+      }),
+    );
+    renderAt("/env/e1");
+    expect(await screen.findByLabelText("Checking what you can see")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Page not found" })).toBeNull();
+    expect(screen.queryByText("You don't have access to any environments yet")).toBeNull();
+    release?.();
+    expect(
+      await screen.findByRole("heading", { name: "You don't have access to any environments yet" }),
+    ).toBeTruthy();
+  });
+
+  it("shows the refusal toast and re-renders from the new /api/me when an action is refused", async () => {
+    me = makeMe({ envs: { e1: "operator" } });
+    stub.summary = () => problem(503, "environment_offline", { reason: "unreachable" });
+    stub.reconnect = () => {
+      me = makeMe({ envs: { e1: "viewer" } });
+      return problem(403, "about:blank");
+    };
+    renderAt("/env/e1");
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(
+      await screen.findByText(
+        "You no longer have permission to do that. Your access may have changed.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() => expect(meReads()).toBeGreaterThanOrEqual(2));
   });
 });
