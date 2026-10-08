@@ -5302,7 +5302,7 @@
     },
     "/api/backup/restore/apply": {
       "post": {
-        "description": "Replaces everything in this Bayplan with the uploaded backup. The backup is opened, migrated to this version, re-keyed to this instance's master key and verified on a private copy first; nothing live changes until all of that has worked. Then Bayplan saves the current database as backups/prerestore-\u003ctime\u003e.db, swaps the restored one in and restarts itself. The answer is 202 and Bayplan is unreachable for a moment; everyone is signed out, including the caller. confirm must be this instance's name (422 confirm_mismatch). The same refusals as the check apply and leave everything as it was. Audited in the restored log as audit.reanchored then backup.restored. Needs backup.manage.",
+        "description": "Replaces everything in this Bayplan with the uploaded backup. The backup is opened, migrated to this version, re-keyed to this instance's master key and verified on a private copy first; nothing live changes until all of that has worked. Then Bayplan saves the current database as backups/prerestore-\u003ctime\u003e.db, swaps the restored one in and restarts itself. The answer is 202 and Bayplan is unreachable for a moment; everyone is signed out, including the caller. confirm must be this instance's name (422 confirm_mismatch). The same refusals as the check apply and leave everything as it was, and 429 rate_limited when the caller has used their attempts. Audited in the restored log as audit.reanchored then backup.restored; a refused restore is recorded in this log as backup.failed (stage restore_apply) with a reason. Needs backup.manage.",
         "operationId": "applyRestore",
         "requestBody": {
           "content": {
@@ -5351,7 +5351,7 @@
     },
     "/api/backup/restore/check": {
       "post": {
-        "description": "Opens the uploaded file with the passphrase and answers what is in it, without changing anything. 422 backup_unreadable for a wrong passphrase or a damaged file, 422 not_a_backup for a file that is not a backup, 409 backup_newer for a backup from a newer Bayplan, 404 upload_not_found for an upload that is gone or expired, 409 restore_busy while another check or restore runs. Audited as backup.checked. Needs backup.manage.",
+        "description": "Opens the uploaded file with the passphrase and answers what is in it, without changing anything. 422 backup_unreadable for a wrong passphrase or a damaged file, 422 not_a_backup for a file that is not a backup, 409 backup_newer for a backup from a newer Bayplan, 404 upload_not_found for an upload that is gone or expired, 409 restore_busy while another check or restore runs, 429 rate_limited when the caller has used their attempts. Audited as backup.checked; a refused check is recorded too, with result failure and a reason (unreadable, not_a_backup, newer, rate_limited). Needs backup.manage.",
         "operationId": "checkRestore",
         "requestBody": {
           "content": {

@@ -17,6 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/backup"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
@@ -78,6 +79,11 @@ type RestoreDeps struct {
 	// data-directory lock still held, and restart. It reports false when a restart
 	// is already pending.
 	Restart func(swap func(context.Context) error) bool
+	// Limiter throttles the Settings check and restore per user ID, right and
+	// wrong attempts alike, so a stolen session cannot try passphrases against an
+	// uploaded backup at the speed of the key derivation alone. The wizard has
+	// the setup token's limiter instead. Nil means no throttle.
+	Limiter *auth.IPLimiter
 	// Now stamps the pre-restore snapshot and the restore. Nil means time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
@@ -235,14 +241,18 @@ func RegisterRestore(r *httpx.Router, d RestoreDeps) {
 		Description: "Opens the uploaded file with the passphrase and answers what is in it, without changing anything. " +
 			"422 " + problemBackupUnreadable + " for a wrong passphrase or a damaged file, 422 " + problemNotABackup + " for a file that is not a backup, " +
 			"409 " + problemBackupNewer + " for a backup from a newer Bayplan, 404 " + problemUploadNotFound + " for an upload that is gone or expired, " +
-			"409 " + problemRestoreBusy + " while another check or restore runs. Audited as backup.checked. Needs backup.manage.",
+			"409 " + problemRestoreBusy + " while another check or restore runs, 429 " + problemRateLimited + " when the caller has used their attempts. " +
+			"Audited as backup.checked; a refused check is recorded too, with result failure and a reason (unreadable, not_a_backup, newer, rate_limited). Needs backup.manage.",
 		Tags: []string{"backup"},
 	}, need, func(ctx context.Context, in *RestoreCheckInput) (*RestoreSummaryOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
-		return a.check(ctx, in.Body.UploadID, in.Body.Passphrase, in.Origin, p.AuditActor(), in.UserAgent)
+		if err := a.allow(ctx, p, audit.ActionBackupChecked, restoreSourceUI, in.UserAgent); err != nil {
+			return nil, err
+		}
+		return a.check(ctx, in.Body.UploadID, in.Body.Passphrase, in.Origin, restoreSourceUI, p.AuditActor(), in.UserAgent)
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -256,14 +266,24 @@ func RegisterRestore(r *httpx.Router, d RestoreDeps) {
 			"worked. Then Bayplan saves the current database as backups/prerestore-<time>.db, swaps the restored one in and restarts " +
 			"itself. The answer is 202 and Bayplan is unreachable for a moment; everyone is signed out, including the caller. " +
 			"confirm must be this instance's name (422 " + problemConfirmMismatch + "). The same refusals as the check apply and leave " +
-			"everything as it was. Audited in the restored log as audit.reanchored then backup.restored. Needs backup.manage.",
+			"everything as it was, and 429 " + problemRateLimited + " when the caller has used their attempts. Audited in the restored log as " +
+			"audit.reanchored then backup.restored; a refused restore is recorded in this log as backup.failed (stage restore_apply) with a reason. Needs backup.manage.",
 		Tags: []string{"backup"},
 	}, need, func(ctx context.Context, in *RestoreApplyInput) (*RestoreApplyOutput, error) {
-		if strings.TrimSpace(in.Body.Confirm) != a.Instance.Name() {
-			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemConfirmMismatch,
-				"Type the name of this instance to confirm.")
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
-		return a.apply(ctx, in.Body.UploadID, in.Body.Passphrase, restoreSourceUI, nil)
+		if err := a.allow(ctx, p, audit.ActionBackupFailed, restoreSourceUI, in.UserAgent); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(in.Body.Confirm) != a.Instance.Name() {
+			err := httpx.Problem(http.StatusUnprocessableEntity, problemConfirmMismatch,
+				"Type the name of this instance to confirm.")
+			a.auditRefusal(ctx, audit.ActionBackupFailed, restoreSourceUI, p.AuditActor(), in.UserAgent, err)
+			return nil, err
+		}
+		return a.apply(ctx, in.Body.UploadID, in.Body.Passphrase, restoreSourceUI, p.AuditActor(), in.UserAgent, nil)
 	})
 
 	// The wizard: the same three steps, open to the holder of the setup token for
@@ -300,7 +320,7 @@ func RegisterRestore(r *httpx.Router, d RestoreDeps) {
 		if err := a.Setup.checkAccess(ctx, in.UserAgent, in.Body.SetupToken); err != nil {
 			return nil, err
 		}
-		return a.check(ctx, in.Body.UploadID, in.Body.Passphrase, in.Origin, audit.Actor{Type: audit.ActorAnonymous}, in.UserAgent)
+		return a.check(ctx, in.Body.UploadID, in.Body.Passphrase, in.Origin, restoreSourceWizard, audit.Actor{Type: audit.ActorAnonymous}, in.UserAgent)
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -318,7 +338,7 @@ func RegisterRestore(r *httpx.Router, d RestoreDeps) {
 		}
 		// The gate is asked once more at the last moment: an admin created while the
 		// backup was being prepared would be replaced without being asked.
-		return a.apply(ctx, in.Body.UploadID, in.Body.Passphrase, restoreSourceWizard, func(ctx context.Context) error {
+		return a.apply(ctx, in.Body.UploadID, in.Body.Passphrase, restoreSourceWizard, audit.Actor{Type: audit.ActorAnonymous}, in.UserAgent, func(ctx context.Context) error {
 			needs, err := a.Setup.Gate.Check(ctx)
 			if err != nil {
 				return err
@@ -469,8 +489,94 @@ func (a *restoreAPI) discard(ctx context.Context, source string, actor audit.Act
 	return nil
 }
 
-// check opens the upload and answers what it holds.
-func (a *restoreAPI) check(ctx context.Context, id, passphrase, origin string, actor audit.Actor, userAgent string) (*RestoreSummaryOutput, error) {
+// allow spends one attempt of the signed-in caller's budget, before any key is
+// derived. A refused attempt is audited and answered 429.
+func (a *restoreAPI) allow(ctx context.Context, p *rbac.Principal, action, source, userAgent string) error {
+	if a.Limiter == nil || a.Limiter.Allow(p.ID) {
+		return nil
+	}
+	a.Log.Warn("restore attempts rate limited", "user_id", p.ID, "ip", httpx.ClientIP(ctx))
+	err := httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many attempts. Wait a minute and try again.")
+	a.auditRefusal(ctx, action, source, p.AuditActor(), userAgent, err)
+	return err
+}
+
+// restoreFailureReason is the short reason recorded for a refused check or
+// restore, or "" for an answer that says nothing about the backup or the caller
+// (another restore running, a missing upload, a closed setup).
+func restoreFailureReason(err error) string {
+	var em *huma.ErrorModel
+	if !errors.As(err, &em) {
+		return "failed"
+	}
+	switch em.Type {
+	case problemBackupUnreadable:
+		return "unreadable"
+	case problemNotABackup:
+		return "not_a_backup"
+	case problemBackupNewer:
+		return "newer"
+	case problemConfirmMismatch:
+		return "confirm_mismatch"
+	case problemRateLimited:
+		return reasonRateLimited
+	}
+	if em.Status >= http.StatusInternalServerError {
+		return "failed"
+	}
+	return ""
+}
+
+// auditRefusal records a check or a restore that did not go through, so a
+// stolen session or a guesser trying passphrases leaves a trace (AUTH-10, D-49).
+// It names the reason and the source and never the passphrase, the upload or the
+// text of the error. The check is recorded as backup.checked and a restore as
+// backup.failed at the stage restore_apply, both with a failure result. A
+// failed write is logged and does not change the answer, which is already a
+// refusal.
+func (a *restoreAPI) auditRefusal(ctx context.Context, action, source string, actor audit.Actor, userAgent string, err error) {
+	reason := restoreFailureReason(err)
+	if reason == "" {
+		return
+	}
+	result := audit.ResultFailure
+	if reason == reasonRateLimited {
+		result = audit.ResultDenied
+	}
+	details := map[string]string{"source": source}
+	if action == audit.ActionBackupFailed {
+		details["stage"] = "restore_apply"
+	}
+	// An anonymous caller's rows go through the throttle that keeps a flood of them
+	// from starving the single writer.
+	var rec httpx.Auditor = a.Audit
+	if actor.Type == audit.ActorAnonymous && a.Setup.AnonAudit != nil {
+		rec = a.Setup.AnonAudit
+	}
+	if werr := rec.Record(ctx, audit.Entry{
+		Actor:      actor,
+		Action:     action,
+		TargetType: targetBackup,
+		Result:     result,
+		Reason:     reason,
+		IP:         httpx.ClientIP(ctx),
+		UserAgent:  userAgent,
+		Details:    details,
+	}); werr != nil {
+		a.Log.Error("could not audit a refused restore step", "error", werr, "action", action, "reason", reason)
+	}
+}
+
+// check opens the upload and answers what it holds. A refusal is audited.
+func (a *restoreAPI) check(ctx context.Context, id, passphrase, origin, source string, actor audit.Actor, userAgent string) (*RestoreSummaryOutput, error) {
+	out, err := a.checkUpload(ctx, id, passphrase, origin, actor, userAgent)
+	if err != nil {
+		a.auditRefusal(ctx, audit.ActionBackupChecked, source, actor, userAgent, err)
+	}
+	return out, err
+}
+
+func (a *restoreAPI) checkUpload(ctx context.Context, id, passphrase, origin string, actor audit.Actor, userAgent string) (*RestoreSummaryOutput, error) {
 	if !a.busy.TryLock() {
 		return nil, a.restoreProblem("check", backup.ErrRestoreBusy)
 	}
@@ -541,8 +647,16 @@ func (a *restoreAPI) publicURLDiffers(backupURL, requestOrigin string) bool {
 
 // apply validates and prepares the upload on a private copy, then hands the
 // server the swap to run once it has stopped. recheck, when set, runs after the
-// preparation and before the restart is requested.
-func (a *restoreAPI) apply(ctx context.Context, id, passphrase, source string, recheck func(context.Context) error) (*RestoreApplyOutput, error) {
+// preparation and before the restart is requested. A refusal is audited.
+func (a *restoreAPI) apply(ctx context.Context, id, passphrase, source string, actor audit.Actor, userAgent string, recheck func(context.Context) error) (*RestoreApplyOutput, error) {
+	out, err := a.applyUpload(ctx, id, passphrase, source, recheck)
+	if err != nil {
+		a.auditRefusal(ctx, audit.ActionBackupFailed, source, actor, userAgent, err)
+	}
+	return out, err
+}
+
+func (a *restoreAPI) applyUpload(ctx context.Context, id, passphrase, source string, recheck func(context.Context) error) (*RestoreApplyOutput, error) {
 	if !a.busy.TryLock() {
 		return nil, a.restoreProblem("apply", backup.ErrRestoreBusy)
 	}

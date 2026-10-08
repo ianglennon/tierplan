@@ -48,6 +48,11 @@ type restoreHook struct {
 	refuse bool
 }
 
+// restoreLimiterBurst is how many Settings checks and restores one user may make
+// at once in these tests. It is wide so the tests that repeat a step are not
+// throttled; the rate-limit test narrows it before it builds its fixture.
+var restoreLimiterBurst = 100
+
 func (f *authFixture) restoreDeps(log *slog.Logger) api.RestoreDeps {
 	if f.restore == nil {
 		f.restore = &restoreHook{uploads: backup.NewUploads(f.dataInfo.Path, 0)}
@@ -55,6 +60,7 @@ func (f *authFixture) restoreDeps(log *slog.Logger) api.RestoreDeps {
 	h := f.restore
 	return api.RestoreDeps{
 		Uploads: h.uploads, Vault: f.v, Audit: f.aud, Instance: f.inst,
+		Limiter: auth.NewIPLimiter(12*time.Second, restoreLimiterBurst, 10*time.Minute, f.clk.now),
 		DataDir: f.dataInfo.Path, AppVersion: "v9.9.9", Now: f.clk.now, Log: log,
 		Restart: func(swap func(context.Context) error) bool {
 			if h.refuse {
@@ -889,5 +895,119 @@ func TestWizardRestoreDiscardNeedsTheSetupTokenAndRemovesTheUpload(t *testing.T)
 	var n int
 	if err := w.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'backup.upload_discarded' AND actor_type = 'anonymous'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("anonymous discard entries = %d, %v, want 1", n, err)
+	}
+}
+
+// WR-B-03: a refused check or restore leaves an entry, on both paths, without the
+// passphrase.
+func TestRestoreCheckWithAWrongPassphraseIsAuditedAsAFailure(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "")))
+
+	const wrong = "not the passphrase 999"
+	rec := f.restoreCall(t, cookie, csrf, "check", map[string]string{"uploadId": id, "passphrase": wrong})
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "backup_unreadable" {
+		t.Fatalf("check = %d %s, want 422 backup_unreadable", rec.Code, rec.Body)
+	}
+	e := f.audits(t, "backup.checked")
+	if len(e) != 1 || e[0].Result != "failure" || e[0].Reason != "unreadable" || e[0].ActorID != "id-admin" {
+		t.Fatalf("entries = %+v, want one failure by the admin with reason unreadable", e)
+	}
+	d := f.auditDetails(t, "backup.checked")
+	if len(d) != 1 || d[0]["source"] != "ui" {
+		t.Fatalf("details = %v, want source ui", d)
+	}
+	var all string
+	if err := f.st.Read.QueryRow(`SELECT group_concat(COALESCE(details, '') || COALESCE(reason, '') || COALESCE(target_id, ''), '|') FROM audit_log WHERE action = 'backup.checked'`).Scan(&all); err != nil || strings.Contains(all, wrong) || strings.Contains(all, id) {
+		t.Fatalf("the entry carries the passphrase or the upload: %q, %v", all, err)
+	}
+}
+
+func TestRestoreCheckOfAFileThatIsNotABackupIsAuditedWithItsReason(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	id := uploadedID(t, f.upload(t, cookie, csrf, bytes.Repeat([]byte("plain text, not a backup. "), 100)))
+	rec := f.restoreCall(t, cookie, csrf, "check", map[string]string{"uploadId": id, "passphrase": restorePass})
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "not_a_backup" {
+		t.Fatalf("check = %d %s, want 422 not_a_backup", rec.Code, rec.Body)
+	}
+	if e := f.audits(t, "backup.checked"); len(e) != 1 || e[0].Result != "failure" || e[0].Reason != "not_a_backup" {
+		t.Fatalf("entries = %+v, want one failure not_a_backup", e)
+	}
+}
+
+func TestRestoreApplyThatIsRefusedIsAuditedAsABackupFailure(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.inst.Apply("Home lab", "")
+	cookie, csrf := f.signIn(t, "admin", false)
+	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "")))
+
+	rec := f.restoreCall(t, cookie, csrf, "apply", map[string]string{"uploadId": id, "passphrase": restorePass, "confirm": "wrong name"})
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "confirm_mismatch" {
+		t.Fatalf("apply = %d %s, want 422 confirm_mismatch", rec.Code, rec.Body)
+	}
+	rec = f.restoreCall(t, cookie, csrf, "apply", map[string]string{"uploadId": id, "passphrase": "wrong passphrase 12345", "confirm": "Home lab"})
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "backup_unreadable" {
+		t.Fatalf("apply = %d %s, want 422 backup_unreadable", rec.Code, rec.Body)
+	}
+	e := f.audits(t, "backup.failed")
+	if len(e) != 2 || e[0].Reason != "confirm_mismatch" || e[1].Reason != "unreadable" || e[0].Result != "failure" || e[1].ActorID != "id-admin" {
+		t.Fatalf("entries = %+v, want confirm_mismatch then unreadable, both failures by the admin", e)
+	}
+	for _, d := range f.auditDetails(t, "backup.failed") {
+		if d["stage"] != "restore_apply" || d["source"] != "ui" {
+			t.Fatalf("details = %v, want stage restore_apply and source ui", d)
+		}
+	}
+}
+
+func TestRestoreSettingsStepsAreRateLimitedPerUserAndTheRefusalIsAudited(t *testing.T) {
+	old := restoreLimiterBurst
+	restoreLimiterBurst = 3
+	t.Cleanup(func() { restoreLimiterBurst = old })
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "")))
+
+	for i := range 3 {
+		rec := f.restoreCall(t, cookie, csrf, "check", map[string]string{"uploadId": id, "passphrase": "wrong passphrase 12345"})
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("attempt %d = %d %s, want 422", i, rec.Code, rec.Body)
+		}
+	}
+	rec := f.restoreCall(t, cookie, csrf, "check", map[string]string{"uploadId": id, "passphrase": restorePass})
+	if rec.Code != http.StatusTooManyRequests || problemType(t, rec) != "rate_limited" {
+		t.Fatalf("fourth attempt = %d %s, want 429 rate_limited even with the right passphrase", rec.Code, rec.Body)
+	}
+	rec = f.restoreCall(t, cookie, csrf, "apply", map[string]string{"uploadId": id, "passphrase": restorePass, "confirm": "x"})
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("apply by the same user = %d %s, want 429 (one budget for both steps)", rec.Code, rec.Body)
+	}
+	var limited int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE reason = 'rate_limited' AND result = 'denied' AND action IN ('backup.checked', 'backup.failed')`).Scan(&limited); err != nil || limited != 2 {
+		t.Fatalf("rate-limit entries = %d, %v, want 2", limited, err)
+	}
+}
+
+func TestWizardRestoreCheckWithAWrongPassphraseIsAuditedAsAnonymous(t *testing.T) {
+	w := newWizardFixture(t)
+	id := uploadedID(t, w.upload(t, w.token, makeBackup(t, "Old lab", "oldadmin", "")))
+	rec := w.call(t, "check", map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": "wrong passphrase 12345"})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("check = %d %s, want 422", rec.Code, rec.Body)
+	}
+	rec = w.call(t, "apply", map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": "wrong passphrase 12345"})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("apply = %d %s, want 422", rec.Code, rec.Body)
+	}
+	for _, c := range []struct{ action, source string }{{"backup.checked", "wizard"}, {"backup.failed", "wizard"}} {
+		var reason, result, actor, src string
+		if err := w.st.Read.QueryRow(`SELECT reason, result, actor_type, json_extract(details, '$.source') FROM audit_log WHERE action = ?`, c.action).Scan(&reason, &result, &actor, &src); err != nil {
+			t.Fatalf("%s: %v", c.action, err)
+		}
+		if reason != "unreadable" || result != "failure" || actor != "anonymous" || src != c.source {
+			t.Fatalf("%s = reason %q result %q actor %q source %q", c.action, reason, result, actor, src)
+		}
 	}
 }

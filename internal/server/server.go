@@ -707,6 +707,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
 			Setup: setupDeps, DataDir: info.Path, AppVersion: buildinfo.Get().Version, Log: log,
+			// Five tries at once, then one every 12 seconds, per signed-in user.
+			Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
 			Restart: func(swap func(context.Context) error) bool { return restart.request(RestartRequest{Swap: swap}) },
 		},
 		AgentConnect: tunnelHub.Handler(),
