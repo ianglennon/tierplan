@@ -4,12 +4,14 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -981,5 +983,32 @@ func TestAStreamingResponseOutlivesTheReadTimeout(t *testing.T) {
 	b, err := io.ReadAll(resp.Body)
 	if err != nil || len(b) != chunks {
 		t.Fatalf("read %d of %d chunks, err %v: the stream was cut off by the read timeout", len(b), chunks, err)
+	}
+}
+
+// CR-B-01: a request line or header block larger than maxHeaderBytes is refused
+// before any handler (or any audit entry that keys on the path) sees it.
+func TestServerRefusesAnOversizedRequestLine(t *testing.T) {
+	called := false
+	addr := serveForTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = fmt.Fprintf(conn, "GET /api/env/%s/summary HTTP/1.1\r\nHost: x\r\n\r\n", strings.Repeat("a", 200_000))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("status = %d, want 431", resp.StatusCode)
+	}
+	if called {
+		t.Fatal("the handler ran for an oversized request line")
 	}
 }

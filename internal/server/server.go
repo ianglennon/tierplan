@@ -56,6 +56,11 @@ const (
 // It is a variable so an internal test can shorten it.
 var readTimeout = 30 * time.Second
 
+// maxHeaderBytes caps the request line and headers. The net/http default is
+// 1 MiB, which let a caller put megabytes into a path segment (an environment ID
+// in a refusal, for one). 64 KiB is far above any real cookie or URL.
+const maxHeaderBytes = 64 << 10
+
 // newHTTPServer returns the http.Server Bayplan serves with. huma already caps
 // JSON bodies (MaxBodyBytes), so no MaxBytesReader is added here.
 func newHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
@@ -64,6 +69,7 @@ func newHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 		TLSConfig:         tlsCfg,
 	}
 }

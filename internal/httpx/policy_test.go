@@ -970,3 +970,22 @@ func TestStillAuthorizedIsTrueForAnInstanceAdminOnAnExistingEnabledEnvironment(t
 		t.Fatal("StillAuthorized = false for an instance admin")
 	}
 }
+
+// CR-B-01: the environment ID in a refusal is the caller's own path segment, so
+// it is cut before it reaches the audit pipeline.
+func TestAnOversizedEnvironmentIDIsCutInTheRefusalEntry(t *testing.T) {
+	f := newFixture(t, nil)
+	f.addUser(t, "nogrant")
+	id := strings.Repeat("e", 50_000)
+	rec := do(f.r.Handler(), http.MethodGet, "/api/env/"+id+"/summary", as("nogrant"))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	entries := f.audit.all()
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(entries))
+	}
+	if got := len(entries[0].EnvID); got != 128 {
+		t.Fatalf("recorded environment ID is %d bytes, want it cut to 128", got)
+	}
+}

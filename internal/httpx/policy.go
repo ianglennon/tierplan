@@ -545,6 +545,18 @@ func (r *Router) publicOrigin() string {
 	return r.opts.PublicOrigin()
 }
 
+// maxAuditedEnvID is how much of a path's environment ID a refusal records. The
+// ID is whatever the caller put in the URL, so it is cut before it reaches the
+// audit pipeline's keys and queues; audit.Writer cuts to the same size.
+const maxAuditedEnvID = 128
+
+func truncateEnvID(id string) string {
+	if len(id) > maxAuditedEnvID {
+		return id[:maxAuditedEnvID]
+	}
+	return id
+}
+
 // deny writes the refusal and records it. Without an Auditor (the openapi
 // subcommand, which serves nothing) the denial is still written. With one, a
 // failed write turns the response into a 500: a refusal nobody can see is not
@@ -566,7 +578,7 @@ func (r *Router) deny(w http.ResponseWriter, req *http.Request, p *rbac.Principa
 			Reason:     reason,
 			TargetType: "route",
 			TargetID:   req.Method + " " + pattern,
-			EnvID:      envID,
+			EnvID:      truncateEnvID(envID),
 			IP:         ClientIP(req.Context()),
 			UserAgent:  req.UserAgent(),
 		})

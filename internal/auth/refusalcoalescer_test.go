@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,5 +277,93 @@ func TestCoalescerBurstThresholdAndWindowAreOptions(t *testing.T) {
 	}
 	if got := len(co.Bursts(clk.now())); got != 1 || len(next.all()) != 2 {
 		t.Fatalf("bursts = %d, rows = %d, want 1 burst and a summary after an 11 second window", got, len(next.all()))
+	}
+}
+
+// CR-B-01: the environment ID of a refusal is whatever a caller put in the URL.
+// One user flooding fresh, oversized IDs must neither grow the table without
+// bound nor turn every request into a full audit write.
+func TestCoalescerAFloodOfRandomEnvironmentIDsKeepsMemoryAndWritesBounded(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk)
+	ctx := context.Background()
+	const perActor = 32 // auth.defaultMaxPerActor
+	const flood = 5000
+	big := strings.Repeat("x", 100_000)
+	for i := range flood {
+		e := userRefusal("u1", "GET /api/env/{envId}/summary", "environment_not_visible", strconv.Itoa(i)+big)
+		if err := co.Record(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := next.all()
+	if len(rows) > perActor+1 {
+		t.Fatalf("a flood of %d distinct IDs wrote %d full rows, want at most %d", flood, len(rows), perActor+1)
+	}
+	if co.Pending() > perActor+1 {
+		t.Fatalf("open windows = %d, want at most %d", co.Pending(), perActor+1)
+	}
+	for _, r := range rows {
+		if len(r.EnvID) > 128 {
+			t.Fatalf("a stored entry holds a %d byte environment ID, want at most 128", len(r.EnvID))
+		}
+	}
+	// Refusals are still audited: the overflow window is summarised with the
+	// count of everything folded into it.
+	clk.advance(2 * time.Minute)
+	if err := co.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var summed int
+	for _, r := range next.all() {
+		if r.Details["overflow"] == "true" && r.Details["coalesced"] == "true" {
+			n, err := strconv.Atoi(r.Details["count"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			summed += n
+		}
+	}
+	if want := flood - perActor - 1; summed != want {
+		t.Fatalf("the overflow summary counted %d refusals, want %d", summed, want)
+	}
+	if co.Pending() != 0 {
+		t.Fatalf("open windows after the sweep = %d, want 0", co.Pending())
+	}
+	// Another user still gets their own first refusal written in full.
+	before := len(next.all())
+	if err := co.Record(ctx, userRefusal("u2", "GET /x", "environment_not_visible", "other")); err != nil {
+		t.Fatal(err)
+	}
+	if len(next.all()) != before+1 {
+		t.Fatal("one user's flood stopped another user's refusal being written")
+	}
+}
+
+func TestCoalescerPerActorOverflowIsAnOptionAndFreesItsSlotsWhenWindowsClose(t *testing.T) {
+	next, clk := &recorder{}, newClock()
+	co := newCoalescer(next, clk, auth.WithMaxPerActor(2))
+	ctx := context.Background()
+	for i := range 6 {
+		if err := co.Record(ctx, userRefusal("u1", "GET /e", "environment_not_visible", strconv.Itoa(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two own windows, then the first overflow refusal in full, then three counted.
+	if got := len(next.all()); got != 3 || co.Pending() != 3 {
+		t.Fatalf("rows = %d, windows = %d, want 3 of each", got, co.Pending())
+	}
+	clk.advance(2 * time.Minute)
+	if err := co.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The slots are free again: two new IDs are separate windows.
+	for i := 10; i < 12; i++ {
+		if err := co.Record(ctx, userRefusal("u1", "GET /e", "environment_not_visible", strconv.Itoa(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if co.Pending() != 2 {
+		t.Fatalf("windows after the sweep = %d, want 2", co.Pending())
 	}
 }
