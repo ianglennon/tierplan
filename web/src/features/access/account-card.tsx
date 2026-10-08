@@ -4,8 +4,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
+import { userOwnedQuery } from "@/api/owned";
 import { userSessionsQuery } from "@/api/sessions";
-
 import { enableUser, type OneTimeLink, type UserDetail, unlockUser } from "@/api/users";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -56,6 +56,14 @@ export function AccountCard({ user, onChanged, onDeleted }: AccountCardProps) {
   const isLocked = user.status === "locked";
   const guard = user.lastInstanceAdmin ? t("needs.lastAdmin") : undefined;
 
+  // Disabling ends every session and pauses what the user owns, and enabling
+  // resumes it; the Sessions and Owned automations cards are on this page and
+  // are not under the users query, so they are told to read again.
+  function readDependentsAgain() {
+    void queryClient.invalidateQueries({ queryKey: userSessionsQuery(user.id).queryKey });
+    void queryClient.invalidateQueries({ queryKey: userOwnedQuery(user.id).queryKey });
+  }
+
   async function run(kind: "enable" | "unlock") {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -69,6 +77,7 @@ export function AccountCard({ user, onChanged, onDeleted }: AccountCardProps) {
             username: user.username,
           }),
         );
+        if (kind === "enable") readDependentsAgain();
         onChanged(result.user);
         return;
       }
@@ -193,6 +202,7 @@ export function AccountCard({ user, onChanged, onDeleted }: AccountCardProps) {
         onClose={() => setDisabling(false)}
         onDone={(updated) => {
           setDisabling(false);
+          readDependentsAgain();
           onChanged(updated);
         }}
         onStale={() => onChanged()}

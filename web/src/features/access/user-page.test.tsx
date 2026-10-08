@@ -300,6 +300,44 @@ describe("Disable user and Enable user", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
+  // WR-C-03: the cards on the page follow a disable and an enable.
+  it("shows the sessions ended and the automations paused after Disable user", async () => {
+    owned = [ownedBody({ state: "active" })];
+    lifecycle = (path) => {
+      user = { ...user, status: "disabled" };
+      userSessions = [];
+      owned = [ownedBody({ state: "paused_disabled" })];
+      return Response.json({ ...user, path });
+    };
+    renderAt(PAGE);
+    const sessions = await screen.findByRole("region", { name: "Sessions" });
+    await within(sessions).findAllByText(/203\.0\.113\.5/);
+    const automations = await screen.findByRole("region", { name: "Owned automations" });
+    expect(within(automations).getByText("Active")).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Disable user" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Disable alice?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Disable user" }));
+
+    expect(await within(sessions).findByText("alice isn't signed in anywhere.")).toBeTruthy();
+    expect(await within(automations).findByText("Paused: owner disabled")).toBeTruthy();
+  });
+
+  it("shows the automations running again after Enable user", async () => {
+    user = userBody({ status: "disabled" });
+    owned = [ownedBody({ state: "paused_disabled" })];
+    lifecycle = (path) => {
+      user = { ...user, status: "active" };
+      owned = [ownedBody({ state: "active" })];
+      return Response.json({ ...user, path });
+    };
+    renderAt(PAGE);
+    const automations = await screen.findByRole("region", { name: "Owned automations" });
+    expect(within(automations).getByText("Paused: owner disabled")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Enable user" }));
+    expect(await within(automations).findByText("Active")).toBeTruthy();
+  });
+
   it("keeps the dialog open with the reason when the server refuses the last admin", async () => {
     lifecycle = () =>
       Response.json(
