@@ -16,7 +16,9 @@
     },
     "actionsFor": "Actions for {{team}}",
     "actions": {
-      "open": "Open"
+      "open": "Open",
+      "rename": "Rename…",
+      "delete": "Delete team…"
     },
     "grants_one": "{{count}} grant",
     "grants_other": "{{count}} grants",
@@ -55,7 +57,8 @@
       "tableLabel": "Members of {{team}}",
       "columns": {
         "user": "User",
-        "status": "Status"
+        "status": "Status",
+        "actions": "Actions"
       },
       "add": {
         "trigger": "Add members",
@@ -72,7 +75,15 @@
         "failed": "Couldn't add members. Try again, and check the Bayplan logs if it keeps happening.",
         "gone": "One of those users or this team no longer exists. The list has been refreshed.",
         "pick": "Pick people to add"
-      }
+      },
+      "empty": "No members yet.",
+      "search": {
+        "label": "Search members",
+        "placeholder": "Search by username or name"
+      },
+      "noMatch": "No members match “{{query}}”.",
+      "actionsFor": "Actions for {{username}}",
+      "remove": "Remove from team…"
     },
     "userTeams": {
       "title": "Teams",
@@ -85,7 +96,72 @@
       "done": "{{username}} added to {{team}}.",
       "unchanged": "{{username}} is already in {{team}}.",
       "failed": "Couldn't add {{username}} to the team. Try again, and check the Bayplan logs if it keeps happening.",
-      "empty": "{{username}} isn't in any team."
+      "empty": "{{username}} isn't in any team.",
+      "actionsFor": "Actions for {{team}}",
+      "remove": "Remove from team…"
+    },
+    "loadFailed": "Couldn't load teams.",
+    "loadFailedBody": "Check the connection and try again.",
+    "retry": "Retry",
+    "empty": {
+      "title": "No teams yet",
+      "body": "Teams give the same access to several people at once. Create a team, add people, then give it a role on an environment."
+    },
+    "rename": {
+      "title": "Rename team",
+      "body": "Members keep the access the team gives them."
+    },
+    "general": {
+      "title": "General",
+      "save": "Save changes",
+      "saving": "Saving…",
+      "saved": "Team renamed.",
+      "failed": "Couldn't rename the team. Try again, and check the Bayplan logs if it keeps happening.",
+      "gone": "This team no longer exists."
+    },
+    "danger": {
+      "title": "Delete team",
+      "body": "Members lose the access this team gives them. They keep every other grant.",
+      "button": "Delete team…"
+    },
+    "impact": {
+      "heading": "What changes",
+      "loading": "Working out what changes",
+      "none": "No one loses access.",
+      "noneAnnounce": "No one loses access",
+      "announce_one": "{{count}} person loses access",
+      "announce_other": "{{count}} people lose access",
+      "failed": "Couldn't work out what changes. Try again.",
+      "retry": "Retry",
+      "list": "People who lose access",
+      "audit": "Recorded as one entry in the audit log, with this list attached.",
+      "change": "{{before}} → {{after}}",
+      "role": {
+        "viewer": "Viewer",
+        "operator": "Operator",
+        "admin": "Admin",
+        "none": "No access"
+      }
+    },
+    "delete": {
+      "title": "Delete team {{team}}?",
+      "body": "Members lose the access this team gives them. They keep every other grant.",
+      "confirm": "Delete team",
+      "pending": "Deleting…",
+      "cancel": "Cancel",
+      "done": "Team {{team}} deleted.",
+      "failed": "Couldn't delete {{team}}. Try again, and check the Bayplan logs if it keeps happening.",
+      "gone": "{{team}} no longer exists. The list has been refreshed."
+    },
+    "remove": {
+      "title": "Remove {{username}} from {{team}}?",
+      "body": "{{username}} loses the access this team gives them. They keep every other grant.",
+      "confirm": "Remove from team",
+      "pending": "Removing…",
+      "cancel": "Cancel",
+      "done": "{{username}} removed from {{team}}.",
+      "failed": "Couldn't remove {{username}} from {{team}}. Try again, and check the Bayplan logs if it keeps happening.",
+      "gone": "{{username}} is no longer in {{team}}. The list has been refreshed."
     }
   }
 }

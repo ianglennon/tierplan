@@ -312,7 +312,8 @@ describe("the team page states", () => {
   it("shows the list error with Retry when the load fails, and loads on Retry", async () => {
     getTeam = () => Response.json({ status: 500, title: "x", detail: "x" }, { status: 500 });
     renderAt(PAGE);
-    expect(await screen.findByText("Couldn't load teams.")).toBeTruthy();
+    // One automatic retry a second later comes first.
+    expect(await screen.findByText("Couldn't load teams.", {}, { timeout: 3000 })).toBeTruthy();
     getTeam = () => Response.json(team);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("heading", { level: 2, name: "ops" })).toBeTruthy();
@@ -390,7 +391,10 @@ describe("Remove from team", () => {
 
   async function openRemove(username = "alice") {
     const row = (await screen.findByRole("link", { name: username })).closest("tr") as HTMLElement;
-    fireEvent.click(within(row).getByRole("button", { name: `Remove ${username} from ops…` }));
+    const trigger = within(row).getByRole("button", { name: `Actions for ${username}` });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Remove from team…" }));
     return screen.findByRole("alertdialog", { name: `Remove ${username} from ops?` });
   }
 
@@ -578,7 +582,10 @@ describe("Remove from team on the user page", () => {
     });
     preview = () => Response.json({ impact: [IMPACT_ALICE] });
     renderAt("/settings/access/users/u1");
-    fireEvent.click(await screen.findByRole("button", { name: "Remove alice from ops…" }));
+    const trigger = await screen.findByRole("button", { name: "Actions for ops" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Remove from team…" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Remove alice from ops?" });
     await within(dialog).findByText("Operator → Viewer");
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove from team" }));

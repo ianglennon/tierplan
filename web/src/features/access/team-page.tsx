@@ -1,13 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useRouter } from "@tanstack/react-router";
+import { useState } from "react";
 
-import { teamQuery } from "@/api/teams";
+import { type TeamDetail, TeamNotFoundError, teamQuery, teamsQuery } from "@/api/teams";
 import { NoPermission } from "@/components/full-page-state";
+import { NotFound } from "@/components/not-found";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { DeleteTeamDialog } from "@/features/access/delete-team-dialog";
 import { MembersCard } from "@/features/access/members-card";
+import { RenameTeamForm } from "@/features/access/rename-team-form";
+import { SettingsCard } from "@/features/environments/settings-card";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -63,17 +71,61 @@ interface TeamPageProps {
 }
 
 // TeamPage is Settings > Access > Teams > {name}: the breadcrumb, the header and
-// the Members card. The page is for an instance admin, who holds teams.manage;
-// the server answers 403 again.
+// the cards, 32px apart: General (rename), Members and Delete team. The page is
+// for an instance admin, who holds teams.manage; the server answers 403 again.
 export function TeamPage({ teamId }: TeamPageProps) {
   const t = useT();
+  const queryClient = useQueryClient();
+  const router = useRouter();
   const allowed = usePermission("teams.manage");
   const query = useQuery({ ...teamQuery(teamId), enabled: allowed });
   const team = query.data;
+  const [deleting, setDeleting] = useState(false);
   useDocumentTitle(team?.name);
 
   if (!allowed) return <NoPermission />;
+  if (query.error instanceof TeamNotFoundError) return <NotFound />;
+  if (query.isError && !team) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>{t("teams.loadFailed")}</AlertTitle>
+        <AlertDescription className="flex flex-wrap items-center gap-3">
+          <span>{t("teams.loadFailedBody")}</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="max-md:h-11"
+            disabled={query.isFetching}
+            onClick={() => void query.refetch()}
+          >
+            {query.isFetching ? <Spinner aria-hidden="true" /> : null}
+            {t("teams.retry")}
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
   if (!team) return <PageSkeleton />;
+
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: teamsQuery.queryKey });
+
+  // The name just saved is shown at once, with the version the next save must
+  // carry, and the team is read again.
+  function renamed(saved: { name: string; updatedAt: string }) {
+    queryClient.setQueryData(teamQuery(teamId).queryKey, (old: TeamDetail | undefined) =>
+      old ? { ...old, name: saved.name, updatedAt: saved.updatedAt } : old,
+    );
+    refresh();
+  }
+
+  // The team is gone: forget the page and go back to the list it came from.
+  function deleted() {
+    setDeleting(false);
+    queryClient.removeQueries({ queryKey: teamQuery(teamId).queryKey });
+    refresh();
+    void router.navigate({ to: "/settings/access/teams" });
+  }
 
   return (
     <div className="flex flex-col gap-8">
@@ -86,7 +138,35 @@ export function TeamPage({ teamId }: TeamPageProps) {
           </p>
         </div>
       </header>
+      <SettingsCard title={t("teams.general.title")} id="general">
+        <RenameTeamForm
+          // A new version of the team starts the form again from its name.
+          key={`${team.name}:${team.updatedAt}`}
+          team={team}
+          onSaved={renamed}
+          onStale={refresh}
+        />
+      </SettingsCard>
       <MembersCard team={team} />
+      <SettingsCard title={t("teams.danger.title")} id="delete">
+        <p className="text-sm text-muted-foreground">{t("teams.danger.body")}</p>
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 border-destructive/40 text-destructive hover:text-destructive max-md:w-full md:h-8"
+            onClick={() => setDeleting(true)}
+          >
+            {t("teams.danger.button")}
+          </Button>
+        </div>
+      </SettingsCard>
+      <DeleteTeamDialog
+        team={deleting ? team : null}
+        onClose={() => setDeleting(false)}
+        onDone={deleted}
+        onStale={refresh}
+      />
     </div>
   );
 }

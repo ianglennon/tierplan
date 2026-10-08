@@ -96,3 +96,92 @@ export async function addTeamMembers(teamId: string, userIds: string[]): Promise
     return { kind: "error" };
   }
 }
+
+export type ImpactRow = components["schemas"]["ImpactRowBody"];
+
+// What an impact preview answers. A failure of any kind is one "error": the
+// confirm that waits on the preview stays unusable (it fails closed). Grant
+// removal (plan 03-19) returns the same shape, so ImpactPreview serves both.
+export type ImpactLoad = { kind: "ok"; rows: ImpactRow[] } | { kind: "error" };
+
+export type TeamChange = { op: "delete" } | { op: "remove_member"; userId: string };
+
+// previewTeamImpact asks who would lose which environment access if the team
+// were deleted or a member removed. Nothing is changed by asking.
+export async function previewTeamImpact(teamId: string, change: TeamChange): Promise<ImpactLoad> {
+  try {
+    const { data } = await api.POST("/api/teams/{teamId}/impact", {
+      params: { path: { teamId } },
+      body:
+        change.op === "delete" ? { op: "delete" } : { op: "remove_member", userId: change.userId },
+    });
+    return data ? { kind: "ok", rows: data.impact ?? [] } : { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+export type RenameTeamResult =
+  | { kind: "ok"; team: Team }
+  | { kind: "name_taken" }
+  // The team changed since it was read (409 stale_change).
+  | { kind: "stale_change" }
+  | { kind: "not_found" }
+  | { kind: "fields"; fields: ProblemField[] }
+  | { kind: "error" };
+
+// renameTeam changes a team's name. It carries the updatedAt it was based on: if
+// the team changed since, nothing is saved and the result is stale_change.
+export async function renameTeam(
+  teamId: string,
+  name: string,
+  updatedAt: string,
+): Promise<RenameTeamResult> {
+  try {
+    const { data, error, response } = await api.PATCH("/api/teams/{teamId}", {
+      params: { path: { teamId } },
+      body: { name, updatedAt },
+    });
+    if (data) return { kind: "ok", team: data };
+    const problem = readProblem(error, response);
+    if (problem.status === 409 && problem.type === "team_name_taken") return { kind: "name_taken" };
+    if (problem.status === 409 && problem.type === "stale_change") return { kind: "stale_change" };
+    if (problem.status === 404) return { kind: "not_found" };
+    if (problem.status === 422 && problem.fields.length > 0) {
+      return { kind: "fields", fields: problem.fields };
+    }
+    return { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+export type TeamChangeResult = { kind: "ok" } | { kind: "not_found" } | { kind: "error" };
+
+// deleteTeam removes a team with its grants and memberships. It answers the
+// impact the delete had; the screen already showed it, so it is not returned.
+export async function deleteTeam(teamId: string): Promise<TeamChangeResult> {
+  try {
+    const { error, response } = await api.DELETE("/api/teams/{teamId}", {
+      params: { path: { teamId } },
+    });
+    if (response.ok) return { kind: "ok" };
+    return readProblem(error, response).status === 404 ? { kind: "not_found" } : { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+// removeTeamMember takes a user out of a team. A user who is no longer a member
+// (404) is not_found: the screen is out of date and reads again.
+export async function removeTeamMember(teamId: string, userId: string): Promise<TeamChangeResult> {
+  try {
+    const { error, response } = await api.DELETE("/api/teams/{teamId}/members/{userId}", {
+      params: { path: { teamId, userId } },
+    });
+    if (response.ok) return { kind: "ok" };
+    return readProblem(error, response).status === 404 ? { kind: "not_found" } : { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}

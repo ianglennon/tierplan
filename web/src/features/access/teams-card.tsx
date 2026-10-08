@@ -3,6 +3,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { EllipsisVertical } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { addTeamMembers, teamsQuery } from "@/api/teams";
@@ -16,8 +17,18 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  type MembershipToRemove,
+  RemoveMemberDialog,
+} from "@/features/access/remove-member-dialog";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useT } from "@/i18n/use-t";
 import { toastInfo, toastSuccess } from "@/lib/toast";
@@ -37,6 +48,7 @@ export function TeamsCard({ user }: TeamsCardProps) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<MembershipToRemove | null>(null);
   // A second click can land before the pending state has rendered.
   const inFlight = useRef(false);
   const teams = useQuery({ ...teamsQuery, enabled: open });
@@ -49,6 +61,12 @@ export function TeamsCard({ user }: TeamsCardProps) {
     if (pending) return;
     setOpen(next);
     if (!next) setError(null);
+  }
+
+  function refreshAll() {
+    void queryClient.invalidateQueries({ queryKey: userQuery(user.id).queryKey });
+    void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey });
+    void queryClient.invalidateQueries({ queryKey: teamsQuery.queryKey });
   }
 
   async function add(teamId: string, teamName: string) {
@@ -71,9 +89,7 @@ export function TeamsCard({ user }: TeamsCardProps) {
             : t("teams.userTeams.failed", { username: user.username }),
         );
       }
-      void queryClient.invalidateQueries({ queryKey: userQuery(user.id).queryKey });
-      void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey });
-      void queryClient.invalidateQueries({ queryKey: teamsQuery.queryKey });
+      refreshAll();
     } finally {
       inFlight.current = false;
       setPending(false);
@@ -89,14 +105,40 @@ export function TeamsCard({ user }: TeamsCardProps) {
       ) : (
         <ul aria-label={t("teams.userTeams.list")} className="flex flex-col gap-1">
           {userTeams.map((x) => (
-            <li key={x.id} className="min-w-0">
+            <li key={x.id} className="flex min-w-0 items-center justify-between gap-2">
               <Link
                 to="/settings/access/teams/$teamId"
                 params={{ teamId: x.id }}
-                className="inline-block max-w-full rounded-sm text-sm break-words text-accent-ink hover:underline"
+                className="inline-block max-w-full min-w-0 rounded-sm text-sm break-words text-accent-ink hover:underline"
               >
                 {x.name}
               </Link>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="shrink-0 max-md:size-11"
+                    aria-label={t("teams.userTeams.actionsFor", { team: x.name })}
+                  >
+                    <EllipsisVertical aria-hidden="true" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={() =>
+                      setRemoving({
+                        team: { id: x.id, name: x.name },
+                        user: { id: user.id, username: user.username },
+                      })
+                    }
+                  >
+                    {t("teams.userTeams.remove")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </li>
           ))}
         </ul>
@@ -161,6 +203,15 @@ export function TeamsCard({ user }: TeamsCardProps) {
           </PopoverContent>
         </Popover>
       </div>
+      <RemoveMemberDialog
+        membership={removing}
+        onClose={() => setRemoving(null)}
+        onDone={() => {
+          setRemoving(null);
+          refreshAll();
+        }}
+        onStale={refreshAll}
+      />
     </SettingsCard>
   );
 }
