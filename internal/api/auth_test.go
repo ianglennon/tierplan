@@ -247,7 +247,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 	}
 	api.RegisterUnknownAgents(r, api.UnknownAgentsDeps{Unknown: f.unknown, Store: f.st, Now: f.clk.now, Log: log})
-	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Now: f.clk.now, Log: log})
+	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Refusals: f.aud, Now: f.clk.now, Log: log})
 	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Checker: checker, Refusals: f.aud, Log: log})
 	api.RegisterBackup(r, api.BackupDeps{Store: f.st, Vault: f.v, Audit: f.aud, Instance: f.inst, DataDir: f.dataInfo.Path, Dir: f.backupDir, Scheduler: f.scheduler, AppVersion: "v9.9.9", Now: f.clk.now, Log: log})
 	api.RegisterRestore(r, f.restoreDeps(log))

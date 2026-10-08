@@ -153,6 +153,13 @@ const (
 	// who holds environments.audit on at least one environment, and refuses the
 	// rest with reason no_audit_scope.
 	kindAudit
+	// kindSelfEnv is a SelfService route that names an environment in its path and
+	// answers the D-08 404 itself, because the policy gate only judges routes that
+	// declare a permission: recording a use of an environment
+	// (PUT /api/me/recent-environments/{envId}). It must refuse and audit an
+	// environment the caller has no grant on exactly as an /api/env route does
+	// (T-03-19), and be open to anyone who may read it.
+	kindSelfEnv
 )
 
 func classify(rec httpx.RouteRecord) (kind, rbac.Permission) {
@@ -162,6 +169,8 @@ func classify(rec httpx.RouteRecord) (kind, rbac.Permission) {
 	case rec.Req.SelfService && rec.Req.Perm == "" && strings.HasPrefix(rec.Path, "/api/audit"):
 		reg, _ := rbac.Lookup(rbac.PermEnvironmentsAudit)
 		return kindAudit, reg
+	case rec.Req.SelfService && rec.Req.Perm == "" && strings.Contains(rec.Path, "{envId}"):
+		return kindSelfEnv, rbac.Permission{MinRole: rbac.RoleViewer}
 	case rec.Req.SelfService && rec.Req.Perm == "":
 		return kindSelf, rbac.Permission{}
 	}
@@ -279,7 +288,7 @@ func TestEveryRouteRefusesEveryArchetypeThatLacksItsRequirement(t *testing.T) {
 		}
 		judged[k]++
 		envs := []string{envA}
-		if k == kindEnv {
+		if k == kindEnv || k == kindSelfEnv {
 			envs = []string{envA, envB}
 		}
 		t.Run(rec.Method+" "+rec.Path, func(t *testing.T) {
@@ -332,7 +341,7 @@ func TestEveryRouteRefusesEveryArchetypeThatLacksItsRequirement(t *testing.T) {
 					if after.reason != wantReason {
 						t.Errorf("%s: audit reason %q, want %q", who, after.reason, wantReason)
 					}
-					if k == kindEnv && after.envID != envID {
+					if (k == kindEnv || (k == kindSelfEnv && want == notVisible)) && after.envID != envID {
 						t.Errorf("%s: audit env_id %q, want the path value", who, after.envID)
 					}
 				}
@@ -341,7 +350,7 @@ func TestEveryRouteRefusesEveryArchetypeThatLacksItsRequirement(t *testing.T) {
 	}
 
 	// The walk must have found each shape, or it proved nothing.
-	for _, k := range []kind{kindSelf, kindGlobal, kindEnv, kindAudit} {
+	for _, k := range []kind{kindSelf, kindGlobal, kindEnv, kindAudit, kindSelfEnv} {
 		if judged[k] == 0 {
 			t.Errorf("no route of kind %d was judged: the harness did not reach the registered routes", k)
 		}

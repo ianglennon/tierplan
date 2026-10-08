@@ -700,7 +700,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
-		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
+		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
 		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log},
 		Backup:        api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},

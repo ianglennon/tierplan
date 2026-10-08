@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -164,5 +166,101 @@ func TestRepeatedRefusalsAreCoalescedIntoOneEntry(t *testing.T) {
 	}
 	if code, items := warnings(servertest.ArchetypeViewerA); code != http.StatusForbidden || len(items) != 0 {
 		t.Fatalf("Viewer warnings = %d %+v, want 403 and no items", code, items)
+	}
+}
+
+// T-03-19: PUT /api/me/recent-environments/{envId} answers the D-08 404 itself (it is
+// self-service, so the policy gate does not see the environment). It must audit that
+// refusal through the same coalescer as the gate, so probing IDs through it is
+// neither free nor a way to flood the log.
+func TestRecentEnvironmentProbesAreAuditedThroughTheCoalescerWithABoundedEnvID(t *testing.T) {
+	fl := pflag.NewFlagSet("refusal", pflag.ContinueOnError)
+	config.BindFlags(fl)
+	env := map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}
+	cfg, err := config.Load(fl, func(k string) string { return env[k] }, os.ReadFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk := &stepClock{t: time.Now()}
+	srv, err := server.Build(context.Background(), cfg, slog.New(slog.DiscardHandler), server.WithRefusalClock(clk.now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	ids := servertest.SeedArchetypes(t, srv.Store(), "env-a", "env-b")
+	h := srv.Handler()
+
+	put := func(envID string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPut, "/api/me/recent-environments/"+envID, nil)
+		req.Header.Set("User-Agent", "recent-probe")
+		req.Header.Set("Origin", "http://example.com")
+		req.RemoteAddr = "192.0.2.78:40000"
+		cookie, csrf := servertest.SessionFor(t, srv, ids[servertest.ArchetypeNoGrant])
+		req.AddCookie(cookie)
+		req.Header.Set("X-CSRF-Token", csrf)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	type row struct{ actor, target, reason, env string }
+	rows := func() []row {
+		t.Helper()
+		q, err := srv.Store().Read.Query(`SELECT actor_id, target_id, reason, COALESCE(env_id, '') FROM audit_log WHERE action = ? ORDER BY seq`, audit.ActionPermissionDenied)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = q.Close() }()
+		var out []row
+		for q.Next() {
+			var r row
+			if err := q.Scan(&r.actor, &r.target, &r.reason, &r.env); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, r)
+		}
+		return out
+	}
+
+	const same = "00000000-0000-7000-8000-000000000000"
+	var firstBody string
+	for i := range 20 {
+		rec := put(same)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("PUT = %d %s, want 404", rec.Code, rec.Body)
+		}
+		if i == 0 {
+			firstBody = rec.Body.String()
+		}
+	}
+	got := rows()
+	if len(got) != 1 {
+		t.Fatalf("%d permission.denied rows after 20 identical probes, want 1 (coalesced)", len(got))
+	}
+	want := row{ids[servertest.ArchetypeNoGrant], "PUT /api/me/recent-environments/{envId}", "environment_not_visible", same}
+	if got[0] != want {
+		t.Fatalf("row = %+v, want %+v", got[0], want)
+	}
+
+	// The 404 reads the same whatever the ID, and the log stays small however many
+	// different IDs are tried and however long they are.
+	long := strings.Repeat("a", 400)
+	for i := range 300 {
+		rec := put(strconv.Itoa(i) + long)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("probe %d = %d, want 404", i, rec.Code)
+		}
+		if rec.Body.String() != firstBody {
+			t.Fatalf("probe %d answered %s, want the bytes of the first 404 %s", i, rec.Body, firstBody)
+		}
+	}
+	got = rows()
+	if len(got) > 40 {
+		t.Fatalf("%d permission.denied rows after 300 distinct probes, want the per-user cap to hold them to a few dozen", len(got))
+	}
+	for _, r := range got {
+		if len(r.env) > 128 {
+			t.Fatalf("a row records an environment ID of %d bytes, want at most 128", len(r.env))
+		}
 	}
 }
