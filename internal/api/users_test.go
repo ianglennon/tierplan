@@ -668,3 +668,128 @@ func TestResetPasswordRefusesNonAdminsUnknownDeletedAndDisabledUsersWithoutEndin
 		t.Fatalf("user.password_reset_issued entries = %d, want none for refusals", n)
 	}
 }
+
+// Deleting a user who owns automations (plan 03-22, D-22, D-14).
+
+func (f *ownedFix) addOwnedBy(t *testing.T, id, owner string) {
+	t.Helper()
+	if _, err := f.st.Write.Exec(`INSERT INTO owned_resources (kind, resource_id, env_id, name, owner_id, state, needs_env_admin, created_at, updated_at)
+		VALUES (?, ?, 'env-a', ?, ?, 'active', 0, 1, 1)`, ownedTestKind, id, "Sync "+id, owner); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *ownedFix) deleteWith(t *testing.T, id, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.userAction(t, f.cookie, f.csrf, http.MethodDelete, id, "", body)
+}
+
+func (f *ownedFix) ownedState(t *testing.T, id string) (owner, state string) {
+	t.Helper()
+	if err := f.st.Read.QueryRow(`SELECT owner_id, state FROM owned_resources WHERE resource_id = ?`, id).Scan(&owner, &state); err != nil {
+		t.Fatal(err)
+	}
+	return owner, state
+}
+
+func (f *ownedFix) userIsDeleted(t *testing.T, id string) bool {
+	t.Helper()
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM users WHERE id = ? AND deleted_at IS NOT NULL`, id).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n == 1
+}
+
+func TestDeleteUserWithReassignHandsOneAutomationToAnEligibleUserAndPausesTheRest(t *testing.T) {
+	f := newOwnedFix(t)
+	f.addOwnedBy(t, "r2", "id-alice")
+
+	rec := f.deleteWith(t, "id-alice", `{"reassign":[{"kind":"test.sync","resourceId":"r1","ownerId":"id-bob"}]}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s, want 204", rec.Code, rec.Body)
+	}
+	if o, s := f.ownedState(t, "r1"); o != "id-bob" || s != "active" {
+		t.Errorf("r1: %s %s, want id-bob active", o, s)
+	}
+	if o, s := f.ownedState(t, "r2"); o != "id-alice" || s != "paused_deleted" {
+		t.Errorf("r2: %s %s, want id-alice paused_deleted", o, s)
+	}
+	if n := len(f.audits(t, "owner.transferred")); n != 1 {
+		t.Errorf("owner.transferred entries = %d, want 1", n)
+	}
+	var details string
+	if err := f.st.Read.QueryRow(`SELECT details FROM audit_log WHERE action = 'user.deleted'`).Scan(&details); err != nil ||
+		details != `{"ended":"0","paused":"1","reassigned":"1","username":"alice"}` {
+		t.Errorf("user.deleted details = %s (%v)", details, err)
+	}
+}
+
+func TestDeleteUserWithAnIneligibleReassignmentAnswers422OwnerNotEligibleAndDeletesNothing(t *testing.T) {
+	f := newOwnedFix(t)
+
+	rec := f.deleteWith(t, "id-alice", `{"reassign":[{"kind":"test.sync","resourceId":"r1","ownerId":"id-carol"}]}`)
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "owner_not_eligible" {
+		t.Fatalf("delete: %d %s, want 422 owner_not_eligible", rec.Code, rec.Body)
+	}
+	if f.userIsDeleted(t, "id-alice") {
+		t.Fatal("alice was deleted")
+	}
+	if o, s := f.ownedState(t, "r1"); o != "id-alice" || s != "active" {
+		t.Errorf("r1: %s %s, want it untouched", o, s)
+	}
+}
+
+func TestDeleteUserWithAReassignmentOfSomeoneElsesAutomationAnswers404AndDeletesNothing(t *testing.T) {
+	f := newOwnedFix(t)
+	f.addOwnedBy(t, "r9", "id-bob")
+
+	rec := f.deleteWith(t, "id-alice", `{"reassign":[{"kind":"test.sync","resourceId":"r9","ownerId":"id-bob"}]}`)
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "automation_not_found" {
+		t.Fatalf("delete: %d %s, want 404 automation_not_found", rec.Code, rec.Body)
+	}
+	if f.userIsDeleted(t, "id-alice") {
+		t.Fatal("alice was deleted")
+	}
+}
+
+func TestDeleteUserWithoutABodyPausesEverythingTheUserOwned(t *testing.T) {
+	f := newOwnedFix(t)
+
+	if rec := f.deleteWith(t, "id-alice", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s, want 204", rec.Code, rec.Body)
+	}
+	if o, s := f.ownedState(t, "r1"); o != "id-alice" || s != "paused_deleted" {
+		t.Errorf("r1: %s %s, want id-alice paused_deleted", o, s)
+	}
+	// Once paused it can be handed over, and it runs again under its new owner.
+	if rec := f.transfer(t, ownedTestKind, "r1", `{"ownerId":"id-bob"}`); rec.Code != http.StatusOK {
+		t.Fatalf("transfer after the delete: %d %s", rec.Code, rec.Body)
+	}
+	if o, s := f.ownedState(t, "r1"); o != "id-bob" || s != "active" {
+		t.Errorf("r1 after the transfer: %s %s, want id-bob active", o, s)
+	}
+}
+
+func TestDeleteUserWithMoreThan200ReassignmentsOrAMalformedOneAnswers422AndDeletesNothing(t *testing.T) {
+	f := newOwnedFix(t)
+
+	item := `{"kind":"test.sync","resourceId":"r1","ownerId":"id-bob"}`
+	many := `{"reassign":[` + strings.Repeat(item+",", 200) + item + `]}`
+	for name, body := range map[string]string{
+		"201 items":        many,
+		"no owner":         `{"reassign":[{"kind":"test.sync","resourceId":"r1"}]}`,
+		"no resource":      `{"reassign":[{"kind":"test.sync","ownerId":"id-bob"}]}`,
+		"not an array":     `{"reassign":"r1"}`,
+		"not json at all":  `reassign`,
+		"a number as body": `7`,
+	} {
+		rec := f.deleteWith(t, "id-alice", body)
+		if rec.Code < 400 || rec.Code >= 500 {
+			t.Errorf("%s: %d %s, want a 4xx", name, rec.Code, rec.Body)
+		}
+		if f.userIsDeleted(t, "id-alice") {
+			t.Fatalf("%s: alice was deleted", name)
+		}
+	}
+}

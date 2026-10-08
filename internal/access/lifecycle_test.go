@@ -680,3 +680,137 @@ func TestOnlyTheLastActiveInstanceAdminIsMarkedAsSuchInTheListAndOnThePage(t *te
 		t.Fatalf("one active of two: %v, want only root marked", got)
 	}
 }
+
+// Deleting an owner reassigns or pauses what they own (plan 03-22, D-22, D-14).
+
+func (f *ownedFixture) addOwned(t *testing.T, id, owner string) {
+	t.Helper()
+	f.exec(t, `INSERT INTO owned_resources (kind, resource_id, env_id, name, owner_id, state, needs_env_admin, created_at, updated_at)
+		VALUES (?, ?, 'env-a', ?, ?, 'active', 0, 1, 1)`, kindTestSync, id, "Sync "+id, owner)
+}
+
+func (f *ownedFixture) isDeleted(t *testing.T, id string) bool {
+	t.Helper()
+	return f.count(t, `SELECT COUNT(*) FROM users WHERE id = ? AND deleted_at IS NOT NULL`, id) == 1
+}
+
+func deleteFixture(t *testing.T) *ownedFixture {
+	t.Helper()
+	f := newOwnedFixture(t)
+	f.addAdmin(t, "root")
+	f.addUser(t, "alice")
+	f.addUser(t, "bob")
+	f.addUser(t, "carol")
+	f.assign(t, "alice", "operator", "env-a")
+	f.assign(t, "bob", "operator", "env-a")
+	f.addOwned(t, "r1", "alice")
+	f.addOwned(t, "r2", "alice")
+	return f
+}
+
+func TestDeleteReassignHandsTheChosenAutomationsOverAndPausesTheRestAtomically(t *testing.T) {
+	f := deleteFixture(t)
+
+	err := f.svc.DeleteUser(f.ctx, testAdmin, "alice", access.WithReassign([]access.Reassignment{
+		{Kind: kindTestSync, ResourceID: "r1", OwnerID: "bob"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.isDeleted(t, "alice") {
+		t.Fatal("alice was not deleted")
+	}
+	if o, s := f.ownerOf(t, kindTestSync, "r1"), f.state(t, kindTestSync, "r1"); o != "bob" || s != "active" {
+		t.Errorf("r1: owner %s, state %s, want bob and active", o, s)
+	}
+	if o, s := f.ownerOf(t, kindTestSync, "r2"), f.state(t, kindTestSync, "r2"); o != "alice" || s != "paused_deleted" {
+		t.Errorf("r2: owner %s, state %s, want alice and paused_deleted", o, s)
+	}
+	if n := f.auditCount(t, "owner.transferred"); n != 1 {
+		t.Errorf("owner.transferred entries = %d, want 1", n)
+	}
+	if got := f.auditDetails(t, "user.deleted"); got != `{"ended":"0","paused":"1","reassigned":"1","username":"alice"}` {
+		t.Errorf("user.deleted details = %s", got)
+	}
+}
+
+func TestDeleteReassignToAnIneligibleUserRefusesAndDeletesNothing(t *testing.T) {
+	f := deleteFixture(t)
+
+	// carol holds nothing on env-a, so she could not run r2; r1 would have been
+	// handed to bob first, and must not stay handed over.
+	err := f.svc.DeleteUser(f.ctx, testAdmin, "alice", access.WithReassign([]access.Reassignment{
+		{Kind: kindTestSync, ResourceID: "r1", OwnerID: "bob"},
+		{Kind: kindTestSync, ResourceID: "r2", OwnerID: "carol"},
+	}))
+	if !errors.Is(err, access.ErrNotEligible) {
+		t.Fatalf("DeleteUser = %v, want ErrNotEligible", err)
+	}
+	if f.isDeleted(t, "alice") {
+		t.Fatal("alice was deleted although a reassignment was refused")
+	}
+	for _, id := range []string{"r1", "r2"} {
+		if o, s := f.ownerOf(t, kindTestSync, id), f.state(t, kindTestSync, id); o != "alice" || s != "active" {
+			t.Errorf("%s: owner %s, state %s, want it untouched", id, o, s)
+		}
+	}
+	if n := f.auditCount(t, "owner.transferred") + f.auditCount(t, "user.deleted"); n != 0 {
+		t.Errorf("%d audit entries written by a refused delete, want none", n)
+	}
+}
+
+func TestDeleteReassignOfAnAutomationTheUserDoesNotOwnIsRefusedAndDeletesNothing(t *testing.T) {
+	f := deleteFixture(t)
+	f.addOwned(t, "r3", "bob")
+
+	for _, bad := range []access.Reassignment{
+		{Kind: kindTestSync, ResourceID: "r3", OwnerID: "bob"},     // bob's, not alice's
+		{Kind: kindTestSync, ResourceID: "nope", OwnerID: "bob"},   // no such automation
+		{Kind: kindTestSync, ResourceID: "r1", OwnerID: "alice"},   // to the user being deleted
+		{Kind: kindTestSync, ResourceID: "r1", OwnerID: "nobody"},  // to no one
+		{Kind: kindUnknown, ResourceID: "r1", OwnerID: "bob"},      // of a kind that is not there
+		{Kind: kindTestSync, ResourceID: "r1", OwnerID: "root-no"}, // to a user that does not exist
+	} {
+		if err := f.svc.DeleteUser(f.ctx, testAdmin, "alice", access.WithReassign([]access.Reassignment{bad})); err == nil {
+			t.Errorf("DeleteUser with %+v succeeded", bad)
+		}
+		if f.isDeleted(t, "alice") {
+			t.Fatalf("alice was deleted with %+v", bad)
+		}
+	}
+	if o := f.ownerOf(t, kindTestSync, "r3"); o != "bob" {
+		t.Errorf("r3 owner = %s, want bob", o)
+	}
+}
+
+func TestDeleteReassignTwiceForTheSameAutomationIsRefusedAndDeletesNothing(t *testing.T) {
+	f := deleteFixture(t)
+	err := f.svc.DeleteUser(f.ctx, testAdmin, "alice", access.WithReassign([]access.Reassignment{
+		{Kind: kindTestSync, ResourceID: "r1", OwnerID: "bob"},
+		{Kind: kindTestSync, ResourceID: "r1", OwnerID: "bob"},
+	}))
+	if !errors.Is(err, access.ErrOwnedNotFound) {
+		t.Fatalf("DeleteUser = %v, want ErrOwnedNotFound for the second hand-over of r1", err)
+	}
+	if f.isDeleted(t, "alice") {
+		t.Fatal("alice was deleted")
+	}
+}
+
+func TestDeleteReassignWithNothingToReassignPausesEverythingAsBefore(t *testing.T) {
+	f := deleteFixture(t)
+	if err := f.svc.DeleteUser(f.ctx, testAdmin, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"r1", "r2"} {
+		if s := f.state(t, kindTestSync, id); s != "paused_deleted" {
+			t.Errorf("%s state = %s, want paused_deleted", id, s)
+		}
+	}
+	if got := f.auditDetails(t, "user.deleted"); got != `{"ended":"0","paused":"2","reassigned":"0","username":"alice"}` {
+		t.Errorf("user.deleted details = %s", got)
+	}
+	if n := f.auditCount(t, "owner.transferred"); n != 0 {
+		t.Errorf("owner.transferred entries = %d, want none", n)
+	}
+}
