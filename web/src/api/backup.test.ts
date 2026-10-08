@@ -9,6 +9,7 @@ import {
   checkRestore,
   checkSetupRestore,
   RestoreError,
+  restoreProblem,
   uploadRestore,
   uploadSetupRestore,
 } from "@/api/backup";
@@ -179,5 +180,41 @@ describe("the wizard's variants", () => {
       status: 409,
       type: "setup_complete",
     });
+  });
+});
+
+describe("restoreProblem", () => {
+  const key = (e: unknown) => restoreProblem(e).key;
+
+  it("maps each problem type to its own message", () => {
+    expect(key(new RestoreError(422, "backup_unreadable"))).toBe("restore.errors.unreadable");
+    expect(key(new RestoreError(422, "not_a_backup"))).toBe("restore.errors.notABackup");
+    expect(key(new RestoreError(409, "restore_busy"))).toBe("restore.errors.busy");
+    expect(key(new RestoreError(400, "upload_incomplete"))).toBe("restore.errors.cutOff");
+  });
+
+  it("maps any 413, typed or a proxy's own page, to the cut-off message", () => {
+    expect(key(new RestoreError(413, "upload_too_large"))).toBe("restore.errors.cutOff");
+    expect(key(new RestoreError(413))).toBe("restore.errors.cutOff");
+  });
+
+  it("names the version a newer backup came from, when the server said it", () => {
+    const named = new RestoreError(
+      409,
+      "backup_newer",
+      "This backup was made by a newer Bayplan (v9.9.9). Upgrade this Bayplan to v9.9.9 or newer, then try again.",
+    );
+    expect(restoreProblem(named)).toEqual({
+      key: "restore.errors.newer",
+      values: { version: "v9.9.9" },
+    });
+    expect(
+      key(new RestoreError(409, "backup_newer", "This backup was made by a newer Bayplan.")),
+    ).toBe("restore.errors.newerUnnamed");
+  });
+
+  it("falls back to a general message for a problem it does not know, and to unreachable for a thrown network error", () => {
+    expect(key(new RestoreError(500, "internal"))).toBe("restore.errors.check");
+    expect(key(new TypeError("Failed to fetch"))).toBe("common.errors.unreachable");
   });
 });
