@@ -509,11 +509,9 @@ func (a *restoreAPI) apply(ctx context.Context, id, passphrase, source string, r
 	}
 
 	swap := func(ctx context.Context) error {
-		snapshot, err := staged.Swap(ctx, a.DataDir, started)
-		if err != nil {
-			return err
-		}
-		if err := backup.WriteMarker(a.DataDir, snapshot, started); err != nil {
+		// The marker is written before the database is replaced, so a restored
+		// database can never be live without its rollback record.
+		if _, err := staged.SwapWithMarker(ctx, a.DataDir, started); err != nil {
 			return err
 		}
 		a.Uploads.Remove(id)

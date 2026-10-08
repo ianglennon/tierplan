@@ -364,6 +364,21 @@ func (s *Staged) rewrite(ctx context.Context, st *store.Store, export, target *v
 // database or the new one, never a mix. It returns the path of the pre-restore
 // snapshot, empty when there was no database to replace.
 func (s *Staged) Swap(ctx context.Context, dataDir string, now time.Time) (snapshotPath string, err error) {
+	return s.swap(ctx, dataDir, now, false)
+}
+
+// SwapWithMarker is Swap for a restore that the next start has to be able to
+// undo (T-03-105). The restore-pending marker naming the pre-restore snapshot
+// is written after the snapshot is saved and before the database is replaced,
+// so there is no moment at which a restored database is live without it. A
+// marker is also left if the process dies between that write and the rename;
+// the next start then finds the old database intact and removes the marker.
+// When the replacement fails the marker is taken away again.
+func (s *Staged) SwapWithMarker(ctx context.Context, dataDir string, now time.Time) (snapshotPath string, err error) {
+	return s.swap(ctx, dataDir, now, true)
+}
+
+func (s *Staged) swap(ctx context.Context, dataDir string, now time.Time, withMarker bool) (snapshotPath string, err error) {
 	defer s.Discard()
 	if !s.prepared {
 		return "", errors.New("the staged database has not been prepared")
@@ -393,6 +408,11 @@ func (s *Staged) Swap(ctx context.Context, dataDir string, now time.Time) (snaps
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		return "", fmt.Errorf("look for %s: %w", live, statErr)
 	}
+	if withMarker {
+		if err := WriteMarker(dataDir, snapshotPath, now); err != nil {
+			return "", err
+		}
+	}
 	// The live database's journal files belong to the old file; left beside the
 	// new one they would be replayed into it.
 	for _, ext := range []string{"-wal", "-shm"} {
@@ -401,10 +421,15 @@ func (s *Staged) Swap(ctx context.Context, dataDir string, now time.Time) (snaps
 		}
 	}
 	if err := os.Rename(staged, live); err != nil {
+		if withMarker {
+			_ = RemoveMarker(dataDir)
+		}
 		return "", fmt.Errorf("move the restored database into place: %w", err)
 	}
+	// The rename has taken effect: from here the marker must stay, so a failure
+	// to flush the directory is reported but never undoes the marker.
 	if err := syncFile(dataDir); err != nil {
-		return "", fmt.Errorf("flush the data directory: %w", err)
+		return snapshotPath, fmt.Errorf("flush the data directory: %w", err)
 	}
 	return snapshotPath, nil
 }

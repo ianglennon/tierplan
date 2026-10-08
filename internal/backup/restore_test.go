@@ -562,3 +562,87 @@ func TestMigrationPrunerLeavesPreRestoreSnapshotsAlone(t *testing.T) {
 		t.Fatalf("after the migration pruner: %d prerestore (want %d), %d bayplan-* (want 3)", gotPre, len(pre), gotMig)
 	}
 }
+
+// --- the restore-pending marker is written before the swap ---------------------
+
+func stagedFor(t *testing.T, file []byte, dir string, target *vault.Vault) *backup.Staged {
+	t.Helper()
+	ctx := context.Background()
+	staged, err := backup.Stage(ctx, bytes.NewReader(file), []byte(exportPass), dir, schemaOfBinary(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(staged.Discard)
+	if err := staged.Prepare(ctx, target, restoreOptions); err != nil {
+		t.Fatal(err)
+	}
+	return staged
+}
+
+func usersOf(t *testing.T, dir string) string {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, store.DatabaseFile)+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	rows, err := db.Query(`SELECT username FROM users ORDER BY username`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, n)
+	}
+	return strings.Join(out, ",")
+}
+
+// WR-A04: SwapWithMarker leaves the marker naming the snapshot, with the
+// restored database live.
+func TestSwapWithMarkerLeavesAMarkerThatNamesThePreRestoreSnapshot(t *testing.T) {
+	dir, target, _ := liveInstall(t)
+	staged := stagedFor(t, buildBackup(t, buildOpts{username: "bob"}), dir, target)
+	at := time.Date(2026, 10, 8, 3, 4, 5, 0, time.UTC)
+
+	snapshot, err := staged.SwapWithMarker(context.Background(), dir, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, pending, err := backup.ReadMarker(dir)
+	if err != nil || !pending {
+		t.Fatalf("marker pending = %v, err %v", pending, err)
+	}
+	if m.SnapshotPath(dir) != snapshot || !m.Started.Equal(at) {
+		t.Fatalf("marker = %+v, want the snapshot %s started %s", m, snapshot, at)
+	}
+	if got := usersOf(t, dir); got != "bob" {
+		t.Fatalf("live users = %q, want bob", got)
+	}
+}
+
+// WR-A04: the marker is written before the database is replaced, so when it
+// cannot be written the old database is still the live one. Writing it after
+// the swap left a restored database with no rollback record.
+func TestSwapWithMarkerThatCannotWriteTheMarkerDoesNotReplaceTheDatabase(t *testing.T) {
+	dir, target, _ := liveInstall(t)
+	if got := usersOf(t, dir); got != "alice,gone" {
+		t.Fatalf("setup: live users = %q", got)
+	}
+	staged := stagedFor(t, buildBackup(t, buildOpts{username: "bob"}), dir, target)
+	// A directory where the marker file goes makes the marker's final rename fail.
+	if err := os.Mkdir(filepath.Join(dir, backup.PendingMarker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := staged.SwapWithMarker(context.Background(), dir, time.Now().UTC()); err == nil {
+		t.Fatal("SwapWithMarker succeeded although the marker could not be written")
+	}
+	if got := usersOf(t, dir); got != "alice,gone" {
+		t.Fatalf("live users = %q: the database was replaced without a rollback record", got)
+	}
+}

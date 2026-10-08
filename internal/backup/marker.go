@@ -16,10 +16,10 @@ import (
 )
 
 // PendingMarker is the file, in the data directory, that a restore writes right
-// after it swaps the database. The next start finishes the restore: it removes
-// the marker once the restored database has started, and when the restored
-// database cannot start it puts the pre-restore snapshot back and removes the
-// marker (T-03-105).
+// before it swaps the database (Staged.SwapWithMarker). The next start finishes
+// the restore: it removes the marker once the restored database has started,
+// and when the restored database cannot start it puts the pre-restore snapshot
+// back and removes the marker (T-03-105).
 const PendingMarker = "restore-pending"
 
 // Marker is the content of the restore-pending file.
