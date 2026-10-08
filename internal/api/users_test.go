@@ -429,3 +429,118 @@ func TestListUsersNeedsUsersManage(t *testing.T) {
 		t.Fatalf("anonymous: %d %s, want 401", rec.Code, rec.Body)
 	}
 }
+
+// Regenerating an invite (plan 03-12, D-22a).
+
+func (f *authFixture) regenerate(t *testing.T, cookie, csrf, userID string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(t, authReq{method: http.MethodPost, path: "/api/users/" + userID + "/invite", cookie: cookie, csrf: csrf})
+}
+
+func (f *authFixture) lookup(t *testing.T, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(t, authReq{method: http.MethodPost, path: "/api/invite/lookup", body: `{"token":"` + token + `"}`})
+}
+
+func TestRegenerateInviteAnswersANewLinkAndTheOldTokenIsInvalidLink(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	old := f.invite(t, cookie, csrf, "alice")
+	var id string
+	if err := f.st.Read.QueryRow(`SELECT id FROM users WHERE username = 'alice'`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := f.regenerate(t, cookie, csrf, id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cc)
+	}
+	var got struct {
+		URL       string `json:"url"`
+		ExpiresAt string `json:"expiresAt"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	m := tokenInLink.FindStringSubmatch(got.URL)
+	if m == nil || m[1] == old {
+		t.Fatalf("link %q, want a new /invite#token=<43 characters>", got.URL)
+	}
+	if got.ExpiresAt != "2026-01-04T00:00:00Z" {
+		t.Fatalf("expiresAt = %q, want 72 hours after the fixture clock", got.ExpiresAt)
+	}
+
+	if rec := f.lookup(t, old); rec.Code != http.StatusNotFound || problemType(t, rec) != "invalid_link" {
+		t.Fatalf("old link: %d %s, want 404 invalid_link", rec.Code, rec.Body)
+	}
+	if rec := f.lookup(t, m[1]); rec.Code != http.StatusOK {
+		t.Fatalf("new link: %d %s, want 200", rec.Code, rec.Body)
+	}
+
+	entries := f.audits(t, "user.invite_regenerated")
+	if len(entries) != 1 || entries[0].TargetID != id || entries[0].ActorID != "id-admin" || entries[0].Result != "success" {
+		t.Fatalf("audit = %+v, want one success by the admin on the user", entries)
+	}
+	if strings.Contains(rec.Body.String(), old) {
+		t.Fatalf("the answer repeats the old token")
+	}
+}
+
+func TestRegenerateInviteAnswers409NotInvitedForAUserWhoSetAPassword(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	id := f.addUser(t, "bob", false)
+
+	rec := f.regenerate(t, cookie, csrf, id)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "not_invited" {
+		t.Fatalf("a user with a password: %d %s, want 409 not_invited", rec.Code, rec.Body)
+	}
+	if n := len(f.audits(t, "user.invite_regenerated")); n != 0 {
+		t.Fatalf("audit rows = %d, want a refusal to record none", n)
+	}
+}
+
+func TestRegenerateInviteAnswers404UserNotFoundForAnUnknownOrDeletedID(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+
+	if rec := f.regenerate(t, cookie, csrf, "no-such-user"); rec.Code != http.StatusNotFound || problemType(t, rec) != "user_not_found" {
+		t.Fatalf("unknown id: %d %s, want 404 user_not_found", rec.Code, rec.Body)
+	}
+	f.invite(t, cookie, csrf, "gone")
+	if _, err := f.st.Write.Exec(`UPDATE users SET deleted_at = ? WHERE username = 'gone'`, f.clk.now().UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := f.st.Read.QueryRow(`SELECT id FROM users WHERE username = 'gone'`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if rec := f.regenerate(t, cookie, csrf, id); rec.Code != http.StatusNotFound || problemType(t, rec) != "user_not_found" {
+		t.Fatalf("deleted user: %d %s, want 404 user_not_found", rec.Code, rec.Body)
+	}
+}
+
+func TestRegenerateInviteNeedsUsersManage(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	old := f.invite(t, cookie, csrf, "alice")
+	var id string
+	if err := f.st.Read.QueryRow(`SELECT id FROM users WHERE username = 'alice'`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	f.addUser(t, "bob", false)
+	bobCookie, bobCSRF := f.signIn(t, "bob", false)
+
+	if rec := f.regenerate(t, bobCookie, bobCSRF, id); rec.Code != http.StatusForbidden {
+		t.Fatalf("a user who is not an instance admin: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if rec := f.regenerate(t, "", "", id); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous: %d %s, want 401", rec.Code, rec.Body)
+	}
+	if rec := f.lookup(t, old); rec.Code != http.StatusOK {
+		t.Fatalf("a refused request must leave the link alone: %d %s", rec.Code, rec.Body)
+	}
+}

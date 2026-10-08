@@ -200,3 +200,9 @@ func (s *Service) AcceptLink(ctx context.Context, token, password, actorIP, user
 	}
 	return nil
 }
+
+// RegenerateInvite replaces an invited user's link with a new one. Not yet
+// implemented.
+func (s *Service) RegenerateInvite(_ context.Context, _ audit.Actor, _ string) (string, Link, error) {
+	return "", Link{}, errors.New("access: not implemented")
+}

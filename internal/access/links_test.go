@@ -207,3 +207,115 @@ func TestInviteTTLIsHowLongALinkWorks(t *testing.T) {
 		t.Fatalf("look-up at the expiry instant = %v, want ErrInvalidLink", err)
 	}
 }
+
+// Regenerating an invite (plan 03-12, D-22a).
+
+func TestRegenerateInviteReplacesTheLinkSoTheOldTokenIsInvalid(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	id, old := f.invite(t, "alice")
+	f.clk.t = f.clk.t.Add(time.Hour)
+
+	username, fresh, err := f.svc.RegenerateInvite(ctx, testAdmin, id)
+	if err != nil {
+		t.Fatalf("RegenerateInvite: %v", err)
+	}
+	if username != "alice" || fresh.Token == "" || fresh.Token == old.Token || len(fresh.Token) != 43 {
+		t.Fatalf("got %q and %+v, want alice and a new 43 character token", username, fresh)
+	}
+	if want := f.clk.t.Add(72 * time.Hour); !fresh.ExpiresAt.Equal(want) {
+		t.Fatalf("expires %v, want a full TTL from now (%v)", fresh.ExpiresAt, want)
+	}
+	if _, err := f.svc.LookupLink(ctx, old.Token); !errors.Is(err, access.ErrInvalidLink) {
+		t.Fatalf("the old link answers %v, want ErrInvalidLink", err)
+	}
+	if err := f.svc.AcceptLink(ctx, old.Token, chosenPassword, "", ""); !errors.Is(err, access.ErrInvalidLink) {
+		t.Fatalf("accepting the old link = %v, want ErrInvalidLink", err)
+	}
+	if info, err := f.svc.LookupLink(ctx, fresh.Token); err != nil || info.Username != "alice" || info.Kind != access.LinkInvite {
+		t.Fatalf("the new link: %+v, %v", info, err)
+	}
+	var links int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM user_links WHERE user_id = ?`, id).Scan(&links); err != nil || links != 1 {
+		t.Fatalf("links held = %d, %v, want exactly one", links, err)
+	}
+}
+
+func TestRegenerateInviteRevivesAnExpiredInvite(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	id, _ := f.invite(t, "alice")
+	f.clk.t = f.clk.t.Add(100 * time.Hour)
+	if list, _ := f.svc.ListUsers(ctx); len(list) != 1 || list[0].Status != access.StatusInviteExpired {
+		t.Fatalf("before: %+v, want invite_expired", list)
+	}
+	if _, _, err := f.svc.RegenerateInvite(ctx, testAdmin, id); err != nil {
+		t.Fatalf("RegenerateInvite: %v", err)
+	}
+	if list, _ := f.svc.ListUsers(ctx); len(list) != 1 || list[0].Status != access.StatusInvitePending {
+		t.Fatalf("after: %+v, want invite_pending", list)
+	}
+}
+
+func TestRegenerateInviteIsAuditedWithTheUsernameAndExpiryAndNoToken(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	id, old := f.invite(t, "alice")
+	_, fresh, err := f.svc.RegenerateInvite(ctx, testAdmin, id)
+	if err != nil {
+		t.Fatalf("RegenerateInvite: %v", err)
+	}
+
+	var actor, target, details string
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'user.invite_regenerated'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("user.invite_regenerated rows = %d, %v, want one", n, err)
+	}
+	if err := f.st.Read.QueryRow(`SELECT actor_id, target_id, details FROM audit_log WHERE action = 'user.invite_regenerated'`).Scan(&actor, &target, &details); err != nil {
+		t.Fatal(err)
+	}
+	if actor != "id-admin" || target != id {
+		t.Fatalf("actor %q target %q, want the admin and the user", actor, target)
+	}
+	for _, want := range []string{"alice", "expires_at"} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details %q lack %q", details, want)
+		}
+	}
+	if strings.Contains(details, fresh.Token) || strings.Contains(details, old.Token) {
+		t.Fatalf("details %q hold a token", details)
+	}
+}
+
+func TestRegenerateInviteRefusesAUserWhoHasSetAPasswordAndLeavesTheirStateAlone(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	id, link := f.invite(t, "alice")
+	if err := f.svc.AcceptLink(ctx, link.Token, chosenPassword, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.svc.RegenerateInvite(ctx, testAdmin, id); !errors.Is(err, access.ErrNotInvited) {
+		t.Fatalf("RegenerateInvite for a user with a password = %v, want ErrNotInvited", err)
+	}
+	var links, audited int
+	_ = f.st.Read.QueryRow(`SELECT COUNT(*) FROM user_links WHERE user_id = ?`, id).Scan(&links)
+	_ = f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'user.invite_regenerated'`).Scan(&audited)
+	if links != 0 || audited != 0 {
+		t.Fatalf("links = %d, audit rows = %d, want a refusal to change nothing", links, audited)
+	}
+}
+
+func TestRegenerateInviteRefusesAnUnknownOrDeletedUser(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, _, err := f.svc.RegenerateInvite(ctx, testAdmin, "no-such-id"); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("unknown id = %v, want ErrNotFound", err)
+	}
+	id, _ := f.invite(t, "gone")
+	if _, err := f.st.Write.Exec(`UPDATE users SET deleted_at = ? WHERE id = ?`, f.clk.t.UnixNano(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.svc.RegenerateInvite(ctx, testAdmin, id); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("deleted user = %v, want ErrNotFound", err)
+	}
+}

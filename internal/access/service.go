@@ -46,6 +46,9 @@ var (
 	// expired, already used, replaced by a newer one, or belonging to a disabled
 	// or deleted user. The caller must not be able to tell them apart.
 	ErrInvalidLink = errors.New("access: this link doesn't work")
+	// ErrNotInvited is a user who has already set a password, so there is no
+	// invite to regenerate.
+	ErrNotInvited = errors.New("access: this user is not waiting on an invite")
 	// ErrNotFound is a user, team or session that does not exist.
 	ErrNotFound = errors.New("access: not found")
 )
