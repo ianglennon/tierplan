@@ -27,18 +27,8 @@ import (
 
 const restorePass = "a long enough passphrase"
 
-// restoredRig is a server built on a data directory restored from a backup of r:
-// another vault key, the same database content as of the backup.
-func restoredRig(t *testing.T, r *rig) *agents.Service {
-	t.Helper()
-	ctx := context.Background()
-	var file bytes.Buffer
-	if _, err := backup.Export(ctx, r.st, r.vlt, t.TempDir(), &file, []byte(restorePass), backup.ExportOptions{AppVersion: "v9.9.9", Now: func() time.Time { return fixedNow }}); err != nil {
-		t.Fatalf("export: %v", err)
-	}
-	return restoreFrom(t, file.Bytes())
-}
-
+// restoreFrom builds a server on a data directory restored from a backup file: another
+// vault key, the same database content as of the backup.
 func restoreFrom(t *testing.T, file []byte) *agents.Service {
 	t.Helper()
 	ctx := context.Background()
