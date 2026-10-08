@@ -4,6 +4,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { clearInviteToken, heldInviteToken } from "@/api/invite";
@@ -59,16 +60,17 @@ function stubApi(opts: { lookup?: () => Response; accept?: () => Response } = {}
   );
 }
 
-function renderInvite() {
+function renderInvite(strict = false) {
   const router = createRouter({
     routeTree,
     history: createMemoryHistory({ initialEntries: ["/invite"] }),
   });
-  render(
+  const app = (
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  render(strict ? <StrictMode>{app}</StrictMode> : app);
   return router;
 }
 
@@ -117,6 +119,28 @@ describe("/invite", () => {
     expect(accept?.body).toEqual({ token: TOKEN, password: PASSWORD });
     // The token went in bodies only, never into a URL.
     expect(sent.every((s) => !s.path.includes(TOKEN))).toBe(true);
+    expect(heldInviteToken()).toBeNull();
+  });
+});
+
+describe("/invite under React StrictMode (WR-C-05)", () => {
+  it("validates the link and sets the password even though StrictMode runs the page's cleanup and mounts it again", async () => {
+    stubApi();
+    openLink();
+    const router = renderInvite(true);
+
+    expect(await screen.findByRole("heading", { name: "Set your password" })).toBeTruthy();
+    expect(screen.queryByText("This link doesn't work")).toBeNull();
+    fireEvent.change(screen.getByLabelText("New password"), { target: { value: PASSWORD } });
+    fireEvent.change(screen.getByLabelText("Confirm new password"), {
+      target: { value: PASSWORD },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Set password" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    expect(sent.find((s) => s.path === "/api/invite/accept")?.body).toEqual({
+      token: TOKEN,
+      password: PASSWORD,
+    });
     expect(heldInviteToken()).toBeNull();
   });
 });

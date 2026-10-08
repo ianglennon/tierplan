@@ -159,10 +159,12 @@ function InvalidCard() {
 
 interface FormProps {
   info: InviteInfo;
+  // The token the page was opened with, held in the page's own memory.
+  token: string | null;
   onInvalid: () => void;
 }
 
-function PasswordForm({ info, onInvalid }: FormProps) {
+function PasswordForm({ info, token, onInvalid }: FormProps) {
   const t = useT();
   const router = useRouter();
   const [pending, setPending] = useState(false);
@@ -181,7 +183,6 @@ function PasswordForm({ info, onInvalid }: FormProps) {
   };
 
   async function submit(values: Values) {
-    const token = heldInviteToken();
     if (submitting.current) return;
     if (token === null) {
       onInvalid();
@@ -293,10 +294,14 @@ export function InvitePage() {
   const t = useT();
   const [phase, setPhase] = useState<Phase>({ name: "checking" });
   useDocumentTitle(t("invite.tabTitle"));
+  // Read once, when the page is first made. The module variable is cleared when
+  // the page goes away, and React's development StrictMode runs that cleanup and
+  // then mounts the same page again: the page must not look the token up a
+  // second time, or every link would read as "doesn't work" under `pnpm dev`.
+  const [token] = useState(heldInviteToken);
 
   useEffect(() => {
     let cancelled = false;
-    const token = heldInviteToken();
     if (token === null) {
       setPhase({ name: "invalid" });
       return;
@@ -320,7 +325,7 @@ export function InvitePage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [token]);
 
   // The secret does not outlive the page.
   useEffect(() => () => clearInviteToken(), []);
@@ -341,7 +346,13 @@ export function InvitePage() {
       );
       break;
     default:
-      body = <PasswordForm info={phase.info} onInvalid={() => setPhase({ name: "invalid" })} />;
+      body = (
+        <PasswordForm
+          info={phase.info}
+          token={token}
+          onInvalid={() => setPhase({ name: "invalid" })}
+        />
+      );
   }
 
   return (
