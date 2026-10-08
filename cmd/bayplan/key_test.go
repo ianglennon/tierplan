@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -123,5 +124,84 @@ func TestKeyRotateThenVerifyMovesSecretsAndChainAndServerStartsOnTheNewKey(t *te
 	srv := buildServer(t, dir)
 	if srv.Vault().KeyID() != both.KeyID() {
 		t.Fatalf("the server runs on %s, want the rotated key %s", srv.Vault().KeyID(), both.KeyID())
+	}
+}
+
+func fileBytes(t *testing.T, dir, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // a file the test made
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestKeyRotateRefusesWhenAnOldKeyFileIsThereAndChangesNothing(t *testing.T) {
+	dir, st := seedDataDir(t, 5)
+	seedSecrets(t, dir, st)
+	if err := vault.WriteKeyFile(dir, vault.OldKeyFile, bytes.Repeat([]byte{4}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	keyBefore, oldBefore := fileBytes(t, dir, vault.KeyFile), fileBytes(t, dir, vault.OldKeyFile)
+
+	_, errOut, err := runCLI(t, dir, "key", "rotate")
+	if err == nil {
+		t.Fatal("key rotate succeeded with bayplan.key.old present")
+	}
+	if !strings.Contains(errOut, "bayplan.key.old somewhere safe first") {
+		t.Fatalf("stderr = %q, want it to ask the admin to move bayplan.key.old", errOut)
+	}
+	if !bytes.Equal(fileBytes(t, dir, vault.KeyFile), keyBefore) || !bytes.Equal(fileBytes(t, dir, vault.OldKeyFile), oldBefore) {
+		t.Error("a refused rotation changed a key file")
+	}
+	if _, err := os.Stat(filepath.Join(dir, vault.NewKeyFile)); err == nil {
+		t.Errorf("a refused rotation left %s", vault.NewKeyFile)
+	}
+	var n int
+	if err := st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = ?`, audit.ActionKeyRotated).Scan(&n); err != nil || n != 0 {
+		t.Errorf("key.rotated entries = %d, %v; want none", n, err)
+	}
+}
+
+func TestKeyRotateRefusesWhileBayplanIsRunningAndChangesNothing(t *testing.T) {
+	dir := t.TempDir() + "/data"
+	srv := buildServer(t, dir)
+	keyBefore := fileBytes(t, dir, vault.KeyFile)
+	kid := srv.Vault().KeyID()
+
+	_, errOut, err := runCLI(t, dir, "key", "rotate")
+	if err == nil {
+		t.Fatal("key rotate succeeded beside a running server")
+	}
+	if !strings.Contains(errOut, "Bayplan is running") || !strings.Contains(errOut, "docker run --rm") {
+		t.Fatalf("stderr = %q, want the running notice and the one-off container command", errOut)
+	}
+	if !bytes.Equal(fileBytes(t, dir, vault.KeyFile), keyBefore) || srv.Vault().KeyID() != kid {
+		t.Error("a refused rotation changed the key")
+	}
+	for _, name := range []string{vault.NewKeyFile, vault.OldKeyFile} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Errorf("a refused rotation created %s", name)
+		}
+	}
+}
+
+func TestKeyRotateDiscardsAStaleNewKeyFromAnInterruptedRunAndRotates(t *testing.T) {
+	dir, st := seedDataDir(t, 5)
+	seedSecrets(t, dir, st)
+	stale, err := vault.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.WriteKeyFile(dir, vault.NewKeyFile, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, errOut, err := runCLI(t, dir, "key", "rotate"); err != nil {
+		t.Fatalf("key rotate: %v (stderr %q)", err, errOut)
+	}
+	cur, err := vault.ReadKeyFile(dir, vault.KeyFile)
+	if err != nil || vault.KeyIDOf(cur) == vault.KeyIDOf(stale) {
+		t.Fatalf("the stale key became the master key: %v", err)
 	}
 }

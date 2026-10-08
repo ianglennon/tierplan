@@ -190,3 +190,113 @@ func TestRotateKeyRefusesWhenAnOldKeyFileIsAlreadyThereAndChangesNothing(t *test
 		t.Errorf("a refused rotation left %s", vault.NewKeyFile)
 	}
 }
+
+var errCrash = errors.New("simulated crash")
+
+// crashAt makes RotateKey fail with errCrash when it reaches point.
+func crashAt(t *testing.T, point string) {
+	t.Helper()
+	restore := backup.SetRotateHook(func(p string) error {
+		if p == point {
+			return errCrash
+		}
+		return nil
+	})
+	t.Cleanup(restore)
+}
+
+func TestRotateKeyCrashAtEveryPointLeavesAnInstanceThatRecoversAndVerifies(t *testing.T) {
+	cases := []struct {
+		point      string
+		wantNewKey bool // whether the recovered instance runs on the new key
+	}{
+		{backup.CrashNewKeyWritten, false},
+		{backup.CrashBeforeCommit, false},
+		{backup.CrashAfterCommit, true},
+		{backup.CrashFirstRename, true},
+	}
+	for _, c := range cases {
+		t.Run(c.point, func(t *testing.T) {
+			f := newRotateFixture(t)
+			ctx := context.Background()
+			crashAt(t, c.point)
+
+			if _, err := backup.RotateKey(ctx, f.st, f.dir, f.old, audit.SystemCLI); !errors.Is(err, errCrash) {
+				t.Fatalf("RotateKey = %v, want the simulated crash", err)
+			}
+
+			// The next start: recovery first, then the key is loaded. LoadOrCreate
+			// must find a key and never mint a fresh one.
+			if _, err := vault.RecoverRotation(ctx, f.dir, false, func(ctx context.Context) (string, error) {
+				return backup.StoredActiveKeyID(ctx, f.dir)
+			}); err != nil {
+				t.Fatalf("RecoverRotation: %v", err)
+			}
+			v, err := vault.LoadOrCreate("", f.dir, slog.New(slog.DiscardHandler))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := v.KeyID() != f.old.KeyID(); got != c.wantNewKey {
+				t.Fatalf("recovered instance on the new key = %v, want %v (active %s, old %s)", got, c.wantNewKey, v.KeyID(), f.old.KeyID())
+			}
+			for _, name := range []string{vault.NewKeyFile} {
+				if _, err := os.Stat(filepath.Join(f.dir, name)); err == nil {
+					t.Errorf("%s remains after recovery", name)
+				}
+			}
+			if plain, err := v.Open(vault.ContextAgentCA+"env-1", f.scalar(t, `SELECT key_sealed FROM env_cas WHERE env_id = 'env-1'`)); err != nil || string(plain) != "ca private key" {
+				t.Errorf("CA key = %q, %v", plain, err)
+			}
+			res, err := audit.Verify(ctx, f.st, v)
+			if err != nil || res.Broken != nil {
+				t.Fatalf("verify = %+v, %v (broken %+v)", res, err, res.Broken)
+			}
+			if c.wantNewKey && res.AttestationsUnchecked != 0 {
+				t.Errorf("the old key is kept, so the attestation must be checked: %+v", res)
+			}
+		})
+	}
+}
+
+func TestRotateKeyCanBeRunAgainAfterACrashBeforeTheCommit(t *testing.T) {
+	f := newRotateFixture(t)
+	ctx := context.Background()
+	restore := backup.SetRotateHook(func(p string) error {
+		if p == backup.CrashBeforeCommit {
+			return errCrash
+		}
+		return nil
+	})
+	if _, err := backup.RotateKey(ctx, f.st, f.dir, f.old, audit.SystemCLI); !errors.Is(err, errCrash) {
+		t.Fatal(err)
+	}
+	restore()
+	// A rolled-back transaction left the database as it was.
+	if _, err := backup.RotateKey(ctx, f.st, f.dir, f.old, audit.SystemCLI); !errors.Is(err, backup.ErrNewKeyPresent) {
+		t.Fatalf("a second run beside a stale bayplan.key.new = %v, want ErrNewKeyPresent until recovery has run", err)
+	}
+	if _, err := vault.RecoverRotation(ctx, f.dir, false, func(ctx context.Context) (string, error) {
+		return backup.StoredActiveKeyID(ctx, f.dir)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backup.RotateKey(ctx, f.st, f.dir, f.old, audit.SystemCLI); err != nil {
+		t.Fatalf("RotateKey after recovery: %v", err)
+	}
+}
+
+func TestRotateKeyThatFailsBeforeTheCommitRemovesItsNewKeyFile(t *testing.T) {
+	f := newRotateFixture(t)
+	// A sealed value that does not open makes the re-wrap fail inside the transaction.
+	f.exec(t, `UPDATE backup_schedule SET passphrase_sealed = 'v1.k1-0000000000000000.AAAA' WHERE id = 1`)
+
+	if _, err := backup.RotateKey(context.Background(), f.st, f.dir, f.old, audit.SystemCLI); err == nil {
+		t.Fatal("RotateKey succeeded over a value it cannot open")
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, vault.NewKeyFile)); err == nil {
+		t.Errorf("a failed rotation left %s", vault.NewKeyFile)
+	}
+	if got := f.scalar(t, `SELECT COUNT(*) FROM app_meta WHERE key = 'active_key_id'`); got != "0" {
+		t.Errorf("a failed rotation recorded an active key")
+	}
+}

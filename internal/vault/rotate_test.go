@@ -5,6 +5,7 @@ package vault_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"io/fs"
@@ -117,5 +118,120 @@ func TestAnUnreadableOldKeyFileIsSkippedAndNeverFatal(t *testing.T) {
 	}
 	if v.KeyID() == "" {
 		t.Fatal("no active key")
+	}
+}
+
+func neverAsked(t *testing.T) func(context.Context) (string, error) {
+	return func(context.Context) (string, error) {
+		t.Helper()
+		t.Error("the database was asked, but this case must not ask it")
+		return "", nil
+	}
+}
+
+func answers(id string) func(context.Context) (string, error) {
+	return func(context.Context) (string, error) { return id, nil }
+}
+
+func put(t *testing.T, dir, name string, key []byte) {
+	t.Helper()
+	if err := vault.WriteKeyFile(dir, name, key); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func exists(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return err == nil
+}
+
+func content(t *testing.T, dir, name string) []byte {
+	t.Helper()
+	k, err := vault.ReadKeyFile(dir, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+func TestRecoverRotationDiscardsANewKeyTheDatabaseDoesNotName(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, vault.KeyFile, rotKey(1))
+	put(t, dir, vault.NewKeyFile, rotKey(2))
+
+	for name, answer := range map[string]string{"never rotated": "", "another key": vault.KeyIDOf(rotKey(1))} {
+		put(t, dir, vault.NewKeyFile, rotKey(2))
+		changed, err := vault.RecoverRotation(context.Background(), dir, false, answers(answer))
+		if err != nil || !changed {
+			t.Fatalf("%s: RecoverRotation = %v, %v; want it to discard", name, changed, err)
+		}
+		if exists(dir, vault.NewKeyFile) {
+			t.Errorf("%s: bayplan.key.new was kept", name)
+		}
+		if !bytes.Equal(content(t, dir, vault.KeyFile), rotKey(1)) {
+			t.Errorf("%s: bayplan.key changed", name)
+		}
+	}
+}
+
+func TestRecoverRotationFinishesBothRenamesWhenTheDatabaseNamesTheNewKey(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, vault.KeyFile, rotKey(1))
+	put(t, dir, vault.NewKeyFile, rotKey(2))
+
+	changed, err := vault.RecoverRotation(context.Background(), dir, false, answers(vault.KeyIDOf(rotKey(2))))
+	if err != nil || !changed {
+		t.Fatalf("RecoverRotation = %v, %v", changed, err)
+	}
+	if !bytes.Equal(content(t, dir, vault.KeyFile), rotKey(2)) || !bytes.Equal(content(t, dir, vault.OldKeyFile), rotKey(1)) || exists(dir, vault.NewKeyFile) {
+		t.Fatal("the key files were not rotated into place")
+	}
+}
+
+func TestRecoverRotationAfterTheFirstRenameMovesTheNewKeyIntoPlaceWithoutAskingTheDatabase(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, vault.OldKeyFile, rotKey(1))
+	put(t, dir, vault.NewKeyFile, rotKey(2))
+
+	changed, err := vault.RecoverRotation(context.Background(), dir, false, neverAsked(t))
+	if err != nil || !changed {
+		t.Fatalf("RecoverRotation = %v, %v", changed, err)
+	}
+	if !bytes.Equal(content(t, dir, vault.KeyFile), rotKey(2)) || exists(dir, vault.NewKeyFile) {
+		t.Fatal("bayplan.key.new was not moved to bayplan.key")
+	}
+	// LoadOrCreate now finds that key and mints nothing.
+	v, err := vault.LoadOrCreate("", dir, slog.New(slog.DiscardHandler))
+	if err != nil || v.KeyID() != vault.KeyIDOf(rotKey(2)) {
+		t.Fatalf("LoadOrCreate = %v, %v; want the new key", v, err)
+	}
+}
+
+func TestRecoverRotationLeavesADataDirectoryWithNoNewKeyUntouched(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, vault.KeyFile, rotKey(1))
+	put(t, dir, vault.OldKeyFile, rotKey(9))
+
+	changed, err := vault.RecoverRotation(context.Background(), dir, false, neverAsked(t))
+	if err != nil || changed {
+		t.Fatalf("RecoverRotation = %v, %v; want nothing to do", changed, err)
+	}
+	if !bytes.Equal(content(t, dir, vault.KeyFile), rotKey(1)) || !bytes.Equal(content(t, dir, vault.OldKeyFile), rotKey(9)) {
+		t.Fatal("the key files changed")
+	}
+	// An empty directory too.
+	if changed, err := vault.RecoverRotation(context.Background(), t.TempDir(), false, neverAsked(t)); err != nil || changed {
+		t.Fatalf("RecoverRotation on an empty directory = %v, %v", changed, err)
+	}
+}
+
+func TestRecoverRotationReportsAFailureToReadTheDatabase(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, vault.KeyFile, rotKey(1))
+	put(t, dir, vault.NewKeyFile, rotKey(2))
+	boom := errors.New("boom")
+	_, err := vault.RecoverRotation(context.Background(), dir, false, func(context.Context) (string, error) { return "", boom })
+	if !errors.Is(err, boom) || !exists(dir, vault.NewKeyFile) {
+		t.Fatalf("RecoverRotation = %v; want the error and bayplan.key.new kept", err)
 	}
 }
