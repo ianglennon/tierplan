@@ -490,3 +490,36 @@ func TestBootRollbackReportsWhenThereIsNoSnapshotToGoBackTo(t *testing.T) {
 	}
 	_ = release()
 }
+
+// WR-B-01: a start that fails for a reason that has nothing to do with the
+// restored database (here a key variable that is not a key) must not throw the
+// restore away. The marker stays, so the next start still has its one try.
+func TestBootRollbackIsNotTriggeredByAFailureUnrelatedToTheRestoredData(t *testing.T) {
+	dir, snapshot := pendingRestore(t)
+
+	_, err := Build(context.Background(), testConfig(t, map[string]string{
+		"BAYPLAN_DATA_DIR":       dir,
+		"BAYPLAN_ENCRYPTION_KEY": "this is not a key",
+	}), slog.New(slog.DiscardHandler))
+	if err == nil {
+		t.Fatal("Build succeeded with a bad encryption key")
+	}
+	if errors.Is(err, errRestoredState) {
+		t.Fatalf("a key error was classed as a restored-data error: %v", err)
+	}
+	if _, pending, _ := backup.ReadMarker(dir); !pending {
+		t.Error("the restore marker was removed by a start that failed for another reason")
+	}
+	if _, err := os.Stat(snapshot); err != nil {
+		t.Errorf("the pre-restore snapshot was consumed: %v", err)
+	}
+	st, err := store.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	var n int
+	if err := st.Read.QueryRow(`SELECT COUNT(*) FROM settings WHERE key = 'from_the_restore'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the restored database was replaced: %d, %v", n, err)
+	}
+}

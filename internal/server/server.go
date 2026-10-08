@@ -312,7 +312,12 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	}
 
 	srv, err = assemble(ctx, cfg, log, bo, info, unlock, socketPath)
-	if err != nil && pending {
+	// Only a failure caused by the restored data goes back to the snapshot. A bad
+	// TLS pair, a mistyped key variable or a cancelled start says nothing about
+	// the restored database, so the restore keeps its one try for the next start.
+	if err != nil && pending && !errors.Is(err, errRestoredState) {
+		log.Error("the start failed for a reason unrelated to the restored data; the restore is kept and tried again at the next start", "error", err)
+	} else if err != nil && pending {
 		log.Error("the restored database could not start; going back to the pre-restore snapshot", "error", err)
 		if rbErr := rollbackRestore(ctx, cfg, log, info.Path, marker, err); rbErr != nil {
 			return nil, fmt.Errorf("%w (and going back to the snapshot failed: %w)", err, rbErr)
@@ -332,6 +337,19 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	}
 	return srv, nil
 }
+
+// errRestoredState marks a start failure that comes from the data a restore put
+// in place: the database cannot be opened, is on a key this instance does not
+// hold, cannot be migrated or does not load.
+var errRestoredState = errors.New("the restored data cannot start")
+
+// restoredStateError wraps err so that errors.Is(err, errRestoredState) holds
+// while the message stays exactly err's own.
+type restoredStateError struct{ err error }
+
+func (e restoredStateError) Error() string      { return e.err.Error() }
+func (e restoredStateError) Unwrap() error      { return e.err }
+func (restoredStateError) Is(target error) bool { return target == errRestoredState }
 
 // rollbackRestore puts the pre-restore snapshot back as the database and records
 // backup.failed (stage restore_boot) in its audit chain. The audit entry is best
@@ -379,13 +397,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 
 	st, err := store.Open(ctx, info.Path)
 	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+		return nil, restoredStateError{fmt.Errorf("open database: %w", err)}
 	}
 	// A database rotated to another key cannot be opened with this one, so say
 	// so before anything is migrated or written (D-33).
 	if err := checkActiveKey(ctx, st, vlt, info.Path); err != nil {
 		_ = st.Close()
-		return nil, err
+		return nil, restoredStateError{err}
 	}
 	res, err := store.Migrate(ctx, st, store.MigrateOptions{
 		AppVersion: buildinfo.Get().Version,
@@ -394,7 +412,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	})
 	if err != nil {
 		_ = st.Close()
-		return nil, fmt.Errorf("migration failed: %w", err)
+		return nil, restoredStateError{fmt.Errorf("migration failed: %w", err)}
 	}
 	attrs := []any{"from", res.From, "to", res.To}
 	if res.SnapshotPath != "" {
@@ -419,7 +437,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	gate := auth.NewSetupGate(st, info.Path, log)
 	if err := gate.Init(ctx); err != nil {
 		_ = st.Close()
-		return nil, fmt.Errorf("initialise the setup gate: %w", err)
+		return nil, restoredStateError{fmt.Errorf("initialise the setup gate: %w", err)}
 	}
 
 	// The instance name and public URL come from the settings table, with
@@ -428,7 +446,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	inst, err := instance.Load(ctx, st, cfg)
 	if err != nil {
 		_ = st.Close()
-		return nil, fmt.Errorf("load instance settings: %w", err)
+		return nil, restoredStateError{fmt.Errorf("load instance settings: %w", err)}
 	}
 
 	// HTTPS comes from a supplied pair or a generated self-signed certificate
