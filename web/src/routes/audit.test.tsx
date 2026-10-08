@@ -49,6 +49,8 @@ interface Call {
 }
 
 let me: typeof ADMIN;
+// What GET /api/audit/actors answers.
+let actors: { name: string; deleted: boolean }[];
 let calls: Call[];
 let answer: (call: Call) => Response | Promise<Response>;
 
@@ -58,6 +60,7 @@ const lastList = () => listCalls()[listCalls().length - 1]?.search as URLSearchP
 beforeEach(() => {
   calls = [];
   me = ADMIN;
+  actors = ["admin", "alice", "bob"].map((name) => ({ name, deleted: false }));
   answer = () => Response.json({ items: [entry()], nextCursor: null, retentionDays: 90 });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -87,9 +90,7 @@ beforeEach(() => {
           ],
         });
       }
-      if (url.pathname === "/api/audit/actors") {
-        return Response.json(["admin", "alice", "bob"].map((name) => ({ name, deleted: false })));
-      }
+      if (url.pathname === "/api/audit/actors") return Response.json(actors);
       if (url.pathname === "/api/audit") return answer(call);
       if (url.pathname === "/api/version") {
         return Response.json({
@@ -656,5 +657,143 @@ describe("the audit log for an env Admin (D-09)", () => {
       cleanup();
       queryClient.clear();
     }
+  });
+});
+
+describe("the new actions and deleted users", () => {
+  it("shows every Phase 3 action by its label and an unknown one by its key", async () => {
+    const actions = [
+      "user.created",
+      "access.granted",
+      "automation.resumed",
+      "backup.schedule_updated",
+      "audit.reanchored",
+      "key.rotated",
+      "user.teleported",
+    ];
+    answer = () =>
+      Response.json({
+        items: actions.map((action, i) => entry({ id: `e${i}`, seq: 20 - i, action })),
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    for (const label of [
+      "Created user",
+      "Granted access",
+      "Resumed automation",
+      "Changed backup schedule",
+      "Re-anchored audit log",
+      "Rotated master key",
+      "user.teleported",
+    ]) {
+      expect(await screen.findByText(label), label).toBeTruthy();
+    }
+  });
+
+  it("shows a deleted user as the name followed by (deleted) in muted text, in rows", async () => {
+    answer = () =>
+      Response.json({
+        items: [
+          entry({ id: "a", seq: 2, actor: "alice", actorDeleted: true }),
+          entry({ id: "b", seq: 1, actor: "bob", actorDeleted: false }),
+        ],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    const row = (await screen.findByText("alice")).closest("tr") as HTMLElement;
+    const marker = within(row).getByText("(deleted)");
+    expect(marker.className).toContain("text-muted-foreground");
+    expect(row.textContent).toContain("alice (deleted)");
+    const other = screen.getByText("bob").closest("tr") as HTMLElement;
+    expect(within(other).queryByText("(deleted)")).toBeNull();
+  });
+
+  it("lists a deleted user the same way in the User filter", async () => {
+    actors = [
+      { name: "alice", deleted: true },
+      { name: "bob", deleted: false },
+    ];
+    renderAt("/audit");
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: /Any user/ }));
+    const deleted = await screen.findByRole("button", { name: "alice (deleted)" });
+    expect(within(deleted).getByText("(deleted)").className).toContain("text-muted-foreground");
+    expect(screen.getByRole("button", { name: "bob" })).toBeTruthy();
+    // Choosing it filters by the plain name.
+    fireEvent.click(deleted);
+    await waitFor(() => expect(lastList().get("user")).toBe("alice"));
+  });
+});
+
+describe("the scoped view of an env Admin (D-09)", () => {
+  it("offers only the actions that can carry an environment in the Action filter", async () => {
+    me = ENV_ADMIN;
+    renderAt("/audit");
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: /Any action/ }));
+    for (const label of [
+      "Permission denied",
+      "Granted access",
+      "Renamed environment",
+      "Paused automation",
+    ]) {
+      expect(await screen.findByRole("checkbox", { name: label }), label).toBeTruthy();
+    }
+    for (const label of [
+      "Signed in",
+      "Created user",
+      "Exported backup",
+      "Updated settings",
+      "Rotated master key",
+    ]) {
+      expect(screen.queryByRole("checkbox", { name: label }), label).toBeNull();
+    }
+  });
+
+  it("offers every action to an instance admin", async () => {
+    renderAt("/audit");
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: /Any action/ }));
+    for (const label of ["Signed in", "Created user", "Exported backup", "Granted access"]) {
+      expect(await screen.findByRole("checkbox", { name: label }), label).toBeTruthy();
+    }
+  });
+
+  it("keeps an action from the address in the filter even when it is not one an env Admin is offered", async () => {
+    me = ENV_ADMIN;
+    renderAt("/audit?action=auth.login");
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: /1 action/ }));
+    const box = await screen.findByRole("checkbox", { name: "Signed in" });
+    expect(box.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("fills the Environment column with the environment's name", async () => {
+    me = ENV_ADMIN;
+    answer = () =>
+      Response.json({
+        items: [entry({ action: "environment.renamed", environment: "e1" })],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    const row = (await screen.findByText("Renamed environment")).closest("tr") as HTMLElement;
+    expect(within(row).getByText("lab-1")).toBeTruthy();
+    expect(within(row).queryByText("—")).toBeNull();
+  });
+
+  it("shows the plain empty state with Clear filters when the scoped view has no entries", async () => {
+    me = ENV_ADMIN;
+    answer = () => Response.json({ items: [], nextCursor: null, retentionDays: 90 });
+    const router = renderAt("/audit?range=30d");
+    expect(await screen.findByText("No audit entries match these filters.")).toBeTruthy();
+    expect(screen.getByText("Showing entries for the environments you administer.")).toBeTruthy();
+    const buttons = screen.getAllByRole("button", { name: "Clear filters" });
+    fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+    await waitFor(() =>
+      expect((router.state.location.search as Record<string, unknown>).range).toBe("24h"),
+    );
   });
 });

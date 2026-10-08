@@ -5,7 +5,15 @@ package audit_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -88,6 +96,87 @@ func TestPhase3ActionKeysHaveTheirDocumentedValues(t *testing.T) {
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
+// definedActions lists the value of every Action* string constant of audit.go.
+func definedActions(t *testing.T) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "audit.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, _ := spec.(*ast.ValueSpec)
+			for i, name := range vs.Names {
+				if !strings.HasPrefix(name.Name, "Action") || i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				v, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+// Every action the backend writes has a label on the audit page and a place in
+// its Action filter. A key the page does not know still renders, as the raw key,
+// but a delegated admin reading the log should never be handed one (UI-SPEC,
+// Audit log changes). The page's list is a TypeScript file, so this reads it.
+func TestEveryDefinedActionIsLabelledAndFilterableOnTheAuditPage(t *testing.T) {
+	actions := definedActions(t)
+	if len(actions) < 60 {
+		t.Fatalf("found %d Action constants, expected the whole vocabulary: the parse is wrong", len(actions))
+	}
+
+	ts, err := os.ReadFile("../../web/src/features/audit/filters.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := regexp.MustCompile(`(?s)KNOWN_ACTIONS: readonly string\[\] = \[(.*?)\];`).FindSubmatch(ts)
+	if block == nil {
+		t.Fatal("KNOWN_ACTIONS not found in filters.ts")
+	}
+	known := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"([a-z_.]+)"`).FindAllSubmatch(block[1], -1) {
+		known[string(m[1])] = true
+	}
+
+	raw, err := os.ReadFile("../../web/src/i18n/en/audit.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Audit struct {
+			Actions map[string]map[string]string `json:"actions"`
+		} `json:"audit"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, action := range actions {
+		area, name, _ := strings.Cut(action, ".")
+		if !known[action] {
+			t.Errorf("%s is not in KNOWN_ACTIONS (web/src/features/audit/filters.ts)", action)
+		}
+		if doc.Audit.Actions[area][name] == "" {
+			t.Errorf("%s has no label in web/src/i18n/en/audit.json", action)
 		}
 	}
 }
