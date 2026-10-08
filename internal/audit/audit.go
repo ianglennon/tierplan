@@ -123,6 +123,7 @@ const (
 	ActionAccessRevoked              = "access.revoked"
 	ActionOwnerTransferred           = "owner.transferred"
 	ActionAutomationPaused           = "automation.paused"
+	ActionAutomationResumed          = "automation.resumed"
 	ActionBackupExported             = "backup.exported"
 	ActionBackupScheduledRun         = "backup.scheduled_run"
 	ActionBackupFailed               = "backup.failed"

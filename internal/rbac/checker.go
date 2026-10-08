@@ -24,12 +24,18 @@ const AllEnvironments = "*"
 const (
 	ReasonUnauthenticated = "unauthenticated"
 	ReasonForbidden       = "forbidden"
+	// ReasonOwnerInactive is an automation whose owner does not exist, is
+	// disabled or is deleted (D-14).
+	ReasonOwnerInactive = "owner_inactive"
+	// ReasonOwnerLacksPermission is an automation whose owner is active but does
+	// not hold the permission asked for (D-14).
+	ReasonOwnerLacksPermission = "owner_lacks_permission"
 )
 
 // Decision is the outcome of Checker.Check.
 type Decision struct {
 	Allowed bool
-	// Reason is ReasonUnauthenticated or ReasonForbidden when Allowed is false.
+	// Reason is one of the Reason constants when Allowed is false.
 	Reason string
 	// Err is set when the decision could not be made (a database error). The
 	// decision is then a denial, and the caller answers 500.
@@ -68,7 +74,12 @@ type userFlags struct{ active, instanceAdmin bool }
 // flags reads the user row's access flags. A user with no row (never created, or
 // removed) is inactive, so it is allowed nothing.
 func (c *Checker) flags(ctx context.Context, userID string) (userFlags, error) {
-	f, err := c.s.RQ.GetUserAccessFlags(ctx, userID)
+	return c.flagsQ(ctx, c.s.RQ, userID)
+}
+
+// flagsQ is flags over the given queries, which may be bound to a transaction.
+func (c *Checker) flagsQ(ctx context.Context, q *sqlc.Queries, userID string) (userFlags, error) {
+	f, err := q.GetUserAccessFlags(ctx, userID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return userFlags{}, nil
 	}
@@ -94,8 +105,8 @@ func (c *Checker) adminExtras() []Perm {
 
 // assignments reads every assignment that reaches the user and folds them into
 // per-environment access, with AllEnvironments for NULL env_id rows.
-func (c *Checker) assignments(ctx context.Context, userID string) (map[string]EnvAccess, error) {
-	rows, err := c.s.RQ.ListUserAssignments(ctx, userID)
+func (c *Checker) assignments(ctx context.Context, q *sqlc.Queries, userID string) (map[string]EnvAccess, error) {
+	rows, err := q.ListUserAssignments(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("rbac: list assignments: %w", err)
 	}
@@ -128,12 +139,29 @@ func (c *Checker) assignments(ctx context.Context, userID string) (map[string]En
 // Access is everything the principal may do. A disabled or deleted user, a user
 // that has no row, and any principal that is not a user are inactive and hold
 // nothing. An instance admin is Admin on every environment without any
-// assignment being read.
+// assignment being read. A system principal acting on behalf of an owner holds
+// exactly what the owner holds now (D-14), provided it is one of
+// SystemPrincipals: a forged system name holds nothing.
 func (c *Checker) Access(ctx context.Context, p *Principal) (Access, error) {
-	if p == nil || p.Type != PrincipalUser {
+	switch {
+	case p == nil:
 		return Access{}, nil
+	case p.Type == PrincipalUser:
+		return c.AccessQ(ctx, c.s.RQ, p.ID)
+	case p.Type == PrincipalSystem && p.OnBehalfOf != "":
+		if _, listed := SystemPrincipals[p.ID]; listed {
+			return c.AccessQ(ctx, c.s.RQ, p.OnBehalfOf)
+		}
 	}
-	f, err := c.flags(ctx, p.ID)
+	return Access{}, nil
+}
+
+// AccessQ is the Access of the user with this ID, read through q. q may be bound
+// to a write transaction, so a recheck inside the transaction that just changed
+// a user or a grant sees that change before it commits. An ID with no row is
+// inactive.
+func (c *Checker) AccessQ(ctx context.Context, q *sqlc.Queries, userID string) (Access, error) {
+	f, err := c.flagsQ(ctx, q, userID)
 	if err != nil {
 		return Access{}, err
 	}
@@ -143,7 +171,7 @@ func (c *Checker) Access(ctx context.Context, p *Principal) (Access, error) {
 	if f.instanceAdmin {
 		return Access{Active: true, InstanceAdmin: true, adminExtras: c.adminExtras()}, nil
 	}
-	envs, err := c.assignments(ctx, p.ID)
+	envs, err := c.assignments(ctx, q, userID)
 	if err != nil {
 		return Access{}, err
 	}
@@ -178,6 +206,9 @@ func (c *Checker) Check(ctx context.Context, p *Principal, req Requirement, envI
 	}
 	switch p.Type {
 	case PrincipalSystem:
+		if p.OnBehalfOf != "" {
+			return c.checkOnBehalf(ctx, p, reg, envID)
+		}
 		if slices.Contains(SystemPrincipals[p.ID], req.Perm) {
 			return Decision{Allowed: true}
 		}
@@ -208,6 +239,32 @@ func (c *Checker) Check(ctx context.Context, p *Principal, req Requirement, envI
 	}
 }
 
+// checkOnBehalf decides for a system principal acting for an owner (D-14). The
+// actor must be a listed system principal, the owner must be active, and the
+// requirement is then judged as the owner's own, as of now. The owner's rights
+// are read on every call, never cached on the principal, so an automation never
+// outlives them.
+func (c *Checker) checkOnBehalf(ctx context.Context, p *Principal, reg Permission, envID string) Decision {
+	if _, listed := SystemPrincipals[p.ID]; !listed {
+		return deny(ReasonForbidden)
+	}
+	a, err := c.AccessQ(ctx, c.s.RQ, p.OnBehalfOf)
+	if err != nil {
+		return Decision{Reason: ReasonForbidden, Err: fmt.Errorf("rbac: check %s on behalf of %s: %w", reg.Name, p.OnBehalfOf, err)}
+	}
+	if !a.Active {
+		return deny(ReasonOwnerInactive)
+	}
+	if reg.Scope == ScopeGlobal {
+		if a.InstanceAdmin {
+			return Decision{Allowed: true}
+		}
+	} else if a.For(envID).Allows(reg) {
+		return Decision{Allowed: true}
+	}
+	return deny(ReasonOwnerLacksPermission)
+}
+
 // EffectivePermissions lists what p may do (D-50). global holds the allowed
 // global-scope permissions. perEnv maps an environment ID to the allowed
 // environment-scope permissions, with AllEnvironments ("*") for access that
@@ -220,7 +277,7 @@ func (c *Checker) EffectivePermissions(ctx context.Context, p *Principal) (globa
 	if p == nil {
 		return nil, perEnv, nil
 	}
-	if p.Type == PrincipalSystem {
+	if p.Type == PrincipalSystem && p.OnBehalfOf == "" {
 		for _, perm := range SystemPrincipals[p.ID] {
 			reg, ok := c.reg.Lookup(perm)
 			if !ok {

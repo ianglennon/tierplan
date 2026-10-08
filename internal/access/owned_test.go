@@ -16,10 +16,11 @@ import (
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
 )
 
+const permTestDeploy rbac.Perm = "test.deploy"
+
 const (
-	permTestDeploy rbac.Perm = "test.deploy"
-	kindTestSync             = "test.sync"
-	kindUnknown              = "test.gone"
+	kindTestSync = "test.sync"
+	kindUnknown  = "test.gone"
 )
 
 var ownedRegistry = rbac.Registry{
@@ -162,7 +163,7 @@ func TestRunAsAnAutomationRunsAsItsOwnerAndPausesAuditedWhenTheOwnerLosesThePerm
 	}
 }
 
-func TestRecheckResumesAPausedAutomationOnceWhenTheOwnerQualifiesAgain(t *testing.T) {
+func TestRecheckOwnedResumesAPausedAutomationOnceWhenTheOwnerQualifiesAgain(t *testing.T) {
 	f := newOwnedFixture(t)
 	f.addUser(t, "alice")
 	f.assign(t, "alice", "operator", "env-a")
@@ -185,7 +186,7 @@ func TestRecheckResumesAPausedAutomationOnceWhenTheOwnerQualifiesAgain(t *testin
 	}
 }
 
-func TestRecheckInsideATransactionSeesThatTransactionsOwnChanges(t *testing.T) {
+func TestRecheckOwnedInsideATransactionSeesThatTransactionsOwnChanges(t *testing.T) {
 	f := newOwnedFixture(t)
 	f.addUser(t, "alice")
 	f.assign(t, "alice", "operator", "env-a")

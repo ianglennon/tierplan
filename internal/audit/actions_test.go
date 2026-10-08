@@ -40,6 +40,7 @@ var phase3DetailKeys = map[string][]string{
 	audit.ActionAccessRevoked:              {"subject_type", "subject", "role", "scope", "impact_count", "impact"},
 	audit.ActionOwnerTransferred:           {"kind", "resource", "from", "to"},
 	audit.ActionAutomationPaused:           {"kind", "resource", "state", "owner"},
+	audit.ActionAutomationResumed:          {"kind", "resource", "state", "owner"},
 	audit.ActionBackupExported:             {"file", "size", "source"},
 	audit.ActionBackupScheduledRun:         {"file", "size"},
 	audit.ActionBackupFailed:               {"stage", "error"},
@@ -51,8 +52,8 @@ var phase3DetailKeys = map[string][]string{
 }
 
 func TestEveryPhase3ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
-	if got := len(phase3DetailKeys); got != 32 {
-		t.Fatalf("the table covers %d actions, want the 32 of the Phase 3 vocabulary", got)
+	if got := len(phase3DetailKeys); got != 33 {
+		t.Fatalf("the table covers %d actions, want the 33 of the Phase 3 vocabulary", got)
 	}
 	f := newFixture(t)
 	for action, keys := range phase3DetailKeys {
@@ -70,7 +71,7 @@ func TestEveryPhase3ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 			}
 		}
 	}
-	if got := f.verify(t); got.Broken != nil || got.Entries != 32 {
+	if got := f.verify(t); got.Broken != nil || got.Entries != 33 {
 		t.Fatalf("verify = %+v", got)
 	}
 }
@@ -81,7 +82,7 @@ func TestPhase3ActionKeysHaveTheirDocumentedValues(t *testing.T) {
 		"user.password_reset_completed": audit.ActionUserPasswordResetCompleted, "session.revoked": audit.ActionSessionRevoked,
 		"user.sessions_revoked": audit.ActionUserSessionsRevoked, "team.member_removed": audit.ActionTeamMemberRemoved,
 		"access.revoked": audit.ActionAccessRevoked, "owner.transferred": audit.ActionOwnerTransferred,
-		"automation.paused": audit.ActionAutomationPaused, "backup.scheduled_run": audit.ActionBackupScheduledRun,
+		"automation.paused": audit.ActionAutomationPaused, "automation.resumed": audit.ActionAutomationResumed, "backup.scheduled_run": audit.ActionBackupScheduledRun,
 		"backup.schedule_updated": audit.ActionBackupScheduleUpdated, "audit.reanchored": audit.ActionAuditReanchored,
 		"key.rotated": audit.ActionKeyRotated,
 	} {
