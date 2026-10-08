@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
@@ -554,5 +556,49 @@ func TestARefusalBurstIsNotShownWithoutSettingsRead(t *testing.T) {
 	cookie, _ := f.signIn(t, "viewer", false)
 	if code, w := f.warnings(t, cookie); code != http.StatusForbidden || len(w.Items) != 0 {
 		t.Fatalf("GET /api/warnings as a non-admin: %d %+v, want 403", code, w.Items)
+	}
+}
+
+// Agents Bayplan does not know after a restore (D-31): one warning, with how many,
+// for an instance admin while the registry holds any.
+func TestUnknownAgentsRaisesAWarningWithTheCountForAnInstanceAdminWhileTheRegistryHoldsAny(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, _ := f.signIn(t, "admin", false)
+	f.addAgentEnv(t, "env-a", "Production")
+	if _, w := f.warnings(t, cookie); len(w.Items) != 0 {
+		t.Fatalf("with an empty registry: %+v", w.Items)
+	}
+
+	now := f.clk.now()
+	f.unknown.Record(agents.UnknownAgent{EnvID: "env-a", Node: "agent-1", Key: "k1", LastAttempt: now})
+	f.unknown.Record(agents.UnknownAgent{EnvID: "env-a", Node: "agent-2", Key: "k2", LastAttempt: now.Add(-time.Minute)})
+	_, w := f.warnings(t, cookie)
+	if len(w.Items) != 1 || w.Items[0].ID != "unknown_agents" || w.Items[0].Count != 2 {
+		t.Fatalf("got %+v, want one unknown_agents with count 2", w.Items)
+	}
+
+	f.unknown.Forget("env-a", "k1")
+	f.unknown.Forget("env-a", "k2")
+	if _, w := f.warnings(t, cookie); len(w.Items) != 0 {
+		t.Fatalf("after the agents enrolled: %+v, want none", w.Items)
+	}
+}
+
+func TestTheUnknownAgentsWarningEmptiesWhenTheAgentsStopTryingAndIsNeverShownToAnyoneButAnInstanceAdmin(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addAgentEnv(t, "env-a", "Production")
+	f.unknown.Record(agents.UnknownAgent{EnvID: "env-a", Node: "agent-1", Key: "k1", LastAttempt: f.clk.now()})
+
+	f.addUser(t, "viewer", false)
+	viewer, _ := f.signIn(t, "viewer", false)
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/warnings", cookie: viewer})
+	if strings.Contains(rec.Body.String(), "unknown_agents") {
+		t.Fatalf("a non-admin was told: %d %s", rec.Code, rec.Body)
+	}
+
+	f.clk.t = f.clk.t.Add(25 * time.Hour)
+	cookie, _ := f.signIn(t, "admin", false)
+	if _, w := f.warnings(t, cookie); len(w.Items) != 0 {
+		t.Fatalf("a day after the last attempt: %+v, want none", w.Items)
 	}
 }

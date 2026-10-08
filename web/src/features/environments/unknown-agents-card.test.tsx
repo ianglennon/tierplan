@@ -118,4 +118,31 @@ describe("UnknownAgentsCard", () => {
     expect(listCalls).toBe(0);
     expect(container.textContent).toBe("");
   });
+
+  it("cuts a long node name to its column with the whole name in a tooltip", async () => {
+    const long = `0198a1b2-${"agent".repeat(30)}`;
+    items = [item({ node: long })];
+    mount();
+    const cell = await screen.findByText(long);
+    expect(cell.className).toContain("truncate");
+    fireEvent.focus(cell);
+    expect((await screen.findAllByText(long)).length).toBeGreaterThan(1);
+  });
+
+  it("keeps the table inside its card, scrolling sideways instead of widening the page", async () => {
+    mount();
+    const table = await screen.findByRole("table", { name: "Agents Bayplan doesn't know" });
+    const container = table.closest('[data-slot="table-container"]');
+    expect(container?.className).toContain("overflow-x-auto");
+    expect(container?.closest('[data-slot="card-content"]')?.className).toContain("min-w-0");
+  });
+
+  it("hides Show install command from a caller without environments.token", async () => {
+    // A user who can reach the card's data but may not make tokens: the list is
+    // the server's to refuse, so this is only about the action.
+    me = makeMe({ instanceAdmin: true, permissions: { global: [], environments: {} } });
+    mount();
+    await screen.findByRole("heading", { name: "Agents Bayplan doesn't know" });
+    expect(screen.queryByRole("button", { name: /Show install command/ })).toBeNull();
+  });
 });

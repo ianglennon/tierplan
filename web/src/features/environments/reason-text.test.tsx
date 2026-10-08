@@ -30,6 +30,9 @@ const D40 = [
 ];
 const ENROLMENT = ["duplicate_environment", "type_mismatch", "host_mismatch"];
 const EXTRA = ["cert_expiring"];
+// Said when an agent holds a certificate the environment issued but is not in the
+// database, as after a restore (D-31).
+const RESTORE = ["unknown_agent"];
 // The codes the local Docker socket reports (UI-SPEC Connection reason codes).
 const LOCAL = ["unreachable", "api_too_old", "podman", "rootless", "docker_desktop"];
 
@@ -181,6 +184,19 @@ describe("ReasonText", () => {
     expect(container.textContent).not.toContain("{{");
   });
 
+  it("says unknown_agent with the node and the reinstall hint, and without the node", () => {
+    const { rerender, container } = render(
+      <ReasonText code="unknown_agent" params={{ node: "edge-1" }} />,
+    );
+    expect(container.textContent).toContain("edge-1 was installed after the last backup.");
+    expect(container.textContent).toContain(
+      "Reinstall the agent with the command from Show install command.",
+    );
+    rerender(<ReasonText code="unknown_agent" />);
+    expect(container.textContent).toContain("An agent was installed after the last backup.");
+    expect(container.textContent).not.toContain("{{");
+  });
+
   it("gives a code it does not know a generic line and does not crash", () => {
     const { container } = render(<ReasonText code="teapot" />);
     expect(container.textContent).toContain("Connection problem (teapot)");
@@ -195,7 +211,7 @@ describe("ReasonText", () => {
   });
 
   describe("every code", () => {
-    for (const code of [...D40, ...ENROLMENT, ...EXTRA, ...LOCAL]) {
+    for (const code of [...D40, ...ENROLMENT, ...EXTRA, ...RESTORE, ...LOCAL]) {
       it(`${code} has text and a fix hint, with every parameter and with none`, () => {
         const { result } = renderHook(() => useReasonText());
         for (const params of [ALL_PARAMS, undefined]) {

@@ -877,3 +877,45 @@ describe("HealthBell failed scheduled backups", () => {
     expect(screen.queryByText("The scheduled backup failed")).toBeNull();
   });
 });
+
+describe("HealthBell agents not known after a restore", () => {
+  it("lists how many agents are not known with the reason and a link to Settings > Environments", async () => {
+    items = [{ id: "unknown_agents", count: 3 }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("3 agents aren't known to this Bayplan")).toBeTruthy();
+    expect(screen.getByText("They were installed after the backup you restored.")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "View" });
+    expect(link.getAttribute("href")).toContain("/settings/environments");
+    // Derived from what agents tried lately: there is nothing to dismiss.
+    expect(screen.queryByRole("button", { name: /dismiss|acknowledge/i })).toBeNull();
+  });
+
+  it("says it in the singular for one agent", async () => {
+    items = [{ id: "unknown_agents", count: 1 }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("1 agent isn't known to this Bayplan")).toBeTruthy();
+    expect(screen.getByText("It was installed after the backup you restored.")).toBeTruthy();
+  });
+
+  it("follows the link to the environments settings and closes the list", async () => {
+    items = [{ id: "unknown_agents", count: 2 }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    fireEvent.click(await screen.findByRole("link", { name: "View" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/environments"));
+    await waitFor(() =>
+      expect(screen.queryByText("2 agents aren't known to this Bayplan")).toBeNull(),
+    );
+  });
+
+  it("shows nothing for someone who is not an instance admin", async () => {
+    me = VIEWER;
+    items = [{ id: "unknown_agents", count: 2 }];
+    renderWarnings();
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+    expect(screen.queryByText(/aren't known to this Bayplan/)).toBeNull();
+  });
+});

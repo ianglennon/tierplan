@@ -15,6 +15,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/agents"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/backup"
@@ -83,6 +84,9 @@ type AccountDeps struct {
 	Refusals interface{ Bursts(time.Time) []auth.Burst }
 	// Now is the clock the bursts are aged by. Nil means time.Now.
 	Now func() time.Time
+	// Unknown lists the agents refused unknown_agent after a restore, for the
+	// unknown_agents warning. Nil means there are none.
+	Unknown *agents.UnknownAgents
 	// Limiter throttles POST /api/me/password per user ID, right and wrong
 	// attempts alike, so a stolen session cannot guess the current password at
 	// the speed of the hash alone (T-01-60). Nil means no throttle.

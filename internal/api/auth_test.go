@@ -193,7 +193,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterAccount(r, api.AccountDeps{
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
 		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
-		Checker: checker, Refusals: refusalSource(f.refusals), Now: f.clk.now,
+		Checker: checker, Refusals: refusalSource(f.refusals), Now: f.clk.now, Unknown: f.unknown,
 	})
 	f.access = access.New(f.st, f.aud, checker, f.inviteTTL)
 	f.access.Now = f.clk.now
