@@ -88,3 +88,83 @@ export async function regenerateInvite(userId: string): Promise<RegenerateResult
     return { kind: "error" };
   }
 }
+
+export type UserDetail = components["schemas"]["UserDetailBody"];
+
+// UserNotFoundError is the 404 of GET /api/users/{id}: an unknown or deleted
+// user. The user page shows the P1 "Page not found" page for it.
+export class UserNotFoundError extends Error {
+  constructor() {
+    super("user not found");
+    this.name = "UserNotFoundError";
+  }
+}
+
+// The ["users", id] query: one user for the user page. It sits under the
+// ["users"] key, so refreshing the list refreshes the page too. A 404 is not
+// retried.
+export const userQuery = (userId: string) =>
+  queryOptions({
+    queryKey: ["users", userId],
+    queryFn: async (): Promise<UserDetail> => {
+      const { data, response } = await api.GET("/api/users/{userId}", {
+        params: { path: { userId } },
+      });
+      if (!data) {
+        if (response.status === 404) throw new UserNotFoundError();
+        throw new Error("GET /api/users/{userId} failed");
+      }
+      return data;
+    },
+    retry: (count, error) => !(error instanceof UserNotFoundError) && count < 1,
+  });
+
+// What an account change answers. The server's own refusals get their own kind
+// so a screen can say why in words: the last active instance admin cannot be
+// taken away (409 last_instance_admin) and a save based on an old version of the
+// user is stale (409 stale_change).
+export type LifecycleResult =
+  | { kind: "ok"; user: UserDetail }
+  | { kind: "last_instance_admin" }
+  | { kind: "stale_change" }
+  | { kind: "not_found" }
+  | { kind: "fields"; fields: ProblemField[] }
+  | { kind: "error" };
+
+function lifecycleFailure(error: unknown, response: { status: number }): LifecycleResult {
+  const problem = readProblem(error, response);
+  if (problem.status === 409 && problem.type === "last_instance_admin") {
+    return { kind: "last_instance_admin" };
+  }
+  if (problem.status === 409 && problem.type === "stale_change") return { kind: "stale_change" };
+  if (problem.status === 404) return { kind: "not_found" };
+  if (problem.status === 422 && problem.fields.length > 0) {
+    return { kind: "fields", fields: problem.fields };
+  }
+  return { kind: "error" };
+}
+
+// disableUser ends every session of the user and refuses their sign-in; their
+// access and teams are kept.
+export async function disableUser(userId: string): Promise<LifecycleResult> {
+  try {
+    const { data, error, response } = await api.POST("/api/users/{userId}/disable", {
+      params: { path: { userId } },
+    });
+    return data ? { kind: "ok", user: data } : lifecycleFailure(error, response);
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+// enableUser lets a disabled user sign in again.
+export async function enableUser(userId: string): Promise<LifecycleResult> {
+  try {
+    const { data, error, response } = await api.POST("/api/users/{userId}/enable", {
+      params: { path: { userId } },
+    });
+    return data ? { kind: "ok", user: data } : lifecycleFailure(error, response);
+  } catch {
+    return { kind: "error" };
+  }
+}

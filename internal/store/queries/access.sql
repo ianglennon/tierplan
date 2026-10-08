@@ -48,3 +48,28 @@ FROM users u
 LEFT JOIN user_links l ON l.user_id = u.id
 WHERE u.deleted_at IS NULL
 ORDER BY u.username;
+
+-- name: GetUserDetail :one
+-- One user for the user page, with the expiry of the invite link they hold
+-- (NULL when none) and how many teams they belong to. A tombstone is returned
+-- too; the caller answers not found for it.
+SELECT u.id, u.username, u.display_name, u.email, u.instance_admin, u.disabled,
+       u.locked_until, u.password_hash, u.last_login_at, u.created_at, u.updated_at,
+       u.deleted_at, l.expires_at AS link_expires_at,
+       (SELECT COUNT(*) FROM team_members m WHERE m.user_id = u.id) AS team_count
+FROM users u
+LEFT JOIN user_links l ON l.user_id = u.id
+WHERE u.id = ?;
+
+-- name: SetUserDisabled :exec
+UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?;
+
+-- name: CountActiveInstanceAdmins :one
+-- How many instance admins can still sign in. Counted after a change inside the
+-- same write transaction, it is what keeps an installation from locking itself
+-- out (D-02).
+SELECT COUNT(*) FROM users WHERE instance_admin = 1 AND disabled = 0 AND deleted_at IS NULL;
+
+-- name: DeleteAllUserSessions :execrows
+-- Ends every session of a user and says how many there were.
+DELETE FROM sessions WHERE user_id = ?;

@@ -33,6 +33,33 @@ func (q *Queries) ConsumeUserLink(ctx context.Context, arg ConsumeUserLinkParams
 	return i, err
 }
 
+const countActiveInstanceAdmins = `-- name: CountActiveInstanceAdmins :one
+SELECT COUNT(*) FROM users WHERE instance_admin = 1 AND disabled = 0 AND deleted_at IS NULL
+`
+
+// How many instance admins can still sign in. Counted after a change inside the
+// same write transaction, it is what keeps an installation from locking itself
+// out (D-02).
+func (q *Queries) CountActiveInstanceAdmins(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countActiveInstanceAdmins)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deleteAllUserSessions = `-- name: DeleteAllUserSessions :execrows
+DELETE FROM sessions WHERE user_id = ?
+`
+
+// Ends every session of a user and says how many there were.
+func (q *Queries) DeleteAllUserSessions(ctx context.Context, userID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAllUserSessions, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteUserLinks = `-- name: DeleteUserLinks :exec
 DELETE FROM user_links WHERE user_id = ?
 `
@@ -67,6 +94,58 @@ func (q *Queries) GetUserByUsernameAny(ctx context.Context, username string) (Us
 		&i.Email,
 		&i.DeletedAt,
 		&i.LastLoginAt,
+	)
+	return i, err
+}
+
+const getUserDetail = `-- name: GetUserDetail :one
+SELECT u.id, u.username, u.display_name, u.email, u.instance_admin, u.disabled,
+       u.locked_until, u.password_hash, u.last_login_at, u.created_at, u.updated_at,
+       u.deleted_at, l.expires_at AS link_expires_at,
+       (SELECT COUNT(*) FROM team_members m WHERE m.user_id = u.id) AS team_count
+FROM users u
+LEFT JOIN user_links l ON l.user_id = u.id
+WHERE u.id = ?
+`
+
+type GetUserDetailRow struct {
+	ID            string
+	Username      string
+	DisplayName   string
+	Email         string
+	InstanceAdmin int64
+	Disabled      int64
+	LockedUntil   sql.NullInt64
+	PasswordHash  string
+	LastLoginAt   sql.NullInt64
+	CreatedAt     int64
+	UpdatedAt     int64
+	DeletedAt     sql.NullInt64
+	LinkExpiresAt sql.NullInt64
+	TeamCount     int64
+}
+
+// One user for the user page, with the expiry of the invite link they hold
+// (NULL when none) and how many teams they belong to. A tombstone is returned
+// too; the caller answers not found for it.
+func (q *Queries) GetUserDetail(ctx context.Context, id string) (GetUserDetailRow, error) {
+	row := q.db.QueryRowContext(ctx, getUserDetail, id)
+	var i GetUserDetailRow
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.DisplayName,
+		&i.Email,
+		&i.InstanceAdmin,
+		&i.Disabled,
+		&i.LockedUntil,
+		&i.PasswordHash,
+		&i.LastLoginAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.LinkExpiresAt,
+		&i.TeamCount,
 	)
 	return i, err
 }
@@ -233,4 +312,19 @@ func (q *Queries) ListUsersForAdmin(ctx context.Context) ([]ListUsersForAdminRow
 		return nil, err
 	}
 	return items, nil
+}
+
+const setUserDisabled = `-- name: SetUserDisabled :exec
+UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?
+`
+
+type SetUserDisabledParams struct {
+	Disabled  int64
+	UpdatedAt int64
+	ID        string
+}
+
+func (q *Queries) SetUserDisabled(ctx context.Context, arg SetUserDisabledParams) error {
+	_, err := q.db.ExecContext(ctx, setUserDisabled, arg.Disabled, arg.UpdatedAt, arg.ID)
+	return err
 }

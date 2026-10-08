@@ -43,6 +43,26 @@ type UserSummaryBody struct {
 	TeamCount     int           `json:"teamCount" doc:"How many teams the user belongs to"`
 }
 
+// UserDetailBody is a user as the user page shows them.
+type UserDetailBody struct {
+	UserSummaryBody
+	CreatedAt string `json:"createdAt" format:"date-time" doc:"When the user was created"`
+	UpdatedAt string `json:"updatedAt" format:"date-time" doc:"The version of the user a profile save is based on; send it back unchanged to PATCH"`
+}
+
+// UserDetailOutput wraps UserDetailBody for huma.
+type UserDetailOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         UserDetailBody
+}
+
+// UserIDInput names one user in the path, with the caller's origin for the audit entry.
+type UserIDInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	UserID    string `path:"userId" doc:"The user's ID"`
+}
+
 // LinkBody is a one-time link, shown once to the admin who asked for it.
 type LinkBody struct {
 	URL       string `json:"url" doc:"The address to give the user. The secret is in the part after #, which a browser never sends to a server"`
@@ -109,6 +129,31 @@ func summaryOfAccess(u access.UserSummary) UserSummaryBody {
 	return b
 }
 
+// detailOf builds the user page's view of a user.
+func detailOf(u access.UserDetail) UserDetailBody {
+	return UserDetailBody{
+		UserSummaryBody: summaryOfAccess(u.UserSummary),
+		CreatedAt:       u.CreatedAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:       u.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+// lifecycleError answers the errors the account lifecycle routes share.
+func lifecycleError(d AccessDeps, op string, err error) error {
+	switch {
+	case errors.Is(err, access.ErrNotFound):
+		return httpx.Problem(http.StatusNotFound, problemUserNotFound, "That user doesn't exist.")
+	case errors.Is(err, access.ErrLastInstanceAdmin):
+		return httpx.Problem(http.StatusConflict, problemLastInstanceAdmin,
+			"Bayplan needs at least one active instance admin. Make someone else an instance admin first.")
+	case errors.Is(err, access.ErrStaleChange):
+		return httpx.Problem(http.StatusConflict, problemStaleChange,
+			"This changed while you were looking at it. Reload the page and try again.")
+	}
+	d.Log.Error(op+" failed", "error", err)
+	return huma.Error500InternalServerError("internal error")
+}
+
 // RegenerateInviteInput names the user whose invite is replaced.
 type RegenerateInviteInput struct {
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
@@ -123,6 +168,7 @@ type RegenerateInviteOutput struct {
 }
 
 func registerUsers(r *httpx.Router, d AccessDeps) {
+	registerUserLifecycle(r, d)
 	httpx.Register(r, huma.Operation{
 		OperationID: "listUsers",
 		Method:      http.MethodGet,

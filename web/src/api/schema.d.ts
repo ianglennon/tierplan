@@ -775,6 +775,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one user
+         * @description The user as the user page shows them. An unknown or deleted user answers 404 user_not_found.
+         */
+        get: operations["getUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable a user
+         * @description Ends every session of the user at once and refuses their sign-in. Their grants and team memberships are kept and the automations they own pause. Answers the user as they now are. Disabling a disabled user changes nothing. The last active instance admin cannot be disabled: 409 last_instance_admin.
+         */
+        post: operations["disableUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable a user
+         * @description Lets a disabled user sign in again with the grants and teams they had. Enabling an enabled user changes nothing.
+         */
+        post: operations["enableUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users/{userId}/invite": {
         parameters: {
             query?: never;
@@ -1942,6 +2002,50 @@ export interface components {
             id: string;
             /** @description True for an instance admin: Admin on every environment, with every extra, and the only holder of the installation-wide permissions (D-01) */
             instanceAdmin: boolean;
+            /** @description The lower-cased username */
+            username: string;
+        };
+        UserDetailBody: {
+            /**
+             * Format: date-time
+             * @description When the user was created
+             */
+            createdAt: string;
+            /** @description The name shown for the user; empty when none was set */
+            displayName: string;
+            /** @description The user's email address; empty when none was set. Bayplan never sends mail to it */
+            email: string;
+            /** @description The user's ID */
+            id: string;
+            /** @description True for an instance admin */
+            instanceAdmin: boolean;
+            /**
+             * Format: date-time
+             * @description When the user last signed in; absent if they never have
+             */
+            lastLoginAt?: string;
+            /**
+             * Format: date-time
+             * @description While the account is locked: when the lock ends
+             */
+            lockedUntil?: string;
+            /**
+             * @description Locked, then disabled, then invite expired, then invite pending, then active
+             * @enum {string}
+             */
+            status: "active" | "disabled" | "locked" | "invite_pending" | "invite_expired" | "deleted";
+            /**
+             * Format: int64
+             * @description How many teams the user belongs to
+             */
+            teamCount: number;
+            /** @description The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows */
+            teams: components["schemas"]["TeamRefBody"][] | null;
+            /**
+             * Format: date-time
+             * @description The version of the user a profile save is based on; send it back unchanged to PATCH
+             */
+            updatedAt: string;
             /** @description The lower-cased username */
             username: string;
         };
@@ -3558,6 +3662,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateUserBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    enableUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
                 };
             };
             /** @description Error */

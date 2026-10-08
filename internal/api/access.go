@@ -24,6 +24,10 @@ const (
 	problemInvalidLink      = "invalid_link"
 	problemNotInvited       = "not_invited"
 	problemUserNotFound     = "user_not_found"
+	// problemLastInstanceAdmin is a change that would leave no active instance admin.
+	problemLastInstanceAdmin = "last_instance_admin"
+	// problemStaleChange is a save based on a version that has since changed.
+	problemStaleChange = "stale_change"
 )
 
 // invalidLinkDetail is the one message every unusable link carries: expired,

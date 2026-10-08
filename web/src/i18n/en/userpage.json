@@ -1,0 +1,38 @@
+{
+  "userpage": {
+    "tabTitle": "User",
+    "breadcrumb": {
+      "label": "Breadcrumb",
+      "settings": "Settings",
+      "access": "Access",
+      "users": "Users"
+    },
+    "loading": "Loading user",
+    "loadFailed": "Couldn't load users.",
+    "loadFailedBody": "Check the connection and try again.",
+    "retry": "Retry",
+    "sections": {
+      "account": "Account"
+    },
+    "account": {
+      "disable": "Disable user",
+      "enable": "Enable user",
+      "enablePending": "Enabling…"
+    },
+    "disable": {
+      "title": "Disable {{username}}?",
+      "body": "{{username}} is signed out everywhere and can't sign in until you enable them again. Their access and team memberships are kept.",
+      "cancel": "Cancel",
+      "confirm": "Disable user",
+      "pending": "Disabling…",
+      "done": "{{username}} is disabled.",
+      "failed": "Couldn't disable {{username}}. Try again, and check the Bayplan logs if it keeps happening."
+    },
+    "enabled": "{{username}} is enabled.",
+    "enableFailed": "Couldn't enable {{username}}. Try again, and check the Bayplan logs if it keeps happening.",
+    "errors": {
+      "lastAdmin": "Bayplan needs at least one active instance admin. Make someone else an instance admin first.",
+      "gone": "{{username}} no longer exists."
+    }
+  }
+}

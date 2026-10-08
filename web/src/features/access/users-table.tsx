@@ -2,10 +2,11 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { EllipsisVertical } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
-import { type OneTimeLink, type UserSummary, usersQuery } from "@/api/users";
+import { enableUser, type OneTimeLink, type UserSummary, usersQuery } from "@/api/users";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -21,12 +22,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CreateUserDialog } from "@/features/access/create-user-dialog";
+import { DisableUserDialog } from "@/features/access/disable-user-dialog";
 import { InstanceAdminBadge } from "@/features/access/instance-admin-badge";
 import { OneTimeLinkDialog } from "@/features/access/one-time-link-dialog";
 import { RegenerateInviteDialog } from "@/features/access/regenerate-invite-dialog";
 import { UserStatusBadge } from "@/features/access/user-status-badge";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { useT } from "@/i18n/use-t";
+import { toastError, toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 // How many skeleton rows keep the layout stable while loading (UI-SPEC).
@@ -60,13 +63,14 @@ function canRegenerate(user: UserSummary): boolean {
 interface RowActionsProps {
   user: UserSummary;
   onRegenerate: (user: UserSummary) => void;
+  onDisable: (user: UserSummary) => void;
+  onEnable: (user: UserSummary) => void;
 }
 
-// RowActions is the "Actions for {username}" menu. It holds only what the user
-// can use right now, and a user with nothing to offer gets no trigger at all.
-function RowActions({ user, onRegenerate }: RowActionsProps) {
+// RowActions is the "Actions for {username}" menu: Open always, Regenerate
+// invite link while an invite is outstanding, and Disable or Enable.
+function RowActions({ user, onRegenerate, onDisable, onEnable }: RowActionsProps) {
   const t = useT();
-  if (!canRegenerate(user)) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -81,9 +85,25 @@ function RowActions({ user, onRegenerate }: RowActionsProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => onRegenerate(user)}>
-          {t("users.actions.regenerate")}
+        <DropdownMenuItem asChild>
+          <Link to="/settings/access/users/$userId" params={{ userId: user.id }}>
+            {t("users.actions.open")}
+          </Link>
         </DropdownMenuItem>
+        {canRegenerate(user) ? (
+          <DropdownMenuItem onSelect={() => onRegenerate(user)}>
+            {t("users.actions.regenerate")}
+          </DropdownMenuItem>
+        ) : null}
+        {user.status === "disabled" ? (
+          <DropdownMenuItem onSelect={() => onEnable(user)}>
+            {t("users.actions.enable")}
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem onSelect={() => onDisable(user)}>
+            {t("users.actions.disable")}
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -108,6 +128,7 @@ export function UsersTable() {
   const queryClient = useQueryClient();
   const [regenerateFor, setRegenerateFor] = useState<UserSummary | null>(null);
   const [issued, setIssued] = useState<IssuedLink | null>(null);
+  const [disableFor, setDisableFor] = useState<UserSummary | null>(null);
 
   const all = query.data ?? [];
   const failed = query.isError && !query.data;
@@ -122,7 +143,13 @@ export function UsersTable() {
       cell: (u) => (
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-center gap-2">
-            <TruncatedText className="font-semibold">{u.username}</TruncatedText>
+            <Link
+              to="/settings/access/users/$userId"
+              params={{ userId: u.id }}
+              className="min-w-0 rounded-sm text-accent-ink hover:underline"
+            >
+              <TruncatedText className="font-semibold">{u.username}</TruncatedText>
+            </Link>
             {u.instanceAdmin ? <InstanceAdminBadge /> : null}
           </div>
           {u.displayName ? (
@@ -156,11 +183,25 @@ export function UsersTable() {
       id: "actions",
       header: t("users.columns.actions"),
       className: "w-12 text-right",
-      cell: (u) => <RowActions user={u} onRegenerate={setRegenerateFor} />,
+      cell: (u) => (
+        <RowActions
+          user={u}
+          onRegenerate={setRegenerateFor}
+          onDisable={setDisableFor}
+          onEnable={(user) => void enable(user)}
+        />
+      ),
     },
   ];
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey });
+
+  async function enable(user: UserSummary) {
+    const result = await enableUser(user.id);
+    if (result.kind === "ok") toastSuccess(t("userpage.enabled", { username: user.username }));
+    else toastError(t("userpage.enableFailed", { username: user.username }));
+    refresh();
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -273,6 +314,15 @@ export function UsersTable() {
       ) : null}
 
       <CreateUserDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <DisableUserDialog
+        user={disableFor}
+        onClose={() => setDisableFor(null)}
+        onDone={() => {
+          setDisableFor(null);
+          refresh();
+        }}
+        onStale={refresh}
+      />
       <RegenerateInviteDialog
         user={regenerateFor}
         onClose={() => setRegenerateFor(null)}

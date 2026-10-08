@@ -2699,6 +2699,91 @@
         ],
         "type": "object"
       },
+      "UserDetailBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the user was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "displayName": {
+            "description": "The name shown for the user; empty when none was set",
+            "type": "string"
+          },
+          "email": {
+            "description": "The user's email address; empty when none was set. Bayplan never sends mail to it",
+            "type": "string"
+          },
+          "id": {
+            "description": "The user's ID",
+            "type": "string"
+          },
+          "instanceAdmin": {
+            "description": "True for an instance admin",
+            "type": "boolean"
+          },
+          "lastLoginAt": {
+            "description": "When the user last signed in; absent if they never have",
+            "format": "date-time",
+            "type": "string"
+          },
+          "lockedUntil": {
+            "description": "While the account is locked: when the lock ends",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "description": "Locked, then disabled, then invite expired, then invite pending, then active",
+            "enum": [
+              "active",
+              "disabled",
+              "locked",
+              "invite_pending",
+              "invite_expired",
+              "deleted"
+            ],
+            "type": "string"
+          },
+          "teamCount": {
+            "description": "How many teams the user belongs to",
+            "format": "int64",
+            "type": "integer"
+          },
+          "teams": {
+            "description": "The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows",
+            "items": {
+              "$ref": "#/components/schemas/TeamRefBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "description": "The version of the user a profile save is based on; send it back unchanged to PATCH",
+            "format": "date-time",
+            "type": "string"
+          },
+          "username": {
+            "description": "The lower-cased username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "updatedAt",
+          "id",
+          "username",
+          "displayName",
+          "email",
+          "instanceAdmin",
+          "status",
+          "teams",
+          "teamCount"
+        ],
+        "type": "object"
+      },
       "UserSummaryBody": {
         "additionalProperties": false,
         "properties": {
@@ -5253,6 +5338,159 @@
           }
         },
         "summary": "Create a user and a one-time invite link",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/users/{userId}": {
+      "get": {
+        "description": "The user as the user page shows them. An unknown or deleted user answers 404 user_not_found.",
+        "operationId": "getUser",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read one user",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/users/{userId}/disable": {
+      "post": {
+        "description": "Ends every session of the user at once and refuses their sign-in. Their grants and team memberships are kept and the automations they own pause. Answers the user as they now are. Disabling a disabled user changes nothing. The last active instance admin cannot be disabled: 409 last_instance_admin.",
+        "operationId": "disableUser",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Disable a user",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/users/{userId}/enable": {
+      "post": {
+        "description": "Lets a disabled user sign in again with the grants and teams they had. Enabling an enabled user changes nothing.",
+        "operationId": "enableUser",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Enable a user",
         "tags": [
           "users"
         ]

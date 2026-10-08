@@ -39,7 +39,10 @@
     },
     "instanceAdmin": "Instance admin",
     "actions": {
-      "regenerate": "Regenerate invite link"
+      "open": "Open",
+      "regenerate": "Regenerate invite link",
+      "disable": "Disable",
+      "enable": "Enable"
     },
     "create": {
       "title": "Create user",

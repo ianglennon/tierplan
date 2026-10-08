@@ -2,6 +2,12 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,6 +36,7 @@ let users: Record<string, unknown>[];
 let answer: () => Response | Promise<Response>;
 let sent: { path: string; method: string }[];
 let regenerate: () => Response | Promise<Response>;
+let lifecycle: (path: string) => Response | Promise<Response>;
 
 const TOKEN = "ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210_-ZyXwV";
 
@@ -57,6 +64,15 @@ beforeEach(() => {
   ];
   answer = () => Response.json(users);
   regenerate = () => newLink();
+  lifecycle = (path) =>
+    Response.json(
+      userRow({
+        id: path.split("/")[3],
+        status: path.endsWith("/disable") ? "disabled" : "active",
+        createdAt: "2026-10-01T10:00:00Z",
+        updatedAt: "2026-10-07T10:00:00Z",
+      }),
+    );
   setCsrfToken("csrf");
   vi.stubGlobal(
     "fetch",
@@ -65,6 +81,9 @@ beforeEach(() => {
       sent.push({ path, method: req.method });
       if (path === "/api/users" && req.method === "GET") return answer();
       if (/^\/api\/users\/[^/]+\/invite$/.test(path) && req.method === "POST") return regenerate();
+      if (/^\/api\/users\/[^/]+\/(disable|enable)$/.test(path) && req.method === "POST") {
+        return lifecycle(path);
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -78,12 +97,23 @@ afterEach(() => {
   setCsrfToken(null);
 });
 
+// The table links to the user page, so it renders inside a router. Only the
+// table's own route exists here; the links just need an address.
 function renderTable() {
-  render(
-    <QueryClientProvider client={queryClient}>
+  const root = createRootRoute({
+    component: () => (
       <TooltipProvider>
         <UsersTable />
       </TooltipProvider>
+    ),
+  });
+  const router = createRouter({
+    routeTree: root,
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
       <Toaster />
     </QueryClientProvider>,
   );
@@ -174,8 +204,14 @@ describe("Regenerate invite link", () => {
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
 
     // A user who is active or locked has nothing to regenerate.
-    expect(screen.queryByRole("button", { name: "Actions for admin" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Actions for erin" })).toBeNull();
+    openMenu("admin");
+    expect(await screen.findByRole("menuitem", { name: "Open" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Regenerate invite link" })).toBeNull();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    openMenu("erin");
+    expect(await screen.findByRole("menuitem", { name: "Open" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Regenerate invite link" })).toBeNull();
   });
 
   it("asks first, with focus on Cancel, and sends nothing until Generate new link is pressed", async () => {
@@ -476,5 +512,70 @@ describe("UsersTable on a phone", () => {
     );
     const wrapper = screen.getByRole("table", { name: "Users" }).parentElement as HTMLElement;
     expect(wrapper.className).toContain("overflow-x-auto");
+  });
+});
+
+// Open, Disable and Enable (plan 03-14, D-22c).
+
+describe("Open, Disable and Enable", () => {
+  beforeEach(() => {
+    users = [
+      userRow({ id: "u0", username: "admin", instanceAdmin: true }),
+      userRow({ id: "u1", username: "alice" }),
+      userRow({ id: "u2", username: "bob", status: "disabled" }),
+    ];
+  });
+
+  it("links the User cell to the user page and lists Open first in the row menu", async () => {
+    renderTable();
+    await screen.findByText("alice");
+    expect(screen.getByRole("link", { name: "alice" }).getAttribute("href")).toBe(
+      "/settings/access/users/u1",
+    );
+    openMenu("alice");
+    const open = await screen.findByRole("menuitem", { name: "Open" });
+    expect(open.getAttribute("href")).toBe("/settings/access/users/u1");
+  });
+
+  it("offers Disable for an enabled user and Enable for a disabled one", async () => {
+    renderTable();
+    await screen.findByText("alice");
+    openMenu("alice");
+    expect(await screen.findByRole("menuitem", { name: "Disable" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Enable" })).toBeNull();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    openMenu("bob");
+    expect(await screen.findByRole("menuitem", { name: "Enable" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Disable" })).toBeNull();
+  });
+
+  it("asks before disabling, with focus on Cancel, then disables and reads the list again", async () => {
+    renderTable();
+    await screen.findByText("alice");
+    openMenu("alice");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Disable" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Disable alice?" });
+    expect(document.activeElement).toBe(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(sent.some((s) => s.method === "POST")).toBe(false);
+
+    fireEvent.click(within(confirm).getByRole("button", { name: "Disable user" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(sent.filter((s) => s.method === "POST")).toEqual([
+      { path: "/api/users/u1/disable", method: "POST" },
+    ]);
+    expect(await screen.findByText("alice is disabled.")).toBeTruthy();
+  });
+
+  it("enables at once, without a dialog, and says so", async () => {
+    renderTable();
+    await screen.findByText("bob");
+    openMenu("bob");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Enable" }));
+    expect(await screen.findByText("bob is enabled.")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(sent.filter((s) => s.method === "POST")).toEqual([
+      { path: "/api/users/u2/enable", method: "POST" },
+    ]);
   });
 });
