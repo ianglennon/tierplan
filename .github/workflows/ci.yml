@@ -389,7 +389,9 @@ jobs:
       # The fallback for an image where exec does not work: the process exits 0 and a
       # restart policy starts it. Same checks, the image from the step above.
       - name: Restore over a running container, exit mode
-        run: RESTART_MODE=exit scripts/restore-smoke.sh
+        env:
+          RESTART_MODE: exit
+        run: scripts/restore-smoke.sh
 
   # D-75: every push to main publishes ghcr.io/ianglennon/bayplan:edge for amd64
   # and arm64, signed with keyless cosign. It is the only tag a push can move;
