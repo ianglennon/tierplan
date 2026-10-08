@@ -4,8 +4,10 @@
 // Package compose is the D-13 privileged-compose checker. Given the text of a
 // compose file it returns every host-escalation feature in it (privileged
 // containers, added capabilities, devices, host namespaces, disabled
-// confinement, binds of the Docker socket or system paths, and local-driver
-// volumes that bind such paths), each with the service, key, value, line and
+// confinement, binds of any host path outside the data roots (/srv, /mnt,
+// /media, below /var/log), local-driver volumes that bind or mount such paths
+// or block devices, and top-level secrets and configs whose file: source is
+// outside the project directory), each with the service, key, value, line and
 // column, so a deploy by anyone below env Admin can be refused with the
 // offending keys named (AUTH-10).
 //
@@ -290,6 +292,14 @@ func (c *checker) document(doc *yaml.Node) {
 			for _, vol := range c.entries(top.val, 0) {
 				c.volume(vol)
 			}
+		case "secrets":
+			for _, sec := range c.entries(top.val, 0) {
+				c.fileSource(secretFileRule, "secrets", sec)
+			}
+		case "configs":
+			for _, cfg := range c.entries(top.val, 0) {
+				c.fileSource(configFileRule, "configs", cfg)
+			}
 		}
 	}
 }
@@ -313,6 +323,13 @@ func (c *checker) service(svc entry) {
 func (c *checker) volume(vol entry) {
 	for _, l := range volumeRule.Leaves(c, vol.val) {
 		c.report(volumeRule, "", "volumes."+vol.name+"."+l.key, l)
+	}
+}
+
+// fileSource runs a file: source rule over one top-level secret or config.
+func (c *checker) fileSource(r rule, section string, e entry) {
+	for _, l := range r.Leaves(c, e.val) {
+		c.report(r, "", section+"."+e.name+"."+l.key, l)
 	}
 }
 

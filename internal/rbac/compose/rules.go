@@ -130,7 +130,7 @@ var serviceRules = []rule{
 	{
 		Name:   "volumes",
 		Key:    "volumes",
-		Why:    "host takeover through the Docker socket or a system path",
+		Why:    "host takeover through the Docker socket, a system path or any host path outside the data directories (/srv, /mnt, /media)",
 		Leaves: volumeLeaves,
 		Bad:    hostPathBad,
 	},
@@ -339,47 +339,175 @@ func shortSource(s string) (string, bool) {
 	return src, src != ""
 }
 
-// Host paths a container must not be given. A bind of the container runtime's
-// socket, of an ancestor directory of it, of the root, or of a system or
-// runtime directory is host takeover.
+// Host paths a container may be given without env Admin. The rule for an
+// absolute bind source is an allow-list, not a deny-list: every absolute host
+// path is a host-escalation feature unless it sits under one of these data
+// roots, so a system or runtime path nobody thought to list (the containerd
+// state directory, /usr, /home, ...) fails closed. The roots are conventional
+// places for data a stack is meant to bind. The Bayplan data directory and
+// anything else a user keeps under one of them cannot be known to this pass, so
+// an operator who stores secrets under /srv or /mnt should not rely on it.
 var (
-	// socketAncestors are directories that contain a runtime socket or the
-	// Docker data directory; mounting one of them exactly exposes it.
-	socketAncestors = []string{"/var", "/var/run", "/run", "/var/lib"}
-	// systemTrees are directories whose whole subtree is off limits.
-	systemTrees = []string{"/etc", "/proc", "/sys", "/dev", "/boot", "/root", "/var/lib/docker"}
+	// dataRoots are directories a bind may name, or sit under.
+	dataRoots = []string{"/srv", "/mnt", "/media"}
+	// logRoot may be bound only below itself (/var/log/app), never whole.
+	logRoot = "/var/log"
 	// socketNames are runtime socket file names, wherever they are mounted from.
 	socketNames = []string{"docker.sock", "containerd.sock", "podman.sock", "crio.sock"}
+	// systemTrees are directories whose subtree is never a data directory. They
+	// are used for a relative path that climbs out of the project directory,
+	// where the real location is unknown and so the rest of the path is read as
+	// if the climb reached the root.
+	systemTrees = []string{
+		"/etc", "/proc", "/sys", "/dev", "/boot", "/root", "/home", "/usr", "/bin", "/sbin",
+		"/lib", "/lib32", "/lib64", "/opt", "/run", "/var/run", "/var/lib", "/var/spool", "/tmp",
+	}
 )
 
-// hostPathBad reports whether a bind source (or local-driver device) is a path
-// that gives the container the host. The path is cleaned first, so .., repeated
-// separators and a trailing slash do not hide it. Relative paths and named
-// volumes are not host paths; a relative path's real location depends on the
-// project directory, which this pass cannot see.
-func hostPathBad(p string) bool {
-	p = strings.TrimSpace(p)
+// underTree reports whether the cleaned absolute path p is root or below it.
+func underTree(p, root string) bool { return p == root || strings.HasPrefix(p, root+"/") }
+
+// socketPath reports whether p names a container runtime socket or the Windows
+// Docker named pipe.
+func socketPath(p string) bool {
 	if strings.Contains(strings.ToLower(strings.ReplaceAll(p, "\\", "/")), "pipe/docker_engine") {
 		return true
 	}
-	if !strings.HasPrefix(p, "/") {
+	return slices.Contains(socketNames, path.Base(path.Clean(p)))
+}
+
+// hostPathBad reports whether a bind source (or local-driver device) gives the
+// container something it should not have without env Admin. The path is
+// cleaned first, so .., repeated separators and a trailing slash do not hide
+// it.
+//
+//   - A runtime socket name or the Docker pipe is bad wherever it is, absolute
+//     or relative.
+//   - An absolute path is bad unless it is under a data root (dataRoots) or
+//     strictly below /var/log.
+//   - A path starting with ~ is bad: compose expands it to a home directory.
+//   - A named volume or a relative path inside the project is fine. A relative
+//     path that climbs out of the project with .. cannot be placed without the
+//     project directory, so what follows the climb is read as if it started at
+//     the root: ../../../../var/run/docker.sock is bad, ../shared is not. Two
+//     or more .. with nothing after them (../..) could be the root and are bad.
+func hostPathBad(p string) bool {
+	p = strings.TrimSpace(p)
+	if socketPath(p) {
+		return true
+	}
+	if strings.HasPrefix(p, "~") {
+		return true
+	}
+	if strings.HasPrefix(p, "/") {
+		p = path.Clean(p)
+		switch {
+		case p == "/":
+			return true
+		case underTree(p, logRoot):
+			return p == logRoot
+		}
+		for _, root := range dataRoots {
+			if underTree(p, root) {
+				return false
+			}
+		}
+		return true
+	}
+	return climbingPathBad(p)
+}
+
+// climbingPathBad judges a relative path by where a climb out of the project
+// directory could land.
+func climbingPathBad(p string) bool {
+	p = path.Clean(p)
+	climbs := 0
+	for strings.HasPrefix(p, "../") || p == ".." {
+		p = strings.TrimPrefix(strings.TrimPrefix(p, ".."), "/")
+		climbs++
+	}
+	if climbs == 0 {
 		return false
 	}
-	p = path.Clean(p)
-	if p == "/" || slices.Contains(socketAncestors, p) || slices.Contains(socketNames, path.Base(p)) {
+	if p == "" {
+		return climbs >= 2
+	}
+	q := "/" + p
+	if q == "/var" {
 		return true
 	}
 	for _, tree := range systemTrees {
-		if p == tree || strings.HasPrefix(p, tree+"/") {
+		if underTree(q, tree) {
 			return true
 		}
 	}
 	return false
 }
 
+// fileSourceBad reports whether the file: source of a top-level secret or
+// config reaches outside the project directory: an absolute path (POSIX or a
+// Windows drive or UNC path), a ~ path, or a relative path that climbs out with
+// .. . The engine reads such a file on whichever host loads the compose file
+// and hands its content to the container, so a below-Admin deployer could
+// otherwise read the master key or the database. A relative path inside the
+// project is fine; a symlink inside the project is not visible to this pass.
+func fileSourceBad(p string) bool {
+	p = strings.ReplaceAll(strings.TrimSpace(p), "\\", "/")
+	if p == "" {
+		return false
+	}
+	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") {
+		return true
+	}
+	if len(p) >= 2 && p[1] == ':' && ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) {
+		return true
+	}
+	c := path.Clean(p)
+	return c == ".." || strings.HasPrefix(c, "../")
+}
+
+// fileRules read the file: source of a top-level secret and of a top-level
+// config (Key is unused for them).
+var (
+	secretFileRule = rule{
+		Name:   "secret_file",
+		Why:    "reads a file from outside the project directory on the host that loads the compose file",
+		Leaves: fileSourceLeaves,
+		Bad:    fileSourceBad,
+	}
+	configFileRule = rule{
+		Name:   "config_file",
+		Why:    "reads a file from outside the project directory on the host that loads the compose file",
+		Leaves: fileSourceLeaves,
+		Bad:    fileSourceBad,
+	}
+)
+
+// fileSourceLeaves checks the file: key of one top-level secret or config.
+func fileSourceLeaves(c *checker, v val) []leaf {
+	var out []leaf
+	for _, f := range c.entries(v, 0) {
+		if f.name != "file" {
+			continue
+		}
+		if x, ok := c.scalarField([]entry{f}, "file"); ok {
+			out = append(out, leaf{text: x.n.Value, line: x.line(), col: x.column(), key: "file"})
+		}
+	}
+	return out
+}
+
+// networkFSTypes are local-driver mount types whose device is a remote share
+// (host:/export, //server/share), not a host path.
+var networkFSTypes = []string{"nfs", "nfs4", "cifs", "smb3", "smbfs", "ceph", "glusterfs"}
+
 // driverOptsLeaves checks one top-level volume definition. Only the local
-// driver binds host paths, and only with type none or o containing bind; when
-// o or type cannot be read (interpolation) the device is checked anyway.
+// driver mounts a device, and it does so for type none with o bind (a bind of
+// a host path) and for any filesystem type (a host block device such as
+// /dev/sda1). So the device is checked when o contains bind, when type is none,
+// when type is any filesystem other than a network one, and when o or type
+// cannot be read (interpolation). With no type and no bind option nothing is
+// mounted and the device is not checked.
 func driverOptsLeaves(c *checker, v val) []leaf {
 	fields := c.entries(v, 0)
 	var out []leaf
@@ -398,7 +526,7 @@ func driverOptsLeaves(c *checker, v val) []leaf {
 			opts = append(opts, c.entries(f.val, 0)...)
 		}
 	}
-	binds, unknown := false, false
+	binds, unknown, fsType := false, false, false
 	if o, ok := c.scalarField(opts, "o"); ok {
 		if interpolated(o.n.Value) {
 			unknown = true
@@ -408,14 +536,18 @@ func driverOptsLeaves(c *checker, v val) []leaf {
 		}
 	}
 	if t, ok := c.scalarField(opts, "type"); ok {
-		if interpolated(t.n.Value) {
+		kind := strings.ToLower(strings.TrimSpace(t.n.Value))
+		switch {
+		case interpolated(t.n.Value):
 			unknown = true
 			out = append(out, leaf{text: t.n.Value, line: t.line(), col: t.column(), key: "driver_opts.type"})
-		} else if strings.EqualFold(strings.TrimSpace(t.n.Value), "none") {
+		case kind == "none":
 			binds = true
+		case kind != "" && !slices.Contains(networkFSTypes, kind):
+			fsType = true
 		}
 	}
-	if d, ok := c.scalarField(opts, "device"); ok && (binds || unknown) {
+	if d, ok := c.scalarField(opts, "device"); ok && (binds || unknown || fsType) {
 		out = append(out, leaf{text: d.n.Value, line: d.line(), col: d.column(), key: "driver_opts.device"})
 	}
 	return out
