@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
-import { type Grant, putGrant, type SubjectType } from "@/api/grants";
+import { type Grant, previewGrantImpact, putGrant, type SubjectType } from "@/api/grants";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +27,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { ExtraPermissions } from "@/features/access/extra-permissions";
+import { ImpactPreview } from "@/features/access/impact-preview";
 import { type RoleId, RolePicker } from "@/features/access/role-picker";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
@@ -62,6 +63,18 @@ function scopeOf(g: Grant): string {
   return g.scope === "all" ? ALL : (g.envId ?? "");
 }
 
+const RANK: Record<string, number> = { viewer: 1, operator: 2, admin: 3 };
+
+// takesAwayFrom says whether saving role and extras in place of the grant being
+// edited lowers it: a lower role, or fewer extras at the same role. An Admin holds
+// every extra, so going up to Admin takes none away. Only a lowering is previewed
+// (D-27); raising access never takes anything from anyone.
+function takesAwayFrom(grant: Grant, role: string, extras: readonly string[]): boolean {
+  if ((RANK[role] ?? 0) < (RANK[grant.role] ?? 0)) return true;
+  if (role === "admin") return false;
+  return (grant.extras ?? []).some((x) => !extras.includes(x));
+}
+
 interface FormProps extends Omit<GrantDialogProps, "open"> {
   onPendingChange: (pending: boolean) => void;
 }
@@ -91,7 +104,14 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
       : (grant?.envName ?? envs.data?.items?.find((e) => e.id === env)?.name ?? "");
   const sorted = [...(envs.data?.items ?? [])].sort((a, b) => a.name.localeCompare(b.name));
   const loading = !editing && envs.isPending;
-  const canSave = !loading && env !== "" && !pending;
+  // What would be saved for the role: only an Operator carries extras.
+  const sentExtras = role === "operator" ? extras : [];
+  // Lowering a grant shows what it takes away first, and Save waits for that to
+  // load: the preview fails closed.
+  const lowering = grant ? takesAwayFrom(grant, role, sentExtras) : false;
+  const [ready, setReady] = useState(false);
+  const waiting = lowering && !ready;
+  const canSave = !loading && env !== "" && !pending && !waiting;
 
   async function save() {
     if (!canSave || inFlight.current) return;
@@ -104,7 +124,7 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
         scope: env === ALL ? "all" : "env",
         envId: env === ALL ? undefined : env,
         role,
-        extras: role === "operator" ? extras : [],
+        extras: sentExtras,
         expected: existing ? { role: existing.role, extras: existing.extras ?? [] } : undefined,
       });
       if (result.kind === "ok") {
@@ -201,7 +221,7 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
             </div>
           )}
           {replacing && existing ? (
-            <Alert>
+            <Alert role="status">
               <AlertDescription>
                 {t("grants.dialog.existing", {
                   subject: subject.name,
@@ -213,6 +233,20 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
           <RolePicker value={role} onChange={setRole} disabled={pending} />
           <ExtraPermissions role={role} value={extras} onChange={setExtras} disabled={pending} />
         </fieldset>
+        {lowering && grant ? (
+          <ImpactPreview
+            // A different role or set of extras is a different question.
+            key={`${role}:${sentExtras.join(",")}`}
+            load={() =>
+              previewGrantImpact(subject.type, subject.id, grant.id, {
+                op: "update",
+                role,
+                extras: sentExtras,
+              })
+            }
+            onReadyChange={setReady}
+          />
+        ) : null}
         <DialogFooter>
           <Button
             type="button"

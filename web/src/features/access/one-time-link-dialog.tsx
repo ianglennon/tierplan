@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import type { ReactNode } from "react";
 import type { OneTimeLink } from "@/api/users";
 import { CopyableCode } from "@/components/copyable-code";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -53,6 +54,8 @@ interface OneTimeLinkContentProps {
   username: string;
   link: OneTimeLink;
   onClose: () => void;
+  // An extra button beside Close, such as "Set up access" for a new user.
+  extra?: ReactNode;
 }
 
 // OneTimeLinkContent is the body of every one-time link screen: the title, the
@@ -60,7 +63,13 @@ interface OneTimeLinkContentProps {
 // only in the props of whoever shows this, which drops it when the dialog
 // closes; nothing here writes it to storage, a URL or a query (UI-SPEC
 // "One-time secrets").
-export function OneTimeLinkContent({ title, username, link, onClose }: OneTimeLinkContentProps) {
+export function OneTimeLinkContent({
+  title,
+  username,
+  link,
+  onClose,
+  extra,
+}: OneTimeLinkContentProps) {
   const t = useT();
   const full = fullUrl(link.url);
   const hours = Math.max(0, Math.round((Date.parse(link.expiresAt) - Date.now()) / HOUR_MS));
@@ -83,6 +92,7 @@ export function OneTimeLinkContent({ title, username, link, onClose }: OneTimeLi
         <AlertDescription>{t("users.link.notice", { username })}</AlertDescription>
       </Alert>
       <DialogFooter>
+        {extra}
         <Button type="button" variant="outline" className="h-11 md:h-8" onClick={onClose}>
           {t("users.link.close")}
         </Button>

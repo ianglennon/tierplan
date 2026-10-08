@@ -40,7 +40,11 @@ export function SourceBadges({ sources, linkTeams = true }: SourceBadgesProps) {
           return (
             <li key={key} className="max-w-full min-w-0">
               <Badge variant="outline" asChild className="max-w-full">
-                <Link to="/settings/access/teams/$teamId" params={{ teamId: s.teamId }}>
+                <Link
+                  to="/settings/access/teams/$teamId"
+                  params={{ teamId: s.teamId }}
+                  aria-label={t("grants.card.comesFromTeam", { name: s.teamName ?? "" })}
+                >
                   <span className="truncate" title={s.teamName}>
                     {label}
                   </span>

@@ -83,8 +83,7 @@
         "edit": "Edit",
         "remove": "Remove access…"
       },
-      "comesFromTeam": "Comes from Team {{name}}",
-      "comesFromAll": "Comes from All environments"
+      "comesFromTeam": "Comes from Team {{name}}"
     },
     "dialog": {
       "addTitle": "Add access",
@@ -109,15 +108,11 @@
         "stale": "This changed while you were looking at it. Reload the page and try again.",
         "gone": "That person, team or environment no longer exists. Reload the page and try again.",
         "generic": "Couldn't save access. Try again."
-      },
-      "lowering": "This lowers access.",
-      "preview": "Checking what changes before you save."
+      }
     },
     "remove": {
       "title": "Remove access?",
       "body": "{{subject}} loses {{role}} on {{environment}}.",
-      "after": "After this, {{subject}} will have {{role}} on {{environment}} through {{source}}.",
-      "afterNone": "After this, {{subject}} will have no access to {{environment}}.",
       "ownAdmin": "You will lose access to manage {{environment}}.",
       "cancel": "Cancel",
       "confirm": "Remove access",

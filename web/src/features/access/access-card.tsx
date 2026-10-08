@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { EllipsisVertical } from "lucide-react";
 import { useState } from "react";
 
 import { type EffectiveEnv, type Grant, teamGrantsQuery, userAccessQuery } from "@/api/grants";
@@ -9,6 +10,12 @@ import { teamQuery, teamsQuery } from "@/api/teams";
 import { userQuery } from "@/api/users";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -21,6 +28,7 @@ import {
 } from "@/components/ui/table";
 import { ExtraPermissionChips } from "@/features/access/extra-permission-chips";
 import { GrantDialog, type GrantSubject } from "@/features/access/grant-dialog";
+import { RemoveGrantDialog } from "@/features/access/remove-grant-dialog";
 import { RoleBadge } from "@/features/access/role-badge";
 import { SourceBadges } from "@/features/access/source-badges";
 import { SettingsCard } from "@/features/environments/settings-card";
@@ -112,8 +120,19 @@ function AdminSummary({ username }: { username: string }) {
   );
 }
 
-// DirectTable lists the subject's own grants, the ones editable here.
-function DirectTable({ subject, grants }: { subject: GrantSubject; grants: readonly Grant[] }) {
+// DirectTable lists the subject's own grants, the ones editable here. Each row
+// has an "Actions for {environment}" menu with Edit and "Remove access…".
+function DirectTable({
+  subject,
+  grants,
+  onEdit,
+  onRemove,
+}: {
+  subject: GrantSubject;
+  grants: readonly Grant[];
+  onEdit: (grant: Grant) => void;
+  onRemove: (grant: Grant) => void;
+}) {
   const t = useT();
   return (
     <div className={SCROLL}>
@@ -123,22 +142,51 @@ function DirectTable({ subject, grants }: { subject: GrantSubject; grants: reado
             <TableHead>{t("grants.card.columns.environment")}</TableHead>
             <TableHead>{t("grants.card.columns.role")}</TableHead>
             <TableHead>{t("grants.card.columns.extras")}</TableHead>
+            <TableHead className="w-12">
+              <span className="sr-only">{t("grants.card.columns.actions")}</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {grants.map((g) => (
-            <TableRow key={g.id}>
-              <TableCell className="align-top">
-                <EnvironmentCell grant={g} />
-              </TableCell>
-              <TableCell className="align-top">
-                <RoleBadge role={g.role} />
-              </TableCell>
-              <TableCell className="align-top whitespace-normal">
-                <ExtraPermissionChips extras={g.extras ?? []} />
-              </TableCell>
-            </TableRow>
-          ))}
+          {grants.map((g) => {
+            const where = g.scope === "all" ? t("grants.scope.all") : (g.envName ?? "");
+            return (
+              <TableRow key={g.id}>
+                <TableCell className="align-top">
+                  <EnvironmentCell grant={g} />
+                </TableCell>
+                <TableCell className="align-top">
+                  <RoleBadge role={g.role} />
+                </TableCell>
+                <TableCell className="align-top whitespace-normal">
+                  <ExtraPermissionChips extras={g.extras ?? []} />
+                </TableCell>
+                <TableCell className="align-top">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="max-md:size-11"
+                        aria-label={t("grants.card.direct.actionsFor", { environment: where })}
+                      >
+                        <EllipsisVertical aria-hidden="true" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onSelect={() => onEdit(g)}>
+                        {t("grants.card.direct.edit")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem variant="destructive" onSelect={() => onRemove(g)}>
+                        {t("grants.card.direct.remove")}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
     </div>
@@ -179,6 +227,8 @@ export function AccessCard({ subject }: AccessCardProps) {
   const teamGrants = useQuery({ ...teamGrantsQuery(subject.id), enabled: !isUser });
   const query = isUser ? userAccess : teamGrants;
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Grant | null>(null);
+  const [removing, setRemoving] = useState<Grant | null>(null);
 
   const grants: readonly Grant[] = isUser
     ? (userAccess.data?.grants ?? [])
@@ -255,20 +305,40 @@ export function AccessCard({ subject }: AccessCardProps) {
           ) : null}
           {grants.length > 0 ? (
             <section className="flex flex-col gap-2">
-              <h4 className="text-sm font-semibold">
-                {isUser ? t("grants.card.direct.title") : t("grants.card.direct.teamTitle")}
-              </h4>
-              <DirectTable subject={subject} grants={grants} />
+              {isUser ? (
+                <h4 className="text-sm font-semibold">{t("grants.card.direct.title")}</h4>
+              ) : null}
+              <DirectTable
+                subject={subject}
+                grants={grants}
+                onEdit={setEditing}
+                onRemove={setRemoving}
+              />
             </section>
           ) : null}
         </>
       ) : null}
       <GrantDialog
         subject={subject}
-        open={adding}
-        onOpenChange={setAdding}
+        open={adding || editing !== null}
+        onOpenChange={(open) => {
+          if (open) return;
+          setAdding(false);
+          setEditing(null);
+        }}
+        grant={editing}
         grants={grants}
         onSaved={refresh}
+      />
+      <RemoveGrantDialog
+        subject={subject}
+        grant={removing}
+        onClose={() => setRemoving(null)}
+        onDone={() => {
+          setRemoving(null);
+          refresh();
+        }}
+        onStale={refresh}
       />
     </SettingsCard>
   );

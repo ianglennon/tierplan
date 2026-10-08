@@ -119,6 +119,26 @@ beforeEach(() => {
           version: "v0.1.0",
         });
       }
+      if (path === "/api/users" && req.method === "GET") return Response.json([]);
+      if (path === "/api/users" && req.method === "POST") {
+        return Response.json(
+          {
+            user: { ...userBody(), id: "u9", username: "carol", status: "invite_pending" },
+            link: {
+              url: "/invite#token=AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-AbCde",
+              expiresAt: new Date(Date.now() + 72 * 3_600_000).toISOString(),
+            },
+          },
+          { status: 201 },
+        );
+      }
+      if (path === "/api/users/u9") {
+        return Response.json({ ...userBody(), id: "u9", username: "carol" });
+      }
+      if (path === "/api/users/u9/access") {
+        return Response.json({ instanceAdmin: false, environments: [], grants: [] });
+      }
+      if (path === "/api/users/u9/sessions") return Response.json([]);
       if (path === "/api/users/u1") return Response.json(userBody());
       if (path === "/api/users/u1/sessions") return Response.json([]);
       if (path === "/api/users/u1/access") {
@@ -519,5 +539,23 @@ describe("the Access card of a team", () => {
     const table = await within(c).findByRole("table", { name: "Direct access of ops" });
     expect(within(table).getByText("Alpha")).toBeTruthy();
     expect(within(table).getByText("Operator")).toBeTruthy();
+  });
+});
+
+describe("Set up access after creating a user", () => {
+  it("opens the new user's page at the Access card", async () => {
+    const router = renderAt("/settings/access/users");
+    fireEvent.click(await screen.findByRole("button", { name: "Create user" }));
+    const dialog = await screen.findByRole("dialog", { name: "Create user" });
+    fireEvent.change(within(dialog).getByLabelText("Username"), { target: { value: "carol" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create user" }));
+    const ready = await screen.findByRole("dialog", { name: "carol is ready" });
+    fireEvent.click(within(ready).getByRole("button", { name: "Set up access" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/access/users/u9"));
+    expect(router.state.location.hash).toBe("access");
+    const c = await card();
+    expect(await within(c).findByText("carol has no access to any environment.")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

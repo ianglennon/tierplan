@@ -6,6 +6,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
+import type { ImpactLoad } from "@/api/teams";
 
 export type Grant = components["schemas"]["GrantBody"];
 export type EffectiveEnv = components["schemas"]["EffectiveEnvBody"];
@@ -104,6 +105,71 @@ export async function putGrant(
     if (problem.status === 409 && problem.type === "stale_change") return { kind: "stale_change" };
     if (problem.status === 404) return { kind: "not_found" };
     return { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+export type GrantChange =
+  | { op: "delete" }
+  | { op: "update"; role: Role; extras: readonly string[] };
+
+// previewGrantImpact asks who would lose which environment access if the grant
+// were removed, or saved with a lower role. Nothing is changed by asking. Any
+// failure is one "error", so the confirm that waits on the preview fails closed.
+export async function previewGrantImpact(
+  subjectType: SubjectType,
+  subjectId: string,
+  grantId: string,
+  change: GrantChange,
+): Promise<ImpactLoad> {
+  const body =
+    change.op === "delete"
+      ? { op: "delete" as const }
+      : { op: "update" as const, role: change.role, extras: [...change.extras] };
+  try {
+    const result =
+      subjectType === "user"
+        ? await api.POST("/api/users/{userId}/grants/{grantId}/impact", {
+            params: { path: { userId: subjectId, grantId } },
+            body,
+          })
+        : await api.POST("/api/teams/{teamId}/grants/{grantId}/impact", {
+            params: { path: { teamId: subjectId, grantId } },
+            body,
+          });
+    return result.data ? { kind: "ok", rows: result.data.impact ?? [] } : { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+export type RemoveGrantResult =
+  | { kind: "ok" }
+  // The grant, or its subject, is already gone: the screen is out of date.
+  | { kind: "not_found" }
+  | { kind: "error" };
+
+// removeGrant takes the access away. It answers the impact the removal had; the
+// dialog already showed it, so it is not returned.
+export async function removeGrant(
+  subjectType: SubjectType,
+  subjectId: string,
+  grantId: string,
+): Promise<RemoveGrantResult> {
+  try {
+    const result =
+      subjectType === "user"
+        ? await api.DELETE("/api/users/{userId}/grants/{grantId}", {
+            params: { path: { userId: subjectId, grantId } },
+          })
+        : await api.DELETE("/api/teams/{teamId}/grants/{grantId}", {
+            params: { path: { teamId: subjectId, grantId } },
+          });
+    if (result.response.ok) return { kind: "ok" };
+    return readProblem(result.error, result.response).status === 404
+      ? { kind: "not_found" }
+      : { kind: "error" };
   } catch {
     return { kind: "error" };
   }

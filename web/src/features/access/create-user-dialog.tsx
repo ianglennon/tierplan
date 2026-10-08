@@ -67,6 +67,7 @@ const SERVER_FIELD: Record<string, { field: FieldName; messageKey: string }> = {
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
 interface Created {
+  userId: string;
   username: string;
   link: OneTimeLink;
 }
@@ -115,7 +116,7 @@ function CreateUserForm({ onCancel, onCreated, onPendingChange }: CreateUserForm
       switch (result.kind) {
         case "ok":
           void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey });
-          onCreated({ username: result.user.username, link: result.link });
+          onCreated({ userId: result.user.id, username: result.user.username, link: result.link });
           return;
         case "username_taken":
           form.setError("username", { type: "server", message: KEY.taken });
@@ -245,6 +246,9 @@ function CreateUserForm({ onCancel, onCreated, onPendingChange }: CreateUserForm
 interface CreateUserDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  // When set, the link step offers "Set up access", which calls this with the new
+  // user's ID so the caller can open their page at the Access card.
+  onSetUpAccess?: (userId: string) => void;
 }
 
 // CreateUserDialog is "Create user" (D-25): the form, then, in the same dialog,
@@ -253,7 +257,7 @@ interface CreateUserDialogProps {
 // dropped when the dialog closes, so it cannot be shown again (UI-SPEC
 // "One-time secrets"). The dialog cannot be dismissed while a request is in
 // flight.
-export function CreateUserDialog({ open, onOpenChange }: CreateUserDialogProps) {
+export function CreateUserDialog({ open, onOpenChange, onSetUpAccess }: CreateUserDialogProps) {
   const t = useT();
   const [pending, setPending] = useState(false);
   const [created, setCreated] = useState<Created | null>(null);
@@ -279,6 +283,22 @@ export function CreateUserDialog({ open, onOpenChange }: CreateUserDialogProps) 
             username={created.username}
             link={created.link}
             onClose={close}
+            extra={
+              onSetUpAccess ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className={TOUCH_HEIGHT}
+                  onClick={() => {
+                    const userId = created.userId;
+                    close();
+                    onSetUpAccess(userId);
+                  }}
+                >
+                  {t("grants.setup.button")}
+                </Button>
+              ) : null
+            }
           />
         ) : (
           <>

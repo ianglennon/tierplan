@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useRouter } from "@tanstack/react-router";
+import { Link, useRouter, useRouterState } from "@tanstack/react-router";
+import { useEffect } from "react";
 
 import { type UserDetail, UserNotFoundError, userQuery, usersQuery } from "@/api/users";
 import { NoPermission } from "@/components/full-page-state";
@@ -88,6 +89,12 @@ export function UserPage({ userId }: UserPageProps) {
   const query = useQuery({ ...userQuery(userId), enabled: allowed });
   const user = query.data;
   useDocumentTitle(user?.username);
+  // A link to a card ("Set up access" after creating a user) lands on it once the
+  // page has loaded; the card does not exist while the skeleton shows.
+  const hash = useRouterState({ select: (s) => s.location.hash });
+  useEffect(() => {
+    if (user && hash) document.getElementById(hash)?.scrollIntoView();
+  }, [user, hash]);
 
   if (!allowed) return <NoPermission />;
   if (query.error instanceof UserNotFoundError) return <NotFound />;

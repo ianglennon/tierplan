@@ -12,6 +12,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { AccessCard } from "@/features/access/access-card";
 import { DeleteTeamDialog } from "@/features/access/delete-team-dialog";
 import { MembersCard } from "@/features/access/members-card";
 import { RenameTeamForm } from "@/features/access/rename-team-form";
@@ -71,7 +72,7 @@ interface TeamPageProps {
 }
 
 // TeamPage is Settings > Access > Teams > {name}: the breadcrumb, the header and
-// the cards, 32px apart: General (rename), Members and Delete team. The page is
+// the cards, 32px apart: General (rename), Members, Access and Delete team. The page is
 // for an instance admin, who holds teams.manage; the server answers 403 again.
 export function TeamPage({ teamId }: TeamPageProps) {
   const t = useT();
@@ -148,6 +149,7 @@ export function TeamPage({ teamId }: TeamPageProps) {
         />
       </SettingsCard>
       <MembersCard team={team} />
+      <AccessCard subject={{ type: "team", id: team.id, name: team.name }} />
       <SettingsCard title={t("teams.danger.title")} id="delete">
         <p className="text-sm text-muted-foreground">{t("teams.danger.body")}</p>
         <div>

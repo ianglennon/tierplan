@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 import { EllipsisVertical } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
@@ -171,6 +171,7 @@ interface IssuedLink {
 // emails as text only.
 export function UsersTable() {
   const t = useT();
+  const router = useRouter();
   const query = useQuery(usersQuery);
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -374,7 +375,17 @@ export function UsersTable() {
         </div>
       ) : null}
 
-      <CreateUserDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <CreateUserDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onSetUpAccess={(userId) =>
+          void router.navigate({
+            to: "/settings/access/users/$userId",
+            params: { userId },
+            hash: "access",
+          })
+        }
+      />
       <DisableUserDialog
         user={disableFor}
         onClose={() => setDisableFor(null)}
