@@ -235,3 +235,33 @@ func TestRecoverRotationReportsAFailureToReadTheDatabase(t *testing.T) {
 		t.Fatalf("RecoverRotation = %v; want the error and bayplan.key.new kept", err)
 	}
 }
+
+func TestRecoverRotationNeverRenamesIntoTheKeyFileForAnEnvironmentKey(t *testing.T) {
+	// The database names the new key: bayplan.key.new stays for the operator,
+	// and no bayplan.key is made, in either file layout a crash could leave.
+	for name, setup := range map[string]func(dir string){
+		"no key file":  func(dir string) {},
+		"old key file": func(dir string) { put(t, dir, vault.OldKeyFile, rotKey(1)) },
+	} {
+		dir := t.TempDir()
+		setup(dir)
+		put(t, dir, vault.NewKeyFile, rotKey(2))
+
+		changed, err := vault.RecoverRotation(context.Background(), dir, true, answers(vault.KeyIDOf(rotKey(2))))
+		if err != nil || changed {
+			t.Fatalf("%s: RecoverRotation = %v, %v; want it left alone", name, changed, err)
+		}
+		if !exists(dir, vault.NewKeyFile) || exists(dir, vault.KeyFile) {
+			t.Errorf("%s: bayplan.key.new must stay and bayplan.key must not appear", name)
+		}
+	}
+}
+
+func TestRecoverRotationDiscardsAStaleNewKeyForAnEnvironmentKeyToo(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, vault.NewKeyFile, rotKey(2))
+	changed, err := vault.RecoverRotation(context.Background(), dir, true, answers(""))
+	if err != nil || !changed || exists(dir, vault.NewKeyFile) {
+		t.Fatalf("RecoverRotation = %v, %v; want the stale file discarded", changed, err)
+	}
+}

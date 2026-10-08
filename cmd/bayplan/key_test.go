@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,5 +204,61 @@ func TestKeyRotateDiscardsAStaleNewKeyFromAnInterruptedRunAndRotates(t *testing.
 	cur, err := vault.ReadKeyFile(dir, vault.KeyFile)
 	if err != nil || vault.KeyIDOf(cur) == vault.KeyIDOf(stale) {
 		t.Fatalf("the stale key became the master key: %v", err)
+	}
+}
+
+// runCLIWithKey is runCLI with BAYPLAN_ENCRYPTION_KEY set to key.
+func runCLIWithKey(t *testing.T, dir string, key []byte, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	t.Setenv("BAYPLAN_DATA_DIR", dir)
+	t.Setenv("BAYPLAN_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(key))
+	t.Setenv("BAYPLAN_ENCRYPTION_KEY_FILE", "")
+	var out, errb bytes.Buffer
+	root := newRoot()
+	root.SetOut(&out)
+	root.SetErr(&errb)
+	root.SetArgs(args)
+	err = root.ExecuteContext(context.Background())
+	return out.String(), errb.String(), err
+}
+
+func TestKeyRotateEnvWritesTheNewKeyFileAndNeverPrintsTheKey(t *testing.T) {
+	dir, st := seedDataDir(t, 5)
+	seedSecrets(t, dir, st)
+	oldKey, err := vault.ReadKeyFile(dir, vault.KeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The instance supplies its key through the variable and has no key file.
+	if err := os.Remove(filepath.Join(dir, vault.KeyFile)); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, err := runCLIWithKey(t, dir, oldKey, "key", "rotate")
+	if err != nil {
+		t.Fatalf("key rotate: %v (stderr %q)", err, errOut)
+	}
+	newKey, err := vault.ReadKeyFile(dir, vault.NewKeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, vault.NewKeyFile))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("%s: %v, %v; want mode 600", vault.NewKeyFile, info, err)
+	}
+	want := "Set BAYPLAN_ENCRYPTION_KEY to the contents of " + filepath.Join(dir, vault.NewKeyFile) + ", restart Bayplan, then delete the file."
+	if !strings.Contains(out, want) {
+		t.Fatalf("output = %q, want %q", out, want)
+	}
+	for _, secret := range [][]byte{newKey, oldKey} {
+		enc := base64.StdEncoding.EncodeToString(secret)
+		if strings.Contains(out, enc) || strings.Contains(errOut, enc) {
+			t.Fatal("a master key was printed")
+		}
+	}
+	for _, name := range []string{vault.KeyFile, vault.OldKeyFile} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Errorf("%s was created for an environment-sourced key", name)
+		}
 	}
 }

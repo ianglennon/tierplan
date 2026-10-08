@@ -300,3 +300,64 @@ func TestRotateKeyThatFailsBeforeTheCommitRemovesItsNewKeyFile(t *testing.T) {
 		t.Errorf("a failed rotation recorded an active key")
 	}
 }
+
+func TestRotateKeyWithAnEnvironmentKeyWritesTheNewKeyFileAndRenamesNothing(t *testing.T) {
+	f := newRotateFixture(t)
+	ctx := context.Background()
+	keyBefore, err := vault.ReadKeyFile(f.dir, vault.KeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envVault, err := vault.New(keyBefore, "env")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := backup.RotateKey(ctx, f.st, f.dir, envVault, audit.SystemCLI)
+	if err != nil {
+		t.Fatalf("RotateKey: %v", err)
+	}
+	if res.KeyFileSwapped || res.NewKeyPath != filepath.Join(f.dir, vault.NewKeyFile) {
+		t.Fatalf("result = %+v, want no swap and the path of %s", res, vault.NewKeyFile)
+	}
+	st, err := os.Stat(res.NewKeyPath)
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("%s: %v, %v; want mode 600", vault.NewKeyFile, st, err)
+	}
+	newKey, err := vault.ReadKeyFile(f.dir, vault.NewKeyFile)
+	if err != nil || vault.KeyIDOf(newKey) != res.NewKID {
+		t.Fatalf("%s holds %s, want %s (%v)", vault.NewKeyFile, vault.KeyIDOf(newKey), res.NewKID, err)
+	}
+	// Nothing was renamed: bayplan.key is what it was and no old file appeared.
+	if after, _ := vault.ReadKeyFile(f.dir, vault.KeyFile); !bytes.Equal(after, keyBefore) {
+		t.Error("bayplan.key changed for an environment-sourced key")
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, vault.OldKeyFile)); err == nil {
+		t.Errorf("%s appeared for an environment-sourced key", vault.OldKeyFile)
+	}
+	// The values are sealed under the new key.
+	nv, _ := vault.New(newKey, "env")
+	if plain, err := nv.Open(vault.ContextAgentCA+"env-1", f.scalar(t, `SELECT key_sealed FROM env_cas WHERE env_id = 'env-1'`)); err != nil || string(plain) != "ca private key" {
+		t.Errorf("CA key under the new key = %q, %v", plain, err)
+	}
+}
+
+func TestRotateKeyRefusesWhenTheKeyInUseIsNotTheOneTheDatabaseWasRotatedTo(t *testing.T) {
+	f := newRotateFixture(t)
+	ctx := context.Background()
+	keyBefore, err := vault.ReadKeyFile(f.dir, vault.KeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envVault, _ := vault.New(keyBefore, "env")
+	if _, err := backup.RotateKey(ctx, f.st, f.dir, envVault, audit.SystemCLI); err != nil {
+		t.Fatal(err)
+	}
+	// The operator still runs the command with the old variable.
+	if err := os.Remove(filepath.Join(f.dir, vault.NewKeyFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backup.RotateKey(ctx, f.st, f.dir, envVault, audit.SystemCLI); !errors.Is(err, backup.ErrKeyMismatch) {
+		t.Fatalf("RotateKey with the old key after a rotation = %v, want ErrKeyMismatch", err)
+	}
+}

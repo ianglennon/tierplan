@@ -5,9 +5,11 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -141,5 +143,75 @@ func TestRotationCrashedBeforeTheCommitDiscardsTheStaleNewKeyAndStartsOnTheOldKe
 	}
 	if _, err := os.Stat(filepath.Join(dir, vault.NewKeyFile)); err == nil {
 		t.Errorf("the stale %s was kept", vault.NewKeyFile)
+	}
+}
+
+func envConfig(t *testing.T, dir string, key []byte) map[string]string {
+	t.Helper()
+	return map[string]string{"BAYPLAN_DATA_DIR": dir, "BAYPLAN_ENCRYPTION_KEY": base64.StdEncoding.EncodeToString(key)}
+}
+
+func TestEnvironmentKeyRotationNeedsTheNewVariableAndKeepsTheNewKeyFile(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir() + "/data"
+	oldKey, err := vault.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := Build(ctx, testConfig(t, envConfig(t, dir, oldKey)), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.Store().Write.Exec(`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-1', 'local', 'This host', '/var/run/docker.sock', 1, 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	ca, err := srv.Vault().Seal(vault.ContextAgentCA+"env-1", []byte("ca private key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.Store().Write.Exec(`INSERT INTO env_cas (env_id, cert_pem, key_sealed, created_at) VALUES ('env-1', 'pem', ?, 1)`, ca); err != nil {
+		t.Fatal(err)
+	}
+	res, err := backup.RotateKey(ctx, srv.Store(), dir, srv.Vault(), audit.SystemCLI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The old variable no longer matches the database: refuse, say what to do.
+	_, err = Build(ctx, testConfig(t, envConfig(t, dir, oldKey)), slog.New(slog.DiscardHandler))
+	if err == nil {
+		t.Fatal("the server started on the old variable after a rotation")
+	}
+	want := "Set BAYPLAN_ENCRYPTION_KEY to the contents of " + filepath.Join(dir, vault.NewKeyFile)
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("Build = %v, want it to contain %q", err, want)
+	}
+	if strings.Contains(err.Error(), base64.StdEncoding.EncodeToString(oldKey)) {
+		t.Fatal("the error echoes the key")
+	}
+	// The refused start released the lock.
+	newKey, err := vault.ReadKeyFile(dir, vault.NewKeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vault.KeyIDOf(newKey) != res.NewKID {
+		t.Fatalf("%s holds %s, want %s", vault.NewKeyFile, vault.KeyIDOf(newKey), res.NewKID)
+	}
+
+	// The new variable works, verifies, and the file is left for the operator.
+	ok, err := Build(ctx, testConfig(t, envConfig(t, dir, newKey)), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("Build on the new variable: %v", err)
+	}
+	t.Cleanup(func() { _ = ok.Close() })
+	assertServesOnNewKey(t, ok, res.NewKID)
+	if _, err := os.Stat(filepath.Join(dir, vault.NewKeyFile)); err != nil {
+		t.Errorf("%s was removed: %v", vault.NewKeyFile, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, vault.KeyFile)); err == nil {
+		t.Errorf("%s was created for an environment-sourced key", vault.KeyFile)
 	}
 }
