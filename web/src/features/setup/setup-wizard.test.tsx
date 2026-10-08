@@ -553,7 +553,7 @@ describe("SetupWizard restore branch", () => {
     click("Back");
     await screen.findByText("Create the admin account");
     expect(screen.getByText("Step 2 of 4")).toBeTruthy();
-    expect(field("Username").value).toBe("admin");
+    expect(field("Username").value).toBe("Admin");
     expect(field("Password").value).toBe(PASSWORD);
   });
 

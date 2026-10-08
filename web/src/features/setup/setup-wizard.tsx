@@ -40,6 +40,7 @@ import {
   type TokenValues,
   tokenFormSchema,
 } from "@/features/setup/schemas";
+import { SetupRestore } from "@/features/setup/setup-restore";
 import { basePath } from "@/lib/base-path";
 import { cn } from "@/lib/utils";
 
@@ -94,6 +95,9 @@ export function SetupWizard() {
   const [showPassword, setShowPassword] = useState(false);
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // The restore branch (D-30) takes the place of the admin step. The admin form
+  // keeps its values while it is hidden, so Back returns to what was typed.
+  const [restoring, setRestoring] = useState(false);
 
   const submitting = useRef(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -256,14 +260,23 @@ export function SetupWizard() {
       showServerErrors(routeServerFieldErrors(readProblem(error, response)));
     });
 
+  const inRestore = step === 2 && restoring;
   const heading =
     step === 1
       ? "setup.token.heading"
-      : step === 2
-        ? "setup.admin.heading"
-        : "setup.instance.heading";
+      : inRestore
+        ? "setup.restore.heading"
+        : step === 2
+          ? "setup.admin.heading"
+          : "setup.instance.heading";
   const body =
-    step === 1 ? "setup.token.body" : step === 2 ? "setup.admin.body" : "setup.instance.body";
+    step === 1
+      ? "setup.token.body"
+      : inRestore
+        ? "setup.restore.body"
+        : step === 2
+          ? "setup.admin.body"
+          : "setup.instance.body";
 
   const pendingLabel = (key: string) => (
     <>
@@ -293,7 +306,7 @@ export function SetupWizard() {
 
   return (
     <div className="flex flex-col gap-4">
-      <WizardStepper current={step} />
+      <WizardStepper current={step} total={inRestore ? 2 : 4} />
       <div className="flex flex-col gap-1">
         <h2
           ref={headingRef}
@@ -348,7 +361,11 @@ export function SetupWizard() {
         </form>
       ) : null}
 
-      {step === 2 ? (
+      {inRestore && verifiedToken !== null ? (
+        <SetupRestore token={verifiedToken} onBack={() => setRestoring(false)} />
+      ) : null}
+
+      {step === 2 && !restoring ? (
         <form noValidate onSubmit={adminForm.handleSubmit(onAdmin)}>
           <fieldset disabled={pending} className="contents">
             <FieldGroup className="gap-4">
@@ -428,6 +445,17 @@ export function SetupWizard() {
                   {t("setup.admin.back")}
                 </Button>
               </div>
+              <p className="text-sm text-muted-foreground">
+                {t("setup.admin.restorePrompt")}{" "}
+                <Button
+                  type="button"
+                  variant="link"
+                  className="h-auto p-0 align-baseline text-sm"
+                  onClick={() => setRestoring(true)}
+                >
+                  {t("setup.admin.restoreLink")}
+                </Button>
+              </p>
             </FieldGroup>
           </fieldset>
         </form>

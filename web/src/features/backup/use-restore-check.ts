@@ -27,7 +27,13 @@ export interface Checked {
 // and nowhere else: they are cleared by reset (after a restore), by
 // chooseAnother, and go with the component when it unmounts. Nothing is uploaded
 // before runCheck is called.
-export function useRestoreCheck(steps: CheckSteps) {
+export function useRestoreCheck(
+  steps: CheckSteps,
+  // Called with an error before it becomes a message. Returning true says the
+  // caller has dealt with it (the wizard leaves for sign-in when setup is
+  // already done), so no message is shown.
+  handled?: (err: unknown) => boolean,
+) {
   const [file, setFile] = useState<File | null>(null);
   const [passphrase, setPassphrase] = useState("");
   const [checking, setChecking] = useState(false);
@@ -57,7 +63,7 @@ export function useRestoreCheck(steps: CheckSteps) {
       const summary = await latest.current.check(upload.uploadId, passphrase);
       setChecked({ uploadId: upload.uploadId, summary });
     } catch (err) {
-      setError(restoreProblem(err));
+      if (!handled?.(err)) setError(restoreProblem(err));
       return;
     } finally {
       running.current = false;

@@ -29,7 +29,9 @@
       "show": "Show password",
       "hide": "Hide password",
       "back": "Back",
-      "continue": "Continue"
+      "continue": "Continue",
+      "restorePrompt": "Restoring an existing Bayplan?",
+      "restoreLink": "Restore from a backup"
     },
     "instance": {
       "heading": "Name this instance",
@@ -60,6 +62,11 @@
       "instanceNameTooLong": "Use 64 characters or fewer.",
       "publicUrl": "Enter a full address such as https://bayplan.example.com.",
       "server": "Something went wrong on the server. Try again, and check the container logs if it keeps happening."
+    },
+    "restore": {
+      "heading": "Restore from a backup",
+      "body": "Upload a backup file and enter its passphrase. Bayplan checks it before changing anything.",
+      "back": "Back"
     }
   }
 }

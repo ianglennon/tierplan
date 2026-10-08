@@ -36,9 +36,10 @@ interface LoginSearch {
   next?: string;
   expired?: boolean;
   // password-set: the visitor just chose a password with an invite or reset link,
-  // which does not sign them in (UI-SPEC "Invite and reset page"). It is the only
-  // value; anything else is ignored.
-  notice?: "password-set";
+  // which does not sign them in (UI-SPEC "Invite and reset page"). backup-restored:
+  // the setup wizard restored a backup and the visitor now signs in with one of
+  // its accounts (D-30). Anything else is ignored.
+  notice?: "password-set" | "backup-restored";
 }
 
 function LoginPage() {
@@ -109,6 +110,12 @@ function LoginPage() {
         <Alert role="status">
           <Info aria-hidden="true" />
           <AlertDescription>{t("invite.login.passwordSet")}</AlertDescription>
+        </Alert>
+      ) : null}
+      {notice === "backup-restored" ? (
+        <Alert role="status">
+          <Info aria-hidden="true" />
+          <AlertDescription>{t("restore.done.notice")}</AlertDescription>
         </Alert>
       ) : null}
       {errorKey ? (
@@ -192,7 +199,10 @@ export const Route = createFileRoute("/login")({
   validateSearch: (search: Record<string, unknown>): LoginSearch => ({
     next: typeof search.next === "string" ? search.next : undefined,
     expired: search.expired === true || search.expired === "true" ? true : undefined,
-    notice: search.notice === "password-set" ? "password-set" : undefined,
+    notice:
+      search.notice === "password-set" || search.notice === "backup-restored"
+        ? search.notice
+        : undefined,
   }),
   beforeLoad: async ({ search }) => {
     const instance = await loadInstance();
