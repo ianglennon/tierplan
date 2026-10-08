@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -258,5 +259,98 @@ func TestRestoreOntoAFreshVolumeWithItsOwnKeyKeepsSignInSecretsAndTheAuditChain(
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("the restored admin could not sign in: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// liveInstallOn restores a first backup onto a fresh directory, so a second
+// restore replaces an existing database.
+func liveInstallOn(t *testing.T) (a instanceA, dir string) {
+	t.Helper()
+	a = newInstanceA(t)
+	dir = t.TempDir()
+	if _, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "restore", a.file); err != nil {
+		t.Fatalf("first restore = %v, stderr %q", err, errOut)
+	}
+	return a, dir
+}
+
+func fileSum(t *testing.T, path string) [32]byte {
+	t.Helper()
+	b, err := os.ReadFile(path) //nolint:gosec // a path the test made
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sha256.Sum256(b)
+}
+
+func TestRestoreOverAnExistingDatabaseWithoutYesShowsTheSummaryExitsTwoAndChangesNothing(t *testing.T) {
+	a, dir := liveInstallOn(t)
+	db := filepath.Join(dir, store.DatabaseFile)
+	before := fileSum(t, db)
+
+	stdout, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "restore", a.file)
+	if err == nil {
+		t.Fatal("restore over an existing database without --yes exited 0")
+	}
+	if exitCode(err) != 2 {
+		t.Fatalf("exit code = %d, want 2 (%v)", exitCode(err), err)
+	}
+	if !strings.Contains(string(stdout), "alpha") || !strings.Contains(string(stdout), "1 users") {
+		t.Fatalf("no backup summary on stdout: %q", stdout)
+	}
+	if !strings.Contains(errOut, "re-run with --yes to replace the current data") {
+		t.Fatalf("stderr = %q", errOut)
+	}
+	if fileSum(t, db) != before {
+		t.Fatal("the database changed")
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "backups", "prerestore-*")); len(matches) != 0 {
+		t.Fatalf("a refused restore wrote a snapshot: %v", matches)
+	}
+}
+
+func TestRestoreWithYesReplacesTheDatabaseAndSavesThePreviousOne(t *testing.T) {
+	a, dir := liveInstallOn(t)
+
+	stdout, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "restore", "--yes", a.file)
+	if err != nil {
+		t.Fatalf("restore --yes = %v, stderr %q", err, errOut)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "backups", "prerestore-*.db"))
+	if len(matches) != 1 || !strings.Contains(string(stdout), matches[0]) {
+		t.Fatalf("snapshots = %v; stdout %q", matches, stdout)
+	}
+	// The master key of the existing install is kept: it is the target.
+	v, err := vault.Load("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vout, _, err := runCLI(t, dir, "audit", "verify"); err != nil || !strings.HasPrefix(strings.TrimSpace(vout), "audit chain OK") {
+		t.Fatalf("audit verify after a second restore = %q, %v (key %s)", vout, err, v.KeyID())
+	}
+}
+
+func TestRestoreOfAWrongPassphraseOrANonBackupChangesNothingAndSaysWhy(t *testing.T) {
+	a, dir := liveInstallOn(t)
+	db := filepath.Join(dir, store.DatabaseFile)
+	before := fileSum(t, db)
+
+	_, errOut, err := runCLIWith(t, dir, "not the right passphrase\n", "", "restore", "--yes", a.file)
+	if err == nil || !strings.Contains(errOut, "passphrase is wrong, or the file is damaged") {
+		t.Fatalf("wrong passphrase = %v, stderr %q", err, errOut)
+	}
+	text := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(text, []byte("just some notes, nothing like a backup file at all\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, err = runCLIWith(t, dir, cliPass+"\n", "", "restore", "--yes", text)
+	if err == nil || !strings.Contains(errOut, "is not a Bayplan backup file") {
+		t.Fatalf("a text file = %v, stderr %q", err, errOut)
+	}
+	if fileSum(t, db) != before {
+		t.Fatal("the database changed")
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "backups", "prerestore-*")); len(matches) != 0 {
+		t.Fatalf("a refused restore wrote a snapshot: %v", matches)
 	}
 }
