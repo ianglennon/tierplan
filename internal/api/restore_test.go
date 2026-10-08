@@ -6,7 +6,9 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -15,13 +17,17 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/backup"
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
@@ -336,5 +342,440 @@ func TestBackupInfoReportsTheLargestAcceptedUpload(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.MaxUploadBytes != 1<<30 {
 		t.Fatalf("info = %s (%v), want maxUploadBytes 1 GiB", rec.Body, err)
+	}
+}
+
+// liveDatabase puts a migrated database in dir, as a running instance has, and
+// returns its SHA-256, to prove that a refused restore changed nothing.
+func liveDatabase(t *testing.T, dir string) func() [32]byte {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Migrate(ctx, st, store.MigrateOptions{AppVersion: "fixture", DataDir: dir, SkipBackup: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sum := func() [32]byte {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(dir, "bayplan.db")) //nolint:gosec // a path the test made
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sha256.Sum256(b)
+	}
+	return sum
+}
+
+// noTrace fails the test when a refused request left a staged database, an upload
+// it should have removed, a restore marker or a pre-restore snapshot.
+func noTrace(t *testing.T, dir string, wantUpload bool) {
+	t.Helper()
+	if m, _ := filepath.Glob(filepath.Join(dir, "restore-staging", "r-*")); len(m) != 0 {
+		t.Errorf("a staged database was left behind: %v", m)
+	}
+	uploads, _ := filepath.Glob(filepath.Join(dir, "restore-staging", "u-*"))
+	if wantUpload != (len(uploads) == 1) {
+		t.Errorf("uploads on disk = %v, want one: %v", uploads, wantUpload)
+	}
+	if _, err := os.Stat(filepath.Join(dir, backup.PendingMarker)); err == nil {
+		t.Error("a restore marker exists")
+	}
+	if m, _ := filepath.Glob(filepath.Join(dir, "backups", "prerestore-*")); len(m) != 0 {
+		t.Errorf("a pre-restore snapshot exists: %v", m)
+	}
+}
+
+// newerBackupFile is a backup whose header says it was made by a Bayplan with a
+// database schema this binary does not know.
+func newerBackupFile(t *testing.T) []byte {
+	t.Helper()
+	salt := bytes.Repeat([]byte{1}, 16)
+	var buf bytes.Buffer
+	w, err := backup.NewWriter(&buf, backup.Header{
+		KDF:        backup.KDFParams{Name: "argon2id", T: 1, MKiB: 8 * 1024, P: 1, Salt: salt},
+		AppVersion: "v7.7.7", Schema: 9999,
+	}, []byte(restorePass))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Add(backup.EntryManifest, 2, strings.NewReader("{}")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Add(backup.EntryDB, 1, strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// hostileHeaderFile claims 1 GiB of key-derivation memory. Honouring it would
+// cost the server a gigabyte before it could say no.
+func hostileHeaderFile(t *testing.T) []byte {
+	t.Helper()
+	hdr, err := json.Marshal(backup.Header{
+		Format: 1, Created: time.Unix(0, 0).UTC(), AppVersion: "v1.0.0", Schema: 1,
+		KDF: backup.KDFParams{Name: "argon2id", T: 3, MKiB: 1 << 20, P: 4, Salt: bytes.Repeat([]byte{1}, 16)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := append([]byte(backup.Magic), 0, 1)
+	out = binary.BigEndian.AppendUint32(out, uint32(len(hdr))) //nolint:gosec // a short test header
+	out = append(out, hdr...)
+	return append(out, bytes.Repeat([]byte{0xAA}, 512)...)
+}
+
+func TestRestoreRefusalsAnswerTheirOwnProblemAndLeaveEverythingAsItWas(t *testing.T) {
+	good := makeBackup(t, "Old lab", "oldadmin", "")
+	damaged := bytes.Clone(good)
+	damaged[len(damaged)-20] ^= 0xFF
+
+	cases := []struct {
+		name       string
+		file       []byte
+		passphrase string
+		step       string
+		status     int
+		problem    string
+		detail     string
+	}{
+		{"a wrong passphrase", good, "not the passphrase", "check", http.StatusUnprocessableEntity, "backup_unreadable", ""},
+		{"a wrong passphrase on apply", good, "not the passphrase", "apply", http.StatusUnprocessableEntity, "backup_unreadable", ""},
+		{"a damaged payload", damaged, restorePass, "apply", http.StatusUnprocessableEntity, "backup_unreadable", ""},
+		{"a text file", []byte(strings.Repeat("this is not a backup\n", 50)), restorePass, "check", http.StatusUnprocessableEntity, "not_a_backup", ""},
+		{"a text file on apply", []byte(strings.Repeat("this is not a backup\n", 50)), restorePass, "apply", http.StatusUnprocessableEntity, "not_a_backup", ""},
+		{"a newer schema", newerBackupFile(t), restorePass, "check", http.StatusConflict, "backup_newer", "v7.7.7"},
+		{"a newer schema on apply", newerBackupFile(t), restorePass, "apply", http.StatusConflict, "backup_newer", "v7.7.7"},
+		{"a header that asks for a gigabyte of key memory", hostileHeaderFile(t), restorePass, "check", http.StatusUnprocessableEntity, "backup_unreadable", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAuthFixture(t, config.Config{})
+			f.inst.Apply("Home lab", "")
+			sum := liveDatabase(t, f.dataInfo.Path)
+			before := sum()
+			cookie, csrf := f.signIn(t, "admin", false)
+			id := uploadedID(t, f.upload(t, cookie, csrf, tc.file))
+
+			started := time.Now()
+			body := map[string]string{"uploadId": id, "passphrase": tc.passphrase}
+			if tc.step == "apply" {
+				body["confirm"] = "Home lab"
+			}
+			rec := f.restoreCall(t, cookie, csrf, tc.step, body)
+			if rec.Code != tc.status || problemType(t, rec) != tc.problem {
+				t.Fatalf("%s = %d %s, want %d %s", tc.step, rec.Code, rec.Body, tc.status, tc.problem)
+			}
+			if tc.detail != "" && !strings.Contains(rec.Body.String(), tc.detail) {
+				t.Errorf("the answer does not name %s: %s", tc.detail, rec.Body)
+			}
+			if time.Since(started) > 5*time.Second {
+				t.Errorf("the refusal took %v: the file must be refused before a key is derived from it", time.Since(started))
+			}
+			if sum() != before {
+				t.Error("bayplan.db changed")
+			}
+			if len(f.restore.swaps) != 0 {
+				t.Error("a restart was requested")
+			}
+			noTrace(t, f.dataInfo.Path, true)
+			if strings.Contains(rec.Body.String(), tc.passphrase) {
+				t.Error("the answer echoes the passphrase")
+			}
+		})
+	}
+}
+
+func TestRestoreAllowsOneUploadAtATimeAndFreesTheSlotAfterFifteenMinutes(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	now := time.Now()
+	f.restore.uploads.Now = func() time.Time { return now }
+	file := makeBackup(t, "Old lab", "oldadmin", "")
+
+	first := uploadedID(t, f.upload(t, cookie, csrf, file))
+	rec := f.upload(t, cookie, csrf, file)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "restore_busy" {
+		t.Fatalf("second upload = %d %s, want 409 restore_busy", rec.Code, rec.Body)
+	}
+	now = now.Add(16 * time.Minute)
+	second := uploadedID(t, f.upload(t, cookie, csrf, file))
+	if second == first {
+		t.Fatal("the new upload has the old one's ID")
+	}
+	rec = f.restoreCall(t, cookie, csrf, "check", map[string]string{"uploadId": first, "passphrase": restorePass})
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "upload_not_found" {
+		t.Fatalf("check of the expired upload = %d %s, want 404 upload_not_found", rec.Code, rec.Body)
+	}
+}
+
+func TestRestoreUploadAboveTheCapIs413AndACutOffUploadIs400AndNeitherLeavesAFile(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.restore.uploads.MaxBytes = 2048
+
+	big := bytes.Repeat([]byte("x"), 4096)
+	rec := f.upload(t, cookie, csrf, big)
+	if rec.Code != http.StatusRequestEntityTooLarge || problemType(t, rec) != "upload_too_large" {
+		t.Fatalf("upload above the cap = %d %s, want 413 upload_too_large", rec.Code, rec.Body)
+	}
+	noTrace(t, f.dataInfo.Path, false)
+
+	// No Content-Length, so the cap is found while reading.
+	req := httptest.NewRequest(http.MethodPost, "/api/backup/restore/upload", bytes.NewReader(big))
+	req.ContentLength = -1
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
+	req.Header.Set("X-CSRF-Token", csrf)
+	out := httptest.NewRecorder()
+	f.h.ServeHTTP(out, req)
+	if out.Code != http.StatusRequestEntityTooLarge || problemType(t, out) != "upload_too_large" {
+		t.Fatalf("unannounced upload above the cap = %d %s", out.Code, out.Body)
+	}
+	noTrace(t, f.dataInfo.Path, false)
+
+	// The body ends before the length it announced: a proxy cut it off.
+	short := bytes.Repeat([]byte("x"), 1000)
+	req = httptest.NewRequest(http.MethodPost, "/api/backup/restore/upload", bytes.NewReader(short))
+	req.ContentLength = 1500
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
+	req.Header.Set("X-CSRF-Token", csrf)
+	out = httptest.NewRecorder()
+	f.h.ServeHTTP(out, req)
+	if out.Code != http.StatusBadRequest || problemType(t, out) != "upload_incomplete" {
+		t.Fatalf("cut-off upload = %d %s, want 400 upload_incomplete", out.Code, out.Body)
+	}
+	noTrace(t, f.dataInfo.Path, false)
+}
+
+func TestRestoreTwoConcurrentAppliesOfOneUploadGiveOne202AndOne409(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.inst.Apply("Home lab", "")
+	cookie, csrf := f.signIn(t, "admin", false)
+	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "")))
+
+	codes := make([]int, 2)
+	types := make([]string, 2)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range codes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			rec := f.restoreCall(t, cookie, csrf, "apply", map[string]string{"uploadId": id, "passphrase": restorePass, "confirm": "Home lab"})
+			codes[i] = rec.Code
+			if rec.Code != http.StatusAccepted {
+				types[i] = problemType(t, rec)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	accepted, busy := 0, 0
+	for i, c := range codes {
+		switch {
+		case c == http.StatusAccepted:
+			accepted++
+		case c == http.StatusConflict && types[i] == "restore_busy":
+			busy++
+		default:
+			t.Errorf("apply %d = %d %s", i, c, types[i])
+		}
+	}
+	if accepted != 1 || busy != 1 {
+		t.Fatalf("accepted = %d, busy = %d, want one of each", accepted, busy)
+	}
+	if len(f.restore.swaps) != 1 {
+		t.Fatalf("restarts requested = %d, want 1", len(f.restore.swaps))
+	}
+}
+
+// wizardFixture is a fresh install: no user yet, a setup token, and the restore
+// routes the setup wizard calls.
+type wizardFixture struct {
+	h       http.Handler
+	st      *store.Store
+	v       *vault.Vault
+	token   string
+	dataDir string
+	restore *restoreHook
+	clk     *fakeClock
+}
+
+func newWizardFixture(t *testing.T) *wizardFixture {
+	t.Helper()
+	st := storetest.New(t)
+	log := slog.New(slog.DiscardHandler)
+	v, err := vault.LoadOrCreate(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)), t.TempDir(), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aud := audit.NewWriter(st, v, log, nil)
+	inst, err := instance.Load(context.Background(), st, config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	gate := auth.NewSetupGate(st, dataDir, log)
+	if err := gate.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	token, _ := auth.ReadTokenFile(dataDir)
+	clk := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	hook := &restoreHook{uploads: backup.NewUploads(dataDir, 0)}
+
+	r := httpx.New(httpx.Options{Auditor: aud, Logger: log, PublicOrigin: inst.PublicOrigin})
+	api.RegisterRestore(r, api.RestoreDeps{
+		Uploads: hook.uploads, Vault: v, Audit: aud, Instance: inst, DataDir: dataDir, AppVersion: "v9.9.9", Now: clk.now, Log: log,
+		Setup: api.SetupDeps{
+			Gate: gate, Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, clk.now),
+			Audit: aud, Store: st, Instance: inst, Log: log,
+		},
+		Restart: func(swap func(context.Context) error) bool {
+			hook.swaps = append(hook.swaps, swap)
+			return true
+		},
+	})
+	if err := httpx.VerifyAllGuarded(r); err != nil {
+		t.Fatal(err)
+	}
+	return &wizardFixture{h: r.Handler(), st: st, v: v, token: token, dataDir: dataDir, restore: hook, clk: clk}
+}
+
+func (w *wizardFixture) upload(t *testing.T, token string, file []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/restore/upload", bytes.NewReader(file))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Setup-Token", token)
+	req.RemoteAddr = testClientAddr
+	rec := httptest.NewRecorder()
+	w.h.ServeHTTP(rec, req)
+	return rec
+}
+
+func (w *wizardFixture) call(t *testing.T, step string, body map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/restore/"+step, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = testClientAddr
+	rec := httptest.NewRecorder()
+	w.h.ServeHTTP(rec, req)
+	return rec
+}
+
+func (w *wizardFixture) addUser(t *testing.T) {
+	t.Helper()
+	now := time.Now().UnixNano()
+	if err := w.st.Q.InsertUser(context.Background(), sqlc.InsertUserParams{
+		ID: "u1", Username: "admin", PasswordHash: "x", CreatedAt: now, UpdatedAt: now, PasswordChangedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWizardRestoreWithTheSetupTokenUploadsChecksAndRestoresOnAFreshInstall(t *testing.T) {
+	w := newWizardFixture(t)
+	id := uploadedID(t, w.upload(t, w.token, makeBackup(t, "Old lab", "oldadmin", "")))
+
+	rec := w.call(t, "check", map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": restorePass})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"instanceName":"Old lab"`) {
+		t.Fatalf("check = %d %s", rec.Code, rec.Body)
+	}
+	rec = w.call(t, "apply", map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": restorePass})
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"restarting":true`) {
+		t.Fatalf("apply = %d %s", rec.Code, rec.Body)
+	}
+	if len(w.restore.swaps) != 1 {
+		t.Fatalf("restarts requested = %d, want 1", len(w.restore.swaps))
+	}
+	if err := w.restore.swaps[0](context.Background()); err != nil {
+		t.Fatalf("swap: %v", err)
+	}
+	st, err := store.Open(context.Background(), w.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if _, err := st.RQ.GetUserByUsername(context.Background(), "oldadmin"); err != nil {
+		t.Fatalf("the restored admin is missing: %v", err)
+	}
+	var source string
+	if err := st.Read.QueryRow(`SELECT json_extract(details, '$.source') FROM audit_log WHERE action = 'backup.restored'`).Scan(&source); err != nil || source != "wizard" {
+		t.Fatalf("backup.restored source = %q, %v, want wizard", source, err)
+	}
+}
+
+func TestWizardRestoreRoutesAnswer409SetupCompleteOnceAnyUserExists(t *testing.T) {
+	w := newWizardFixture(t)
+	file := makeBackup(t, "Old lab", "oldadmin", "")
+	id := uploadedID(t, w.upload(t, w.token, file))
+	w.addUser(t)
+
+	body := map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": restorePass}
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"upload": w.upload(t, w.token, file),
+		"check":  w.call(t, "check", body),
+		"apply":  w.call(t, "apply", body),
+	} {
+		if rec.Code != http.StatusConflict || problemType(t, rec) != "setup_complete" {
+			t.Errorf("%s after setup = %d %s, want 409 setup_complete", name, rec.Code, rec.Body)
+		}
+	}
+	if len(w.restore.swaps) != 0 {
+		t.Fatal("a restart was requested after setup was complete")
+	}
+	if _, err := os.Stat(filepath.Join(w.dataDir, "bayplan.db")); err == nil {
+		t.Fatal("a database was swapped in after setup was complete")
+	}
+}
+
+func TestWizardRestoreWithAWrongTokenIs401RateLimitedAndRecorded(t *testing.T) {
+	w := newWizardFixture(t)
+	file := makeBackup(t, "Old lab", "oldadmin", "")
+
+	for i := range 5 {
+		rec := w.upload(t, "not-the-token", file)
+		if rec.Code != http.StatusUnauthorized || problemType(t, rec) != "invalid_setup_token" {
+			t.Fatalf("attempt %d = %d %s, want 401 invalid_setup_token", i+1, rec.Code, rec.Body)
+		}
+	}
+	rec := w.call(t, "check", map[string]string{"setupToken": "not-the-token", "uploadId": "u-x", "passphrase": restorePass})
+	if rec.Code != http.StatusTooManyRequests || problemType(t, rec) != "rate_limited" {
+		t.Fatalf("sixth attempt = %d %s, want 429 rate_limited", rec.Code, rec.Body)
+	}
+	// Even the right token waits its turn: the address has used its attempts.
+	if rec := w.upload(t, w.token, file); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("right token from a limited address = %d, want 429", rec.Code)
+	}
+	var failed int
+	if err := w.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'setup.token_failed'`).Scan(&failed); err != nil || failed < 6 {
+		t.Fatalf("setup.token_failed entries = %d, %v, want the five wrong tokens and the limited attempts", failed, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(w.dataDir, "restore-staging", "*")); len(left) != 0 {
+		t.Fatalf("refused uploads left %v", left)
+	}
+}
+
+func TestWizardRestoreRefusesABadFileWithTheSameProblemsAsSettings(t *testing.T) {
+	w := newWizardFixture(t)
+	id := uploadedID(t, w.upload(t, w.token, makeBackup(t, "Old lab", "oldadmin", "")))
+	rec := w.call(t, "check", map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": "not the passphrase"})
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "backup_unreadable" {
+		t.Fatalf("wrong passphrase = %d %s", rec.Code, rec.Body)
+	}
+	rec = w.call(t, "apply", map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": "not the passphrase"})
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "backup_unreadable" {
+		t.Fatalf("wrong passphrase on apply = %d %s", rec.Code, rec.Body)
+	}
+	if len(w.restore.swaps) != 0 {
+		t.Fatal("a restart was requested")
 	}
 }

@@ -551,3 +551,63 @@ func TestInviteTTLRefusesAnythingOutsideItsRangeAtStartup(t *testing.T) {
 		t.Error("--invite-ttl=2000h was accepted")
 	}
 }
+
+// BAYPLAN_RESTORE_RESTART and BAYPLAN_BACKUP_MAX_UPLOAD (plan 03-25, D-30): how
+// Bayplan restarts after a restore from the web UI, and how big a backup it takes.
+func TestTheRestoreRestartModeDefaultsToExecAcceptsExitAndRefusesAnythingElse(t *testing.T) {
+	names := strings.Join(config.Names(), " ")
+	for _, want := range []string{"BAYPLAN_RESTORE_RESTART", "BAYPLAN_BACKUP_MAX_UPLOAD"} {
+		if !strings.Contains(names, want) {
+			t.Errorf("Names() does not list %s", want)
+		}
+	}
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RestoreRestart != "exec" {
+		t.Fatalf("RestoreRestart default = %q, want exec", c.RestoreRestart)
+	}
+	for _, mode := range []string{"exec", "exit"} {
+		c, err := load(t, nil, envMap{"BAYPLAN_RESTORE_RESTART": mode}, files{})
+		if err != nil || c.RestoreRestart != mode {
+			t.Errorf("BAYPLAN_RESTORE_RESTART=%s: %q, %v", mode, c.RestoreRestart, err)
+		}
+	}
+	c, err = load(t, []string{"--restore-restart", "exit"}, envMap{"BAYPLAN_RESTORE_RESTART": "exec"}, files{})
+	if err != nil || c.RestoreRestart != "exit" {
+		t.Errorf("the flag does not win: %q, %v", c.RestoreRestart, err)
+	}
+	for _, bad := range []string{"restart", "EXEC", "kill", "true"} {
+		_, err := load(t, nil, envMap{"BAYPLAN_RESTORE_RESTART": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_RESTORE_RESTART") || !strings.Contains(err.Error(), "exec") || !strings.Contains(err.Error(), "exit") {
+			t.Errorf("BAYPLAN_RESTORE_RESTART=%q: error = %v, want one naming the variable and the two values", bad, err)
+		}
+	}
+}
+
+func TestTheBackupUploadCapDefaultsToOneGiBAndTakesByteSizesFromOneMiBToSixtyFourGiB(t *testing.T) {
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BackupMaxUpload != 1<<30 {
+		t.Fatalf("BackupMaxUpload default = %d, want 1 GiB", c.BackupMaxUpload)
+	}
+	for in, want := range map[string]int64{
+		"1MiB": 1 << 20, "512MiB": 512 << 20, "2GiB": 2 << 30, "64GiB": 64 << 30,
+		"1048576": 1 << 20, "5368709120": 5 << 30, " 1 GiB ": 1 << 30, "1gib": 1 << 30,
+		"1024KiB": 1 << 20, "1M": 1 << 20, "3G": 3 << 30,
+	} {
+		c, err := load(t, nil, envMap{"BAYPLAN_BACKUP_MAX_UPLOAD": in}, files{})
+		if err != nil || c.BackupMaxUpload != want {
+			t.Errorf("BAYPLAN_BACKUP_MAX_UPLOAD=%q: %d, %v; want %d", in, c.BackupMaxUpload, err, want)
+		}
+	}
+	for _, bad := range []string{"1048575", "1023KiB", "0", "-1GiB", "65GiB", "70000000000", "lots", "1TiB", "1.5GiB"} {
+		_, err := load(t, nil, envMap{"BAYPLAN_BACKUP_MAX_UPLOAD": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "BAYPLAN_BACKUP_MAX_UPLOAD") {
+			t.Errorf("BAYPLAN_BACKUP_MAX_UPLOAD=%q: error = %v, want one naming the variable", bad, err)
+		}
+	}
+}

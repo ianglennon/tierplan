@@ -20,10 +20,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/backup"
 	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
 )
 
@@ -371,4 +373,120 @@ func TestOnlyTheFirstRestartRequestIsAccepted(t *testing.T) {
 	default:
 		t.Fatal("requested() is not closed after a request")
 	}
+}
+
+// pendingRestore sets a data directory up as a swap leaves it: the old database
+// saved under backups/, a database that carries a schema newer than this binary
+// as bayplan.db, and the restore-pending marker. The old database holds the
+// admin "oldadmin"; the new one holds a setting the old one lacks.
+func pendingRestore(t *testing.T) (dir, snapshot string) {
+	t.Helper()
+	ctx := context.Background()
+	dir = t.TempDir() + "/data"
+	old, err := Build(ctx, testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAdmin(t, old, "oldadmin")
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	snapshot, err = backup.PreRestoreSnapshot(ctx, dir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The "restored" database: the same file with a newer schema recorded, so the
+	// migration at the next start refuses it.
+	st, err := store.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO settings (key, value, updated_at) VALUES ('from_the_restore', 'yes', 1)`,
+		`INSERT INTO goose_db_version (version_id, is_applied, tstamp) VALUES (9999, 1, CURRENT_TIMESTAMP)`,
+	} {
+		if _, err := st.Write.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := backup.WriteMarker(dir, snapshot, now); err != nil {
+		t.Fatal(err)
+	}
+	return dir, snapshot
+}
+
+func TestBootRollbackPutsThePreRestoreSnapshotBackWhenTheRestoredDatabaseCannotStart(t *testing.T) {
+	dir, snapshot := pendingRestore(t)
+
+	var logs bytes.Buffer
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatalf("Build with a restore pending whose database cannot start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	// The old state is what runs.
+	var n int
+	if err := srv.Store().Read.QueryRow(`SELECT COUNT(*) FROM users WHERE username = 'oldadmin'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the old admin is missing after the rollback: %d, %v", n, err)
+	}
+	if err := srv.Store().Read.QueryRow(`SELECT COUNT(*) FROM settings WHERE key = 'from_the_restore'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the restored database is still in use: %d, %v", n, err)
+	}
+	if _, pending, _ := backup.ReadMarker(dir); pending {
+		t.Error("the marker survived the rollback")
+	}
+	if _, err := os.Stat(snapshot); err == nil {
+		t.Error("the snapshot is still in backups/: it should have been moved back")
+	}
+
+	// The failure is on the old chain, and the chain verifies.
+	var details string
+	if err := srv.Store().Read.QueryRow(`SELECT details FROM audit_log WHERE action = 'backup.failed'`).Scan(&details); err != nil {
+		t.Fatalf("no backup.failed entry: %v", err)
+	}
+	var d map[string]string
+	if err := json.Unmarshal([]byte(details), &d); err != nil || d["stage"] != "restore_boot" || d["error"] == "" {
+		t.Fatalf("backup.failed details = %v, %v; want stage restore_boot and the error", d, err)
+	}
+	if res, err := audit.Verify(context.Background(), srv.Store(), srv.Vault()); err != nil || res.Broken != nil {
+		t.Fatalf("the chain after the rollback = %+v, %v", res, err)
+	}
+	if !strings.Contains(logs.String(), "going back to the pre-restore snapshot") {
+		t.Error("the rollback was not logged")
+	}
+}
+
+func TestBootRollbackDoesNotRunWhenNoRestoreIsPending(t *testing.T) {
+	dir, _ := pendingRestore(t)
+	if err := backup.RemoveMarker(dir); err != nil {
+		t.Fatal(err)
+	}
+	// Without the marker a database that cannot start is an error to report, not
+	// something to quietly replace.
+	if _, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler)); err == nil {
+		t.Fatal("Build succeeded on a database newer than the binary")
+	}
+}
+
+func TestBootRollbackReportsWhenThereIsNoSnapshotToGoBackTo(t *testing.T) {
+	dir, snapshot := pendingRestore(t)
+	if err := os.Remove(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	if err == nil || !strings.Contains(err.Error(), "snapshot") {
+		t.Fatalf("Build = %v, want an error that says the snapshot is missing", err)
+	}
+	// The data directory is released for the next attempt.
+	release, lerr := datadir.Lock(dir)
+	if lerr != nil {
+		t.Fatalf("the lock was kept after a failed start: %v", lerr)
+	}
+	_ = release()
 }
