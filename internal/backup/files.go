@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"regexp"
 	"sort"
@@ -128,3 +129,7 @@ func isEscape(err error) bool {
 	// that TestAFileNameThatIsALinkOutOfTheFolderIsNotServed pins.
 	return errors.As(err, &pe) && pe.Err != nil && pe.Err.Error() == "path escapes from parent"
 }
+
+// SweepWorkFiles removes what a killed export left behind. Skeleton: the sweep
+// itself follows the test that describes it.
+func SweepWorkFiles(dataDir, backupDir string, now time.Time, log *slog.Logger) {}

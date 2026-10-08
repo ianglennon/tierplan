@@ -4,10 +4,13 @@
 package backup_test
 
 import (
+	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/backup"
 )
@@ -67,5 +70,131 @@ func TestAScheduledBackupOpensByItsName(t *testing.T) {
 	b, _ := io.ReadAll(f)
 	if string(b) != "the bytes" || info.Size != 9 {
 		t.Fatalf("read %q, info %+v", b, info)
+	}
+}
+
+func TestFilePatternAcceptsOnlyTheNameOfAScheduledBackup(t *testing.T) {
+	for name, want := range map[string]bool{
+		"bayplan-backup-20261008-0300.bayplan":     true,
+		"bayplan-backup-20261008-0300.bayplan.bak": false,
+		"bayplan-backup-20261008-300.bayplan":      false,
+		"bayplan-backup-2026-10-08-0300.bayplan":   false,
+		"Bayplan-backup-20261008-0300.bayplan":     false,
+		"x.bayplan":                                false,
+		"bayplan.db":                               false,
+		"bayplan.key":                              false,
+		"bayplan-20261008T030000Z.db":              false,
+		"prerestore-20261008T030000Z.db":           false,
+		"../bayplan-backup-20261008-0300.bayplan":  false,
+		"sub/bayplan-backup-20261008-0300.bayplan": false,
+		"bayplan-backup-20261008-0300.bayplan\n":   false,
+		"":                                         false,
+	} {
+		if got := backup.IsScheduledName(name); got != want {
+			t.Errorf("IsScheduledName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestFilePatternKeepsEveryOtherNameAwayFromTheFileSystem(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "backups")
+	writeFile(t, parent, "bayplan.db", "the database")
+	writeFile(t, parent, "bayplan.key", "the master key")
+	writeFile(t, dir, "x.bayplan", "not a scheduled name")
+	writeFile(t, dir, "bayplan-backup-20261008-0300.bayplan.bak", "x")
+	for _, name := range []string{
+		"../bayplan.db", "../bayplan.key", "x.bayplan", "bayplan-backup-20261008-0300.bayplan.bak",
+		"..%2Fbayplan.db", "/etc/passwd", "bayplan-backup-20261008-0300.bayplan/../../bayplan.key",
+	} {
+		f, _, err := backup.OpenBackupFile(dir, name)
+		if f != nil {
+			_ = f.Close()
+		}
+		if !errors.Is(err, backup.ErrNoSuchBackup) {
+			t.Errorf("OpenBackupFile(%q) = %v, want ErrNoSuchBackup", name, err)
+		}
+	}
+}
+
+func TestAFileNameThatIsALinkOutOfTheFolderIsNotServed(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "backups")
+	writeFile(t, parent, "bayplan.key", "the master key")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const name = "bayplan-backup-20261008-0300.bayplan"
+	if err := os.Symlink(filepath.Join(parent, "bayplan.key"), filepath.Join(dir, name)); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	f, _, err := backup.OpenBackupFile(dir, name)
+	if f != nil {
+		_ = f.Close()
+	}
+	if !errors.Is(err, backup.ErrNoSuchBackup) {
+		t.Fatalf("a link to the master key opened: %v", err)
+	}
+	listed, err := backup.ListBackupFiles(dir)
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("a link is listed as a backup: %v, %v", listed, err)
+	}
+}
+
+func TestADirectoryWithABackupsNameIsNotABackup(t *testing.T) {
+	dir := t.TempDir()
+	const name = "bayplan-backup-20261008-0300.bayplan"
+	writeFile(t, filepath.Join(dir, name), "inner", "x")
+	if f, _, err := backup.OpenBackupFile(dir, name); !errors.Is(err, backup.ErrNoSuchBackup) {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatalf("a directory opened as a backup: %v", err)
+	}
+}
+
+func TestStaleWorkFilesOfAKilledExportAreSweptAndNothingElseIs(t *testing.T) {
+	data := t.TempDir()
+	dir := filepath.Join(data, "backups")
+	now := utc(2026, 10, 8, 12, 0)
+	old := now.Add(-3 * time.Hour)
+	fresh := now.Add(-time.Minute)
+	mk := func(parent, name string, isDir bool, mod time.Time) string {
+		t.Helper()
+		p := filepath.Join(parent, name)
+		if isDir {
+			if err := os.MkdirAll(filepath.Join(p, "inner"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			writeFile(t, parent, name, "x")
+		}
+		if err := os.Chtimes(p, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	staleDir := mk(data, ".bayplan-backup-123", true, old)
+	staleTmp := mk(data, ".bayplan-export-456.tmp", false, old)
+	staleSched := mk(dir, ".bayplan-schedule-789.tmp", false, old)
+	freshDir := mk(data, ".bayplan-backup-live", true, fresh)
+	freshTmp := mk(data, ".bayplan-export-live.tmp", false, fresh)
+	db := mk(data, "bayplan.db", false, old)
+	key := mk(data, "bayplan.key", false, old)
+	saved := mk(dir, "bayplan-backup-20261001-0300.bayplan", false, old)
+	snap := mk(dir, "bayplan-20261001T030000Z.db", false, old)
+	otherHidden := mk(data, ".bayplan-something-else", false, old)
+
+	backup.SweepWorkFiles(data, dir, now, slog.New(slog.DiscardHandler))
+
+	for _, p := range []string{staleDir, staleTmp, staleSched} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s was not swept", p)
+		}
+	}
+	for _, p := range []string{freshDir, freshTmp, db, key, saved, snap, otherHidden} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was removed: %v", p, err)
+		}
 	}
 }
