@@ -25,6 +25,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "auth.unlocked",
   "auth.logout",
   "auth.password_changed",
+  "auth.link_refused",
   "setup.token_failed",
   "setup.completed",
   "setup.attempt_denied",

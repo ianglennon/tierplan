@@ -67,7 +67,8 @@
         "logout": "Signed out",
         "locked": "Account locked",
         "unlocked": "Unlocked account",
-        "password_changed": "Changed password"
+        "password_changed": "Changed password",
+        "link_refused": "Refused invite or reset link"
       },
       "setup": {
         "token_failed": "Wrong setup token",
