@@ -7,6 +7,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { queryClient } from "@/api/query-client";
+import type { Me } from "@/hooks/use-me";
 import { recordRecentTiming } from "@/routes/_app/env/$envId";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
@@ -55,6 +56,8 @@ const SUMMARY = (id: string, name: string) => ({
 });
 
 let sent: { method: string; path: string }[];
+// What GET /api/me answers; stubInstance puts it back to the instance admin.
+let meBody: Me = ME;
 // What GET /api/me/recent-environments and GET /api/environments answer.
 let recent: () => Response | Promise<Response>;
 let list: () => Response | Promise<Response>;
@@ -63,6 +66,7 @@ let list: () => Response | Promise<Response>;
 // caller, the two lists "/" reads, and the dashboard reads of an environment.
 function stubInstance(needsSetup: boolean, signedIn = true) {
   sent = [];
+  meBody = ME;
   recent = () => Response.json({ environmentIds: [] });
   list = () => Response.json({ items: [] });
   vi.stubGlobal(
@@ -71,7 +75,7 @@ function stubInstance(needsSetup: boolean, signedIn = true) {
       const path = new URL(req.url).pathname;
       sent.push({ method: req.method, path });
       if (path === "/api/me") {
-        return signedIn ? Response.json(ME) : Response.json({ status: 401 }, { status: 401 });
+        return signedIn ? Response.json(meBody) : Response.json({ status: 401 }, { status: 401 });
       }
       if (path === "/api/me/recent-environments") return recent();
       if (path === "/api/environments") return list();
@@ -168,6 +172,43 @@ describe("first-run redirects", () => {
     cleanup();
     stubInstance(false);
     expect(await land("/")).toBe("/environments");
+  });
+});
+
+describe("a user with no access to any environment (D-08)", () => {
+  function renderHome() {
+    const router = createRouter({
+      routeTree,
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    return router;
+  }
+
+  it("stays on the home page and says who to ask, inside the shell", async () => {
+    stubInstance(false);
+    meBody = makeMe({ envs: {}, administrators: ["admin", "ops-lead"] });
+    const router = renderHome();
+    expect(
+      await screen.findByRole("heading", { name: "You don't have access to any environments yet" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Ask an administrator to give you access.")).toBeTruthy();
+    expect(screen.getByText("Administrators: admin, ops-lead")).toBeTruthy();
+    // The shell works: the user menu is there and the page did not redirect.
+    expect(screen.getByRole("button", { name: /viewer/i })).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("still redirects a user who can read an environment", async () => {
+    stubInstance(false);
+    meBody = makeMe({ envs: { a: "viewer" } });
+    recent = () => Response.json({ environmentIds: ["a"] });
+    list = () => Response.json({ items: [env("a", "alpha")] });
+    expect(await land("/")).toBe("/env/a");
   });
 });
 

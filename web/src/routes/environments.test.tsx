@@ -239,6 +239,17 @@ describe("/environments", () => {
     expect(screen.queryByRole("table")).toBeNull();
   });
 
+  it("shows the no-access state, not No permission, to someone with no access to any environment (D-08)", async () => {
+    me = makeMe({ envs: {}, administrators: ["admin"] });
+    renderAt("/environments");
+    expect(
+      await screen.findByRole("heading", { name: "You don't have access to any environments yet" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Administrators: admin")).toBeTruthy();
+    expect(screen.queryByText("You don't have permission to view this page")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
   it("shows Live once the stream opens, Reconnecting… while it retries, and nothing once polling", async () => {
     renderAt("/environments");
     await screen.findByRole("table");
