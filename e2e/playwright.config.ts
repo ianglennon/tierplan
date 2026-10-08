@@ -11,9 +11,19 @@ import { ORIGIN as baseURL } from "./tests/env";
 // one before it. A failure early on skips the rest, which is what a broken
 // setup deserves.
 const chromium = { ...devices["Desktop Chrome"], baseURL };
-// The agent project runs last: it adds a second environment and revokes it, and
-// the rest of the suite assumes the one it started with.
-const order = ["setup-and-login", "dashboard", "audit", "version", "settings", "agent"] as const;
+// The agent project adds a second environment and revokes it, so the specs before
+// it assume the one environment they started with. The access project follows it
+// because it needs that second, revoked environment as the one a new user must not
+// see.
+const order = [
+  "setup-and-login",
+  "dashboard",
+  "audit",
+  "version",
+  "settings",
+  "agent",
+  "access",
+] as const;
 
 export default defineConfig({
   testDir: "./tests",
