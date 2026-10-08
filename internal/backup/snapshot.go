@@ -37,9 +37,12 @@ const (
 
 // PreRestoreSnapshot saves the live database in dataDir as
 // backups/prerestore-<UTC time>.db, mode 0600, and returns its path. It is a
-// consistent VACUUM INTO copy. If the database cannot be opened (a restore is
-// often the answer to a damaged one) the file is copied as it is, so the
-// operator still has whatever was there.
+// consistent VACUUM INTO copy, flushed to disk with its directory. If the
+// database cannot be opened (a restore is often the answer to a damaged one) the
+// file is copied as it is together with its write-ahead log
+// (prerestore-<UTC time>.db-wal), so the operator still has whatever was there,
+// including transactions that had not yet been folded into the main file.
+// RollbackRestore moves both back.
 func PreRestoreSnapshot(ctx context.Context, dataDir string, now time.Time) (string, error) {
 	dir := filepath.Join(dataDir, backupsDir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -53,15 +56,37 @@ func PreRestoreSnapshot(ctx context.Context, dataDir string, now time.Time) (str
 		if cerr := st.Close(); err == nil && cerr != nil {
 			err = cerr
 		}
+		// VACUUM INTO does not promise a durable output file: flush it, and the
+		// directory entry, before the live database is replaced.
+		if err == nil {
+			err = errors.Join(syncFile(path), syncFile(dir))
+		}
 	}
 	if err != nil {
 		_ = os.Remove(path)
-		if cerr := copyExclusive(filepath.Join(dataDir, store.DatabaseFile), path); cerr != nil {
+		_ = os.Remove(path + walSuffix)
+		live := filepath.Join(dataDir, store.DatabaseFile)
+		cerr := copyExclusive(live, path)
+		if cerr == nil {
+			// Swap removes the live journal, so what it holds must survive
+			// beside the copy for SQLite to recover when the copy is opened.
+			if werr := copyExclusive(live+walSuffix, path+walSuffix); werr != nil && !errors.Is(werr, fs.ErrNotExist) {
+				cerr = fmt.Errorf("save the write-ahead log: %w", werr)
+				_ = os.Remove(path)
+			}
+		}
+		if cerr == nil {
+			cerr = syncFile(dir)
+		}
+		if cerr != nil {
 			return "", fmt.Errorf("save the current database before replacing it: %w", errors.Join(err, cerr))
 		}
 	}
 	return path, nil
 }
+
+// walSuffix is the extension of SQLite's write-ahead log beside a database file.
+const walSuffix = "-wal"
 
 // copyExclusive copies src to a new file dst, mode 0600, refusing to replace an
 // existing one.
@@ -89,7 +114,8 @@ func copyExclusive(src, dst string) error {
 }
 
 // prunePreRestore keeps the newest keep pre-restore snapshots in dir and removes
-// the rest. It matches only prerestore-<timestamp>.db, so it never removes a
+// the rest, with the write-ahead log saved beside a fallback copy. It matches
+// only prerestore-<timestamp>.db (and its -wal), so it never removes a
 // migration snapshot, a backup or any other file. A missing directory is not an
 // error.
 func prunePreRestore(dir string, keep int) error {
@@ -116,6 +142,9 @@ func prunePreRestore(dir string, keep int) error {
 	var errs []error
 	for len(snaps) > keep {
 		errs = append(errs, os.Remove(filepath.Join(dir, snaps[0])))
+		if err := os.Remove(filepath.Join(dir, snaps[0]+walSuffix)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
 		snaps = snaps[1:]
 	}
 	return errors.Join(errs...)

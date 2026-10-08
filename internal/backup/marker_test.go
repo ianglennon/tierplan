@@ -135,3 +135,34 @@ func TestRollbackOfARestoreThatReplacedNothingRemovesTheRestoredDatabase(t *test
 		t.Fatal("the restored database was kept")
 	}
 }
+
+func TestRollbackMovesTheSnapshotsWriteAheadLogBackWithIt(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"bayplan.db": "restored", "bayplan.db-wal": "restored-journal",
+		"backups/prerestore-20260304T050607Z.db": "old", "backups/prerestore-20260304T050607Z.db-wal": "old-journal",
+	} {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := backup.WriteMarker(dir, filepath.Join(dir, "backups", "prerestore-20260304T050607Z.db"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m, _, _ := backup.ReadMarker(dir)
+	if err := backup.RollbackRestore(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"bayplan.db": "old", "bayplan.db-wal": "old-journal"} {
+		if got, _ := os.ReadFile(filepath.Join(dir, name)); string(got) != want { //nolint:gosec // a file in the test directory
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "backups", "prerestore-20260304T050607Z.db-wal")); err == nil {
+		t.Fatal("the snapshot's journal was copied, not moved")
+	}
+}

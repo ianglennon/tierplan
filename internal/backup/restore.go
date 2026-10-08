@@ -378,8 +378,10 @@ func (s *Staged) Swap(ctx context.Context, dataDir string, now time.Time) (snaps
 	if err := syncFile(staged); err != nil {
 		return "", fmt.Errorf("flush the staged database: %w", err)
 	}
-	// The database being replaced is saved first, and its journal is folded in
-	// by closing it cleanly, so removing the journal files below loses nothing.
+	// The database being replaced is saved first. Its journal is folded into
+	// the snapshot (a clean close and VACUUM INTO) or, when the database cannot
+	// be opened, copied beside the snapshot, so removing the journal files below
+	// loses nothing.
 	if _, statErr := os.Stat(live); statErr == nil {
 		snapshotPath, err = PreRestoreSnapshot(ctx, dataDir, now)
 		if err != nil {

@@ -128,8 +128,16 @@ func RollbackRestore(dataDir string, m Marker) error {
 		if err := os.Remove(live); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("remove the restored database: %w", err)
 		}
-	} else if err := os.Rename(snap, live); err != nil {
-		return fmt.Errorf("move the pre-restore snapshot back: %w", err)
+	} else {
+		// A snapshot saved as a plain copy of a damaged database carries its
+		// write-ahead log; the log goes back first so the database is never
+		// live without it.
+		if err := os.Rename(snap+walSuffix, live+walSuffix); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("move the pre-restore write-ahead log back: %w", err)
+		}
+		if err := os.Rename(snap, live); err != nil {
+			return fmt.Errorf("move the pre-restore snapshot back: %w", err)
+		}
 	}
 	if err := syncFile(dataDir); err != nil {
 		return fmt.Errorf("flush the data directory: %w", err)
