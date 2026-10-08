@@ -48,6 +48,7 @@ import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from "@/componen
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { LocalHostPanel, localHostQuery } from "@/features/environments/local-host-panel";
+import { UnknownAgentsCard } from "@/features/environments/unknown-agents-card";
 import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
@@ -407,6 +408,9 @@ export function EnvironmentsSettings() {
 
   return (
     <div ref={listRef} tabIndex={-1} className="flex flex-col gap-6 outline-none">
+      {/* After a restore: the agents installed after the backup (D-31). Instance
+          admins only, and only while there are any. */}
+      <UnknownAgentsCard />
       {items.length > 0 ? (
         <ItemGroup className="gap-3">
           {items.map((environment) => (

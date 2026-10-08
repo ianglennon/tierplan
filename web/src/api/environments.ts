@@ -13,6 +13,7 @@ export type EnvironmentStatus = components["schemas"]["EnvironmentStatusBody"];
 export type HealthState = EnvironmentStatus["state"];
 export type InstallInfo = components["schemas"]["InstallBody"];
 export type RotateAnswer = components["schemas"]["RotateTokenBody"];
+export type UnknownAgentItem = components["schemas"]["UnknownAgentBody"];
 
 // The dashboard counts refetch on this interval as the polling fallback while
 // the events stream is not there (D-57).
@@ -28,6 +29,22 @@ export const environmentsQuery = queryOptions({
     if (!data) throw new Error("GET /api/environments failed");
     return data;
   },
+});
+
+// The ["unknown-agents"] query: the agents that tried to connect with a certificate
+// the environment issued but are not in this Bayplan's database, as after a restore
+// from an older backup (D-31). The server keeps the list in memory and ages it out
+// 24 hours after an agent stops trying, so it is read again now and then. Only an
+// instance admin may read it.
+export const UNKNOWN_AGENTS_REFETCH_MS = 60_000;
+export const unknownAgentsQuery = queryOptions({
+  queryKey: ["unknown-agents"],
+  queryFn: async (): Promise<UnknownAgentItem[]> => {
+    const { data } = await api.GET("/api/environments/unknown-agents");
+    if (!data) throw new Error("GET /api/environments/unknown-agents failed");
+    return data.items ?? [];
+  },
+  refetchInterval: UNKNOWN_AGENTS_REFETCH_MS,
 });
 
 // The ["recent-environments"] query: the environments this user opened last,

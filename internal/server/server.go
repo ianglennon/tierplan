@@ -128,23 +128,24 @@ type Server struct {
 // routes with no database or socket, which is what the `openapi` subcommand and
 // the router-walk tests use.
 type RouterDeps struct {
-	Options      httpx.Options
-	System       api.SystemDeps
-	Setup        api.SetupDeps
-	Auth         api.AuthDeps
-	Account      api.AccountDeps
-	Access       api.AccessDeps
-	LocalHost    api.LocalHostDeps
-	Environments api.EnvironmentsDeps
-	Agents       api.AgentsDeps
-	Dashboard    api.DashboardDeps
-	Events       api.EventsDeps
-	EnvStream    api.EnvStreamDeps
-	Recent       api.RecentDeps
-	Audit        api.AuditDeps
-	Settings     api.SettingsDeps
-	Backup       api.BackupDeps
-	Restore      api.RestoreDeps
+	Options       httpx.Options
+	System        api.SystemDeps
+	Setup         api.SetupDeps
+	Auth          api.AuthDeps
+	Account       api.AccountDeps
+	Access        api.AccessDeps
+	LocalHost     api.LocalHostDeps
+	Environments  api.EnvironmentsDeps
+	Agents        api.AgentsDeps
+	UnknownAgents api.UnknownAgentsDeps
+	Dashboard     api.DashboardDeps
+	Events        api.EventsDeps
+	EnvStream     api.EnvStreamDeps
+	Recent        api.RecentDeps
+	Audit         api.AuditDeps
+	Settings      api.SettingsDeps
+	Backup        api.BackupDeps
+	Restore       api.RestoreDeps
 	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
 	// route outside the policy besides the probes and the setup page, because the
 	// handshake inside it is its own authentication. Nil mounts a handler that
@@ -170,6 +171,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterLocalHost(r, d.LocalHost)
 	api.RegisterEnvironments(r, d.Environments)
 	api.RegisterAgents(r, d.Agents)
+	api.RegisterUnknownAgents(r, d.UnknownAgents)
 	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Agents: d.Agents, Log: d.Environments.Log})
 	api.RegisterDashboard(r, d.Dashboard)
 	api.RegisterEvents(r, d.Events)
@@ -666,16 +668,17 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			AnonAudit: anonAudit,
 			Log:       log,
 		},
-		LocalHost:    api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		Environments: api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
-		Agents:       api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
-		Dashboard:    api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
-		Events:       api.EventsDeps{Aggregator: aggregator, Log: log},
-		EnvStream:    api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
-		Recent:       api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
-		Audit:        api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
-		Settings:     api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log},
-		Backup:       api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
+		LocalHost:     api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
+		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
+		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
+		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
+		Dashboard:     api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
+		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
+		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
+		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
+		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
+		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log},
+		Backup:        api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
 			Setup: setupDeps, DataDir: info.Path, AppVersion: buildinfo.Get().Version, Log: log,

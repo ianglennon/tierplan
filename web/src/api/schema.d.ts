@@ -636,6 +636,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/environments/unknown-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the agents Bayplan does not know
+         * @description After a restore from a backup, agents that were installed after the backup was taken present a certificate the environment issued but are not in the restored database, and are refused unknown_agent. This lists the ones that tried in the last 24 hours, newest first, from memory: it is empty after a restart until they try again, and an agent drops off 24 hours after it stops trying. Each is reinstalled with its environment's install command. Needs environments.token (instance admin).
+         */
+        get: operations["listUnknownAgents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments/warnings": {
         parameters: {
             query?: never;
@@ -3301,6 +3321,25 @@ export interface components {
             /** @description The ID of the user who takes it over */
             ownerId: string;
         };
+        UnknownAgentBody: {
+            /** @description The environment whose CA signed the agent's certificate */
+            envId: string;
+            /** @description That environment's name */
+            envName: string;
+            /** @description The address of the newest attempt */
+            ip: string;
+            /**
+             * Format: date-time
+             * @description When the agent last tried to connect
+             */
+            lastAttempt: string;
+            /** @description The agent as its certificate names it (the certificate's common name) */
+            node: string;
+        };
+        UnknownAgentsBody: {
+            /** @description Newest attempt first; empty when there are none */
+            items: components["schemas"]["UnknownAgentBody"][] | null;
+        };
         UpdateAgentsBody: {
             /**
              * Format: int64
@@ -4779,6 +4818,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AddEnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listUnknownAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnknownAgentsBody"];
                 };
             };
             /** @description Error */

@@ -4117,6 +4117,59 @@
         ],
         "type": "object"
       },
+      "UnknownAgentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment whose CA signed the agent's certificate",
+            "type": "string"
+          },
+          "envName": {
+            "description": "That environment's name",
+            "type": "string"
+          },
+          "ip": {
+            "description": "The address of the newest attempt",
+            "type": "string"
+          },
+          "lastAttempt": {
+            "description": "When the agent last tried to connect",
+            "format": "date-time",
+            "type": "string"
+          },
+          "node": {
+            "description": "The agent as its certificate names it (the certificate's common name)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "envName",
+          "node",
+          "ip",
+          "lastAttempt"
+        ],
+        "type": "object"
+      },
+      "UnknownAgentsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Newest attempt first; empty when there are none",
+            "items": {
+              "$ref": "#/components/schemas/UnknownAgentBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "UpdateAgentsBody": {
         "additionalProperties": false,
         "properties": {
@@ -6669,6 +6722,45 @@
           }
         },
         "summary": "Add an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/unknown-agents": {
+      "get": {
+        "description": "After a restore from a backup, agents that were installed after the backup was taken present a certificate the environment issued but are not in the restored database, and are refused unknown_agent. This lists the ones that tried in the last 24 hours, newest first, from memory: it is empty after a restart until they try again, and an agent drops off 24 hours after it stops trying. Each is reinstalled with its environment's install command. Needs environments.token (instance admin).",
+        "operationId": "listUnknownAgents",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownAgentsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the agents Bayplan does not know",
         "tags": [
           "environments"
         ]

@@ -141,11 +141,14 @@ type authFixture struct {
 	// restore is what the restore routes (plan 03-25) restart through and keep
 	// their upload in; build creates it on first use and keeps it across builds.
 	restore *restoreHook
+	// unknown is the registry of agents refused unknown_agent that the unknown-agents
+	// route and the warnings read (plan 03-28); newAuthFixture makes one.
+	unknown *agents.UnknownAgents
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	t.Helper()
-	f := &authFixture{st: storetest.New(t), clk: &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, logs: &bytes.Buffer{}}
+	f := &authFixture{st: storetest.New(t), clk: &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, logs: &bytes.Buffer{}, unknown: agents.NewUnknownAgents()}
 	log := slog.New(slog.NewJSONHandler(f.logs, nil))
 	v, err := vault.LoadOrCreate(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)), t.TempDir(), slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -243,6 +246,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			MaxStreamsPerUser: f.envStreamMaxStreams, MaxLifetime: f.envStreamMaxLifetime, Log: log,
 		})
 	}
+	api.RegisterUnknownAgents(r, api.UnknownAgentsDeps{Unknown: f.unknown, Store: f.st, Now: f.clk.now, Log: log})
 	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Now: f.clk.now, Log: log})
 	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Checker: checker, Refusals: f.aud, Log: log})
 	api.RegisterBackup(r, api.BackupDeps{Store: f.st, Vault: f.v, Audit: f.aud, Instance: f.inst, DataDir: f.dataInfo.Path, Dir: f.backupDir, Scheduler: f.scheduler, AppVersion: "v9.9.9", Now: f.clk.now, Log: log})
