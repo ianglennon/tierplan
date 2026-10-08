@@ -307,11 +307,15 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
     if (kind === "refused") deps.notifyRefused();
 
     const at = now();
-    if (at - lastRun < ACCESS_REFETCH_THROTTLE_MS) {
-      // Not dropped: answered once when the window ends.
+    // A run still outstanding counts like the window: its read, or its move after
+    // the read, may not have finished even when 5000 ms have passed, and a second
+    // run beside it would cancel its read or move and tell the user twice.
+    if (inFlight || at - lastRun < ACCESS_REFETCH_THROTTLE_MS) {
+      // Not dropped: answered once when the window ends and the run is done.
       if (kind === "unseen") foldedUnseen = true;
       if (!cancelTrailing && !trailingWaiting) {
-        cancelTrailing = schedule(runTrailingSoon, lastRun + ACCESS_REFETCH_THROTTLE_MS - at);
+        const wait = Math.max(0, lastRun + ACCESS_REFETCH_THROTTLE_MS - at);
+        cancelTrailing = schedule(runTrailingSoon, wait);
       }
       return;
     }

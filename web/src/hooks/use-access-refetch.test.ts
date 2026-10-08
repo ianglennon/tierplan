@@ -184,6 +184,37 @@ describe("the throttle (T-03-100)", () => {
     await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
   });
 
+  it("folds a refusal that arrives after the window into the run still outstanding (WR-G-01)", async () => {
+    const before = makeMe({ envs: { a: "viewer", b: "viewer" } });
+    meAnswer = makeMe({ envs: { b: "viewer" } });
+    items = ["b"];
+    const { handle, moveTo, notifyChanged } = setup("a", before);
+    const release = holdMe();
+    const first = handle("unseen", "/api/env/a/summary");
+    await vi.waitFor(() => expect(meReads()).toBe(1));
+
+    // The window is over but the first read has not answered: a slow /api/me.
+    clock += ACCESS_REFETCH_THROTTLE_MS + 1_000;
+    await handle("unseen", "/api/env/a/containers");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // No second read beside the first, and the first was not cancelled.
+    expect(meReads()).toBe(1);
+    expect(liveTimers()).toHaveLength(1);
+    expect(moveTo).not.toHaveBeenCalled();
+
+    fire();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(meReads()).toBe(1);
+
+    release();
+    await first;
+    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+    await vi.waitFor(() => expect(meReads()).toBe(2));
+    // The move and the toast happened once, not once per run.
+    expect(moveTo).toHaveBeenCalledExactlyOnceWith("b");
+    expect(notifyChanged).toHaveBeenCalledTimes(1);
+  });
+
   it("counts the trailing run as unseen when any refusal folded into it was", async () => {
     meAnswer = makeMe({ envs: { a: "operator" } });
     const { handle, moveTo, notifyChanged, notifyRefused } = setup("a", meAnswer);
