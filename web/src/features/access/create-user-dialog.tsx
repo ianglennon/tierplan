@@ -150,6 +150,9 @@ function CreateUserForm({ onCancel, onCreated, onPendingChange }: CreateUserForm
           form.setFocus(routed[0]?.field ?? "username");
           return;
         }
+        case "unreachable":
+          setFormError(KEY.unreachable);
+          return;
         default:
           setFormError(KEY.server);
       }

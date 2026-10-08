@@ -33,11 +33,13 @@ export type CreateUserResult =
   | { kind: "username_taken" }
   | { kind: "username_reserved" }
   | { kind: "fields"; fields: ProblemField[] }
-  | { kind: "error" };
+  | { kind: "error" }
+  // The request never got an answer: the network or the server is down.
+  | { kind: "unreachable" };
 
 // createUser adds a user and returns the one-time invite link. The link is
 // handed to the caller and kept nowhere else: not in the query cache, not in
-// storage (UI-SPEC "One-time secrets"). A network failure is "error".
+// storage (UI-SPEC "One-time secrets").
 export async function createUser(input: NewUser): Promise<CreateUserResult> {
   try {
     const { data, error, response } = await api.POST("/api/users", {
@@ -60,7 +62,7 @@ export async function createUser(input: NewUser): Promise<CreateUserResult> {
     }
     return { kind: "error" };
   } catch {
-    return { kind: "error" };
+    return { kind: "unreachable" };
   }
 }
 
