@@ -259,3 +259,78 @@ export function restoreProblem(err: unknown): RestoreMessage {
       return { key: "restore.errors.check" };
   }
 }
+
+export type BackupSchedule = components["schemas"]["BackupScheduleBody"];
+export type BackupFileItem = components["schemas"]["BackupFileBody"];
+
+export const SCHEDULE_KEY = ["backup", "schedule"] as const;
+export const BACKUP_FILES_KEY = ["backup", "files"] as const;
+
+// The ["backup", "schedule"] query: whether scheduled backups are on, when, where
+// they go and how the last runs went. The passphrase is never in it.
+export const scheduleQuery = queryOptions({
+  queryKey: SCHEDULE_KEY,
+  queryFn: async () => {
+    const { data } = await api.GET("/api/backup/schedule");
+    if (!data) throw new Error("GET /api/backup/schedule failed");
+    return data;
+  },
+});
+
+// The ["backup", "files"] query: the scheduled backups on disk, newest first.
+export const backupFilesQuery = queryOptions({
+  queryKey: BACKUP_FILES_KEY,
+  queryFn: async () => {
+    const { data } = await api.GET("/api/backup/files");
+    if (!data) throw new Error("GET /api/backup/files failed");
+    return data.items ?? [];
+  },
+});
+
+// What the schedule form sends. An empty passphrase keeps the one already saved.
+export interface ScheduleValues {
+  enabled: boolean;
+  frequency: BackupSchedule["frequency"];
+  weekday: number;
+  timeUtc: string;
+  keep: number;
+  passphrase: string;
+}
+
+// ScheduleSaveError is a schedule the server did not save. type is the problem type
+// ("passphrase_too_short", "passphrase_required"), when it sent one. It never
+// carries the passphrase.
+export class ScheduleSaveError extends Error {
+  readonly status: number;
+  readonly type: string | undefined;
+
+  constructor(status: number, type?: string) {
+    super(`PUT /api/backup/schedule failed with ${status}`);
+    this.name = "ScheduleSaveError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// saveSchedule stores the schedule. The passphrase travels in the JSON body of a
+// PUT, is left out when empty, and is not kept anywhere here.
+export async function saveSchedule(values: ScheduleValues): Promise<BackupSchedule> {
+  const { passphrase, ...rest } = values;
+  const { data, error, response } = await api.PUT("/api/backup/schedule", {
+    body: passphrase ? { ...rest, passphrase } : rest,
+  });
+  if (!data) throw new ScheduleSaveError(response.status, readProblem(error, response).type);
+  return data;
+}
+
+// downloadBackupFile fetches one saved backup so the browser can save it.
+export async function downloadBackupFile(name: string): Promise<BackupFile> {
+  const { data, response } = await api.GET("/api/backup/files/{name}", {
+    params: { path: { name } },
+    parseAs: "blob",
+  });
+  if (!response.ok || data === undefined) {
+    throw new Error(`GET /api/backup/files/${name} failed with ${response.status}`);
+  }
+  return { blob: data, name: fileNameOf(response.headers.get("Content-Disposition")) };
+}

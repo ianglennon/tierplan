@@ -611,3 +611,22 @@ func TestTheBackupUploadCapDefaultsToOneGiBAndTakesByteSizesFromOneMiBToSixtyFou
 		}
 	}
 }
+
+// BAYPLAN_BACKUP_DIR (plan 03-27, D-32): where scheduled backups are written.
+func TestTheBackupFolderIsUnsetByDefaultSoItFollowsTheDataDirectoryAndCanBeSet(t *testing.T) {
+	if !strings.Contains(strings.Join(config.Names(), " "), "BAYPLAN_BACKUP_DIR") {
+		t.Error("Names() does not list BAYPLAN_BACKUP_DIR")
+	}
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil || c.BackupDir != "" {
+		t.Fatalf("default BackupDir = %q, %v; want empty", c.BackupDir, err)
+	}
+	c, err = load(t, nil, envMap{"BAYPLAN_BACKUP_DIR": "/mnt/backups"}, files{})
+	if err != nil || c.BackupDir != "/mnt/backups" {
+		t.Errorf("BAYPLAN_BACKUP_DIR: %q, %v", c.BackupDir, err)
+	}
+	c, err = load(t, []string{"--backup-dir", "/srv/b"}, envMap{"BAYPLAN_BACKUP_DIR": "/mnt/backups"}, files{})
+	if err != nil || c.BackupDir != "/srv/b" {
+		t.Errorf("the flag does not win: %q, %v", c.BackupDir, err)
+	}
+}

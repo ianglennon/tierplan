@@ -9,11 +9,12 @@ import { BackupRestored } from "@/features/backup/backup-restored";
 import { DownloadCard } from "@/features/backup/download-card";
 import { MasterKeyNote } from "@/features/backup/master-key-note";
 import { RestorePanel } from "@/features/backup/restore-panel";
+import { SchedulePanel } from "@/features/backup/schedule-panel";
 import { useT } from "@/i18n/use-t";
 
 // BackupPage is Settings > Backup: what a backup holds, the download and the
-// master key note, in the UI-SPEC order, 32px apart. The restore card sits between
-// the download and the note (the schedule card lands before it in a later plan).
+// master key note, in the UI-SPEC order, 32px apart. The scheduled backups card (with
+// the saved backups under it) and the restore card sit between the download and the note.
 // The page sits in the narrow (896px) Settings column. Once a restore has worked
 // the session is gone, and the whole page gives way to "Backup restored".
 export function BackupPage() {
@@ -33,6 +34,7 @@ export function BackupPage() {
         <AlertDescription className="text-foreground">{t("backup.intro")}</AlertDescription>
       </Alert>
       <DownloadCard />
+      <SchedulePanel />
       <RestorePanel
         onRestored={(done) => {
           release.current = done;

@@ -108,6 +108,7 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `BAYPLAN_SKIP_PRE_MIGRATE_BACKUP` | `false` | no | Do not snapshot the database before a migration. |
 | `BAYPLAN_RESTORE_RESTART` | `exec` | no | How Bayplan restarts after a restore from the web UI. `exec` replaces the process with a fresh Bayplan, so the container keeps running. `exit` stops with status 0 after the swap and relies on the container's restart policy (`unless-stopped` or `always`) to start it again. |
 | `BAYPLAN_BACKUP_MAX_UPLOAD` | `1GiB` | no | The largest backup file the web UI accepts for a restore, from `1MiB` to `64GiB`, in bytes or with a `KiB`, `MiB` or `GiB` suffix. A reverse proxy in front of Bayplan needs an upload limit at least this large. |
+| `BAYPLAN_BACKUP_DIR` | `<data>/backups` | no | The folder scheduled backups are written into. Mount a volume or a host folder here to keep backups off the data volume. Only `bayplan-backup-*.bayplan` files in it are ever listed, served or deleted. |
 | `BAYPLAN_TLS_CERT_FILE` | unset | no | Path to a TLS certificate in PEM form. Needs `BAYPLAN_TLS_KEY_FILE`. |
 | `BAYPLAN_TLS_KEY_FILE` | unset | no | Path to the TLS private key in PEM form. Needs `BAYPLAN_TLS_CERT_FILE`. |
 | `BAYPLAN_TLS_SELF_SIGNED` | `false` | no | Serve a generated self-signed certificate. Cannot be combined with the two file settings. |

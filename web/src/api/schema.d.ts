@@ -124,6 +124,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/backup/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the scheduled backups on disk
+         * @description The scheduled backups in the backups folder, newest first, with their size and when each was made. Other files in the folder (pre-migration and pre-restore snapshots, anything copied in by hand) are not listed. Needs backup.manage.
+         */
+        get: operations["listBackupFiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/files/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download a scheduled backup
+         * @description The encrypted backup file as it is on disk. Only names of the form bayplan-backup-YYYYMMDD-HHMM.bayplan are served; any other name is 404 and is never looked up in the file system. Audited as backup.exported with source saved. Needs backup.manage.
+         */
+        get: operations["downloadBackupFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/backup/info": {
         parameters: {
             query?: never;
@@ -178,6 +218,30 @@ export interface paths {
          * @description Opens the uploaded file with the passphrase and answers what is in it, without changing anything. 422 backup_unreadable for a wrong passphrase or a damaged file, 422 not_a_backup for a file that is not a backup, 409 backup_newer for a backup from a newer Bayplan, 404 upload_not_found for an upload that is gone or expired, 409 restore_busy while another check or restore runs. Audited as backup.checked. Needs backup.manage.
          */
         post: operations["checkRestore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the backup schedule
+         * @description Whether Bayplan makes a backup by itself, when, how many it keeps, where it writes them, when the next one is due and how the last runs went. Whether a passphrase is saved is reported; the passphrase never is. Needs backup.manage.
+         */
+        get: operations["getBackupSchedule"];
+        /**
+         * Set the backup schedule
+         * @description Turns scheduled backups on or off and sets when, how many to keep and the passphrase that locks them. The passphrase is sealed in the vault so backups can run with nobody present, and is never returned or logged; leave it out to keep the saved one. 422 passphrase_required when the schedule is on and no passphrase was ever saved; 422 passphrase_too_short for fewer than 16 characters. Audited as backup.schedule_updated. Needs backup.manage.
+         */
+        put: operations["putBackupSchedule"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1798,6 +1862,24 @@ export interface components {
              */
             retentionDays: number;
         };
+        BackupFileBody: {
+            /**
+             * Format: date-time
+             * @description When it was made, from its name (UTC, to the minute)
+             */
+            created: string;
+            /** @description The file name, bayplan-backup-YYYYMMDD-HHMM.bayplan */
+            name: string;
+            /**
+             * Format: int64
+             * @description Size in bytes
+             */
+            size: number;
+        };
+        BackupFilesOutputBody: {
+            /** @description The scheduled backups in the backups folder, newest first */
+            items: components["schemas"]["BackupFileBody"][] | null;
+        };
         BackupInfoBody: {
             /** @description The extension of a backup file, with the dot */
             fileExtension: string;
@@ -1811,6 +1893,40 @@ export interface components {
              * @description The fewest characters a backup passphrase may have
              */
             minPassphraseLength: number;
+        };
+        BackupScheduleBody: {
+            /** @description The folder the backups are written into on the Bayplan host */
+            dir: string;
+            /** @description Whether Bayplan makes a backup by itself */
+            enabled: boolean;
+            /**
+             * @description How often
+             * @enum {string}
+             */
+            frequency: "daily";
+            /**
+             * Format: int64
+             * @description How many scheduled backups are kept; older ones are deleted
+             */
+            keep: number;
+            /** @description The newest scheduled run, successful or not */
+            lastRun?: components["schemas"]["ScheduleRunBody"];
+            /** @description The newest scheduled run that wrote a backup */
+            lastSuccess?: components["schemas"]["ScheduleRunBody"];
+            /**
+             * Format: date-time
+             * @description When the next backup is due; absent while the schedule is off
+             */
+            nextRun?: string;
+            /** @description Whether a passphrase is saved. The passphrase itself is never returned */
+            passphraseSaved: boolean;
+            /** @description The time of day in UTC, as 24-hour HH:MM */
+            timeUtc: string;
+            /**
+             * Format: int64
+             * @description For a weekly schedule: the day, 0 for Sunday to 6 for Saturday
+             */
+            weekday: number;
         };
         CandidateTeamBody: {
             /** @description The team's ID */
@@ -2761,6 +2877,29 @@ export interface components {
             /** @description The lower-cased username. It can never be changed */
             username: string;
         };
+        PutBackupScheduleInputBody: {
+            /** @description Turn scheduled backups on or off */
+            enabled: boolean;
+            /**
+             * @description How often
+             * @enum {string}
+             */
+            frequency: "daily";
+            /**
+             * Format: int64
+             * @description How many scheduled backups to keep
+             */
+            keep: number;
+            /** @description Locks the scheduled backups; at least 16 characters. Leave it out to keep the saved one. It is stored sealed in the vault and never returned */
+            passphrase?: string;
+            /** @description The time of day in UTC, as 24-hour HH:MM */
+            timeUtc: string;
+            /**
+             * Format: int64
+             * @description For a weekly schedule: the day, 0 for Sunday to 6 for Saturday
+             */
+            weekday?: number;
+        };
         ReassignBody: {
             /** @description The automation's kind, as the owned list gives it */
             kind: string;
@@ -2874,6 +3013,24 @@ export interface components {
             hasAgents: boolean;
             /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
             install: components["schemas"]["InstallBody"];
+        };
+        ScheduleRunBody: {
+            /**
+             * Format: date-time
+             * @description When the run finished
+             */
+            at: string;
+            /** @description Why it failed, when it did */
+            error?: string;
+            /** @description The backup file it wrote, when it did */
+            fileName?: string;
+            /** @description Whether it wrote a backup */
+            ok: boolean;
+            /**
+             * Format: int64
+             * @description The size of that file in bytes
+             */
+            size?: number;
         };
         SessionBody: {
             /**
@@ -3595,6 +3752,69 @@ export interface operations {
             };
         };
     };
+    listBackupFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupFilesOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    downloadBackupFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A file name from the list; only names of the form bayplan-backup-YYYYMMDD-HHMM.bayplan are served */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The backup file */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getBackupInfo: {
         parameters: {
             query?: never;
@@ -3680,6 +3900,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RestoreSummaryBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getBackupSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupScheduleBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putBackupSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBackupScheduleInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupScheduleBody"];
                 };
             };
             /** @description Error */

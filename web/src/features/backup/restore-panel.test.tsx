@@ -127,10 +127,14 @@ async function reachConfirm() {
 }
 
 describe("Restore card (tracer): Settings > Backup to Backup restored", () => {
-  it("sits between the Download card and the Master key note", async () => {
+  it("sits after the Download and Scheduled backups cards, before the Master key note", async () => {
     renderPage();
     const titles = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
-    expect(titles.slice(0, 2)).toEqual(["Download a backup", "Restore from a backup"]);
+    expect(titles.slice(0, 3)).toEqual([
+      "Download a backup",
+      "Scheduled backups",
+      "Restore from a backup",
+    ]);
     expect(
       card().getByText("Replace everything in this Bayplan with the contents of a backup file."),
     ).toBeTruthy();

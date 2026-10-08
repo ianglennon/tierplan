@@ -595,6 +595,18 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	restart := newRestarter()
 
+	// Scheduled backups go to BAYPLAN_BACKUP_DIR, or the backups folder of the data
+	// directory, which the pre-migration and pre-restore snapshots share (D-32).
+	backupDir := cfg.BackupDir
+	if backupDir == "" {
+		backupDir = filepath.Join(info.Path, "backups")
+	}
+	backups := &backup.Scheduler{
+		Store: st, Vault: vlt, Audit: aud, Dir: backupDir, DataDir: info.Path, Log: log,
+		AppVersion:   func() string { return buildinfo.Get().Version },
+		InstanceName: inst.Name, PublicURL: inst.PublicURL,
+	}
+
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -660,7 +672,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Recent:       api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
 		Audit:        api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
 		Settings:     api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log},
-		Backup:       api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
+		Backup:       api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
 			Setup: setupDeps, DataDir: info.Path, AppVersion: buildinfo.Get().Version, Log: log,
@@ -708,6 +720,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	bg, stop := context.WithCancel(ctx)
 	srv.stopBackground = stop
 	srv.background.Go(func() { audit.RunNightly(bg, srv.audit, cfg.AuditRetentionDays, log) })
+	// Scheduled backups wait for the next instant the saved schedule names.
+	srv.background.Go(func() { backups.Run(bg) })
 	// Expired sessions are refused on lookup; this hourly sweep only keeps the table small.
 	srv.background.Go(func() { auth.RunSessionCleanup(bg, st, cfg.SessionIdleTimeout, nil) })
 	// Suppressed anonymous refusals are written every minute, and once more when

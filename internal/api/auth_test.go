@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -65,7 +66,12 @@ type authFixture struct {
 	// dataInfo and acctVault feed the account routes (plan 14). A test sets them
 	// before calling build; the defaults are a persisted directory and the
 	// environment-keyed vault.
-	dataInfo  datadir.Info
+	dataInfo datadir.Info
+	// backupDir is where the scheduled backups are listed from (plan 03-27); it is
+	// not made until a test writes into it.
+	backupDir string
+	// scheduler is told when a test saves the backup schedule.
+	scheduler interface{ Notify() }
 	acctVault *vault.Vault
 	// proxy feeds the proxy items of GET /api/warnings (plan 02-25); nil means none.
 	proxy *httpx.ProxyObserver
@@ -148,6 +154,7 @@ func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	f.v = v
 	f.acctVault = v
 	f.dataInfo = datadir.Info{Path: t.TempDir(), Persisted: true}
+	f.backupDir = filepath.Join(t.TempDir(), "backups")
 	f.aud = audit.NewWriter(f.st, v, log, f.clk.now)
 	if f.inst, err = instance.Load(context.Background(), f.st, cfg); err != nil {
 		t.Fatal(err)
@@ -238,7 +245,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	}
 	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Now: f.clk.now, Log: log})
 	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Checker: checker, Refusals: f.aud, Log: log})
-	api.RegisterBackup(r, api.BackupDeps{Store: f.st, Vault: f.v, Audit: f.aud, Instance: f.inst, DataDir: f.dataInfo.Path, AppVersion: "v9.9.9", Now: f.clk.now, Log: log})
+	api.RegisterBackup(r, api.BackupDeps{Store: f.st, Vault: f.v, Audit: f.aud, Instance: f.inst, DataDir: f.dataInfo.Path, Dir: f.backupDir, Scheduler: f.scheduler, AppVersion: "v9.9.9", Now: f.clk.now, Log: log})
 	api.RegisterRestore(r, f.restoreDeps(log))
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)

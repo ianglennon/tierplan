@@ -29,6 +29,7 @@ const (
 	problemPassphraseTooShort = "passphrase_too_short"
 	problemAuditChainBroken   = "audit_chain_broken"
 	problemBackupBusy         = "backup_busy"
+	problemPassphraseRequired = "passphrase_required"
 )
 
 // targetBackup is the audit target of a backup.
@@ -45,6 +46,12 @@ type BackupDeps struct {
 	DataDir string
 	// AppVersion is recorded in the backup.
 	AppVersion string
+	// Dir is the folder scheduled backups are written into and listed from, shown
+	// on the schedule card.
+	Dir string
+	// Scheduler is told when the saved schedule changes, so it plans its next run
+	// again. Nil means nobody is told (the routes still save).
+	Scheduler interface{ Notify() }
 	// MaxUploadBytes is the largest backup file a restore accepts, reported by the
 	// info route so the page can refuse a file before sending it. Zero means the
 	// default.
@@ -77,9 +84,10 @@ type ExportBackupInput struct {
 	}
 }
 
-// RegisterBackup registers the backup routes: the facts the Backup page needs
-// and the download of an encrypted backup. Both need backup.manage, which only
-// instance admins hold (D-28, D-29, D-32).
+// RegisterBackup registers the backup routes: the facts the Backup page needs,
+// the download of an encrypted backup, the backup schedule and the scheduled
+// backups saved on disk. All need backup.manage, which only instance admins hold
+// (D-28, D-29, D-32).
 func RegisterBackup(r *httpx.Router, d BackupDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
@@ -205,4 +213,6 @@ func RegisterBackup(r *httpx.Router, d BackupDeps) {
 			}
 		}}, nil
 	})
+
+	registerBackupSchedule(r, d, need, internal)
 }

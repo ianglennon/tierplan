@@ -67,6 +67,9 @@ type Config struct {
 	RestoreRestart string
 	// BackupMaxUpload caps an uploaded backup, in bytes.
 	BackupMaxUpload int64
+	// BackupDir is the folder scheduled backups are written into; empty means
+	// the backups folder inside the data directory.
+	BackupDir string
 
 	TLSCertFile   string
 	TLSKeyFile    string
@@ -193,6 +196,8 @@ var settings = []setting{
 		}},
 	{env: "BAYPLAN_BACKUP_MAX_UPLOAD", flag: "backup-max-upload", def: "1GiB", desc: "the largest backup file the web UI accepts for a restore, from 1MiB to 64GiB (bytes, or a number with KiB, MiB or GiB)",
 		apply: func(c *Config, raw string) (err error) { c.BackupMaxUpload, err = parseUploadSize(raw); return err }},
+	{env: "BAYPLAN_BACKUP_DIR", flag: "backup-dir", desc: "folder scheduled backups are written into (default: backups inside the data directory); mount a volume or host folder here to keep them off the data volume",
+		apply: func(c *Config, raw string) error { c.BackupDir = raw; return nil }},
 	{env: "BAYPLAN_TLS_CERT_FILE", flag: "tls-cert-file", desc: "path to a TLS certificate (PEM)",
 		apply: func(c *Config, raw string) error { c.TLSCertFile = raw; return nil }},
 	{env: "BAYPLAN_TLS_KEY_FILE", flag: "tls-key-file", desc: "path to the TLS private key (PEM)",
