@@ -203,6 +203,18 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
   const heldFor = (envId: string): Holding =>
     merge(baseline.get("*") ?? emptyHolding(), baseline.get(envId) ?? emptyHolding());
   const has = (envId: string): boolean => baseline.has(envId) || baseline.has("*");
+  // Whether the page of an environment waits behind the skeleton. Access to every
+  // environment ("*") covers an ID that is not an environment too, and that one is
+  // a plain Page not found at once (D-08), so with "*" only an environment the
+  // list knows counts. A list not read yet cannot rule an ID out.
+  const holdsSkeleton = (envId: string): boolean => {
+    if (baseline.has(envId)) return true;
+    if (!baseline.has("*")) return false;
+    const list = queryClient.getQueryData<{ items?: { id: string }[] | null }>(
+      environmentsQuery.queryKey,
+    );
+    return list === undefined || (list.items ?? []).some((e) => e.id === envId);
+  };
 
   // holdWhileWaiting keeps the skeleton up for the environment the user is on, if
   // they held it, from a refusal folded into the trailing run until that run
@@ -210,7 +222,7 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
   const holdWhileWaiting = (): void => {
     if (releaseWaiting) return;
     const envId = deps.currentEnvId();
-    if (envId === undefined || !has(envId)) return;
+    if (envId === undefined || !holdsSkeleton(envId)) return;
     let held = true;
     const release = (): void => {
       if (!held) return;
@@ -232,7 +244,7 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
     // The skeleton is for an environment the user held. This runs before the first
     // await so the page never shows a frame without it.
     const startEnv = deps.currentEnvId();
-    let held = startEnv !== undefined && has(startEnv);
+    let held = startEnv !== undefined && holdsSkeleton(startEnv);
     const release = (): void => {
       if (!held) return;
       held = false;

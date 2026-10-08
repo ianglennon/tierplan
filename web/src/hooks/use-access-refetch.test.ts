@@ -370,6 +370,35 @@ describe("the move after an environment is lost (D-10)", () => {
     expect(notifyChanged).not.toHaveBeenCalled();
   });
 
+  it("shows no skeleton for an ID that is not an environment, even to a user who holds every environment (IN-G-03)", async () => {
+    const me = makeMe({ instanceAdmin: true });
+    meAnswer = me;
+    qc.setQueryData(["environments"], { items: [{ id: "a", name: "a" }] });
+    const { handle, moveTo, notifyChanged } = setup("ghost", me);
+    const release = holdMe();
+    const run = handle("unseen", "/api/env/ghost/summary");
+    await vi.waitFor(() => expect(meReads()).toBe(1));
+    expect(isAccessRefetching()).toBe(false);
+    release();
+    await run;
+    expect(moveTo).not.toHaveBeenCalled();
+    expect(notifyChanged).not.toHaveBeenCalled();
+  });
+
+  it("still shows the skeleton for a real environment to a user who holds every environment", async () => {
+    const me = makeMe({ instanceAdmin: true });
+    meAnswer = me;
+    qc.setQueryData(["environments"], { items: [{ id: "a", name: "a" }] });
+    const { handle } = setup("a", me);
+    const release = holdMe();
+    const run = handle("unseen", "/api/env/a/summary");
+    await vi.waitFor(() => expect(meReads()).toBe(1));
+    expect(isAccessRefetching()).toBe(true);
+    release();
+    await run;
+    expect(isAccessRefetching()).toBe(false);
+  });
+
   it("does not move a user who is not on an environment page", async () => {
     const before = makeMe({ envs: { a: "viewer", b: "viewer" } });
     meAnswer = makeMe({ envs: { b: "viewer" } });
