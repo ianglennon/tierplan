@@ -550,3 +550,120 @@ func TestLoweringOnlyTheExtrasIsNotAnImpactRowButIsStillAudited(t *testing.T) {
 		t.Fatalf("details = %v, want no extras and impact_count 0", d)
 	}
 }
+
+// Delegation (plan 03-20, AUTH-06, D-12): an env Admin changes grants on the
+// environment they administer and nothing else.
+
+func delegated(env string, in access.GrantInput) access.GrantInput {
+	in.DelegatedEnv = env
+	return in
+}
+
+func (f *ownedFixture) assignmentCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM role_assignments`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestDelegatedPutRefusesEveryScopeButTheEnvironmentAndInstanceAdminSubjects(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addEnv(t, "env-a", "Alpha")
+	f.addEnv(t, "env-b", "Beta")
+	f.addUser(t, "dave")
+	f.addAdmin(t, "root")
+	f.addTeam(t, "ops", "dave")
+	before := f.assignmentCount(t)
+
+	for name, in := range map[string]access.GrantInput{
+		"every environment":          {SubjectType: "user", SubjectID: "dave", Scope: access.ScopeAll, Role: "viewer"},
+		"another environment":        envGrant("dave", "env-b", "viewer"),
+		"an env scope with no env":   {SubjectType: "user", SubjectID: "dave", Scope: access.ScopeEnv, Role: "viewer"},
+		"an instance admin":          envGrant("root", "env-a", "viewer"),
+		"every environment for team": {SubjectType: "team", SubjectID: "ops", Scope: access.ScopeAll, Role: "viewer"},
+	} {
+		if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, delegated("env-a", in)); !errors.Is(err, access.ErrDelegationDenied) {
+			t.Fatalf("delegated PutGrant for %s: %v, want ErrDelegationDenied", name, err)
+		}
+	}
+	if after := f.assignmentCount(t); after != before {
+		t.Fatalf("assignments %d -> %d, want nothing written", before, after)
+	}
+	if n := f.auditCount(t, "access.granted"); n != 0 {
+		t.Fatalf("access.granted entries = %d, want none", n)
+	}
+
+	// The same grant on the environment is fine, for a user and for a team.
+	for _, in := range []access.GrantInput{
+		envGrant("dave", "env-a", "viewer"),
+		{SubjectType: "team", SubjectID: "ops", Scope: access.ScopeEnv, EnvID: "env-a", Role: "operator"},
+	} {
+		if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, delegated("env-a", in)); err != nil {
+			t.Fatalf("delegated PutGrant on the environment: %v", err)
+		}
+	}
+}
+
+func TestDelegatedRemovalAndPreviewRefuseGrantsBeyondTheEnvironmentAndInstanceAdminsAndChangeNothing(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addEnv(t, "env-a", "Alpha")
+	f.addEnv(t, "env-b", "Beta")
+	for _, u := range []string{"dave", "erin", "frank"} {
+		f.addUser(t, u)
+	}
+	f.addAdmin(t, "root")
+	put := func(in access.GrantInput) access.Grant {
+		t.Helper()
+		g, _, err := f.svc.PutGrant(f.ctx, testAdmin, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return g
+	}
+	own := put(envGrant("dave", "env-a", "operator"))
+	all := put(access.GrantInput{SubjectType: "user", SubjectID: "erin", Scope: access.ScopeAll, Role: "viewer"})
+	other := put(envGrant("frank", "env-b", "viewer"))
+	stale := put(envGrant("root", "env-a", "viewer"))
+	limit := access.GrantScopeLimit{DelegatedEnv: "env-a"}
+	before := f.assignmentCount(t)
+
+	for name, g := range map[string]access.Grant{"every environment": all, "another environment": other, "an instance admin": stale} {
+		if _, err := f.svc.GrantImpact(f.ctx, g.SubjectType, g.SubjectID, g.ID, access.GrantChange{Op: access.OpDeleteGrant}, limit); !errors.Is(err, access.ErrDelegationDenied) {
+			t.Fatalf("delegated preview of %s: %v, want ErrDelegationDenied", name, err)
+		}
+		if _, err := f.svc.DeleteGrant(f.ctx, testAdmin, g.SubjectType, g.SubjectID, g.ID, limit); !errors.Is(err, access.ErrDelegationDenied) {
+			t.Fatalf("delegated removal of %s: %v, want ErrDelegationDenied", name, err)
+		}
+		if _, _, err := f.svc.GrantSubject(f.ctx, g.ID, limit); !errors.Is(err, access.ErrDelegationDenied) {
+			t.Fatalf("delegated lookup of %s: %v, want ErrDelegationDenied", name, err)
+		}
+	}
+	if after := f.assignmentCount(t); after != before {
+		t.Fatalf("assignments %d -> %d, want nothing removed", before, after)
+	}
+	if n := f.auditCount(t, "access.revoked"); n != 0 {
+		t.Fatalf("access.revoked entries = %d, want none", n)
+	}
+
+	// The environment's own grant: found, previewed, removed, audited with the environment.
+	typ, id, err := f.svc.GrantSubject(f.ctx, own.ID, limit)
+	if err != nil || typ != "user" || id != "dave" {
+		t.Fatalf("GrantSubject = %q, %q, %v", typ, id, err)
+	}
+	preview, err := f.svc.GrantImpact(f.ctx, typ, id, own.ID, access.GrantChange{Op: access.OpDeleteGrant}, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := f.svc.DeleteGrant(f.ctx, testAdmin, typ, id, own.ID, limit)
+	if err != nil || len(removed) != len(preview) || len(removed) != 1 {
+		t.Fatalf("removal = %+v, %v; preview = %+v", removed, err, preview)
+	}
+	if env := f.auditEnvID(t, "access.revoked"); env != "env-a" {
+		t.Fatalf("access.revoked env_id = %q, want env-a", env)
+	}
+	if _, _, err := f.svc.GrantSubject(f.ctx, "no-such", limit); !errors.Is(err, access.ErrGrantNotFound) {
+		t.Fatalf("GrantSubject of nothing: %v, want ErrGrantNotFound", err)
+	}
+}
