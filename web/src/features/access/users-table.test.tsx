@@ -37,6 +37,7 @@ let answer: () => Response | Promise<Response>;
 let sent: { path: string; method: string }[];
 let regenerate: () => Response | Promise<Response>;
 let lifecycle: (path: string) => Response | Promise<Response>;
+let delete_: () => Response | Promise<Response>;
 
 const TOKEN = "ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210_-ZyXwV";
 
@@ -64,6 +65,7 @@ beforeEach(() => {
   ];
   answer = () => Response.json(users);
   regenerate = () => newLink();
+  delete_ = () => new Response(null, { status: 204 });
   lifecycle = (path) =>
     Response.json(
       userRow({
@@ -83,6 +85,12 @@ beforeEach(() => {
       if (/^\/api\/users\/[^/]+\/invite$/.test(path) && req.method === "POST") return regenerate();
       if (/^\/api\/users\/[^/]+\/(disable|enable)$/.test(path) && req.method === "POST") {
         return lifecycle(path);
+      }
+      if (/^\/api\/users\/[^/]+\/unlock$/.test(path) && req.method === "POST") {
+        return Response.json(userRow({ id: path.split("/")[3], createdAt: "x", updatedAt: "x" }));
+      }
+      if (/^\/api\/users\/[^/]+$/.test(path) && req.method === "DELETE") {
+        return delete_();
       }
       return Response.json({}, { status: 404 });
     }),
@@ -577,5 +585,76 @@ describe("Open, Disable and Enable", () => {
     expect(sent.filter((s) => s.method === "POST")).toEqual([
       { path: "/api/users/u2/enable", method: "POST" },
     ]);
+  });
+});
+
+// Unlock, Delete user… and the last-admin guard (plan 03-14 Task 3).
+
+describe("Unlock and Delete user… in the row menu", () => {
+  beforeEach(() => {
+    users = [
+      userRow({ id: "u0", username: "admin", instanceAdmin: true }),
+      userRow({ id: "u1", username: "alice" }),
+      userRow({
+        id: "u4",
+        username: "erin",
+        status: "locked",
+        lockedUntil: "2026-10-07T12:30:00Z",
+      }),
+    ];
+  });
+
+  it("offers Unlock only while a user is locked, and unlocking says they can sign in", async () => {
+    renderTable();
+    await screen.findByText("alice");
+    openMenu("alice");
+    expect(await screen.findByRole("menuitem", { name: "Open" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Unlock" })).toBeNull();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+
+    openMenu("erin");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Unlock" }));
+    expect(await screen.findByText("erin can sign in again.")).toBeTruthy();
+    expect(sent.filter((s) => s.method === "POST")).toEqual([
+      { path: "/api/users/u4/unlock", method: "POST" },
+    ]);
+  });
+
+  it("deletes through the same type-to-confirm dialog and reads the list again", async () => {
+    renderTable();
+    await screen.findByText("alice");
+    openMenu("alice");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete user…" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete alice?" });
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.change(within(dialog).getByLabelText("Type alice to confirm"), {
+      target: { value: "alice" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete user" }));
+    expect(await screen.findByText("alice was deleted.")).toBeTruthy();
+    expect(sent.filter((s) => s.method === "DELETE")).toEqual([
+      { path: "/api/users/u1", method: "DELETE" },
+    ]);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  it("shows Disable and Delete user… for the last active instance admin as unavailable, with the reason", async () => {
+    users = [
+      userRow({ id: "u0", username: "admin", instanceAdmin: true, lastInstanceAdmin: true }),
+    ];
+    renderTable();
+    await screen.findByText("admin");
+    openMenu("admin");
+    const reason = "Bayplan needs at least one active instance admin";
+    for (const name of ["Disable", "Delete user…"]) {
+      const item = await screen.findByRole("menuitem", { name });
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      const described = document.getElementById(item.getAttribute("aria-describedby") ?? "");
+      expect(described?.textContent).toBe(reason);
+    }
+    fireEvent.click(screen.getByRole("menuitem", { name: "Disable" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(sent.some((s) => s.method === "POST")).toBe(false);
   });
 });
