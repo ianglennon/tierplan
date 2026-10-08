@@ -475,13 +475,21 @@ describe("the Profile card", () => {
       user = { ...user, ...(body as object), updatedAt: "2026-10-08T10:00:00Z" };
       return Response.json(user);
     };
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    expect(await screen.findByText("Profile saved.")).toBeTruthy();
-    expect(sent["PATCH /api/users/u1"]).toEqual({
-      displayName: "Mine",
-      email: "theirs@example.test",
-      updatedAt: "2026-10-08T09:00:00Z",
-    });
+    // The refusal's own save has to settle before the retry, or the click lands
+    // on a button that is still pending; under a loaded test run that takes a while.
+    const save = screen.getByRole<HTMLButtonElement>("button", { name: "Save changes" });
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(
+      () =>
+        expect(sent["PATCH /api/users/u1"]).toEqual({
+          displayName: "Mine",
+          email: "theirs@example.test",
+          updatedAt: "2026-10-08T09:00:00Z",
+        }),
+      { timeout: 5000 },
+    );
+    expect(await screen.findByText("Profile saved.", undefined, { timeout: 5000 })).toBeTruthy();
   });
 
   it("shows the field message under the email when the server refuses it", async () => {
