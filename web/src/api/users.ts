@@ -168,3 +168,75 @@ export async function enableUser(userId: string): Promise<LifecycleResult> {
     return { kind: "error" };
   }
 }
+
+// deleteUser turns a user into a tombstone. It cannot be undone, and their
+// username stays reserved. The answer carries no user: there is nobody left to
+// show.
+export type DeleteResult =
+  | { kind: "ok" }
+  | { kind: "last_instance_admin" }
+  | { kind: "not_found" }
+  | { kind: "error" };
+
+export async function deleteUser(userId: string): Promise<DeleteResult> {
+  try {
+    const { error, response } = await api.DELETE("/api/users/{userId}", {
+      params: { path: { userId } },
+    });
+    if (response.ok) return { kind: "ok" };
+    const failure = lifecycleFailure(error, response);
+    if (failure.kind === "last_instance_admin" || failure.kind === "not_found") {
+      return { kind: failure.kind };
+    }
+    return { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+// setInstanceAdmin turns instance authority on or off for a user. It is a flag
+// on the user and never comes through a team.
+export async function setInstanceAdmin(userId: string, enabled: boolean): Promise<LifecycleResult> {
+  try {
+    const { data, error, response } = await api.POST("/api/users/{userId}/instance-admin", {
+      params: { path: { userId } },
+      body: { enabled },
+    });
+    return data ? { kind: "ok", user: data } : lifecycleFailure(error, response);
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+// unlockUser clears the lock of a locked account.
+export async function unlockUser(userId: string): Promise<LifecycleResult> {
+  try {
+    const { data, error, response } = await api.POST("/api/users/{userId}/unlock", {
+      params: { path: { userId } },
+    });
+    return data ? { kind: "ok", user: data } : lifecycleFailure(error, response);
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+export interface ProfileChange {
+  displayName: string;
+  email: string;
+  // The updatedAt of the user these values were edited from.
+  updatedAt: string;
+}
+
+// updateUser saves a user's display name and email. If the user changed since
+// updatedAt was read, nothing is saved and the result is stale_change.
+export async function updateUser(userId: string, change: ProfileChange): Promise<LifecycleResult> {
+  try {
+    const { data, error, response } = await api.PATCH("/api/users/{userId}", {
+      params: { path: { userId } },
+      body: change,
+    });
+    return data ? { kind: "ok", user: data } : lifecycleFailure(error, response);
+  } catch {
+    return { kind: "error" };
+  }
+}

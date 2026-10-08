@@ -6,7 +6,14 @@ import { Link } from "@tanstack/react-router";
 import { EllipsisVertical } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
-import { enableUser, type OneTimeLink, type UserSummary, usersQuery } from "@/api/users";
+import {
+  enableUser,
+  type OneTimeLink,
+  type UserSummary,
+  unlockUser,
+  usersQuery,
+} from "@/api/users";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -22,6 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CreateUserDialog } from "@/features/access/create-user-dialog";
+import { DeleteUserDialog } from "@/features/access/delete-user-dialog";
 import { DisableUserDialog } from "@/features/access/disable-user-dialog";
 import { InstanceAdminBadge } from "@/features/access/instance-admin-badge";
 import { OneTimeLinkDialog } from "@/features/access/one-time-link-dialog";
@@ -65,12 +73,25 @@ interface RowActionsProps {
   onRegenerate: (user: UserSummary) => void;
   onDisable: (user: UserSummary) => void;
   onEnable: (user: UserSummary) => void;
+  onUnlock: (user: UserSummary) => void;
+  onDelete: (user: UserSummary) => void;
 }
 
 // RowActions is the "Actions for {username}" menu: Open always, Regenerate
-// invite link while an invite is outstanding, and Disable or Enable.
-function RowActions({ user, onRegenerate, onDisable, onEnable }: RowActionsProps) {
+// invite link while an invite is outstanding, Unlock while the account is
+// locked, Disable or Enable, and Delete user…. For the last active instance
+// admin, Disable and Delete are shown but unavailable, with the reason, because
+// the server would refuse.
+function RowActions({
+  user,
+  onRegenerate,
+  onDisable,
+  onEnable,
+  onUnlock,
+  onDelete,
+}: RowActionsProps) {
   const t = useT();
+  const guard = user.lastInstanceAdmin ? t("needs.lastAdmin") : undefined;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -95,15 +116,27 @@ function RowActions({ user, onRegenerate, onDisable, onEnable }: RowActionsProps
             {t("users.actions.regenerate")}
           </DropdownMenuItem>
         ) : null}
+        {user.status === "locked" ? (
+          <DropdownMenuItem onSelect={() => onUnlock(user)}>
+            {t("users.actions.unlock")}
+          </DropdownMenuItem>
+        ) : null}
         {user.status === "disabled" ? (
           <DropdownMenuItem onSelect={() => onEnable(user)}>
             {t("users.actions.enable")}
           </DropdownMenuItem>
         ) : (
-          <DropdownMenuItem onSelect={() => onDisable(user)}>
-            {t("users.actions.disable")}
-          </DropdownMenuItem>
+          <NeedsTooltip reason={guard}>
+            <DropdownMenuItem onSelect={() => onDisable(user)}>
+              {t("users.actions.disable")}
+            </DropdownMenuItem>
+          </NeedsTooltip>
         )}
+        <NeedsTooltip reason={guard}>
+          <DropdownMenuItem variant="destructive" onSelect={() => onDelete(user)}>
+            {t("users.actions.delete")}
+          </DropdownMenuItem>
+        </NeedsTooltip>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -129,6 +162,7 @@ export function UsersTable() {
   const [regenerateFor, setRegenerateFor] = useState<UserSummary | null>(null);
   const [issued, setIssued] = useState<IssuedLink | null>(null);
   const [disableFor, setDisableFor] = useState<UserSummary | null>(null);
+  const [deleteFor, setDeleteFor] = useState<UserSummary | null>(null);
 
   const all = query.data ?? [];
   const failed = query.isError && !query.data;
@@ -189,12 +223,21 @@ export function UsersTable() {
           onRegenerate={setRegenerateFor}
           onDisable={setDisableFor}
           onEnable={(user) => void enable(user)}
+          onUnlock={(user) => void unlock(user)}
+          onDelete={setDeleteFor}
         />
       ),
     },
   ];
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey });
+
+  async function unlock(user: UserSummary) {
+    const result = await unlockUser(user.id);
+    if (result.kind === "ok") toastSuccess(t("userpage.unlocked", { username: user.username }));
+    else toastError(t("userpage.unlockFailed", { username: user.username }));
+    refresh();
+  }
 
   async function enable(user: UserSummary) {
     const result = await enableUser(user.id);
@@ -319,6 +362,15 @@ export function UsersTable() {
         onClose={() => setDisableFor(null)}
         onDone={() => {
           setDisableFor(null);
+          refresh();
+        }}
+        onStale={refresh}
+      />
+      <DeleteUserDialog
+        user={deleteFor}
+        onClose={() => setDeleteFor(null)}
+        onDone={() => {
+          setDeleteFor(null);
           refresh();
         }}
         onStale={refresh}

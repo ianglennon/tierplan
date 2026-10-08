@@ -22,18 +22,16 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/c
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { OneTimeLinkContent } from "@/features/access/one-time-link-dialog";
+import { displayNameRule, emailRule, PROFILE_KEY } from "@/features/access/profile-schema";
 import { lowerAscii, MAX_USERNAME_LENGTH } from "@/features/setup/schemas";
 import { useT } from "@/i18n/use-t";
-
-// The same limit the server holds a display name to, counted in characters.
-const MAX_DISPLAY_NAME = 64;
 
 const KEY = {
   taken: "users.create.errors.usernameTaken",
   reserved: "users.create.errors.usernameReserved",
   username: "users.create.errors.username",
-  email: "users.create.errors.email",
-  displayName: "users.create.errors.displayName",
+  email: PROFILE_KEY.email,
+  displayName: PROFILE_KEY.displayName,
   server: "users.create.errors.server",
   unreachable: "common.errors.unreachable",
 } as const;
@@ -44,8 +42,6 @@ function describe(id: string, helper: boolean, error: string | undefined): strin
   return ids.length > 0 ? ids.join(" ") : undefined;
 }
 
-const chars = (s: string) => [...s].length;
-
 // Validation here is UX only: the server checks every field again and names the
 // ones at fault. Messages are i18n keys, never literals.
 const createUserSchema = z.object({
@@ -53,14 +49,8 @@ const createUserSchema = z.object({
     .string()
     .trim()
     .regex(new RegExp(`^[A-Za-z0-9._-]{3,${MAX_USERNAME_LENGTH}}$`), { error: KEY.username }),
-  displayName: z
-    .string()
-    .trim()
-    .refine((v) => chars(v) <= MAX_DISPLAY_NAME, { error: KEY.displayName }),
-  email: z
-    .string()
-    .trim()
-    .refine((v) => v === "" || z.email().safeParse(v).success, { error: KEY.email }),
+  displayName: displayNameRule,
+  email: emailRule,
 });
 
 type Values = z.input<typeof createUserSchema>;

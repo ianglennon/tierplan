@@ -42,7 +42,9 @@
       "open": "Open",
       "regenerate": "Regenerate invite link",
       "disable": "Disable",
-      "enable": "Enable"
+      "enable": "Enable",
+      "unlock": "Unlock",
+      "delete": "Delete user…"
     },
     "create": {
       "title": "Create user",

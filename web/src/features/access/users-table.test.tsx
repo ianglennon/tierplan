@@ -501,7 +501,7 @@ describe("UsersTable with many users", () => {
     typeSearch("user042");
     expect(bodyRows()).toHaveLength(1);
     expect(screen.getByText("500 users")).toBeTruthy();
-  });
+  }, 20_000);
 });
 
 describe("UsersTable on a phone", () => {

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 
 import { type UserDetail, UserNotFoundError, userQuery, usersQuery } from "@/api/users";
 import { NoPermission } from "@/components/full-page-state";
@@ -13,6 +13,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { AccountCard } from "@/features/access/account-card";
 import { InstanceAdminBadge } from "@/features/access/instance-admin-badge";
+import { InstanceAdminCard } from "@/features/access/instance-admin-card";
+import { ProfileCard } from "@/features/access/profile-card";
 import { UserStatusBadge } from "@/features/access/user-status-badge";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -72,11 +74,13 @@ interface UserPageProps {
 
 // UserPage is Settings > Access > Users > {username}: the breadcrumb, the header
 // (the display name as the title when there is one, else the username, with the
-// status and the instance-admin badge) and the cards, 32px apart. The page is
+// status and the instance-admin badge) and the cards, 32px apart: Profile,
+// Instance administrator and Account. The page is
 // for an instance admin, who holds users.manage; the server answers 403 again.
 export function UserPage({ userId }: UserPageProps) {
   const t = useT();
   const queryClient = useQueryClient();
+  const router = useRouter();
   const allowed = usePermission("users.manage");
   const query = useQuery({ ...userQuery(userId), enabled: allowed });
   const user = query.data;
@@ -114,6 +118,13 @@ export function UserPage({ userId }: UserPageProps) {
     void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey });
   }
 
+  // The user is gone: forget the page and go back to the list it came from.
+  function deleted() {
+    queryClient.removeQueries({ queryKey: userQuery(userId).queryKey });
+    void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey });
+    void router.navigate({ to: "/settings/access/users" });
+  }
+
   const title = user.displayName || user.username;
   return (
     <div className="flex flex-col gap-8">
@@ -130,7 +141,9 @@ export function UserPage({ userId }: UserPageProps) {
           {user.instanceAdmin ? <InstanceAdminBadge /> : null}
         </div>
       </header>
-      <AccountCard user={user} onChanged={changed} />
+      <ProfileCard user={user} onChanged={changed} />
+      <InstanceAdminCard user={user} onChanged={changed} />
+      <AccountCard user={user} onChanged={changed} onDeleted={deleted} />
     </div>
   );
 }

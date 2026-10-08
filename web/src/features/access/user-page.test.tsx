@@ -137,8 +137,8 @@ describe("the user page", () => {
     user = userBody({ displayName: "Alice Liddell", instanceAdmin: true, status: "disabled" });
     renderAt(PAGE);
     expect(await screen.findByRole("heading", { level: 2, name: "Alice Liddell" })).toBeTruthy();
-    // The username is beneath the title as well as in the breadcrumb.
-    expect(screen.getAllByText("alice")).toHaveLength(2);
+    // The username is beneath the title, in the breadcrumb and in the Profile card.
+    expect(screen.getAllByText("alice")).toHaveLength(3);
     expect(screen.getByText("Instance admin")).toBeTruthy();
     expect(screen.getByText("Disabled")).toBeTruthy();
   });
@@ -409,12 +409,12 @@ describe("the Account card", () => {
       return Response.json(user);
     };
     renderAt(PAGE);
-    expect(await screen.findByText(/^Locked until /)).toBeTruthy();
+    expect(await screen.findByText(/^Locked until .+\.$/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
     expect(await screen.findByText("alice can sign in again.")).toBeTruthy();
     expect(seen).toContain("POST /api/users/u1/unlock");
     await waitFor(() => expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull());
-    expect(screen.queryByText(/^Locked until /)).toBeNull();
+    expect(screen.queryByText(/^Locked until .+\.$/)).toBeNull();
   });
 
   it("has no Unlock for an account that is not locked", async () => {

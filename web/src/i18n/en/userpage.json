@@ -12,12 +12,47 @@
     "loadFailedBody": "Check the connection and try again.",
     "retry": "Retry",
     "sections": {
+      "profile": "Profile",
+      "instanceAdmin": "Instance administrator",
       "account": "Account"
+    },
+    "profile": {
+      "username": "Username",
+      "usernameHelper": "Usernames can't be changed.",
+      "displayName": "Display name",
+      "email": "Email",
+      "emailHelper": "Nothing uses it yet. Bayplan sends no email.",
+      "save": "Save changes",
+      "saving": "Saving…",
+      "saved": "Profile saved.",
+      "failed": "Couldn't save the profile. Try again, and check the Bayplan logs if it keeps happening."
+    },
+    "instanceAdmin": {
+      "label": "Instance administrator",
+      "helper": "Instance admins manage users, teams, settings, backups and every environment, with every extra permission. This can't be given through a team.",
+      "on": {
+        "title": "Make {{username}} an instance admin?",
+        "body": "They'll be able to manage users and teams, change settings, take backups and use every environment, including container shells and secrets.",
+        "confirm": "Make instance admin",
+        "pending": "Making…"
+      },
+      "off": {
+        "title": "Remove instance admin from {{username}}?",
+        "body": "They keep any access they have through roles and teams.",
+        "confirm": "Remove instance admin",
+        "pending": "Removing…"
+      },
+      "cancel": "Cancel",
+      "failed": "Couldn't change {{username}}. Try again, and check the Bayplan logs if it keeps happening."
     },
     "account": {
       "disable": "Disable user",
       "enable": "Enable user",
-      "enablePending": "Enabling…"
+      "enablePending": "Enabling…",
+      "unlock": "Unlock",
+      "unlockPending": "Unlocking…",
+      "lockedUntil": "Locked until {{time}}.",
+      "delete": "Delete user…"
     },
     "disable": {
       "title": "Disable {{username}}?",
@@ -28,10 +63,23 @@
       "done": "{{username}} is disabled.",
       "failed": "Couldn't disable {{username}}. Try again, and check the Bayplan logs if it keeps happening."
     },
+    "delete": {
+      "title": "Delete {{username}}?",
+      "body": "This can't be undone. {{username}}'s access, team memberships, sessions and pending links are removed. The username stays reserved, so the audit log still reads “{{username}} (deleted)”.",
+      "ownAccount": "You're deleting your own account. You'll be signed out.",
+      "cancel": "Cancel",
+      "confirm": "Delete user",
+      "pending": "Deleting…",
+      "done": "{{username}} was deleted.",
+      "failed": "Couldn't delete {{username}}. Try again, and check the Bayplan logs if it keeps happening."
+    },
     "enabled": "{{username}} is enabled.",
     "enableFailed": "Couldn't enable {{username}}. Try again, and check the Bayplan logs if it keeps happening.",
+    "unlocked": "{{username}} can sign in again.",
+    "unlockFailed": "Couldn't unlock {{username}}. Try again, and check the Bayplan logs if it keeps happening.",
     "errors": {
       "lastAdmin": "Bayplan needs at least one active instance admin. Make someone else an instance admin first.",
+      "stale": "This changed while you were looking at it. Reload the page and try again.",
       "gone": "{{username}} no longer exists."
     }
   }
