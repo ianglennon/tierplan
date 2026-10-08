@@ -1,0 +1,59 @@
+{
+  "restore": {
+    "title": "Restore from a backup",
+    "body": "Replace everything in this Bayplan with the contents of a backup file.",
+    "file": {
+      "label": "Backup file",
+      "helper": "A .bayplan file.",
+      "choose": "Choose a file",
+      "none": "No file chosen"
+    },
+    "passphrase": {
+      "label": "Passphrase"
+    },
+    "check": {
+      "submit": "Check backup",
+      "pending": "Checking…"
+    },
+    "summary": {
+      "title": "What's in this backup",
+      "from": "From {{name}}",
+      "made": "Made {{date}}",
+      "version": "Bayplan {{version}}",
+      "users_one": "{{count}} user",
+      "users_other": "{{count}} users",
+      "teams_one": "{{count}} team",
+      "teams_other": "{{count}} teams",
+      "environments_one": "{{count}} environment",
+      "environments_other": "{{count}} environments",
+      "auditEntries_one": "{{count}} audit entry",
+      "auditEntries_other": "{{count}} audit entries",
+      "chooseAnother": "Choose another file",
+      "restore": "Restore backup"
+    },
+    "confirm": {
+      "title": "Restore this backup?",
+      "body": "This replaces all users, teams, access, settings, environments and audit entries in this Bayplan with the backup's. Everyone is signed out, including you. Bayplan saves a snapshot first, so you can go back.",
+      "cancel": "Cancel",
+      "confirm": "Restore backup",
+      "pending": "Applying backup…"
+    },
+    "errors": {
+      "check": "Couldn't check this backup. Check the container logs, then try again."
+    },
+    "failed": {
+      "generic": "The restore didn't finish."
+    },
+    "overlay": {
+      "title": "Restoring…",
+      "body": "Don't close this page. This takes a moment."
+    },
+    "done": {
+      "heading": "Backup restored",
+      "body": "You were signed out. Sign in with an account from the backup.",
+      "action": "Go to sign-in",
+      "agents": "Agents reconnect on their own once your public URL points at this Bayplan. Agents installed after the backup was taken are listed under Settings → Environments.",
+      "notice": "Backup restored. Sign in with an account from the backup."
+    }
+  }
+}

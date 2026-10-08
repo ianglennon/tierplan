@@ -43,6 +43,28 @@ export function setCsrfToken(token: string | null): void {
   csrfToken = token;
 }
 
+// getCsrfToken is for the calls that cannot go through the typed client, such as
+// the raw upload of a backup file. The token is still read only from here.
+export function getCsrfToken(): string | null {
+  return csrfToken;
+}
+
+// While a restore restarts Bayplan, every request is expected to be refused: the
+// session it ran under is gone. The caller holds the reactions to that off until
+// it has decided what the refusals mean, so the 401s of the restart do not send
+// the browser to sign-in or refetch an access list. It returns the function that
+// lets them react again; calling it twice does nothing the second time.
+let suspended = 0;
+export function suspendSessionReactions(): () => void {
+  suspended += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    suspended -= 1;
+  };
+}
+
 // The handler is told the path (with its query string, without the base path)
 // the user was on, so the sign-in screen can send them back after they sign in
 // again.
@@ -124,6 +146,7 @@ const session: Middleware = {
     return request;
   },
   async onResponse({ request, response }) {
+    if (suspended > 0) return response;
     if (
       response.status === 401 &&
       onUnauthorized &&

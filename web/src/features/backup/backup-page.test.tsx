@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -86,7 +86,10 @@ function renderPage() {
   );
 }
 
-const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+// The Restore card has a Passphrase field too, so the Download card's fields are
+// found inside the Download card.
+const downloadCard = () => within(screen.getByRole("region", { name: "Download a backup" }));
+const field = (label: string) => downloadCard().getByLabelText(label) as HTMLInputElement;
 const exports = () => sent.filter((s) => s.path === "/api/backup/export");
 
 function fill(passphrase: string, confirm = passphrase) {
@@ -175,7 +178,7 @@ describe("Download card fields", () => {
       expect(input.type).toBe("password");
       expect(input.autocomplete).toBe("new-password");
     }
-    const toggles = screen.getAllByRole("button", { name: "Show passphrase" });
+    const toggles = downloadCard().getAllByRole("button", { name: "Show passphrase" });
     expect(toggles).toHaveLength(2);
     fireEvent.click(toggles[0] as HTMLElement);
     expect(field("Passphrase").type).toBe("text");

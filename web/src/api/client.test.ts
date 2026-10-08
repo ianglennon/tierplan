@@ -3,7 +3,14 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api, setAccessChangeHandler, setCsrfToken, setUnauthorizedHandler } from "@/api/client";
+import {
+  api,
+  getCsrfToken,
+  setAccessChangeHandler,
+  setCsrfToken,
+  setUnauthorizedHandler,
+  suspendSessionReactions,
+} from "@/api/client";
 import { resetBasePathForTests } from "@/lib/base-path";
 
 function stubFetch(status: number, body: unknown = {}) {
@@ -110,6 +117,48 @@ describe("401 handling", () => {
     stubFetch(401, { status: 401 });
     const { response } = await api.GET("/api/me");
     expect(response.status).toBe(401);
+  });
+});
+
+describe("suspending the reactions to refusals (a restore restarting Bayplan)", () => {
+  it("holds back the 401 and the access-change handlers until released, and still returns the answer", async () => {
+    const unauthorized = vi.fn();
+    const access = vi.fn();
+    setUnauthorizedHandler(unauthorized);
+    setAccessChangeHandler(access);
+    const release = suspendSessionReactions();
+    stubFetch(401, { status: 401 });
+    const { response } = await api.GET("/api/me");
+    stubFetch(403, { status: 403 });
+    await api.GET("/api/env/{envId}/summary", { params: { path: { envId: "e1" } } });
+    expect(response.status).toBe(401);
+    expect(unauthorized).not.toHaveBeenCalled();
+    expect(access).not.toHaveBeenCalled();
+
+    release();
+    release();
+    stubFetch(401, { status: 401 });
+    await api.GET("/api/me");
+    expect(unauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps holding while any of several suspensions is still open", async () => {
+    const unauthorized = vi.fn();
+    setUnauthorizedHandler(unauthorized);
+    const first = suspendSessionReactions();
+    const second = suspendSessionReactions();
+    first();
+    stubFetch(401, { status: 401 });
+    await api.GET("/api/me");
+    expect(unauthorized).not.toHaveBeenCalled();
+    second();
+  });
+
+  it("hands the CSRF token to a caller that cannot use the typed client", () => {
+    setCsrfToken("abc");
+    expect(getCsrfToken()).toBe("abc");
+    setCsrfToken(null);
+    expect(getCsrfToken()).toBeNull();
   });
 });
 

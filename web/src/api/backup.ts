@@ -3,8 +3,10 @@
 
 import { queryOptions } from "@tanstack/react-query";
 
-import { api } from "@/api/client";
+import { api, getCsrfToken } from "@/api/client";
 import { readProblem } from "@/api/problem";
+import type { components } from "@/api/schema";
+import { apiUrl } from "@/lib/base-path";
 
 // The passphrase rule the server states, used until (or unless) it is read.
 export const DEFAULT_MIN_PASSPHRASE = 16;
@@ -87,4 +89,146 @@ export function saveBlob(blob: Blob, name: string): void {
   link.remove();
   // Let the click start the download before the URL goes.
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export type RestoreSummary = components["schemas"]["RestoreSummaryBody"];
+
+// What a stored upload answers: the ID the check and the restore name it by.
+export interface RestoreUpload {
+  uploadId: string;
+  size: number;
+  expiresAt: string;
+}
+
+// RestoreError is a restore step the server refused, or a proxy in front of it
+// did. type is the problem type ("backup_unreadable", "backup_newer", ...) when
+// the answer had one; detail is the server's own sentence. Neither carries the
+// passphrase or the setup token.
+export class RestoreError extends Error {
+  readonly status: number;
+  readonly type: string | undefined;
+  readonly detail: string | undefined;
+
+  constructor(status: number, type?: string, detail?: string) {
+    super(`restore step failed with ${status}`);
+    this.name = "RestoreError";
+    this.status = status;
+    this.type = type;
+    this.detail = detail;
+  }
+}
+
+function detailOf(body: unknown): string | undefined {
+  if (typeof body !== "object" || body === null || !("detail" in body)) return undefined;
+  return typeof body.detail === "string" ? body.detail : undefined;
+}
+
+// restoreErrorOf reads a failed answer into a RestoreError. body is whatever
+// openapi-fetch or a plain fetch gave: a parsed problem, or a string (or nothing)
+// when a proxy answered with a page of its own.
+function restoreErrorOf(body: unknown, response: { status: number }): RestoreError {
+  let parsed = body;
+  if (typeof body === "string") {
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      parsed = undefined;
+    }
+  }
+  return new RestoreError(response.status, readProblem(parsed, response).type, detailOf(parsed));
+}
+
+// A raw POST of the file to the upload route, which is not in the typed client:
+// its body is the file itself. The CSRF token goes in the header the way the
+// typed client sends it; the passphrase is not part of this call.
+async function postFile(
+  path: string,
+  file: File,
+  extraHeaders: Record<string, string> = {},
+): Promise<RestoreUpload> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/octet-stream",
+    ...extraHeaders,
+  };
+  const csrf = getCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+  const response = await globalThis.fetch(apiUrl(path), {
+    method: "POST",
+    headers,
+    body: file,
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => undefined);
+    throw restoreErrorOf(body, response);
+  }
+  return (await response.json()) as RestoreUpload;
+}
+
+// uploadRestore stores the file on the server. Nothing is opened yet.
+export function uploadRestore(file: File): Promise<RestoreUpload> {
+  return postFile("/api/backup/restore/upload", file);
+}
+
+// checkRestore opens the stored file with the passphrase and says what is in it.
+export async function checkRestore(uploadId: string, passphrase: string): Promise<RestoreSummary> {
+  const { data, error, response } = await api.POST("/api/backup/restore/check", {
+    body: { uploadId, passphrase },
+  });
+  if (!data) throw restoreErrorOf(error, response);
+  return data;
+}
+
+// applyRestore replaces this instance with the backup. The 202 means Bayplan is
+// about to restart; confirm is the instance name the person typed.
+export async function applyRestore(
+  uploadId: string,
+  passphrase: string,
+  confirm: string,
+): Promise<void> {
+  const { error, response } = await api.POST("/api/backup/restore/apply", {
+    body: { uploadId, passphrase, confirm },
+  });
+  if (!response.ok) throw restoreErrorOf(error, response);
+}
+
+// The wizard's three steps. The setup token is the credential: a header on the
+// raw upload and a member of the body elsewhere, never in the address.
+export function uploadSetupRestore(file: File, setupToken: string): Promise<RestoreUpload> {
+  return postFile("/api/setup/restore/upload", file, { "X-Setup-Token": setupToken });
+}
+
+export async function checkSetupRestore(
+  uploadId: string,
+  passphrase: string,
+  setupToken: string,
+): Promise<RestoreSummary> {
+  const { data, error, response } = await api.POST("/api/setup/restore/check", {
+    body: { uploadId, passphrase, setupToken },
+  });
+  if (!data) throw restoreErrorOf(error, response);
+  return data;
+}
+
+export async function applySetupRestore(
+  uploadId: string,
+  passphrase: string,
+  setupToken: string,
+): Promise<void> {
+  const { error, response } = await api.POST("/api/setup/restore/apply", {
+    body: { uploadId, passphrase, setupToken },
+  });
+  if (!response.ok) throw restoreErrorOf(error, response);
+}
+
+// A message to show: an i18n key and what fills it.
+export interface RestoreMessage {
+  key: string;
+  values?: Record<string, string>;
+}
+
+// restoreProblem turns whatever a restore step threw into the message to show.
+export function restoreProblem(err: unknown): RestoreMessage {
+  if (!(err instanceof RestoreError)) return { key: "common.errors.unreachable" };
+  return { key: "restore.errors.check" };
 }
