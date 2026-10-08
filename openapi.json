@@ -396,6 +396,24 @@
         ],
         "type": "object"
       },
+      "AuditActorDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "description": "True when the user behind the name has since been deleted",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The actor's name as recorded",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "deleted"
+        ],
+        "type": "object"
+      },
       "AuditEntryDTO": {
         "additionalProperties": false,
         "properties": {
@@ -406,6 +424,10 @@
           "actor": {
             "description": "The actor's name. For a failed sign-in this is anonymous; the target is the matched account's username, or (unknown user) when none matched",
             "type": "string"
+          },
+          "actorDeleted": {
+            "description": "True when the user behind the entry has since been deleted. The entry itself is unchanged",
+            "type": "boolean"
           },
           "actorType": {
             "enum": [
@@ -479,7 +501,8 @@
           "reason",
           "ip",
           "userAgent",
-          "details"
+          "details",
+          "actorDeleted"
         ],
         "type": "object"
       },
@@ -4392,7 +4415,7 @@
     },
     "/api/audit/actors": {
       "get": {
-        "description": "The distinct actor names seen, sorted, at most 200, for the user filter. Under the same scope as the list: an Admin of environments sees only the actors of entries on those environments. 403 as for the list.",
+        "description": "The distinct actor names seen, sorted, at most 200, for the user filter, each marked when the user behind it has been deleted. Under the same scope as the list: an Admin of environments sees only the actors of entries on those environments. 403 as for the list.",
         "operationId": "listAuditActors",
         "responses": {
           "200": {
@@ -4400,7 +4423,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "type": "string"
+                    "$ref": "#/components/schemas/AuditActorDTO"
                   },
                   "type": [
                     "array",

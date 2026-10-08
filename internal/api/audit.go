@@ -117,6 +117,8 @@ type AuditEntryDTO struct {
 	IP         string            `json:"ip"`
 	UserAgent  string            `json:"userAgent"`
 	Details    map[string]string `json:"details"`
+	// ActorDeleted is worked out when the entry is read; the entry itself is never rewritten.
+	ActorDeleted bool `json:"actorDeleted" doc:"True when the user behind the entry has since been deleted. The entry itself is unchanged"`
 }
 
 // AuditListBody is one page of the audit log.
@@ -132,10 +134,16 @@ type AuditListOutput struct {
 	Body         AuditListBody
 }
 
+// AuditActorDTO is one actor name the log holds.
+type AuditActorDTO struct {
+	Name    string `json:"name" doc:"The actor's name as recorded"`
+	Deleted bool   `json:"deleted" doc:"True when the user behind the name has since been deleted"`
+}
+
 // AuditActorsOutput lists the actor names seen.
 type AuditActorsOutput struct {
 	CacheControl string `header:"Cache-Control"`
-	Body         []string
+	Body         []AuditActorDTO
 }
 
 // ExportAuditInput is the query of GET /api/audit/export.
@@ -154,6 +162,7 @@ func auditEntryDTO(r audit.Row) AuditEntryDTO {
 		ActorType: r.ActorType, Actor: r.ActorName, Action: r.Action,
 		TargetType: r.TargetType, Target: r.TargetID, Env: env,
 		Result: r.Result, Reason: r.Reason, IP: r.IP, UserAgent: r.UserAgent, Details: r.Details,
+		ActorDeleted: r.ActorDeleted,
 	}
 }
 
@@ -284,19 +293,24 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 		Method:      http.MethodGet,
 		Path:        "/api/audit/actors",
 		Summary:     "List the actor names in the audit log",
-		Description: "The distinct actor names seen, sorted, at most 200, for the user filter. Under the same scope as the " +
-			"list: an Admin of environments sees only the actors of entries on those environments. 403 as for the list.",
+		Description: "The distinct actor names seen, sorted, at most 200, for the user filter, each marked when the user behind it " +
+			"has been deleted. Under the same scope as the list: an Admin of environments sees only the actors of entries on " +
+			"those environments. 403 as for the list.",
 		Tags: []string{"audit"},
 	}, need, func(ctx context.Context, in *AuditActorsInput) (*AuditActorsOutput, error) {
 		scope, err := auditScope(ctx, d, "GET /api/audit/actors", in.UserAgent)
 		if err != nil {
 			return nil, err
 		}
-		names, err := audit.Actors(ctx, d.Store, scope)
+		actors, err := audit.Actors(ctx, d.Store, scope)
 		if err != nil {
 			return nil, fail("list actors", err)
 		}
-		return &AuditActorsOutput{CacheControl: "no-store", Body: names}, nil
+		body := make([]AuditActorDTO, len(actors))
+		for i, a := range actors {
+			body[i] = AuditActorDTO{Name: a.Name, Deleted: a.Deleted}
+		}
+		return &AuditActorsOutput{CacheControl: "no-store", Body: body}, nil
 	})
 
 	httpx.Register(r, huma.Operation{

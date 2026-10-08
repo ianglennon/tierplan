@@ -75,10 +75,10 @@ function UserFilter({
   const [draft, setDraft] = useState("");
   const actors = useQuery(auditActorsQuery);
   const typed = draft.trim();
-  const matches = (actors.data ?? []).filter((name) =>
-    name.toLowerCase().includes(typed.toLowerCase()),
+  const matches = (actors.data ?? []).filter((actor) =>
+    actor.name.toLowerCase().includes(typed.toLowerCase()),
   );
-  const isNew = typed !== "" && !(actors.data ?? []).includes(typed);
+  const isNew = typed !== "" && !(actors.data ?? []).some((actor) => actor.name === typed);
 
   function choose(user: string | undefined) {
     onChange(user);
@@ -153,16 +153,16 @@ function UserFilter({
                 </Button>
               </li>
             ) : null}
-            {matches.map((name) => (
-              <li key={name}>
+            {matches.map((actor) => (
+              <li key={actor.name}>
                 <Button
                   variant="ghost"
                   size="sm"
-                  aria-pressed={name === value}
+                  aria-pressed={actor.name === value}
                   className="w-full justify-start font-normal aria-pressed:bg-muted"
-                  onClick={() => choose(name)}
+                  onClick={() => choose(actor.name)}
                 >
-                  <span className="truncate">{name}</span>
+                  <span className="truncate">{actor.name}</span>
                 </Button>
               </li>
             ))}

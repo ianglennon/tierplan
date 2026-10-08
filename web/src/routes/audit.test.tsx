@@ -87,7 +87,9 @@ beforeEach(() => {
           ],
         });
       }
-      if (url.pathname === "/api/audit/actors") return Response.json(["admin", "alice", "bob"]);
+      if (url.pathname === "/api/audit/actors") {
+        return Response.json(["admin", "alice", "bob"].map((name) => ({ name, deleted: false })));
+      }
       if (url.pathname === "/api/audit") return answer(call);
       if (url.pathname === "/api/version") {
         return Response.json({

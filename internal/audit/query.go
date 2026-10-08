@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,17 @@ type Row struct {
 	IP         string            `json:"ip"`
 	UserAgent  string            `json:"userAgent"`
 	Details    map[string]string `json:"details"`
+	// ActorDeleted is true when the user behind the entry has since been deleted
+	// (D-22c). It is worked out when the entry is read, from the user's tombstone;
+	// the signed row is never rewritten.
+	ActorDeleted bool `json:"actorDeleted"`
+}
+
+// NamedActor is an actor name the log holds, and whether the user behind it has
+// been deleted.
+type NamedActor struct {
+	Name    string `json:"name"`
+	Deleted bool   `json:"deleted"`
 }
 
 // params turns f into query parameters for one page.
@@ -132,7 +144,7 @@ func page(ctx context.Context, s *store.Store, f Filter, cursor int64, limit int
 	return rows, nil
 }
 
-func toRow(r sqlc.AuditLog) Row {
+func toRow(r sqlc.ListAuditPageRow) Row {
 	details := map[string]string{}
 	if err := json.Unmarshal([]byte(r.Details), &details); err != nil || details == nil {
 		details = map[string]string{}
@@ -142,6 +154,7 @@ func toRow(r sqlc.AuditLog) Row {
 		ActorType: r.ActorType, ActorName: r.ActorName,
 		Action: r.Action, TargetType: r.TargetType, TargetID: r.TargetID, EnvID: r.EnvID.String,
 		Result: r.Result, Reason: r.Reason, IP: r.Ip, UserAgent: r.UserAgent, Details: details,
+		ActorDeleted: r.ActorDeleted != 0,
 	}
 }
 
@@ -169,21 +182,23 @@ func Query(ctx context.Context, s *store.Store, f Filter, cursor int64, limit in
 }
 
 // Actors returns the distinct actor names in the log that f's scope reaches,
-// sorted, at most 200. It feeds the user filter. Only the scope of f applies; its
-// other fields narrow entries, not the list of who acted.
-func Actors(ctx context.Context, s *store.Store, f Filter) ([]string, error) {
+// sorted, at most 200, each marked when the user behind it has been deleted. It
+// feeds the user filter. Only the scope of f applies; its other fields narrow
+// entries, not the list of who acted.
+func Actors(ctx context.Context, s *store.Store, f Filter) ([]NamedActor, error) {
 	scoped, anyEnv, envs, err := f.scope()
 	if err != nil {
 		return nil, err
 	}
-	names, err := s.RQ.ListAuditActors(ctx, sqlc.ListAuditActorsParams{Scoped: scoped, AnyEnv: anyEnv, Envs: envs})
+	recs, err := s.RQ.ListAuditActors(ctx, sqlc.ListAuditActorsParams{Scoped: scoped, AnyEnv: anyEnv, Envs: envs})
 	if err != nil {
 		return nil, fmt.Errorf("audit: list actors: %w", err)
 	}
-	if names == nil {
-		names = []string{}
+	actors := make([]NamedActor, len(recs))
+	for i, r := range recs {
+		actors[i] = NamedActor{Name: r.ActorName, Deleted: r.Deleted != 0}
 	}
-	return names, nil
+	return actors, nil
 }
 
 // each calls fn for every entry matching f, newest first, reading in batches.
@@ -212,7 +227,7 @@ func each(ctx context.Context, s *store.Store, f Filter, fn func(Row) error) err
 // csvHeader is the first row of every CSV export.
 var csvHeader = []string{
 	"id", "time", "actor_type", "actor", "action", "target_type", "target",
-	"environment", "result", "reason", "ip", "user_agent", "details",
+	"environment", "result", "reason", "ip", "user_agent", "details", "actor_deleted",
 }
 
 // csvSafe stops a spreadsheet from running a cell as a formula. Fields such as
@@ -243,6 +258,7 @@ func ExportCSV(ctx context.Context, s *store.Store, f Filter, w io.Writer) error
 		cells := []string{
 			r.ID, r.Time.Format(time.RFC3339Nano), r.ActorType, r.ActorName, r.Action,
 			r.TargetType, r.TargetID, r.EnvID, r.Result, r.Reason, r.IP, r.UserAgent, string(details),
+			strconv.FormatBool(r.ActorDeleted),
 		}
 		for i, c := range cells {
 			rec[i] = csvSafe(c)

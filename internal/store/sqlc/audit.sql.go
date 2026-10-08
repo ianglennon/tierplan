@@ -131,11 +131,14 @@ func (q *Queries) LastAuditHMAC(ctx context.Context) ([]byte, error) {
 }
 
 const listAuditActors = `-- name: ListAuditActors :many
-SELECT DISTINCT actor_name FROM audit_log
+SELECT a.actor_name, CAST(MAX(COALESCE(u.deleted_at IS NOT NULL, 0)) AS INTEGER) AS deleted
+FROM audit_log a
+LEFT JOIN users u ON u.id = a.actor_id
 WHERE CAST(?1 AS INTEGER) = 0
-   OR (CAST(?2 AS INTEGER) = 1 AND env_id IS NOT NULL)
-   OR env_id IN (SELECT value FROM json_each(CAST(?3 AS TEXT)))
-ORDER BY actor_name LIMIT 200
+   OR (CAST(?2 AS INTEGER) = 1 AND a.env_id IS NOT NULL)
+   OR a.env_id IN (SELECT value FROM json_each(CAST(?3 AS TEXT)))
+GROUP BY a.actor_name
+ORDER BY a.actor_name LIMIT 200
 `
 
 type ListAuditActorsParams struct {
@@ -144,20 +147,26 @@ type ListAuditActorsParams struct {
 	Envs   string
 }
 
-// The distinct actor names, under the same scope as ListAuditPage.
-func (q *Queries) ListAuditActors(ctx context.Context, arg ListAuditActorsParams) ([]string, error) {
+type ListAuditActorsRow struct {
+	ActorName string
+	Deleted   int64
+}
+
+// The distinct actor names, under the same scope as ListAuditPage, each with
+// whether the user behind it has been deleted.
+func (q *Queries) ListAuditActors(ctx context.Context, arg ListAuditActorsParams) ([]ListAuditActorsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAuditActors, arg.Scoped, arg.AnyEnv, arg.Envs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []ListAuditActorsRow
 	for rows.Next() {
-		var actor_name string
-		if err := rows.Scan(&actor_name); err != nil {
+		var i ListAuditActorsRow
+		if err := rows.Scan(&i.ActorName, &i.Deleted); err != nil {
 			return nil, err
 		}
-		items = append(items, actor_name)
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -274,16 +283,18 @@ func (q *Queries) ListAuditForVerify(ctx context.Context, arg ListAuditForVerify
 }
 
 const listAuditPage = `-- name: ListAuditPage :many
-SELECT seq, id, ts, actor_type, actor_id, actor_name, "action", target_type, target_id, env_id, result, reason, ip, user_agent, details, key_id, prev_hmac, hmac FROM audit_log
-WHERE (CAST(?1 AS TEXT) = '' OR actor_name = ?1)
-  AND (json_array_length(?2) = 0 OR action IN (SELECT value FROM json_each(?2)))
-  AND (CAST(?3 AS INTEGER) = 0 OR ts >= ?3)
-  AND (CAST(?4 AS INTEGER) = 0 OR ts <= ?4)
-  AND (CAST(?5 AS INTEGER) = 0 OR seq < ?5)
+SELECT a.seq, a.id, a.ts, a.actor_type, a.actor_id, a.actor_name, a."action", a.target_type, a.target_id, a.env_id, a.result, a.reason, a.ip, a.user_agent, a.details, a.key_id, a.prev_hmac, a.hmac, CAST(COALESCE(u.deleted_at IS NOT NULL, 0) AS INTEGER) AS actor_deleted
+FROM audit_log a
+LEFT JOIN users u ON u.id = a.actor_id
+WHERE (CAST(?1 AS TEXT) = '' OR a.actor_name = ?1)
+  AND (json_array_length(?2) = 0 OR a.action IN (SELECT value FROM json_each(?2)))
+  AND (CAST(?3 AS INTEGER) = 0 OR a.ts >= ?3)
+  AND (CAST(?4 AS INTEGER) = 0 OR a.ts <= ?4)
+  AND (CAST(?5 AS INTEGER) = 0 OR a.seq < ?5)
   AND (CAST(?6 AS INTEGER) = 0
-       OR (CAST(?7 AS INTEGER) = 1 AND env_id IS NOT NULL)
-       OR env_id IN (SELECT value FROM json_each(CAST(?8 AS TEXT))))
-ORDER BY seq DESC
+       OR (CAST(?7 AS INTEGER) = 1 AND a.env_id IS NOT NULL)
+       OR a.env_id IN (SELECT value FROM json_each(CAST(?8 AS TEXT))))
+ORDER BY a.seq DESC
 LIMIT ?9
 `
 
@@ -299,6 +310,28 @@ type ListAuditPageParams struct {
 	Lim     int64
 }
 
+type ListAuditPageRow struct {
+	Seq          int64
+	ID           string
+	Ts           int64
+	ActorType    string
+	ActorID      string
+	ActorName    string
+	Action       string
+	TargetType   string
+	TargetID     string
+	EnvID        sql.NullString
+	Result       string
+	Reason       string
+	Ip           string
+	UserAgent    string
+	Details      string
+	KeyID        string
+	PrevHmac     []byte
+	Hmac         []byte
+	ActorDeleted int64
+}
+
 // actions is a JSON array of action keys, not sqlc.slice: sqlc numbers a slice
 // placeholder as an anonymous "?" among numbered ones, which collides as soon as
 // two actions are given. envs is a JSON array of environment IDs the same way.
@@ -306,7 +339,9 @@ type ListAuditPageParams struct {
 // environment when any_env is set; an entry with no environment, an instance-level
 // event, never matches. The scope is part of the WHERE clause, so it applies
 // before the cursor and the limit and a page is never short of entries.
-func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([]AuditLog, error) {
+// actor_deleted is a display-time join to the user tombstone (D-22c): the signed
+// row is never rewritten when a user is deleted.
+func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([]ListAuditPageRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAuditPage,
 		arg.Actor,
 		arg.Actions,
@@ -322,9 +357,9 @@ func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([
 		return nil, err
 	}
 	defer rows.Close()
-	var items []AuditLog
+	var items []ListAuditPageRow
 	for rows.Next() {
-		var i AuditLog
+		var i ListAuditPageRow
 		if err := rows.Scan(
 			&i.Seq,
 			&i.ID,
@@ -344,6 +379,7 @@ func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([
 			&i.KeyID,
 			&i.PrevHmac,
 			&i.Hmac,
+			&i.ActorDeleted,
 		); err != nil {
 			return nil, err
 		}

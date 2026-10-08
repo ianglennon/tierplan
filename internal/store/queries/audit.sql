@@ -44,22 +44,30 @@ SELECT * FROM audit_log WHERE seq = ?;
 -- environment when any_env is set; an entry with no environment, an instance-level
 -- event, never matches. The scope is part of the WHERE clause, so it applies
 -- before the cursor and the limit and a page is never short of entries.
-SELECT * FROM audit_log
-WHERE (CAST(sqlc.arg(actor) AS TEXT) = '' OR actor_name = sqlc.arg(actor))
-  AND (json_array_length(sqlc.arg(actions)) = 0 OR action IN (SELECT value FROM json_each(sqlc.arg(actions))))
-  AND (CAST(sqlc.arg(from_ts) AS INTEGER) = 0 OR ts >= sqlc.arg(from_ts))
-  AND (CAST(sqlc.arg(to_ts) AS INTEGER) = 0 OR ts <= sqlc.arg(to_ts))
-  AND (CAST(sqlc.arg(cursor) AS INTEGER) = 0 OR seq < sqlc.arg(cursor))
+-- actor_deleted is a display-time join to the user tombstone (D-22c): the signed
+-- row is never rewritten when a user is deleted.
+SELECT a.*, CAST(COALESCE(u.deleted_at IS NOT NULL, 0) AS INTEGER) AS actor_deleted
+FROM audit_log a
+LEFT JOIN users u ON u.id = a.actor_id
+WHERE (CAST(sqlc.arg(actor) AS TEXT) = '' OR a.actor_name = sqlc.arg(actor))
+  AND (json_array_length(sqlc.arg(actions)) = 0 OR a.action IN (SELECT value FROM json_each(sqlc.arg(actions))))
+  AND (CAST(sqlc.arg(from_ts) AS INTEGER) = 0 OR a.ts >= sqlc.arg(from_ts))
+  AND (CAST(sqlc.arg(to_ts) AS INTEGER) = 0 OR a.ts <= sqlc.arg(to_ts))
+  AND (CAST(sqlc.arg(cursor) AS INTEGER) = 0 OR a.seq < sqlc.arg(cursor))
   AND (CAST(sqlc.arg(scoped) AS INTEGER) = 0
-       OR (CAST(sqlc.arg(any_env) AS INTEGER) = 1 AND env_id IS NOT NULL)
-       OR env_id IN (SELECT value FROM json_each(CAST(sqlc.arg(envs) AS TEXT))))
-ORDER BY seq DESC
+       OR (CAST(sqlc.arg(any_env) AS INTEGER) = 1 AND a.env_id IS NOT NULL)
+       OR a.env_id IN (SELECT value FROM json_each(CAST(sqlc.arg(envs) AS TEXT))))
+ORDER BY a.seq DESC
 LIMIT sqlc.arg(lim);
 
 -- name: ListAuditActors :many
--- The distinct actor names, under the same scope as ListAuditPage.
-SELECT DISTINCT actor_name FROM audit_log
+-- The distinct actor names, under the same scope as ListAuditPage, each with
+-- whether the user behind it has been deleted.
+SELECT a.actor_name, CAST(MAX(COALESCE(u.deleted_at IS NOT NULL, 0)) AS INTEGER) AS deleted
+FROM audit_log a
+LEFT JOIN users u ON u.id = a.actor_id
 WHERE CAST(sqlc.arg(scoped) AS INTEGER) = 0
-   OR (CAST(sqlc.arg(any_env) AS INTEGER) = 1 AND env_id IS NOT NULL)
-   OR env_id IN (SELECT value FROM json_each(CAST(sqlc.arg(envs) AS TEXT)))
-ORDER BY actor_name LIMIT 200;
+   OR (CAST(sqlc.arg(any_env) AS INTEGER) = 1 AND a.env_id IS NOT NULL)
+   OR a.env_id IN (SELECT value FROM json_each(CAST(sqlc.arg(envs) AS TEXT)))
+GROUP BY a.actor_name
+ORDER BY a.actor_name LIMIT 200;

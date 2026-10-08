@@ -33,7 +33,7 @@ export interface paths {
         };
         /**
          * List the actor names in the audit log
-         * @description The distinct actor names seen, sorted, at most 200, for the user filter. Under the same scope as the list: an Admin of environments sees only the actors of entries on those environments. 403 as for the list.
+         * @description The distinct actor names seen, sorted, at most 200, for the user filter, each marked when the user behind it has been deleted. Under the same scope as the list: an Admin of environments sees only the actors of entries on those environments. 403 as for the list.
          */
         get: operations["listAuditActors"];
         put?: never;
@@ -1665,11 +1665,19 @@ export interface components {
             /** @description The commands that take the agent off a host by hand, for the hosts Bayplan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token */
             manualCleanup: components["schemas"]["InstallCleanupBody"];
         };
+        AuditActorDTO: {
+            /** @description True when the user behind the name has since been deleted */
+            deleted: boolean;
+            /** @description The actor's name as recorded */
+            name: string;
+        };
         AuditEntryDTO: {
             /** @description A stable action key such as auth.login */
             action: string;
             /** @description The actor's name. For a failed sign-in this is anonymous; the target is the matched account's username, or (unknown user) when none matched */
             actor: string;
+            /** @description True when the user behind the entry has since been deleted. The entry itself is unchanged */
+            actorDeleted: boolean;
             /** @enum {string} */
             actorType: "user" | "system" | "anonymous";
             details: {
@@ -3266,7 +3274,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": string[] | null;
+                    "application/json": components["schemas"]["AuditActorDTO"][] | null;
                 };
             };
             /** @description Error */
