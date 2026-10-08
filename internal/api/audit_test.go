@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ type auditListResp struct {
 	Items []struct {
 		ID, Time, ActorType, Actor, Action, TargetType, Target, Result, Reason, IP, UserAgent string
 		Seq                                                                                   int64
+		ActorDeleted                                                                          bool
 		Environment                                                                           *string
 		Details                                                                               map[string]string
 	} `json:"items"`
@@ -208,8 +210,7 @@ func TestAuditActorsListsTheDistinctNamesSeen(t *testing.T) {
 		f.log(t, base, a, "auth.login", "ua")
 	}
 	rec := f.get(t, "/api/audit/actors", f.cookie)
-	var names []string
-	if rec.code != http.StatusOK || json.Unmarshal([]byte(rec.body), &names) != nil || fmt.Sprint(names) != "[admin bob zed]" {
+	if names, ok := actorsOf(rec); !ok || fmt.Sprint(names) != "[{admin false} {bob false} {zed false}]" {
 		t.Errorf("actors = %d %s", rec.code, rec.body)
 	}
 }
@@ -331,6 +332,21 @@ func (f *auditFix) logIn(t *testing.T, at time.Time, actor, action, envID string
 	}
 }
 
+// auditActor is one name of GET /api/audit/actors.
+type auditActor struct {
+	Name    string `json:"name"`
+	Deleted bool   `json:"deleted"`
+}
+
+// actorsOf decodes the actor list of a successful answer.
+func actorsOf(r *authRecorder) ([]auditActor, bool) {
+	var out []auditActor
+	if r.code != http.StatusOK || json.Unmarshal([]byte(r.body), &out) != nil {
+		return nil, false
+	}
+	return out, true
+}
+
 // scopeFix is the audit log of two environments and instance-level events, read
 // by people with different access (D-09).
 type scopeFix struct{ *auditFix }
@@ -403,10 +419,9 @@ func TestAuditScopeAnEnvAdminSeesTheirEnvironmentsEntriesAndNoInstanceLevelEvent
 func TestAuditScopeActorsAndBothExportsHoldOnlyTheScopedEntries(t *testing.T) {
 	f := newScopeFix(t)
 
-	var names []string
 	rec := f.as(t, "carol", "/api/audit/actors")
-	if rec.code != http.StatusOK || json.Unmarshal([]byte(rec.body), &names) != nil || fmt.Sprint(names) != "[alice vera]" {
-		t.Errorf("actors of an env Admin of A = %d %s, want [alice vera]", rec.code, rec.body)
+	if names, ok := actorsOf(rec); !ok || fmt.Sprint(names) != "[{alice false} {vera false}]" {
+		t.Errorf("actors of an env Admin of A = %d %s, want alice and vera", rec.code, rec.body)
 	}
 
 	rec = f.as(t, "carol", "/api/audit/export?format=json")
@@ -456,5 +471,104 @@ func TestAuditScopeAnOperatorAndAViewerAreRefusedAndTheRefusalIsAudited(t *testi
 			!strings.HasPrefix(last.TargetID, "GET /api/audit") {
 			t.Errorf("%s %s: refusal entry = %+v, want reason no_audit_scope on the route", tc.user, tc.path, last)
 		}
+	}
+}
+
+func TestAuditScopeCursorsPageExactlyTheScopedEntriesOnceEachNewestFirst(t *testing.T) {
+	f := newAuditFix(t)
+	f.addEnvUser(t, "carol", scopeEnvA, "admin")
+	at := time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC)
+	for i := range 120 {
+		f.logIn(t, at, "alice", fmt.Sprintf("on.a%d", i), scopeEnvA, audit.ResultSuccess)
+		f.logIn(t, at, "bob", fmt.Sprintf("on.b%d", i), scopeEnvB, audit.ResultSuccess)
+	}
+	cookie, csrf := f.signIn(t, "carol", false)
+	var sizes []int
+	var seen []int64
+	path := "/api/audit"
+	for range 5 {
+		rec := f.call(t, authReq{method: http.MethodGet, path: path, cookie: cookie, csrf: csrf})
+		out := (&authRecorder{rec.Code, rec.Body.String(), rec.Header()}).list(t)
+		sizes = append(sizes, len(out.Items))
+		for _, it := range out.Items {
+			if it.Environment == nil || *it.Environment != scopeEnvA {
+				t.Fatalf("a page holds %s on %v", it.Action, it.Environment)
+			}
+			seen = append(seen, it.Seq)
+		}
+		if out.NextCursor == nil {
+			break
+		}
+		path = fmt.Sprintf("/api/audit?cursor=%d", *out.NextCursor)
+	}
+	if fmt.Sprint(sizes) != "[50 50 20]" {
+		t.Fatalf("page sizes = %v, want [50 50 20]: the 120 entries on A, every page full", sizes)
+	}
+	for i := 1; i < len(seen); i++ {
+		if seen[i] >= seen[i-1] {
+			t.Fatalf("seq %d follows %d: not newest first", seen[i], seen[i-1])
+		}
+	}
+}
+
+func TestAuditScopeAnAdminOfEveryEnvironmentSeesEveryEntryWithAnEnvironmentAndNoOther(t *testing.T) {
+	f := newScopeFix(t)
+	f.addAllEnvAdmin(t, "gail")
+	got := f.as(t, "gail", "/api/audit").list(t)
+	if a := fmt.Sprint(got.actions("")); a != "[access.granted permission.denied environment.renamed]" {
+		t.Errorf("an Admin of every environment reads %s, want the three entries that have an environment, newest first", a)
+	}
+	var names []auditActor
+	rec := f.as(t, "gail", "/api/audit/actors")
+	if names, _ = actorsOf(rec); fmt.Sprint(names) != "[{alice false} {erin false} {vera false}]" {
+		t.Errorf("actors of an Admin of every environment = %s", rec.body)
+	}
+}
+
+func TestAuditEntriesOfADeletedUserReadAsDeletedAndTheSignedRowsAreUntouched(t *testing.T) {
+	f := newAuditFix(t)
+	f.addUser(t, "alice", false)
+	at := time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC)
+	f.logIn(t, at, "alice", "environment.renamed", scopeEnvA, audit.ResultSuccess)
+	f.logIn(t, at, "bob", "environment.renamed", scopeEnvA, audit.ResultSuccess)
+	chain := func() string {
+		var s string
+		err := f.st.Read.QueryRow(`SELECT group_concat(hex(hmac) || actor_name || actor_id, '|') FROM (SELECT * FROM audit_log ORDER BY seq)`).Scan(&s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	before := chain()
+	if _, err := f.st.Write.Exec(`UPDATE users SET deleted_at = 5 WHERE id = 'id-alice'`); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, it := range f.get(t, "/api/audit?action=environment.renamed", f.cookie).list(t).Items {
+		if want := it.Actor == "alice"; it.ActorDeleted != want {
+			t.Errorf("%s by %s: actorDeleted = %v, want %v", it.Action, it.Actor, it.ActorDeleted, want)
+		}
+	}
+	if names, ok := actorsOf(f.get(t, "/api/audit/actors", f.cookie)); !ok || !slices.Contains(names, auditActor{"alice", true}) ||
+		!slices.Contains(names, auditActor{"bob", false}) {
+		t.Errorf("actors = %v, want alice deleted and bob not", names)
+	}
+
+	var rows []map[string]any
+	if rec := f.get(t, "/api/audit/export?format=json&user=alice", f.cookie); json.Unmarshal([]byte(rec.body), &rows) != nil ||
+		len(rows) != 1 || rows[0]["actorDeleted"] != true {
+		t.Errorf("json export = %s, want actorDeleted true", rec.body)
+	}
+	rec := f.get(t, "/api/audit/export?format=csv&user=alice", f.cookie)
+	recs, err := csv.NewReader(strings.NewReader(rec.body)).ReadAll()
+	if err != nil || len(recs) != 2 || recs[0][len(recs[0])-1] != "actor_deleted" || recs[1][len(recs[1])-1] != "true" {
+		t.Errorf("csv export = %v (%v), want actor_deleted true", recs, err)
+	}
+
+	if chain() != before {
+		t.Error("a delete rewrote a signed row")
+	}
+	if res, err := audit.Verify(context.Background(), f.st, f.v); err != nil || res.Broken != nil {
+		t.Errorf("verify after a delete = %+v, %v", res, err)
 	}
 }
