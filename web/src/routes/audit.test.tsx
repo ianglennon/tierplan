@@ -389,7 +389,7 @@ describe("refused requests", () => {
     expect(view.getByText("Count").nextElementSibling?.textContent).toBe("11");
     expect(view.queryByText("coalesced: true")).toBeNull();
     expect(view.queryByText("count: 11")).toBeNull();
-    expect(view.queryByText("first: " + FIRST)).toBeNull();
+    expect(view.queryByText(`first: ${FIRST}`)).toBeNull();
     // A detail that is not part of the burst is still listed.
     expect(view.getByText("other: kept")).toBeTruthy();
   });
