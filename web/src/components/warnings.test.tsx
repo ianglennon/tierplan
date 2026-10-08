@@ -134,6 +134,7 @@ function makeRouter() {
       page("/"),
       page("/environments"),
       page("/audit"),
+      page("/settings/backup"),
       page("/env/$envId"),
       page("/settings/environments"),
       page("/settings/environments/$envId"),
@@ -822,5 +823,57 @@ describe("HealthBell refusal bursts", () => {
     renderWarnings();
     await openBell();
     expect(await screen.findByText("No warnings")).toBeTruthy();
+  });
+});
+
+describe("HealthBell failed scheduled backups", () => {
+  const TWO_DAYS_AGO = new Date(Date.now() - 2 * 86_400_000).toISOString();
+
+  it("lists the failure for an instance admin with the reason, when the last good backup was, and a link to the backups", async () => {
+    items = [{ id: "backup_failed", subject: "no space left on device", since: TWO_DAYS_AGO }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The scheduled backup failed")).toBeTruthy();
+    expect(
+      screen.getByText("no space left on device. The last good backup was 2 days ago."),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open backups" });
+    expect(link.getAttribute("href")).toContain("/settings/backup");
+    // Derived from live state: there is nothing to dismiss.
+    expect(screen.queryByRole("button", { name: /dismiss|acknowledge/i })).toBeNull();
+  });
+
+  it("gives only the reason when there has never been a good backup", async () => {
+    items = [{ id: "backup_failed", subject: "no space left on device" }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("no space left on device.")).toBeTruthy();
+  });
+
+  it("follows the link to the backup page and closes the list", async () => {
+    items = [{ id: "backup_failed", subject: "boom", since: TWO_DAYS_AGO }];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    fireEvent.click(await screen.findByRole("link", { name: "Open backups" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/backup"));
+    await waitFor(() => expect(screen.queryByText("The scheduled backup failed")).toBeNull());
+  });
+
+  it("counts with the other items", async () => {
+    items = [
+      { id: "backup_failed", subject: "boom" },
+      { id: "key_backup", keyPath: "/data/bayplan.key" },
+    ];
+    renderWarnings();
+    expect(await screen.findByRole("button", { name: "Warnings, 2 items" })).toBeTruthy();
+  });
+
+  it("shows nothing for someone who is not an instance admin, and nothing when no failure is current", async () => {
+    me = VIEWER;
+    items = [{ id: "backup_failed", subject: "boom" }];
+    renderWarnings();
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+    expect(screen.queryByText("The scheduled backup failed")).toBeNull();
   });
 });
