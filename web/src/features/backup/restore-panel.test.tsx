@@ -296,6 +296,7 @@ const NOT_A_BACKUP = "That isn't a Bayplan backup file.";
 const CUT_OFF =
   "The upload was cut off. If Bayplan runs behind a reverse proxy, check its upload size limit.";
 const BUSY = "Another restore is being prepared. Try again in a few minutes.";
+const RATE = "Too many attempts. Wait a minute and try again.";
 
 const problem = (status: number, type: string, detail = "") =>
   Response.json({ status, type, detail }, { status });
@@ -340,6 +341,7 @@ describe("Restore card errors on the check", () => {
       CUT_OFF,
     ],
     ["another restore in progress", "upload", () => problem(409, "restore_busy"), BUSY],
+    ["too many checks (429 rate_limited)", "check", () => problem(429, "rate_limited"), RATE],
   ];
 
   it.each(cases)(
@@ -474,6 +476,15 @@ describe("Restore card failures", () => {
     expect(screen.queryByRole("status")).toBeNull();
     // The dialog stays for another go, and the session reactions are released.
     expect(screen.getByRole("alertdialog")).toBeTruthy();
+  });
+
+  it("says nothing was changed and that there were too many attempts when apply is rate limited", async () => {
+    answers["/api/backup/restore/apply"] = () =>
+      problem(429, "rate_limited", "a server sentence that is not shown");
+    const dialog = await confirmRestore();
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toBe(`The restore didn't finish and nothing was changed. ${RATE}`);
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("says Bayplan went back to the snapshot when it came back and still accepts the session", async () => {

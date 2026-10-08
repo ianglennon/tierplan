@@ -77,9 +77,14 @@ export function SetupRestore({ token, onBack }: SetupRestoreProps) {
         inFlight.current = false;
         if (isSetupComplete(err)) leave();
         else {
+          // Too many attempts is said in the wizard's own words, not the server's.
+          const reason =
+            err.status === 429 || err.type === "rate_limited"
+              ? t("restore.errors.rateLimited")
+              : err.detail;
           setFailure(
-            err.detail
-              ? `${t("restore.failed.nothingChanged")} ${err.detail}`
+            reason
+              ? `${t("restore.failed.nothingChanged")} ${reason}`
               : t("restore.failed.nothingChanged"),
           );
         }

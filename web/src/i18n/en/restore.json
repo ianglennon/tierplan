@@ -50,6 +50,7 @@
       "notABackup": "That isn't a Bayplan backup file.",
       "cutOff": "The upload was cut off. If Bayplan runs behind a reverse proxy, check its upload size limit.",
       "busy": "Another restore is being prepared. Try again in a few minutes.",
+      "rateLimited": "Too many attempts. Wait a minute and try again.",
       "check": "Couldn't check this backup. Check the container logs, then try again."
     },
     "failed": {

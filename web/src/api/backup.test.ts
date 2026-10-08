@@ -193,6 +193,11 @@ describe("restoreProblem", () => {
     expect(key(new RestoreError(400, "upload_incomplete"))).toBe("restore.errors.cutOff");
   });
 
+  it("maps a 429 rate_limited, typed or not, to the too-many-attempts message", () => {
+    expect(key(new RestoreError(429, "rate_limited"))).toBe("restore.errors.rateLimited");
+    expect(key(new RestoreError(429))).toBe("restore.errors.rateLimited");
+  });
+
   it("maps any 413, typed or a proxy's own page, to the cut-off message", () => {
     expect(key(new RestoreError(413, "upload_too_large"))).toBe("restore.errors.cutOff");
     expect(key(new RestoreError(413))).toBe("restore.errors.cutOff");

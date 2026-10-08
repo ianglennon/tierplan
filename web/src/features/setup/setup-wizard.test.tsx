@@ -626,6 +626,26 @@ describe("SetupWizard restore branch", () => {
     );
   });
 
+  it("says there were too many attempts when the wizard's check or restore is rate limited", async () => {
+    answers["/api/setup/restore/check"] = () => problem(429, { type: "rate_limited", detail: "x" });
+    await openRestore();
+    chooseAndCheck();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Too many attempts. Wait a minute and try again.",
+    );
+
+    answers["/api/setup/restore/check"] = () => Response.json(SUMMARY);
+    answers["/api/setup/restore/apply"] = () => problem(429, { type: "rate_limited", detail: "x" });
+    click("Check backup");
+    await screen.findByText("What's in this backup");
+    click("Restore backup");
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe(
+        "The restore didn't finish and nothing was changed. Too many attempts. Wait a minute and try again.",
+      ),
+    );
+  });
+
   it("treats a 409 setup_complete as setup already done and leaves the wizard", async () => {
     answers["/api/setup/restore/upload"] = () => problem(409, { type: "setup_complete" });
     const { router } = await openRestore();

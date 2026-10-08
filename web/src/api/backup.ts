@@ -239,6 +239,8 @@ function newerVersion(detail: string | undefined): string | undefined {
 export function restoreProblem(err: unknown): RestoreMessage {
   if (!(err instanceof RestoreError)) return { key: "common.errors.unreachable" };
   if (err.status === 413) return { key: "restore.errors.cutOff" };
+  if (err.status === 429 || err.type === "rate_limited")
+    return { key: "restore.errors.rateLimited" };
   switch (err.type) {
     case "backup_unreadable":
       return { key: "restore.errors.unreadable" };
