@@ -3,6 +3,7 @@
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -194,5 +195,47 @@ describe("the Profile dialog (D-24)", () => {
     fireEvent.click(within(d).getByRole("button", { name: "Cancel" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(patches).toEqual([]);
+  });
+
+  // CR-C-01: the dialog stays mounted, so a cached pre-save profile used to survive
+  // a close and the next save sent old values with a fresh version.
+  it("reopens on the saved values and sends them with the matching version", async () => {
+    let setOpen: (open: boolean) => void = () => undefined;
+    function Harness() {
+      const [open, set] = useState(true);
+      setOpen = set;
+      return <ProfileDialog open={open} onOpenChange={set} />;
+    }
+    queryClient.setQueryData(
+      meQueryOptions.queryKey,
+      makeMe({ id: "id-alice", username: "alice" }),
+    );
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Harness />
+        <Toaster />
+      </QueryClientProvider>,
+    );
+    let d = await dialog();
+    await waitFor(() => expect(field("Display name").value).toBe("Alice"));
+    fireEvent.change(field("Display name"), { target: { value: "Alice L" } });
+    fireEvent.click(within(d).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(patches).toHaveLength(1);
+
+    setOpen(true);
+    d = await dialog();
+    // Never the pre-save copy, not even for a moment.
+    expect(screen.queryByLabelText("Display name")).toBeNull();
+    await waitFor(() => expect(field("Display name").value).toBe("Alice L"));
+
+    fireEvent.change(field("Email"), { target: { value: "new@example.test" } });
+    fireEvent.click(within(d).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(patches).toHaveLength(2));
+    expect(patches[1]).toEqual({
+      displayName: "Alice L",
+      email: "new@example.test",
+      updatedAt: "2026-10-08T10:00:00.5Z",
+    });
   });
 });

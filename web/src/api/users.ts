@@ -295,8 +295,10 @@ export async function resetUserPassword(userId: string): Promise<ResetResult> {
 export type MyProfile = components["schemas"]["ProfileBody"];
 
 // The ["profile"] query: the signed-in user's own display name and email, with
-// the version a save must be based on. It is dropped the moment nothing shows it,
-// so the next open reads the profile again and never edits a stale copy.
+// the version a save must be based on. The dialog that shows it is mounted for
+// good, so gcTime: 0 alone does not drop it: the dialog removes the query when it
+// closes and after a save, so the next open reads the profile again and never
+// edits a stale copy.
 export const myProfileQuery = queryOptions({
   queryKey: ["profile"],
   queryFn: async (): Promise<MyProfile> => {

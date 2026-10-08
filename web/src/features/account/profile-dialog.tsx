@@ -4,7 +4,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Lock } from "lucide-react";
-import { type RefObject, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -84,6 +84,9 @@ function ProfileForm({ profile, onDone, onCancel, onPendingChange }: ProfileForm
       switch (result.kind) {
         case "ok":
           toastSuccess(t("userpage.profile.saved"));
+          // The cached profile is now the pre-save one: drop it, so the next open
+          // reads the saved values together with their version.
+          queryClient.removeQueries({ queryKey: myProfileQuery.queryKey });
           // The name shown for the caller follows the save.
           void queryClient.invalidateQueries({ queryKey: meQueryOptions.queryKey });
           onDone();
@@ -217,10 +220,18 @@ interface ProfileDialogProps {
 // dialog says so. The dialog cannot be dismissed while a request is in flight.
 export function ProfileDialog({ open, onOpenChange, returnFocusRef }: ProfileDialogProps) {
   const t = useT();
+  const queryClient = useQueryClient();
   const query = useQuery({ ...myProfileQuery, enabled: open });
   const [pending, setPending] = useState(false);
   const profile = query.data;
   const failed = query.isError && !profile;
+
+  // This dialog is mounted for good, so its (disabled) observer keeps the query
+  // alive and gcTime: 0 never fires. Drop the copy on close so every open reads
+  // the profile again, and the form's values and its version come from one read.
+  useEffect(() => {
+    if (!open) queryClient.removeQueries({ queryKey: myProfileQuery.queryKey });
+  }, [open, queryClient]);
 
   return (
     <Dialog open={open} onOpenChange={(next) => (pending ? undefined : onOpenChange(next))}>
@@ -257,6 +268,7 @@ export function ProfileDialog({ open, onOpenChange, returnFocusRef }: ProfileDia
           </Alert>
         ) : profile ? (
           <ProfileForm
+            key={profile.updatedAt}
             profile={profile}
             onDone={() => onOpenChange(false)}
             onCancel={() => onOpenChange(false)}
