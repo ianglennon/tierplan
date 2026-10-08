@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/access"
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
 )
 
@@ -317,5 +318,169 @@ func TestRegenerateInviteRefusesAnUnknownOrDeletedUser(t *testing.T) {
 	}
 	if _, _, err := f.svc.RegenerateInvite(ctx, testAdmin, id); !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("deleted user = %v, want ErrNotFound", err)
+	}
+}
+
+// --- password reset (plan 03-15, AUTH-04, D-22b) ------------------------------
+
+func TestLinkURLPutsTheTokenInTheFragmentAfterThePublicURLOrTheBasePath(t *testing.T) {
+	const tok = "TOKEN"
+	for _, c := range []struct{ public, base, want string }{
+		{"https://bayplan.example.test", "", "https://bayplan.example.test/invite#token=TOKEN"},
+		{"https://bayplan.example.test/", "", "https://bayplan.example.test/invite#token=TOKEN"},
+		{"https://example.test/bayplan", "/bayplan", "https://example.test/bayplan/invite#token=TOKEN"},
+		{"", "", "/invite#token=TOKEN"},
+		{"", "/bayplan", "/bayplan/invite#token=TOKEN"},
+	} {
+		if got := access.LinkURL(c.public, c.base, tok); got != c.want {
+			t.Errorf("LinkURL(%q, %q) = %q, want %q", c.public, c.base, got, c.want)
+		}
+	}
+}
+
+func (f *fixture) addSession(t *testing.T, userID, id string) {
+	t.Helper()
+	if _, err := f.st.Write.Exec(`INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, absolute_expires_at, remember, ip, user_agent, public_id)
+		VALUES (?, ?, 1, 1, NULL, 0, '', '', ?)`, []byte(id), userID, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// activeUser is a user who has set a password, with two sessions.
+func (f *fixture) activeUser(t *testing.T, name string) string {
+	t.Helper()
+	id, link := f.invite(t, name)
+	if err := f.svc.AcceptLink(context.Background(), link.Token, chosenPassword, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	f.addSession(t, id, name+"-1")
+	f.addSession(t, id, name+"-2")
+	return id
+}
+
+func TestIssueResetEndsEverySessionAndIssuesAResetLinkThatSetsANewPassword(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	id := f.activeUser(t, "alice")
+	other := f.activeUser(t, "bob")
+
+	username, link, err := f.svc.IssueReset(ctx, testAdmin, id)
+	if err != nil {
+		t.Fatalf("IssueReset: %v", err)
+	}
+	if username != "alice" || len(link.Token) != 43 || !link.ExpiresAt.Equal(testNow.Add(72*time.Hour)) {
+		t.Fatalf("got %q and %+v, want alice and a 43 character token valid for 72 hours", username, link)
+	}
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM sessions WHERE user_id = ?`, id).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the user has %d sessions left (%v), want none", n, err)
+	}
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM sessions WHERE user_id = ?`, other).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("another user's sessions = %d (%v), want them untouched", n, err)
+	}
+	info, err := f.svc.LookupLink(ctx, link.Token)
+	if err != nil || info.Kind != access.LinkReset || info.Username != "alice" {
+		t.Fatalf("LookupLink = %+v, %v; want a reset link for alice", info, err)
+	}
+
+	const next = "a brand new passphrase 99"
+	if err := f.svc.AcceptLink(ctx, link.Token, next, "", ""); err != nil {
+		t.Fatalf("AcceptLink: %v", err)
+	}
+	var hash string
+	if err := f.st.Read.QueryRow(`SELECT password_hash FROM users WHERE id = ?`, id).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := auth.VerifyPassword(next, hash); !ok {
+		t.Fatal("the new password does not verify")
+	}
+	if ok, _ := auth.VerifyPassword(chosenPassword, hash); ok {
+		t.Fatal("the old password still verifies")
+	}
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'user.password_reset_completed'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("user.password_reset_completed entries = %d (%v), want 1", n, err)
+	}
+}
+
+func TestIssueResetIsAuditedWithTheSessionsEndedAndTheExpiryAndNeverTheToken(t *testing.T) {
+	f := newFixture(t)
+	id := f.activeUser(t, "alice")
+	_, link, err := f.svc.IssueReset(context.Background(), testAdmin, id, access.WithOrigin("203.0.113.9", "ua/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actor, target, ip, details string
+	if err := f.st.Read.QueryRow(`SELECT actor_id, target_id, ip, details FROM audit_log WHERE action = 'user.password_reset_issued'`).Scan(&actor, &target, &ip, &details); err != nil {
+		t.Fatalf("no user.password_reset_issued entry: %v", err)
+	}
+	if actor != "id-admin" || target != id || ip != "203.0.113.9" {
+		t.Fatalf("entry = actor %q target %q ip %q", actor, target, ip)
+	}
+	want := `{"ended":"2","expires_at":"` + link.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00") + `","username":"alice"}`
+	if details != want {
+		t.Fatalf("details = %s, want %s", details, want)
+	}
+	if strings.Contains(details, link.Token) {
+		t.Fatal("the audit entry holds the token")
+	}
+}
+
+func TestIssueResetReplacesTheUsersEarlierLink(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	id := f.activeUser(t, "alice")
+	_, first, err := f.svc.IssueReset(ctx, testAdmin, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, second, err := f.svc.IssueReset(ctx, testAdmin, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.LookupLink(ctx, first.Token); !errors.Is(err, access.ErrInvalidLink) {
+		t.Fatalf("the earlier reset link answers %v, want ErrInvalidLink", err)
+	}
+	if _, err := f.svc.LookupLink(ctx, second.Token); err != nil {
+		t.Fatalf("the newer link: %v", err)
+	}
+}
+
+func TestIssueResetRefusesAnUnknownOrDeletedUserAndADisabledOneAndChangesNothing(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, _, err := f.svc.IssueReset(ctx, testAdmin, "no-such-user"); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("unknown user = %v, want ErrNotFound", err)
+	}
+	gone := f.activeUser(t, "gone")
+	if _, err := f.st.Write.Exec(`UPDATE users SET deleted_at = 5 WHERE id = ?`, gone); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.svc.IssueReset(ctx, testAdmin, gone); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("deleted user = %v, want ErrNotFound", err)
+	}
+	off := f.activeUser(t, "off")
+	if _, err := f.st.Write.Exec(`UPDATE users SET disabled = 1 WHERE id = ?`, off); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.svc.IssueReset(ctx, testAdmin, off); !errors.Is(err, access.ErrUserDisabled) {
+		t.Fatalf("disabled user = %v, want ErrUserDisabled", err)
+	}
+	var sessions, links, entries int
+	if err := f.st.Read.QueryRow(`SELECT (SELECT COUNT(*) FROM sessions WHERE user_id IN (?, ?)), (SELECT COUNT(*) FROM user_links), (SELECT COUNT(*) FROM audit_log WHERE action = 'user.password_reset_issued')`, gone, off).Scan(&sessions, &links, &entries); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 4 || links != 0 || entries != 0 {
+		t.Fatalf("after refusals: sessions %d, links %d, entries %d; want 4, 0, 0", sessions, links, entries)
+	}
+}
+
+func TestIssueResetWorksForTheOnlyInstanceAdmin(t *testing.T) {
+	f := newFixture(t)
+	id := f.activeUser(t, "root")
+	if _, err := f.st.Write.Exec(`UPDATE users SET instance_admin = 1 WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.svc.IssueReset(context.Background(), audit.SystemCLI, id); err != nil {
+		t.Fatalf("resetting the only instance admin: %v", err)
 	}
 }

@@ -544,3 +544,127 @@ func TestRegenerateInviteNeedsUsersManage(t *testing.T) {
 		t.Fatalf("a refused request must leave the link alone: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// --- POST /api/users/{id}/reset-password (plan 03-15, AUTH-04, D-22b) -----------
+
+func (f *authFixture) resetPassword(t *testing.T, cookie, csrf, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(t, authReq{method: http.MethodPost, path: "/api/users/" + id + "/reset-password", cookie: cookie, csrf: csrf})
+}
+
+func TestResetPasswordEndsEverySessionIssuesAResetLinkAndTheLinkChoosesANewPassword(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	id := f.addUser(t, "alice", false)
+	a1, _ := f.signIn(t, "alice", false)
+	a2, _ := f.signIn(t, "alice", true)
+
+	rec := f.resetPassword(t, cookie, csrf, id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset: %d %s", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cc)
+	}
+	var link struct{ URL, ExpiresAt string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &link); err != nil {
+		t.Fatal(err)
+	}
+	m := tokenInLink.FindStringSubmatch(link.URL)
+	if m == nil || link.ExpiresAt == "" {
+		t.Fatalf("link = %+v, want an /invite#token= address and an expiry", link)
+	}
+	for _, c := range []string{a1, a2} {
+		if code := f.meStatus(t, c); code != http.StatusUnauthorized {
+			t.Fatalf("a session of the user after the reset: %d, want 401", code)
+		}
+	}
+	if f.meStatus(t, cookie) != http.StatusOK {
+		t.Fatal("the reset ended the admin's own session")
+	}
+
+	look := f.lookupInvite(t, m[1])
+	var got struct{ Kind, Username string }
+	if look.Code != http.StatusOK || json.Unmarshal(look.Body.Bytes(), &got) != nil || got.Kind != "reset" || got.Username != "alice" {
+		t.Fatalf("lookup = %d %s, want a reset link for alice", look.Code, look.Body)
+	}
+	const next = "a brand new passphrase 99"
+	if rec := f.acceptInvite(t, m[1], next); rec.Code != http.StatusNoContent {
+		t.Fatalf("accept: %d %s", rec.Code, rec.Body)
+	}
+	if rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("alice", goodPassword, false)}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("sign-in with the old password: %d, want 401", rec.Code)
+	}
+	if rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("alice", next, false)}); rec.Code != http.StatusOK {
+		t.Fatalf("sign-in with the new password: %d %s", rec.Code, rec.Body)
+	}
+	if n := len(f.audits(t, "user.password_reset_completed")); n != 1 {
+		t.Fatalf("user.password_reset_completed entries = %d, want 1", n)
+	}
+	entries := f.audits(t, "user.password_reset_issued")
+	if len(entries) != 1 || entries[0].ActorID != "id-admin" || entries[0].TargetID != id || entries[0].Result != "success" || entries[0].IP != authIP || entries[0].UserAgent != authUA {
+		t.Fatalf("audit = %+v", entries)
+	}
+	var details string
+	if err := f.st.Read.QueryRow(`SELECT details FROM audit_log WHERE action = 'user.password_reset_issued'`).Scan(&details); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(details, `"ended":"2"`) || !strings.Contains(details, `"username":"alice"`) || strings.Contains(details, m[1]) {
+		t.Fatalf("details = %s", details)
+	}
+}
+
+func TestResetPasswordBuildsTheLinkOnThePublicURLAndBasePath(t *testing.T) {
+	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example.test/base"})
+	cookie, csrf := f.signIn(t, "admin", false)
+	id := f.addUser(t, "alice", false)
+	rec := f.resetPassword(t, cookie, csrf, id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset: %d %s", rec.Code, rec.Body)
+	}
+	var link struct{ URL string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &link); err != nil || !strings.HasPrefix(link.URL, "https://bayplan.example.test/base/invite#token=") {
+		t.Fatalf("link = %q (%v), want it on the public URL and base path", link.URL, err)
+	}
+}
+
+func TestResetPasswordRefusesNonAdminsUnknownDeletedAndDisabledUsersWithoutEndingAnything(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	alice := f.addUser(t, "alice", false)
+	f.addUser(t, "mallory", false)
+	malloryCookie, malloryCSRF := f.signIn(t, "mallory", false)
+	a1, _ := f.signIn(t, "alice", false)
+
+	if rec := f.resetPassword(t, malloryCookie, malloryCSRF, alice); rec.Code != http.StatusForbidden {
+		t.Fatalf("a user resetting another's password: %d, want 403", rec.Code)
+	}
+	if rec := f.call(t, authReq{method: http.MethodPost, path: "/api/users/" + alice + "/reset-password"}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous reset: %d, want 401", rec.Code)
+	}
+	if rec := f.resetPassword(t, cookie, "", alice); rec.Code != http.StatusForbidden {
+		t.Fatalf("reset without a CSRF token: %d, want 403", rec.Code)
+	}
+	if f.meStatus(t, a1) != http.StatusOK {
+		t.Fatal("a refused reset ended a session")
+	}
+	if rec := f.resetPassword(t, cookie, csrf, "no-such-user"); rec.Code != http.StatusNotFound || problemType(t, rec) != "user_not_found" {
+		t.Fatalf("unknown user: %d %s, want 404 user_not_found", rec.Code, rec.Body)
+	}
+
+	if rec := f.disable(t, cookie, csrf, alice); rec.Code != http.StatusOK {
+		t.Fatalf("disable: %d", rec.Code)
+	}
+	if rec := f.resetPassword(t, cookie, csrf, alice); rec.Code != http.StatusConflict || problemType(t, rec) != "user_disabled" {
+		t.Fatalf("disabled user: %d %s, want 409 user_disabled", rec.Code, rec.Body)
+	}
+	if rec := f.userAction(t, cookie, csrf, http.MethodDelete, alice, "", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d", rec.Code)
+	}
+	if rec := f.resetPassword(t, cookie, csrf, alice); rec.Code != http.StatusNotFound || problemType(t, rec) != "user_not_found" {
+		t.Fatalf("deleted user: %d %s, want 404 user_not_found", rec.Code, rec.Body)
+	}
+	if n := len(f.audits(t, "user.password_reset_issued")); n != 0 {
+		t.Fatalf("user.password_reset_issued entries = %d, want none for refusals", n)
+	}
+}
