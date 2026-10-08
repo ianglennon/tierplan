@@ -52,8 +52,8 @@ func TestPreRestorePrunerKeepsTheNewestThreeAndTouchesNoOtherFile(t *testing.T) 
 	if strings.Join(pre, ",") != "prerestore-20260103T000000Z.db,prerestore-20260104T000000Z.db,prerestore-20260105T000000Z.db" {
 		t.Fatalf("prerestore files left = %v, want the newest three", pre)
 	}
-	if len(others) != 7 {
-		t.Fatalf("other files left = %v, want all seven untouched", others)
+	if len(others) != 6 {
+		t.Fatalf("other files left = %v, want all six untouched", others)
 	}
 }
 

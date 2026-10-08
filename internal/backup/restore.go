@@ -361,6 +361,19 @@ func (s *Staged) Swap(ctx context.Context, dataDir string, now time.Time) (snaps
 	if err := syncFile(staged); err != nil {
 		return "", fmt.Errorf("flush the staged database: %w", err)
 	}
+	// The database being replaced is saved first, and its journal is folded in
+	// by closing it cleanly, so removing the journal files below loses nothing.
+	if _, statErr := os.Stat(live); statErr == nil {
+		snapshotPath, err = PreRestoreSnapshot(ctx, dataDir, now)
+		if err != nil {
+			return "", err
+		}
+		if err := prunePreRestore(filepath.Join(dataDir, backupsDir), preRestoreKept); err != nil {
+			return "", fmt.Errorf("prune old pre-restore snapshots: %w", err)
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return "", fmt.Errorf("look for %s: %w", live, statErr)
+	}
 	// The live database's journal files belong to the old file; left beside the
 	// new one they would be replayed into it.
 	for _, ext := range []string{"-wal", "-shm"} {
@@ -374,7 +387,7 @@ func (s *Staged) Swap(ctx context.Context, dataDir string, now time.Time) (snaps
 	if err := syncFile(dataDir); err != nil {
 		return "", fmt.Errorf("flush the data directory: %w", err)
 	}
-	return "", nil
+	return snapshotPath, nil
 }
 
 // syncFile fsyncs a file or a directory.

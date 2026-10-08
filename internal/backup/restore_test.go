@@ -475,6 +475,13 @@ func TestSwapOverAnExistingDatabaseWritesAPreRestoreSnapshotFirst(t *testing.T) 
 	}
 
 	// The snapshot is the old database (alice, gone) and the live one is the new (bob).
+	// Checked before the database is opened below, which can create them again.
+	for _, ext := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(filepath.Join(dir, store.DatabaseFile+ext)); err == nil {
+			t.Errorf("a %s file sits beside the swapped database", ext)
+		}
+	}
+
 	names := func(path string) string {
 		t.Helper()
 		db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
@@ -502,11 +509,6 @@ func TestSwapOverAnExistingDatabaseWritesAPreRestoreSnapshotFirst(t *testing.T) 
 	}
 	if got := names(filepath.Join(dir, store.DatabaseFile)); got != "bob" {
 		t.Fatalf("live users = %q, want bob", got)
-	}
-	for _, ext := range []string{"-wal", "-shm"} {
-		if _, err := os.Stat(filepath.Join(dir, store.DatabaseFile+ext)); err == nil {
-			t.Errorf("a %s file sits beside the swapped database", ext)
-		}
 	}
 }
 
