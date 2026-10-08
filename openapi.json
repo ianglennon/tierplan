@@ -834,6 +834,61 @@
         ],
         "type": "object"
       },
+      "EffectiveEnvBody": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment's ID",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The environment's name",
+            "type": "string"
+          },
+          "extras": {
+            "description": "The union of the extra permissions the sources give; an Admin holds every one",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "inherited": {
+            "description": "True when the user reaches this environment only through a grant on every environment",
+            "type": "boolean"
+          },
+          "role": {
+            "description": "The highest role any source gives",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          },
+          "sources": {
+            "description": "Every source, in the order instance, all, team, direct",
+            "items": {
+              "$ref": "#/components/schemas/SourceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "envId",
+          "envName",
+          "role",
+          "extras",
+          "sources",
+          "inherited"
+        ],
+        "type": "object"
+      },
       "EnvAccessBody": {
         "additionalProperties": false,
         "properties": {
@@ -1604,6 +1659,153 @@
         },
         "required": [
           "passphrase"
+        ],
+        "type": "object"
+      },
+      "GrantBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the grant was first made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "envId": {
+            "description": "The environment's ID, for scope env",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The environment's name, for scope env",
+            "type": "string"
+          },
+          "extras": {
+            "description": "The extra (dangerous) permissions the grant carries; only an Operator grant may carry any",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The grant's ID",
+            "type": "string"
+          },
+          "role": {
+            "description": "The role",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          },
+          "scope": {
+            "description": "env for one environment, all for every environment, including ones added later",
+            "enum": [
+              "env",
+              "all"
+            ],
+            "type": "string"
+          },
+          "subjectId": {
+            "description": "The user's or team's ID",
+            "type": "string"
+          },
+          "subjectType": {
+            "description": "Whether the grant is made to a user or a team",
+            "enum": [
+              "user",
+              "team"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "subjectType",
+          "subjectId",
+          "scope",
+          "role",
+          "extras",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "GrantInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment, for scope env",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/GrantStateBody",
+            "description": "The state of the grant the editor started from. If the grant is different now, or gone, nothing is saved and the answer is 409 stale_change"
+          },
+          "extras": {
+            "description": "The extra permissions; only Operator may carry any. A Viewer answers 422 viewer_cannot_have_extras, an Admin 422 extras_implied, and a name that is not an extra permission 422 unknown_extra",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "role": {
+            "description": "The role",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          },
+          "scope": {
+            "description": "env for one environment, all for every environment",
+            "enum": [
+              "env",
+              "all"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "role"
+        ],
+        "type": "object"
+      },
+      "GrantStateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "extras": {
+            "description": "The extra permissions the grant had when the editor opened it",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "role": {
+            "description": "The role the grant had when the editor opened it",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
         ],
         "type": "object"
       },
@@ -3112,6 +3314,41 @@
         },
         "required": [
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "UserAccessBody": {
+        "additionalProperties": false,
+        "properties": {
+          "environments": {
+            "description": "The environments the user can reach, sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/EffectiveEnvBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "grants": {
+            "description": "The grants made to this user directly, the ones editable here",
+            "items": {
+              "$ref": "#/components/schemas/GrantBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "instanceAdmin": {
+            "description": "True for an instance admin, who holds every environment with every extra permission and so has no environments listed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "instanceAdmin",
+          "environments",
+          "grants"
         ],
         "type": "object"
       },
@@ -6164,6 +6401,122 @@
         ]
       }
     },
+    "/api/teams/{teamId}/grants": {
+      "get": {
+        "description": "The grants made to the team: the one on every environment first, then those on single environments by name. Every member holds what they give. An unknown team answers 404 team_not_found.",
+        "operationId": "listTeamGrants",
+        "parameters": [
+          {
+            "description": "The team's ID",
+            "in": "path",
+            "name": "teamId",
+            "required": true,
+            "schema": {
+              "description": "The team's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GrantBody"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List a team's grants",
+        "tags": [
+          "grants"
+        ]
+      },
+      "put": {
+        "description": "As putUserGrant, for a team: every member holds the role (the highest across their sources). An unknown team answers 404 team_not_found.",
+        "operationId": "putTeamGrant",
+        "parameters": [
+          {
+            "description": "The team's ID",
+            "in": "path",
+            "name": "teamId",
+            "required": true,
+            "schema": {
+              "description": "The team's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Give a team a role on an environment",
+        "tags": [
+          "grants"
+        ]
+      }
+    },
     "/api/teams/{teamId}/impact": {
       "post": {
         "description": "Works out, with the same evaluator that enforces access, who would lose which environment access if the team were deleted (op delete) or a member removed (op remove_member, with userId). The change is applied inside a transaction that is rolled back, so nothing is written and nothing is audited. Confirming recomputes the impact when it commits. A remove_member for a user who is not in the team answers 404 member_not_found.",
@@ -6584,6 +6937,57 @@
         ]
       }
     },
+    "/api/users/{userId}/access": {
+      "get": {
+        "description": "The user's effective access: for each environment the user can reach, the highest role any source gives, the union of the extra permissions and every source (instance, all, team, direct), computed by the same evaluator that enforces access. An instance admin holds every environment, so the list is empty and instanceAdmin is true. grants lists the user's own grants, the ones editable on the user page. An unknown user answers 404 user_not_found.",
+        "operationId": "getUserAccess",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAccessBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What a user may do on each environment, and why",
+        "tags": [
+          "grants"
+        ]
+      }
+    },
     "/api/users/{userId}/disable": {
       "post": {
         "description": "Ends every session of the user at once and refuses their sign-in. Their grants and team memberships are kept and the automations they own pause. Answers the user as they now are. Disabling a disabled user changes nothing. The last active instance admin cannot be disabled: 409 last_instance_admin.",
@@ -6683,6 +7087,67 @@
         "summary": "Enable a user",
         "tags": [
           "users"
+        ]
+      }
+    },
+    "/api/users/{userId}/grants": {
+      "put": {
+        "description": "Gives the user Admin, Operator or Viewer on one environment (scope env, with envId) or on all of them (scope all). A user holds at most one grant per scope: saving an existing combination edits it (200, audited as access.updated), a new one is created (201, access.granted). Extras are accepted only on Operator: a Viewer answers 422 viewer_cannot_have_extras, an Admin 422 extras_implied and a permission that is not an extra 422 unknown_extra. With expected set, a grant that has changed answers 409 stale_change. A grant never expires. An unknown user answers 404 user_not_found and an unknown environment 404 environment_not_found.",
+        "operationId": "putUserGrant",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Give a user a role on an environment",
+        "tags": [
+          "grants"
         ]
       }
     },

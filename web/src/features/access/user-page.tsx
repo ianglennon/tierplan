@@ -11,6 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { AccessCard } from "@/features/access/access-card";
 import { AccountCard } from "@/features/access/account-card";
 import { InstanceAdminBadge } from "@/features/access/instance-admin-badge";
 import { InstanceAdminCard } from "@/features/access/instance-admin-card";
@@ -77,7 +78,7 @@ interface UserPageProps {
 // UserPage is Settings > Access > Users > {username}: the breadcrumb, the header
 // (the display name as the title when there is one, else the username, with the
 // status and the instance-admin badge) and the cards, 32px apart: Profile,
-// Instance administrator, Teams, Sessions and Account. The page is
+// Instance administrator, Access, Teams, Sessions and Account. The page is
 // for an instance admin, who holds users.manage; the server answers 403 again.
 export function UserPage({ userId }: UserPageProps) {
   const t = useT();
@@ -145,6 +146,7 @@ export function UserPage({ userId }: UserPageProps) {
       </header>
       <ProfileCard user={user} onChanged={changed} />
       <InstanceAdminCard user={user} onChanged={changed} />
+      <AccessCard subject={{ type: "user", id: user.id, name: user.username }} />
       <TeamsCard user={user} />
       <SessionsCard userId={user.id} username={user.username} />
       <AccountCard user={user} onChanged={changed} onDeleted={deleted} />

@@ -887,6 +887,30 @@ export interface paths {
         patch: operations["renameTeam"];
         trace?: never;
     };
+    "/api/teams/{teamId}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a team's grants
+         * @description The grants made to the team: the one on every environment first, then those on single environments by name. Every member holds what they give. An unknown team answers 404 team_not_found.
+         */
+        get: operations["listTeamGrants"];
+        /**
+         * Give a team a role on an environment
+         * @description As putUserGrant, for a team: every member holds the role (the highest across their sources). An unknown team answers 404 team_not_found.
+         */
+        put: operations["putTeamGrant"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/teams/{teamId}/impact": {
         parameters: {
             query?: never;
@@ -999,6 +1023,26 @@ export interface paths {
         patch: operations["updateUser"];
         trace?: never;
     };
+    "/api/users/{userId}/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a user may do on each environment, and why
+         * @description The user's effective access: for each environment the user can reach, the highest role any source gives, the union of the extra permissions and every source (instance, all, team, direct), computed by the same evaluator that enforces access. An instance admin holds every environment, so the list is empty and instanceAdmin is true. grants lists the user's own grants, the ones editable on the user page. An unknown user answers 404 user_not_found.
+         */
+        get: operations["getUserAccess"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users/{userId}/disable": {
         parameters: {
             query?: never;
@@ -1033,6 +1077,26 @@ export interface paths {
          * @description Lets a disabled user sign in again with the grants and teams they had. Enabling an enabled user changes nothing.
          */
         post: operations["enableUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Give a user a role on an environment
+         * @description Gives the user Admin, Operator or Viewer on one environment (scope env, with envId) or on all of them (scope all). A user holds at most one grant per scope: saving an existing combination edits it (200, audited as access.updated), a new one is created (201, access.granted). Extras are accepted only on Operator: a Viewer answers 422 viewer_cannot_have_extras, an Admin 422 extras_implied and a permission that is not an extra 422 unknown_extra. With expected set, a grant that has changed answers 409 stale_change. A grant never expires. An unknown user answers 404 user_not_found and an unknown environment 404 environment_not_found.
+         */
+        put: operations["putUserGrant"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1530,6 +1594,23 @@ export interface components {
             /** @description The Docker API path the agent refused */
             endpoint: string;
         };
+        EffectiveEnvBody: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The environment's name */
+            envName: string;
+            /** @description The union of the extra permissions the sources give; an Admin holds every one */
+            extras: string[] | null;
+            /** @description True when the user reaches this environment only through a grant on every environment */
+            inherited: boolean;
+            /**
+             * @description The highest role any source gives
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description Every source, in the order instance, all, team, direct */
+            sources: components["schemas"]["SourceBody"][] | null;
+        };
         EnvAccessBody: {
             /** @description The dangerous permissions the grants carry explicitly, sorted */
             extras: string[] | null;
@@ -1873,6 +1954,65 @@ export interface components {
         ExportBackupInputBody: {
             /** @description Locks the backup. At least 16 characters; Bayplan never stores it and cannot recover it */
             passphrase: string;
+        };
+        GrantBody: {
+            /**
+             * Format: date-time
+             * @description When the grant was first made
+             */
+            createdAt: string;
+            /** @description The environment's ID, for scope env */
+            envId?: string;
+            /** @description The environment's name, for scope env */
+            envName?: string;
+            /** @description The extra (dangerous) permissions the grant carries; only an Operator grant may carry any */
+            extras: string[] | null;
+            /** @description The grant's ID */
+            id: string;
+            /**
+             * @description The role
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /**
+             * @description env for one environment, all for every environment, including ones added later
+             * @enum {string}
+             */
+            scope: "env" | "all";
+            /** @description The user's or team's ID */
+            subjectId: string;
+            /**
+             * @description Whether the grant is made to a user or a team
+             * @enum {string}
+             */
+            subjectType: "user" | "team";
+        };
+        GrantInputBody: {
+            /** @description The environment, for scope env */
+            envId?: string;
+            /** @description The state of the grant the editor started from. If the grant is different now, or gone, nothing is saved and the answer is 409 stale_change */
+            expected?: components["schemas"]["GrantStateBody"];
+            /** @description The extra permissions; only Operator may carry any. A Viewer answers 422 viewer_cannot_have_extras, an Admin 422 extras_implied, and a name that is not an extra permission 422 unknown_extra */
+            extras?: string[] | null;
+            /**
+             * @description The role
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /**
+             * @description env for one environment, all for every environment
+             * @enum {string}
+             */
+            scope: "env" | "all";
+        };
+        GrantStateBody: {
+            /** @description The extra permissions the grant had when the editor opened it */
+            extras?: string[] | null;
+            /**
+             * @description The role the grant had when the editor opened it
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
         };
         ImageItem: {
             /** Format: date-time */
@@ -2495,6 +2635,14 @@ export interface components {
              * @description The updatedAt of the user this edit is based on. If the user changed since, the answer is 409 stale_change
              */
             updatedAt: string;
+        };
+        UserAccessBody: {
+            /** @description The environments the user can reach, sorted by name */
+            environments: components["schemas"]["EffectiveEnvBody"][] | null;
+            /** @description The grants made to this user directly, the ones editable here */
+            grants: components["schemas"]["GrantBody"][] | null;
+            /** @description True for an instance admin, who holds every environment with every extra permission and so has no environments listed */
+            instanceAdmin: boolean;
         };
         UserBody: {
             /** @description The name shown for the user; empty when none was set, and the SPA then shows the username */
@@ -4437,6 +4585,76 @@ export interface operations {
             };
         };
     };
+    listTeamGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putTeamGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     previewTeamImpact: {
         parameters: {
             query?: never;
@@ -4710,6 +4928,39 @@ export interface operations {
             };
         };
     };
+    getUserAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserAccessBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     disableUser: {
         parameters: {
             query?: never;
@@ -4763,6 +5014,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putUserGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantBody"];
                 };
             };
             /** @description Error */

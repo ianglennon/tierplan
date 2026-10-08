@@ -124,6 +124,9 @@ beforeEach(() => {
           ? Response.json(userSessions)
           : Response.json({ title: "boom" }, { status: sessionsStatus });
       }
+      if (path === "/api/users/u1/access") {
+        return Response.json({ instanceAdmin: false, environments: [], grants: [] });
+      }
       if (path === "/api/users/u1/sessions/revoke-all") return revokeAll();
       if (path === "/api/users/u1/reset-password") return reset();
       if (/^\/api\/users\/u1\/(disable|enable)$/.test(path)) return lifecycle(path);
@@ -639,11 +642,18 @@ describe("the Sessions card (D-23)", () => {
     expect(await within(card).findByText("Chrome on Windows")).toBeTruthy();
   });
 
-  it("sits between the Teams and Account cards", async () => {
+  it("sits between the Teams and Account cards, after the Access card", async () => {
     renderAt(PAGE);
     await screen.findByText("Where alice is signed in.");
     const titles = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
-    expect(titles).toEqual(["Profile", "Instance administrator", "Teams", "Sessions", "Account"]);
+    expect(titles).toEqual([
+      "Profile",
+      "Instance administrator",
+      "Access",
+      "Teams",
+      "Sessions",
+      "Account",
+    ]);
   });
 });
 
