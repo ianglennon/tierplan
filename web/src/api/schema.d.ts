@@ -164,6 +164,50 @@ export interface paths {
         patch: operations["updateEnvironment"];
         trace?: never;
     };
+    "/api/env/{envId}/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Everyone who can use an environment, and why
+         * @description The environment's Access tab: the teams with a grant on it or on every environment, and the people, one entry each, with the highest role any source gives, the union of the extra permissions and every source (direct, team, all environments, instance admin), worked out by the same evaluator that enforces access. Instance admins are always listed. A grant carries the ID an edit or removal names, present only for a grant on this environment. Needs environments.access on the environment (env Admin or instance admin); another environment answers 404 environment_not_found, a Viewer or Operator 403.
+         */
+        get: operations["listEnvAccess"];
+        /**
+         * Give a user or team a role on this environment
+         * @description An env Admin's (or instance admin's) way to give an existing user or team Admin, Operator or Viewer on this environment, with the extra permissions of an Operator. The body names no scope and no environment: the route is the environment, and a body carrying either is rejected (422). Saving an existing combination edits it (200, access.updated), a new one is created (201, access.granted); the grantee has it on their next request. A subject who is an instance admin answers 403 delegation_denied and is audited as permission.denied with that reason. Extras and stale edits answer as putUserGrant does. Teams, team membership and users are not managed here. Needs environments.access on the environment.
+         */
+        put: operations["putEnvAccess"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/access/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Who an environment's access can be given to
+         * @description The users and teams with no direct grant on the environment, for the Who list: usernames, display names and team names, never an email. Users who cannot sign in and instance admins are left out. Needs environments.access on the environment.
+         */
+        get: operations["listEnvAccessCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/adopt-cluster": {
         parameters: {
             query?: never;
@@ -1575,6 +1619,20 @@ export interface components {
              */
             minPassphraseLength: number;
         };
+        CandidateTeamBody: {
+            /** @description The team's ID */
+            id: string;
+            /** @description The team's name */
+            name: string;
+        };
+        CandidateUserBody: {
+            /** @description The user's display name, when set */
+            displayName?: string;
+            /** @description The user's ID */
+            id: string;
+            /** @description The user's username */
+            username: string;
+        };
         ChangePasswordBody: {
             /** @description The CSRF token of the new session, sent as X-CSRF-Token on every mutating request */
             csrfToken: string;
@@ -1701,6 +1759,91 @@ export interface components {
             role: "viewer" | "operator" | "admin";
             /** @description Every grant that contributes, in the order instance, all, team (by name), direct */
             sources: components["schemas"]["SourceBody"][] | null;
+        };
+        EnvAccessCandidatesBody: {
+            /** @description Teams with no direct grant here, by name */
+            teams: components["schemas"]["CandidateTeamBody"][] | null;
+            /** @description Users who can sign in, are not instance admins and have no direct grant here, by username */
+            users: components["schemas"]["CandidateUserBody"][] | null;
+        };
+        EnvAccessListBody: {
+            /** @description Everyone who can use the environment, one entry each, highest role first. Instance admins are always listed. */
+            people: components["schemas"]["EnvAccessPersonBody"][] | null;
+            /** @description Teams with a grant on the environment or on every environment, highest role first */
+            teams: components["schemas"]["EnvAccessTeamBody"][] | null;
+        };
+        EnvAccessMemberBody: {
+            /** @description The user's display name, when set */
+            displayName?: string;
+            /**
+             * @description The role the team gives them on the environment
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description The user's ID */
+            userId: string;
+            /** @description The user's username */
+            username: string;
+        };
+        EnvAccessPersonBody: {
+            /** @description The user's display name, when set */
+            displayName?: string;
+            /** @description The union of the extra permissions the sources give; an Admin holds every one */
+            extras: string[] | null;
+            /** @description The person's own grant on this environment, the one an env Admin may edit or remove; absent for an instance admin and for someone who reaches the environment only through a team or a grant on every environment */
+            grant?: components["schemas"]["GrantRef"];
+            /** @description True for an instance admin, who holds every environment with every extra permission */
+            instanceAdmin: boolean;
+            /**
+             * @description The highest role any source gives
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description True for the signed-in user's own row */
+            self: boolean;
+            /** @description Every source, in the order instance, all, team, direct */
+            sources: components["schemas"]["SourceBody"][] | null;
+            /** @description The user's ID */
+            userId: string;
+            /** @description The user's username */
+            username: string;
+        };
+        EnvAccessTeamBody: {
+            /** @description The union of the extra permissions the team's grants give; an Admin holds every one */
+            extras: string[] | null;
+            /** @description The team's own grant on this environment, the one an env Admin may edit or remove; absent when the team reaches the environment only through a grant on every environment */
+            grant?: components["schemas"]["GrantRef"];
+            /** @description The members who can sign in, with the role the team gives each */
+            members: components["schemas"]["EnvAccessMemberBody"][] | null;
+            /** @description The team's name */
+            name: string;
+            /**
+             * @description The highest role the team's grants give on the environment
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description Every source: direct for a grant on this environment, all for a grant on every environment */
+            sources: components["schemas"]["SourceBody"][] | null;
+            /** @description The team's ID */
+            teamId: string;
+        };
+        EnvGrantInputBody: {
+            /** @description The state of the grant the editor started from. If the grant is different now, or gone, nothing is saved and the answer is 409 stale_change */
+            expected?: components["schemas"]["GrantStateBody"];
+            /** @description The extra permissions; only Operator may carry any. A Viewer answers 422 viewer_cannot_have_extras, an Admin 422 extras_implied, and a name that is not an extra permission 422 unknown_extra */
+            extras?: string[] | null;
+            /**
+             * @description The role
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
+            /** @description The user's or team's ID */
+            subjectId: string;
+            /**
+             * @description Whether the grant is made to a user or a team
+             * @enum {string}
+             */
+            subjectType: "user" | "team";
         };
         EnvWarningBody: {
             /** @description For cert_not_renewing and clock_skew: the agent */
@@ -2098,6 +2241,17 @@ export interface components {
              * @enum {string}
              */
             scope: "env" | "all";
+        };
+        GrantRef: {
+            /** @description The extra permissions this grant gives on the environment */
+            extras: string[] | null;
+            /** @description The grant's ID, for the edit and remove routes */
+            id: string;
+            /**
+             * @description The role this grant gives on the environment
+             * @enum {string}
+             */
+            role: "viewer" | "operator" | "admin";
         };
         GrantStateBody: {
             /** @description The extra permissions the grant had when the editor opened it */
@@ -3175,6 +3329,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvAccessListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putEnvAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnvGrantInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvAccessCandidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvAccessCandidatesBody"];
                 };
             };
             /** @description Error */

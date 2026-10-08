@@ -141,6 +141,59 @@ func (q *Queries) InsertAssignment(ctx context.Context, arg InsertAssignmentPara
 	return err
 }
 
+const listAccessCandidates = `-- name: ListAccessCandidates :many
+SELECT CAST('user' AS TEXT) AS kind, u.id AS id, u.username AS name, u.display_name AS display_name
+FROM users u
+WHERE u.deleted_at IS NULL AND u.disabled = 0 AND u.instance_admin = 0
+  AND NOT EXISTS (SELECT 1 FROM role_assignments ra
+                  WHERE ra.principal_type = 'user' AND ra.principal_id = u.id AND ra.env_id = ?1)
+UNION ALL
+SELECT CAST('team' AS TEXT) AS kind, t.id AS id, t.name AS name, CAST('' AS TEXT) AS display_name
+FROM teams t
+WHERE NOT EXISTS (SELECT 1 FROM role_assignments ra
+                  WHERE ra.principal_type = 'team' AND ra.principal_id = t.id AND ra.env_id = ?1)
+ORDER BY kind, name COLLATE NOCASE, id
+`
+
+type ListAccessCandidatesRow struct {
+	Kind        string
+	ID          string
+	Name        string
+	DisplayName string
+}
+
+// The users and teams an environment's Access tab can give access to: the users
+// who can sign in and are not instance admins (who hold every environment
+// already), and every team, each without a direct assignment on the environment.
+// kind is user or team; display_name is empty for a team.
+func (q *Queries) ListAccessCandidates(ctx context.Context, envID sql.NullString) ([]ListAccessCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAccessCandidates, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAccessCandidatesRow
+	for rows.Next() {
+		var i ListAccessCandidatesRow
+		if err := rows.Scan(
+			&i.Kind,
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAssignmentExtras = `-- name: ListAssignmentExtras :many
 SELECT permission FROM assignment_extras WHERE assignment_id = ? ORDER BY permission
 `
@@ -158,6 +211,125 @@ func (q *Queries) ListAssignmentExtras(ctx context.Context, assignmentID string)
 			return nil, err
 		}
 		items = append(items, permission)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnvAccessInstanceAdmins = `-- name: ListEnvAccessInstanceAdmins :many
+SELECT id, username, display_name FROM users
+WHERE instance_admin = 1 AND disabled = 0 AND deleted_at IS NULL
+ORDER BY username
+`
+
+type ListEnvAccessInstanceAdminsRow struct {
+	ID          string
+	Username    string
+	DisplayName string
+}
+
+// The instance admins who can sign in: each holds Admin on every environment.
+func (q *Queries) ListEnvAccessInstanceAdmins(ctx context.Context) ([]ListEnvAccessInstanceAdminsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEnvAccessInstanceAdmins)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnvAccessInstanceAdminsRow
+	for rows.Next() {
+		var i ListEnvAccessInstanceAdminsRow
+		if err := rows.Scan(&i.ID, &i.Username, &i.DisplayName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnvAccessRows = `-- name: ListEnvAccessRows :many
+SELECT ra.id AS id,
+       ra.principal_type AS principal_type,
+       ra.principal_id AS principal_id,
+       ra.role_id AS role_id,
+       ra.env_id AS env_id,
+       CAST(COALESCE((SELECT json_group_array(ae.permission) FROM (SELECT permission FROM assignment_extras WHERE assignment_id = ra.id ORDER BY permission) ae), '[]') AS TEXT) AS extras,
+       CAST(COALESCE(CASE ra.principal_type WHEN 'user' THEN u.username ELSE t.name END, '') AS TEXT) AS subject_name,
+       CAST(COALESCE(u.display_name, '') AS TEXT) AS subject_display,
+       CAST(CASE WHEN u.id IS NOT NULL AND u.disabled = 0 AND u.deleted_at IS NULL THEN 1 ELSE 0 END AS INTEGER) AS subject_active,
+       CAST(COALESCE(m.id, '') AS TEXT) AS member_id,
+       CAST(COALESCE(m.username, '') AS TEXT) AS member_username,
+       CAST(COALESCE(m.display_name, '') AS TEXT) AS member_display,
+       CAST(CASE WHEN m.id IS NOT NULL AND m.disabled = 0 THEN 1 ELSE 0 END AS INTEGER) AS member_active
+FROM role_assignments ra
+LEFT JOIN users u ON ra.principal_type = 'user' AND u.id = ra.principal_id
+LEFT JOIN teams t ON ra.principal_type = 'team' AND t.id = ra.principal_id
+LEFT JOIN team_members tm ON ra.principal_type = 'team' AND tm.team_id = ra.principal_id
+LEFT JOIN users m ON m.id = tm.user_id AND m.deleted_at IS NULL
+WHERE ra.env_id = ?1 OR ra.env_id IS NULL
+ORDER BY ra.created_at, ra.id, m.username
+`
+
+type ListEnvAccessRowsRow struct {
+	ID             string
+	PrincipalType  string
+	PrincipalID    string
+	RoleID         string
+	EnvID          sql.NullString
+	Extras         string
+	SubjectName    string
+	SubjectDisplay string
+	SubjectActive  int64
+	MemberID       string
+	MemberUsername string
+	MemberDisplay  string
+	MemberActive   int64
+}
+
+// Every assignment that reaches one environment: the ones on it and the ones on
+// every environment (env_id NULL), whoever holds them. A team assignment comes
+// once per member (member_id is empty for a team with no members), so the people
+// who hold it through the team can be folded in Go with the same merge rules the
+// evaluator uses. subject_name and subject_display are the user's username and
+// display name, or the team's name. member_active is 1 for a member who can sign
+// in (not disabled, not deleted); a deleted member is not listed at all.
+func (q *Queries) ListEnvAccessRows(ctx context.Context, envID sql.NullString) ([]ListEnvAccessRowsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEnvAccessRows, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnvAccessRowsRow
+	for rows.Next() {
+		var i ListEnvAccessRowsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PrincipalType,
+			&i.PrincipalID,
+			&i.RoleID,
+			&i.EnvID,
+			&i.Extras,
+			&i.SubjectName,
+			&i.SubjectDisplay,
+			&i.SubjectActive,
+			&i.MemberID,
+			&i.MemberUsername,
+			&i.MemberDisplay,
+			&i.MemberActive,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

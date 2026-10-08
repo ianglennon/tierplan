@@ -536,6 +536,46 @@
         ],
         "type": "object"
       },
+      "CandidateTeamBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The team's ID",
+            "type": "string"
+          },
+          "name": {
+            "description": "The team's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "CandidateUserBody": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "description": "The user's display name, when set",
+            "type": "string"
+          },
+          "id": {
+            "description": "The user's ID",
+            "type": "string"
+          },
+          "username": {
+            "description": "The user's username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username"
+        ],
+        "type": "object"
+      },
       "ChangePasswordBody": {
         "additionalProperties": false,
         "properties": {
@@ -926,6 +966,279 @@
           "role",
           "extras",
           "sources"
+        ],
+        "type": "object"
+      },
+      "EnvAccessCandidatesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "teams": {
+            "description": "Teams with no direct grant here, by name",
+            "items": {
+              "$ref": "#/components/schemas/CandidateTeamBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "users": {
+            "description": "Users who can sign in, are not instance admins and have no direct grant here, by username",
+            "items": {
+              "$ref": "#/components/schemas/CandidateUserBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "users",
+          "teams"
+        ],
+        "type": "object"
+      },
+      "EnvAccessListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "people": {
+            "description": "Everyone who can use the environment, one entry each, highest role first. Instance admins are always listed.",
+            "items": {
+              "$ref": "#/components/schemas/EnvAccessPersonBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "teams": {
+            "description": "Teams with a grant on the environment or on every environment, highest role first",
+            "items": {
+              "$ref": "#/components/schemas/EnvAccessTeamBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "teams",
+          "people"
+        ],
+        "type": "object"
+      },
+      "EnvAccessMemberBody": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "description": "The user's display name, when set",
+            "type": "string"
+          },
+          "role": {
+            "description": "The role the team gives them on the environment",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          },
+          "userId": {
+            "description": "The user's ID",
+            "type": "string"
+          },
+          "username": {
+            "description": "The user's username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "username",
+          "role"
+        ],
+        "type": "object"
+      },
+      "EnvAccessPersonBody": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "description": "The user's display name, when set",
+            "type": "string"
+          },
+          "extras": {
+            "description": "The union of the extra permissions the sources give; an Admin holds every one",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "grant": {
+            "$ref": "#/components/schemas/GrantRef",
+            "description": "The person's own grant on this environment, the one an env Admin may edit or remove; absent for an instance admin and for someone who reaches the environment only through a team or a grant on every environment"
+          },
+          "instanceAdmin": {
+            "description": "True for an instance admin, who holds every environment with every extra permission",
+            "type": "boolean"
+          },
+          "role": {
+            "description": "The highest role any source gives",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          },
+          "self": {
+            "description": "True for the signed-in user's own row",
+            "type": "boolean"
+          },
+          "sources": {
+            "description": "Every source, in the order instance, all, team, direct",
+            "items": {
+              "$ref": "#/components/schemas/SourceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "userId": {
+            "description": "The user's ID",
+            "type": "string"
+          },
+          "username": {
+            "description": "The user's username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "username",
+          "role",
+          "extras",
+          "sources",
+          "instanceAdmin",
+          "self"
+        ],
+        "type": "object"
+      },
+      "EnvAccessTeamBody": {
+        "additionalProperties": false,
+        "properties": {
+          "extras": {
+            "description": "The union of the extra permissions the team's grants give; an Admin holds every one",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "grant": {
+            "$ref": "#/components/schemas/GrantRef",
+            "description": "The team's own grant on this environment, the one an env Admin may edit or remove; absent when the team reaches the environment only through a grant on every environment"
+          },
+          "members": {
+            "description": "The members who can sign in, with the role the team gives each",
+            "items": {
+              "$ref": "#/components/schemas/EnvAccessMemberBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The team's name",
+            "type": "string"
+          },
+          "role": {
+            "description": "The highest role the team's grants give on the environment",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          },
+          "sources": {
+            "description": "Every source: direct for a grant on this environment, all for a grant on every environment",
+            "items": {
+              "$ref": "#/components/schemas/SourceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "teamId": {
+            "description": "The team's ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "teamId",
+          "name",
+          "role",
+          "extras",
+          "sources",
+          "members"
+        ],
+        "type": "object"
+      },
+      "EnvGrantInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "expected": {
+            "$ref": "#/components/schemas/GrantStateBody",
+            "description": "The state of the grant the editor started from. If the grant is different now, or gone, nothing is saved and the answer is 409 stale_change"
+          },
+          "extras": {
+            "description": "The extra permissions; only Operator may carry any. A Viewer answers 422 viewer_cannot_have_extras, an Admin 422 extras_implied, and a name that is not an extra permission 422 unknown_extra",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "role": {
+            "description": "The role",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          },
+          "subjectId": {
+            "description": "The user's or team's ID",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "subjectType": {
+            "description": "Whether the grant is made to a user or a team",
+            "enum": [
+              "user",
+              "team"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "subjectType",
+          "subjectId",
+          "role"
         ],
         "type": "object"
       },
@@ -1814,6 +2127,40 @@
         "required": [
           "scope",
           "role"
+        ],
+        "type": "object"
+      },
+      "GrantRef": {
+        "additionalProperties": false,
+        "properties": {
+          "extras": {
+            "description": "The extra permissions this grant gives on the environment",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The grant's ID, for the edit and remove routes",
+            "type": "string"
+          },
+          "role": {
+            "description": "The role this grant gives on the environment",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "extras"
         ],
         "type": "object"
       },
@@ -4303,6 +4650,167 @@
         "summary": "Rename an environment or switch its automatic agent updates",
         "tags": [
           "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/access": {
+      "get": {
+        "description": "The environment's Access tab: the teams with a grant on it or on every environment, and the people, one entry each, with the highest role any source gives, the union of the extra permissions and every source (direct, team, all environments, instance admin), worked out by the same evaluator that enforces access. Instance admins are always listed. A grant carries the ID an edit or removal names, present only for a grant on this environment. Needs environments.access on the environment (env Admin or instance admin); another environment answers 404 environment_not_found, a Viewer or Operator 403.",
+        "operationId": "listEnvAccess",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvAccessListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Everyone who can use an environment, and why",
+        "tags": [
+          "grants"
+        ]
+      },
+      "put": {
+        "description": "An env Admin's (or instance admin's) way to give an existing user or team Admin, Operator or Viewer on this environment, with the extra permissions of an Operator. The body names no scope and no environment: the route is the environment, and a body carrying either is rejected (422). Saving an existing combination edits it (200, access.updated), a new one is created (201, access.granted); the grantee has it on their next request. A subject who is an instance admin answers 403 delegation_denied and is audited as permission.denied with that reason. Extras and stale edits answer as putUserGrant does. Teams, team membership and users are not managed here. Needs environments.access on the environment.",
+        "operationId": "putEnvAccess",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnvGrantInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Give a user or team a role on this environment",
+        "tags": [
+          "grants"
+        ]
+      }
+    },
+    "/api/env/{envId}/access/candidates": {
+      "get": {
+        "description": "The users and teams with no direct grant on the environment, for the Who list: usernames, display names and team names, never an email. Users who cannot sign in and instance admins are left out. Needs environments.access on the environment.",
+        "operationId": "listEnvAccessCandidates",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvAccessCandidatesBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Who an environment's access can be given to",
+        "tags": [
+          "grants"
         ]
       }
     },

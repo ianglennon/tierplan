@@ -72,6 +72,7 @@ func RegisterAccess(r *httpx.Router, d AccessDeps) {
 	registerUsers(r, d)
 	registerTeams(r, d)
 	registerGrants(r, d)
+	registerEnvAccess(r, d)
 	registerInvite(r, d)
 	registerSessions(r, d)
 	registerProfile(r, d)

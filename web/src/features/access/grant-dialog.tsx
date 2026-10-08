@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-
+import { envAccessCandidatesQuery, putEnvAccess } from "@/api/envaccess";
 import { environmentsQuery } from "@/api/environments";
 import { type Grant, previewGrantImpact, putGrant, type SubjectType } from "@/api/grants";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -29,6 +29,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { ExtraPermissions } from "@/features/access/extra-permissions";
 import { ImpactPreview } from "@/features/access/impact-preview";
 import { type RoleId, RolePicker } from "@/features/access/role-picker";
+import { type Who, WhoCombobox } from "@/features/access/who-combobox";
+import { useInstanceAdmin } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 
@@ -45,18 +47,34 @@ export interface GrantSubject {
   name: string;
 }
 
-interface GrantDialogProps {
-  subject: GrantSubject;
+// The environment an Access tab gives access on.
+export interface GrantEnvironment {
+  id: string;
+  name: string;
+}
+
+interface GrantDialogBase {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   // The grant being edited, or null to add one.
   grant?: Grant | null;
   // The subject's own grants, so choosing an environment they already hold can
-  // say that saving replaces it.
-  grants: readonly Grant[];
+  // say that saving replaces it. Only the user and team pages pass them.
+  grants?: readonly Grant[];
   // Called once the grant is saved, before the dialog closes.
   onSaved: () => void;
 }
+
+// The two entry points (UI-SPEC "GrantDialog"): from a user's or a team's page,
+// where the subject is known and the environment is chosen; and from an
+// environment's Access tab (mode "env"), where the environment is known and the
+// subject is chosen in the Who list. The Access tab gives access through the
+// route an env Admin may use, which cannot reach any other environment.
+export type GrantDialogProps = GrantDialogBase &
+  (
+    | { mode?: "subject"; subject: GrantSubject; environment?: undefined }
+    | { mode: "env"; environment: GrantEnvironment; subject?: GrantSubject }
+  );
 
 // scopeOf is the Select value a grant is on.
 function scopeOf(g: Grant): string {
@@ -75,15 +93,40 @@ function takesAwayFrom(grant: Grant, role: string, extras: readonly string[]): b
   return (grant.extras ?? []).some((x) => !extras.includes(x));
 }
 
-interface FormProps extends Omit<GrantDialogProps, "open"> {
+interface FormProps extends Omit<GrantDialogBase, "open"> {
+  mode: "subject" | "env";
+  subject?: GrantSubject;
+  environment?: GrantEnvironment;
   onPendingChange: (pending: boolean) => void;
 }
 
-function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingChange }: FormProps) {
+const NO_GRANTS: readonly Grant[] = [];
+
+function GrantForm({
+  mode,
+  subject: given,
+  environment,
+  onOpenChange,
+  grant,
+  grants = NO_GRANTS,
+  onSaved,
+  onPendingChange,
+}: FormProps) {
   const t = useT();
-  const editing = Boolean(grant);
-  const envs = useQuery({ ...environmentsQuery, enabled: !editing });
-  const [env, setEnv] = useState(grant ? scopeOf(grant) : "");
+  const instanceAdmin = useInstanceAdmin();
+  const envMode = mode === "env" && environment !== undefined;
+  // The Access tab adds access; editing a row comes with it later.
+  const editing = Boolean(grant) && !envMode;
+  const envs = useQuery({ ...environmentsQuery, enabled: !editing && !envMode });
+  const candidates = useQuery({
+    ...envAccessCandidatesQuery(environment?.id ?? ""),
+    enabled: envMode,
+  });
+  // The subject: known on a user's or a team's page, chosen in the Who list on
+  // an environment's Access tab.
+  const [who, setWho] = useState<Who | null>(null);
+  const subject: GrantSubject | null = given ?? who;
+  const [env, setEnv] = useState(envMode ? (environment?.id ?? "") : grant ? scopeOf(grant) : "");
   const [role, setRole] = useState<RoleId>((grant?.role as RoleId | undefined) ?? "viewer");
   // The extras ticked for an Operator. A Viewer or an Admin shows its own
   // fixed state instead, and this is kept so that going back to Operator
@@ -96,10 +139,11 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
 
   // The grant a save would replace: the one being edited, or the subject's
   // existing grant on the chosen environment.
-  const existing = grant ?? grants.find((g) => scopeOf(g) === env);
+  const existing = envMode ? undefined : (grant ?? grants.find((g) => scopeOf(g) === env));
   const replacing = !editing && existing !== undefined;
-  const envName =
-    env === ALL
+  const envName = envMode
+    ? (environment?.name ?? "")
+    : env === ALL
       ? t("grants.scope.all")
       : (grant?.envName ?? envs.data?.items?.find((e) => e.id === env)?.name ?? "");
   const sorted = [...(envs.data?.items ?? [])].sort((a, b) => a.name.localeCompare(b.name));
@@ -111,22 +155,34 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
   const lowering = grant ? takesAwayFrom(grant, role, sentExtras) : false;
   const [ready, setReady] = useState(false);
   const waiting = lowering && !ready;
-  const canSave = !loading && env !== "" && !pending && !waiting;
+  const canSave = !loading && env !== "" && subject !== null && !pending && !waiting;
 
   async function save() {
-    if (!canSave || inFlight.current) return;
+    if (!canSave || inFlight.current || subject === null) return;
     inFlight.current = true;
     setPending(true);
     onPendingChange(true);
     setError(null);
     try {
-      const result = await putGrant(subject.type, subject.id, {
-        scope: env === ALL ? "all" : "env",
-        envId: env === ALL ? undefined : env,
-        role,
-        extras: sentExtras,
-        expected: existing ? { role: existing.role, extras: existing.extras ?? [] } : undefined,
-      });
+      const expected = existing
+        ? { role: existing.role, extras: existing.extras ?? [] }
+        : undefined;
+      const result =
+        envMode && environment
+          ? await putEnvAccess(environment.id, {
+              subjectType: subject.type,
+              subjectId: subject.id,
+              role,
+              extras: sentExtras,
+              expected,
+            })
+          : await putGrant(subject.type, subject.id, {
+              scope: env === ALL ? "all" : "env",
+              envId: env === ALL ? undefined : env,
+              role,
+              extras: sentExtras,
+              expected,
+            });
       if (result.kind === "ok") {
         toastSuccess(t("grants.dialog.saved"));
         onSaved();
@@ -159,9 +215,11 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
           {editing ? t("grants.dialog.editTitle") : t("grants.dialog.addTitle")}
         </DialogTitle>
         <DialogDescription className="break-words">
-          {editing
+          {editing && subject
             ? t("grants.dialog.editBody", { subject: subject.name, environment: envName })
-            : t("grants.dialog.addBody", { subject: subject.name })}
+            : envMode
+              ? t("envaccess.dialog.addBody", { environment: envName })
+              : t("grants.dialog.addBody", { subject: subject?.name ?? "" })}
         </DialogDescription>
       </DialogHeader>
       <form
@@ -178,7 +236,30 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
           </Alert>
         ) : null}
         <fieldset disabled={pending} className="flex min-w-0 flex-col gap-4">
-          {editing ? (
+          {envMode && environment ? (
+            <>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="grant-who">{t("grants.dialog.who")}</Label>
+                <WhoCombobox
+                  id="grant-who"
+                  candidates={candidates.data ?? { users: null, teams: null }}
+                  value={who}
+                  onChange={setWho}
+                  disabled={pending}
+                />
+              </div>
+              <p className="text-sm font-medium break-words">
+                {t("envaccess.dialog.onEnvironment", { environment: environment.name })}
+              </p>
+              {instanceAdmin ? null : (
+                <Alert role="status">
+                  <AlertDescription>
+                    {t("envaccess.dialog.delegation", { environment: environment.name })}
+                  </AlertDescription>
+                </Alert>
+              )}
+            </>
+          ) : editing && subject ? (
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
               <dt className="text-muted-foreground">{t("grants.dialog.who")}</dt>
               <dd className="font-medium break-words">{subject.name}</dd>
@@ -220,7 +301,7 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
               ) : null}
             </div>
           )}
-          {replacing && existing ? (
+          {replacing && existing && subject ? (
             <Alert role="status">
               <AlertDescription>
                 {t("grants.dialog.existing", {
@@ -233,7 +314,7 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
           <RolePicker value={role} onChange={setRole} disabled={pending} />
           <ExtraPermissions role={role} value={extras} onChange={setExtras} disabled={pending} />
         </fieldset>
-        {lowering && grant ? (
+        {lowering && grant && subject ? (
           <ImpactPreview
             // A different role or set of extras is a different question.
             key={`${role}:${sentExtras.join(",")}`}
@@ -283,7 +364,7 @@ function GrantForm({ subject, onOpenChange, grant, grants, onSaved, onPendingCha
 // inside the dialog as an inline alert, never a toast over it. The form starts
 // afresh every time the dialog opens, and the dialog cannot be closed while a
 // save is in flight.
-export function GrantDialog({ open, onOpenChange, ...rest }: GrantDialogProps) {
+export function GrantDialog({ open, onOpenChange, mode = "subject", ...rest }: GrantDialogProps) {
   const [pending, setPending] = useState(false);
   return (
     <Dialog
@@ -300,6 +381,7 @@ export function GrantDialog({ open, onOpenChange, ...rest }: GrantDialogProps) {
         {open ? (
           <GrantForm
             {...rest}
+            mode={mode}
             onOpenChange={(next) => {
               setPending(false);
               onOpenChange(next);

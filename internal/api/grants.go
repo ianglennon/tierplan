@@ -263,7 +263,7 @@ func registerGrants(r *httpx.Router, d AccessDeps) {
 		if f.Op == access.OpUpdateGrant && f.Role == "" {
 			return nil, validationProblem("body.role", "required for update")
 		}
-		rows, err := d.Access.GrantImpact(ctx, subjectType, subjectID, grantID, change)
+		rows, err := d.Access.GrantImpact(ctx, subjectType, subjectID, grantID, change, access.GrantScopeLimit{})
 		if err != nil {
 			return nil, grantError(d, subjectType, "preview grant impact", err)
 		}
@@ -275,7 +275,7 @@ func registerGrants(r *httpx.Router, d AccessDeps) {
 			return nil, err
 		}
 		rows, err := d.Access.DeleteGrant(ctx, p.AuditActor(), subjectType, subjectID, grantID,
-			access.WithOrigin(httpx.ClientIP(ctx), ua))
+			access.GrantScopeLimit{}, access.WithOrigin(httpx.ClientIP(ctx), ua))
 		if err != nil {
 			return nil, grantError(d, subjectType, "delete grant", err)
 		}

@@ -96,6 +96,11 @@ func (a EnvAccess) merge(b EnvAccess) EnvAccess {
 	return out
 }
 
+// Merge folds b into a by the rules the evaluator itself uses: the higher role,
+// the union of extras and of sources. Callers that explain access (the
+// environment Access tab) fold with it so they cannot disagree with enforcement.
+func (a EnvAccess) Merge(b EnvAccess) EnvAccess { return a.merge(b) }
+
 // Access is everything one user may do: whether the account is usable at all,
 // whether it is an instance admin, and its access to each environment. Envs is
 // keyed by environment ID, with AllEnvironments for grants that apply to every

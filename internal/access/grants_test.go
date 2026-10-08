@@ -394,11 +394,11 @@ func TestGrantImpactEqualsWhatTheChangeProducesAndTheDatabaseIsUnchangedByAsking
 	}
 	before := f.snapshot(t)
 
-	del, err := f.svc.GrantImpact(f.ctx, access.SubjectTeam, team.ID, tg.ID, access.GrantChange{Op: access.OpDeleteGrant})
+	del, err := f.svc.GrantImpact(f.ctx, access.SubjectTeam, team.ID, tg.ID, access.GrantChange{Op: access.OpDeleteGrant}, access.GrantScopeLimit{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	down, err := f.svc.GrantImpact(f.ctx, access.SubjectTeam, team.ID, tg.ID, access.GrantChange{Op: access.OpUpdateGrant, Role: "viewer"})
+	down, err := f.svc.GrantImpact(f.ctx, access.SubjectTeam, team.ID, tg.ID, access.GrantChange{Op: access.OpUpdateGrant, Role: "viewer"}, access.GrantScopeLimit{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestGrantImpactEqualsWhatTheChangeProducesAndTheDatabaseIsUnchangedByAsking
 		t.Fatalf("downgrade impact = %q, want %q", got, want)
 	}
 
-	rows, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectTeam, team.ID, tg.ID)
+	rows, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectTeam, team.ID, tg.ID, access.GrantScopeLimit{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +486,7 @@ func TestRemovingOrLoweringAGrantPausesTheOwnedAutomationsOfAnOwnerWhoNoLongerQu
 	if s := f.state(t, kindTestSync, "r1"); s != "active" {
 		t.Fatalf("state after the role came back = %s, want active", s)
 	}
-	if _, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectUser, "alice", g.ID); err != nil {
+	if _, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectUser, "alice", g.ID, access.GrantScopeLimit{}); err != nil {
 		t.Fatal(err)
 	}
 	if s := f.state(t, kindTestSync, "r1"); s != "paused_lacks_permission" {
@@ -504,16 +504,16 @@ func TestAGrantThatIsNotTheSubjectsIsNotFoundForPreviewAndRemovalAndNothingIsWri
 		t.Fatal(err)
 	}
 	before := f.snapshot(t)
-	if _, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectUser, "bob", g.ID); !errors.Is(err, access.ErrGrantNotFound) {
+	if _, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectUser, "bob", g.ID, access.GrantScopeLimit{}); !errors.Is(err, access.ErrGrantNotFound) {
 		t.Fatalf("removing alice's grant as bob's = %v, want ErrGrantNotFound", err)
 	}
-	if _, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectUser, "alice", "no-such"); !errors.Is(err, access.ErrGrantNotFound) {
+	if _, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectUser, "alice", "no-such", access.GrantScopeLimit{}); !errors.Is(err, access.ErrGrantNotFound) {
 		t.Fatalf("removing an unknown grant = %v, want ErrGrantNotFound", err)
 	}
-	if _, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "bob", g.ID, access.GrantChange{Op: access.OpDeleteGrant}); !errors.Is(err, access.ErrGrantNotFound) {
+	if _, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "bob", g.ID, access.GrantChange{Op: access.OpDeleteGrant}, access.GrantScopeLimit{}); !errors.Is(err, access.ErrGrantNotFound) {
 		t.Fatalf("previewing alice's grant as bob's = %v, want ErrGrantNotFound", err)
 	}
-	if _, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "ghost", g.ID, access.GrantChange{Op: access.OpDeleteGrant}); !errors.Is(err, access.ErrSubjectNotFound) {
+	if _, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "ghost", g.ID, access.GrantChange{Op: access.OpDeleteGrant}, access.GrantScopeLimit{}); !errors.Is(err, access.ErrSubjectNotFound) {
 		t.Fatalf("previewing for an unknown user = %v, want ErrSubjectNotFound", err)
 	}
 	for _, bad := range []access.GrantChange{
@@ -521,7 +521,7 @@ func TestAGrantThatIsNotTheSubjectsIsNotFoundForPreviewAndRemovalAndNothingIsWri
 		{Op: access.OpUpdateGrant, Role: "owner"},
 		{Op: access.OpUpdateGrant, Role: "viewer", Extras: []string{"containers.exec"}},
 	} {
-		if _, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "alice", g.ID, bad); err == nil {
+		if _, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "alice", g.ID, bad, access.GrantScopeLimit{}); err == nil {
 			t.Fatalf("GrantImpact(%+v) was accepted", bad)
 		}
 	}
@@ -538,7 +538,7 @@ func TestLoweringOnlyTheExtrasIsNotAnImpactRowButIsStillAudited(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "alice", g.ID, access.GrantChange{Op: access.OpUpdateGrant, Role: "operator"})
+	rows, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "alice", g.ID, access.GrantChange{Op: access.OpUpdateGrant, Role: "operator"}, access.GrantScopeLimit{})
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("impact of dropping an extra = %+v, %v, want none (the role does not fall)", rows, err)
 	}

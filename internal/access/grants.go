@@ -53,7 +53,32 @@ var (
 	ErrEnvironmentNotFound = errors.New("access: that environment does not exist")
 	// ErrGrantNotFound is a grant that does not exist, or is not the subject's.
 	ErrGrantNotFound = errors.New("access: that grant does not exist")
+	// ErrDelegationDenied is a change an env Admin asked for through an
+	// environment's Access tab that is beyond what they may delegate (D-12): a
+	// grant on every environment or on another environment, a grant whose scope
+	// is not the environment, or an instance admin's access. Nothing is written.
+	ErrDelegationDenied = errors.New("access: that is beyond the access you can give")
 )
+
+// GrantScopeLimit narrows what a change to a grant may touch. The zero value is
+// no limit: an instance admin through the user and team pages. DelegatedEnv is
+// the environment an env Admin administers (D-12): when set, the change must be
+// a grant on that environment alone, to a subject who is not an instance admin;
+// anything else is ErrDelegationDenied and changes nothing.
+type GrantScopeLimit struct {
+	DelegatedEnv string
+}
+
+// check judges a grant row (and the subject it belongs to) against the limit.
+func (l GrantScopeLimit) check(a sqlc.RoleAssignment, target grantTarget) error {
+	if l.DelegatedEnv == "" {
+		return nil
+	}
+	if !a.EnvID.Valid || a.EnvID.String != l.DelegatedEnv || target.instanceAdmin {
+		return ErrDelegationDenied
+	}
+	return nil
+}
 
 // GrantState is the state of a grant a save was based on: the role and the
 // extras the person editing it saw.
@@ -80,6 +105,12 @@ type GrantInput struct {
 	// Expected, when set, is the state the editor started from: if the grant is
 	// now different (or gone) the save is ErrStaleChange and nothing changes.
 	Expected *GrantState
+	// DelegatedEnv, when set, is the environment the caller administers and may
+	// give access on (D-12): the grant must be Scope env on exactly that
+	// environment, to a subject who is not an instance admin, or the save is
+	// ErrDelegationDenied. It is set from the route's environment, never from
+	// the request body.
+	DelegatedEnv string
 }
 
 // Grant is one assignment as the Access card shows it. EnvID is empty for a grant
@@ -141,6 +172,9 @@ func cleanExtras(role rbac.Role, in []string) ([]string, error) {
 type grantTarget struct {
 	typ, id, name string
 	users         []string
+	// instanceAdmin is true for a user who holds the instance-admin flag. Such a
+	// user's access is not an environment grant's to give or take (D-12).
+	instanceAdmin bool
 }
 
 // subjectTx reads the subject of a grant inside the caller's transaction and the
@@ -156,7 +190,7 @@ func subjectTx(ctx context.Context, q *sqlc.Queries, typ, id string) (grantTarge
 		if err != nil {
 			return grantTarget{}, err
 		}
-		return grantTarget{typ: typ, id: id, name: u.Username, users: []string{id}}, nil
+		return grantTarget{typ: typ, id: id, name: u.Username, users: []string{id}, instanceAdmin: u.InstanceAdmin != 0}, nil
 	case SubjectTeam:
 		t, err := q.GetTeam(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -263,6 +297,9 @@ func applyGrantDelete(ctx context.Context, q *sqlc.Queries, id string) error {
 // caller has checked users.manage or teams.manage.
 func (s *Service) PutGrant(ctx context.Context, actor audit.Actor, in GrantInput, opts ...Option) (Grant, bool, error) {
 	o := optionsOf(opts)
+	if in.DelegatedEnv != "" && (in.Scope != ScopeEnv || in.EnvID != in.DelegatedEnv) {
+		return Grant{}, false, ErrDelegationDenied
+	}
 	role, ok := rbac.ParseRole(in.Role)
 	if !ok {
 		return Grant{}, false, ErrInvalidRole
@@ -286,6 +323,9 @@ func (s *Service) PutGrant(ctx context.Context, actor audit.Actor, in GrantInput
 	target, err := subjectTx(ctx, q, in.SubjectType, in.SubjectID)
 	if err != nil {
 		return Grant{}, false, err
+	}
+	if in.DelegatedEnv != "" && target.instanceAdmin {
+		return Grant{}, false, ErrDelegationDenied
 	}
 	envName := ""
 	if envKey != "" {
@@ -438,8 +478,9 @@ func grantOfSubjectTx(ctx context.Context, q *sqlc.Queries, subjectType, subject
 // and extras (OpUpdateGrant). It applies the change in a write transaction with
 // the same function the real change uses, reads the access of everyone it
 // reaches through the real evaluator and rolls back, so nothing is written. A
-// grant that is not the subject's is ErrGrantNotFound.
-func (s *Service) GrantImpact(ctx context.Context, subjectType, subjectID, grantID string, change GrantChange) ([]ImpactRow, error) {
+// grant that is not the subject's is ErrGrantNotFound, and one beyond the limit
+// (an env Admin's delegation, D-12) is ErrDelegationDenied.
+func (s *Service) GrantImpact(ctx context.Context, subjectType, subjectID, grantID string, change GrantChange, limit GrantScopeLimit) ([]ImpactRow, error) {
 	var role rbac.Role
 	var extras []string
 	switch change.Op {
@@ -465,6 +506,9 @@ func (s *Service) GrantImpact(ctx context.Context, subjectType, subjectID, grant
 		if err != nil {
 			return nil, nil, err
 		}
+		if err := limit.check(a, target); err != nil {
+			return nil, nil, err
+		}
 		if change.Op == OpDeleteGrant {
 			return target.users, func(_ *sql.Tx, q *sqlc.Queries) error { return applyGrantDelete(ctx, q, a.ID) }, nil
 		}
@@ -477,8 +521,9 @@ func (s *Service) GrantImpact(ctx context.Context, subjectType, subjectID, grant
 // access, computed inside the same transaction (so it is what this removal does,
 // not what an earlier preview saw). The automations of every user the grant
 // reached are rechecked in the same transaction. It returns the impact. A grant
-// that is not the subject's is ErrGrantNotFound and nothing is written.
-func (s *Service) DeleteGrant(ctx context.Context, actor audit.Actor, subjectType, subjectID, grantID string, opts ...Option) ([]ImpactRow, error) {
+// that is not the subject's is ErrGrantNotFound, one beyond the limit (an env
+// Admin's delegation, D-12) is ErrDelegationDenied, and nothing is written.
+func (s *Service) DeleteGrant(ctx context.Context, actor audit.Actor, subjectType, subjectID, grantID string, limit GrantScopeLimit, opts ...Option) ([]ImpactRow, error) {
 	o := optionsOf(opts)
 	tx, err := s.Store.Write.BeginTx(ctx, nil)
 	if err != nil {
@@ -493,6 +538,9 @@ func (s *Service) DeleteGrant(ctx context.Context, actor audit.Actor, subjectTyp
 	}
 	a, err := grantOfSubjectTx(ctx, q, subjectType, subjectID, grantID)
 	if err != nil {
+		return nil, err
+	}
+	if err := limit.check(a, target); err != nil {
 		return nil, err
 	}
 	rows, err := s.impactTx(ctx, tx, q, target.users, func(_ *sql.Tx, q *sqlc.Queries) error {
@@ -517,4 +565,30 @@ func (s *Service) DeleteGrant(ctx context.Context, actor audit.Actor, subjectTyp
 		return nil, fmt.Errorf("access: commit: %w", err)
 	}
 	return rows, nil
+}
+
+// GrantSubject names the subject of a grant, for the routes under an
+// environment, whose path names the grant but not who holds it. A grant that is
+// gone is ErrGrantNotFound, and one beyond the limit is ErrDelegationDenied
+// (the environment routes never reveal a grant of another scope). The change
+// that follows re-checks everything inside its own transaction.
+func (s *Service) GrantSubject(ctx context.Context, grantID string, limit GrantScopeLimit) (subjectType, subjectID string, err error) {
+	a, err := s.Store.RQ.GetAssignment(ctx, grantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrGrantNotFound
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("access: read grant: %w", err)
+	}
+	target, err := subjectTx(ctx, s.Store.RQ, a.PrincipalType, a.PrincipalID)
+	if err != nil {
+		if errors.Is(err, ErrSubjectNotFound) {
+			return "", "", ErrGrantNotFound
+		}
+		return "", "", err
+	}
+	if err := limit.check(a, target); err != nil {
+		return "", "", err
+	}
+	return a.PrincipalType, a.PrincipalID, nil
 }

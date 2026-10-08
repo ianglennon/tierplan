@@ -36,6 +36,8 @@ import { Route as AppSettingsAccessUsersRouteImport } from './routes/_app/settin
 import { Route as AppSettingsEnvironmentsEnvIdRouteImport } from './routes/_app/settings/environments_.$envId'
 import { Route as AppSettingsAccessTeamsTeamIdRouteImport } from './routes/_app/settings/access/teams_.$teamId'
 import { Route as AppSettingsAccessUsersUserIdRouteImport } from './routes/_app/settings/access/users_.$userId'
+import { Route as AppSettingsEnvironmentsEnvIdIndexRouteImport } from './routes/_app/settings/environments_.$envId.index'
+import { Route as AppSettingsEnvironmentsEnvIdAccessRouteImport } from './routes/_app/settings/environments_.$envId.access'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -174,6 +176,18 @@ const AppSettingsAccessUsersUserIdRoute =
     path: '/users/$userId',
     getParentRoute: () => AppSettingsAccessRoute,
   } as any)
+const AppSettingsEnvironmentsEnvIdIndexRoute =
+  AppSettingsEnvironmentsEnvIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AppSettingsEnvironmentsEnvIdRoute,
+  } as any)
+const AppSettingsEnvironmentsEnvIdAccessRoute =
+  AppSettingsEnvironmentsEnvIdAccessRouteImport.update({
+    id: '/access',
+    path: '/access',
+    getParentRoute: () => AppSettingsEnvironmentsEnvIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -197,11 +211,13 @@ export interface FileRoutesByFullPath {
   '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
   '/settings/access/teams': typeof AppSettingsAccessTeamsRoute
   '/settings/access/users': typeof AppSettingsAccessUsersRoute
-  '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdRoute
+  '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdRouteWithChildren
   '/env/$envId/': typeof AppEnvEnvIdIndexRoute
   '/settings/access/': typeof AppSettingsAccessIndexRoute
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
+  '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  '/settings/environments/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/invite': typeof InviteRoute
@@ -222,11 +238,12 @@ export interface FileRoutesByTo {
   '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
   '/settings/access/teams': typeof AppSettingsAccessTeamsRoute
   '/settings/access/users': typeof AppSettingsAccessUsersRoute
-  '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdRoute
   '/env/$envId': typeof AppEnvEnvIdIndexRoute
   '/settings/access': typeof AppSettingsAccessIndexRoute
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
+  '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -252,11 +269,13 @@ export interface FileRoutesById {
   '/_app/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
   '/_app/settings/access/teams': typeof AppSettingsAccessTeamsRoute
   '/_app/settings/access/users': typeof AppSettingsAccessUsersRoute
-  '/_app/settings/environments_/$envId': typeof AppSettingsEnvironmentsEnvIdRoute
+  '/_app/settings/environments_/$envId': typeof AppSettingsEnvironmentsEnvIdRouteWithChildren
   '/_app/env/$envId/': typeof AppEnvEnvIdIndexRoute
   '/_app/settings/access/': typeof AppSettingsAccessIndexRoute
   '/_app/settings/access/teams_/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/_app/settings/access/users_/$userId': typeof AppSettingsAccessUsersUserIdRoute
+  '/_app/settings/environments_/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  '/_app/settings/environments_/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -287,6 +306,8 @@ export interface FileRouteTypes {
     | '/settings/access/'
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
+    | '/settings/environments/$envId/access'
+    | '/settings/environments/$envId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/invite'
@@ -307,11 +328,12 @@ export interface FileRouteTypes {
     | '/env/$envId/volumes'
     | '/settings/access/teams'
     | '/settings/access/users'
-    | '/settings/environments/$envId'
     | '/env/$envId'
     | '/settings/access'
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
+    | '/settings/environments/$envId/access'
+    | '/settings/environments/$envId'
   id:
     | '__root__'
     | '/_app'
@@ -341,6 +363,8 @@ export interface FileRouteTypes {
     | '/_app/settings/access/'
     | '/_app/settings/access/teams_/$teamId'
     | '/_app/settings/access/users_/$userId'
+    | '/_app/settings/environments_/$envId/access'
+    | '/_app/settings/environments_/$envId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -542,6 +566,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsAccessUsersUserIdRouteImport
       parentRoute: typeof AppSettingsAccessRoute
     }
+    '/_app/settings/environments_/$envId/': {
+      id: '/_app/settings/environments_/$envId/'
+      path: '/'
+      fullPath: '/settings/environments/$envId/'
+      preLoaderRoute: typeof AppSettingsEnvironmentsEnvIdIndexRouteImport
+      parentRoute: typeof AppSettingsEnvironmentsEnvIdRoute
+    }
+    '/_app/settings/environments_/$envId/access': {
+      id: '/_app/settings/environments_/$envId/access'
+      path: '/access'
+      fullPath: '/settings/environments/$envId/access'
+      preLoaderRoute: typeof AppSettingsEnvironmentsEnvIdAccessRouteImport
+      parentRoute: typeof AppSettingsEnvironmentsEnvIdRoute
+    }
   }
 }
 
@@ -564,6 +602,24 @@ const AppSettingsAccessRouteChildren: AppSettingsAccessRouteChildren = {
 const AppSettingsAccessRouteWithChildren =
   AppSettingsAccessRoute._addFileChildren(AppSettingsAccessRouteChildren)
 
+interface AppSettingsEnvironmentsEnvIdRouteChildren {
+  AppSettingsEnvironmentsEnvIdAccessRoute: typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  AppSettingsEnvironmentsEnvIdIndexRoute: typeof AppSettingsEnvironmentsEnvIdIndexRoute
+}
+
+const AppSettingsEnvironmentsEnvIdRouteChildren: AppSettingsEnvironmentsEnvIdRouteChildren =
+  {
+    AppSettingsEnvironmentsEnvIdAccessRoute:
+      AppSettingsEnvironmentsEnvIdAccessRoute,
+    AppSettingsEnvironmentsEnvIdIndexRoute:
+      AppSettingsEnvironmentsEnvIdIndexRoute,
+  }
+
+const AppSettingsEnvironmentsEnvIdRouteWithChildren =
+  AppSettingsEnvironmentsEnvIdRoute._addFileChildren(
+    AppSettingsEnvironmentsEnvIdRouteChildren,
+  )
+
 interface AppSettingsRouteChildren {
   AppSettingsAboutRoute: typeof AppSettingsAboutRoute
   AppSettingsAccessRoute: typeof AppSettingsAccessRouteWithChildren
@@ -571,7 +627,7 @@ interface AppSettingsRouteChildren {
   AppSettingsEnvironmentsRoute: typeof AppSettingsEnvironmentsRoute
   AppSettingsGeneralRoute: typeof AppSettingsGeneralRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
-  AppSettingsEnvironmentsEnvIdRoute: typeof AppSettingsEnvironmentsEnvIdRoute
+  AppSettingsEnvironmentsEnvIdRoute: typeof AppSettingsEnvironmentsEnvIdRouteWithChildren
 }
 
 const AppSettingsRouteChildren: AppSettingsRouteChildren = {
@@ -581,7 +637,8 @@ const AppSettingsRouteChildren: AppSettingsRouteChildren = {
   AppSettingsEnvironmentsRoute: AppSettingsEnvironmentsRoute,
   AppSettingsGeneralRoute: AppSettingsGeneralRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
-  AppSettingsEnvironmentsEnvIdRoute: AppSettingsEnvironmentsEnvIdRoute,
+  AppSettingsEnvironmentsEnvIdRoute:
+    AppSettingsEnvironmentsEnvIdRouteWithChildren,
 }
 
 const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
