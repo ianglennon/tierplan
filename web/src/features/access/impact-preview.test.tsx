@@ -32,6 +32,17 @@ function deferred() {
 }
 
 describe("ImpactPreview", () => {
+  // WR-C-06: a confirm kept in the parent must not stay enabled once the preview is gone.
+  it("says it is no longer ready when it goes away", async () => {
+    const onReadyChange = vi.fn();
+    const { unmount } = render(
+      <ImpactPreview load={async () => ({ kind: "ok", rows: [] })} onReadyChange={onReadyChange} />,
+    );
+    await waitFor(() => expect(onReadyChange).toHaveBeenLastCalledWith(true));
+    unmount();
+    expect(onReadyChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("shows skeleton rows and is not ready until the preview has loaded", async () => {
     const d = deferred();
     const onReadyChange = vi.fn();

@@ -50,7 +50,11 @@ export function RemoveMemberDialog({
   onStale,
 }: RemoveMemberDialogProps) {
   const t = useT();
-  const [ready, setReady] = useState(false);
+  // Ready is remembered for the membership it loaded for, so it can never carry
+  // over to another one.
+  const previewKey = membership ? `${membership.team.id}:${membership.user.id}` : null;
+  const [readyFor, setReadyFor] = useState<string | null>(null);
+  const ready = previewKey !== null && readyFor === previewKey;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A second click can land before the pending state has rendered.
@@ -100,13 +104,14 @@ export function RemoveMemberDialog({
         </AlertDialogHeader>
         {membership ? (
           <ImpactPreview
+            key={previewKey}
             load={() =>
               previewTeamImpact(membership.team.id, {
                 op: "remove_member",
                 userId: membership.user.id,
               })
             }
-            onReadyChange={setReady}
+            onReadyChange={(r) => setReadyFor(r ? previewKey : null)}
           />
         ) : null}
         {error ? (

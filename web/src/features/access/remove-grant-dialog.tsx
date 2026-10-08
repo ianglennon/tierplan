@@ -57,7 +57,11 @@ export function RemoveGrantDialog({
 }: RemoveGrantDialogProps) {
   const t = useT();
   const me = useMe();
-  const [ready, setReady] = useState(false);
+  // Ready is remembered for the grant it loaded for, so it can never carry over
+  // to another one.
+  const previewKey = grant ? grant.id : null;
+  const [readyFor, setReadyFor] = useState<string | null>(null);
+  const ready = previewKey !== null && readyFor === previewKey;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A second click can land before the pending state has rendered.
@@ -124,12 +128,13 @@ export function RemoveGrantDialog({
         ) : null}
         {grant ? (
           <ImpactPreview
+            key={previewKey}
             load={() =>
               tab
                 ? previewEnvAccessImpact(tab.id, grant.id, { op: "delete" })
                 : previewGrantImpact(subject.type, subject.id, grant.id, { op: "delete" })
             }
-            onReadyChange={setReady}
+            onReadyChange={(r) => setReadyFor(r ? previewKey : null)}
           />
         ) : null}
         {error ? (

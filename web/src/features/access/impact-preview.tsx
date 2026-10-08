@@ -46,6 +46,13 @@ export function ImpactPreview({ load, onReadyChange }: ImpactPreviewProps) {
     latest.current = { load, onReadyChange };
   });
 
+  // The preview going away is not "ready" any more. Without this, a confirm kept
+  // in the parent would stay enabled after the dialog closes, until the next
+  // preview's effect ran.
+  useEffect(() => {
+    return () => latest.current.onReadyChange?.(false);
+  }, []);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: asks again only when attempt changes; the latest load and callback are read from the ref
   useEffect(() => {
     let current = true;

@@ -40,7 +40,11 @@ interface DeleteTeamDialogProps {
 // dialog.
 export function DeleteTeamDialog({ team, onClose, onDone, onStale }: DeleteTeamDialogProps) {
   const t = useT();
-  const [ready, setReady] = useState(false);
+  // Ready is remembered for the team it loaded for, so it can never carry over
+  // to another one.
+  const previewKey = team ? team.id : null;
+  const [readyFor, setReadyFor] = useState<string | null>(null);
+  const ready = previewKey !== null && readyFor === previewKey;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A second click can land before the pending state has rendered.
@@ -89,8 +93,9 @@ export function DeleteTeamDialog({ team, onClose, onDone, onStale }: DeleteTeamD
         </AlertDialogHeader>
         {team ? (
           <ImpactPreview
+            key={previewKey}
             load={() => previewTeamImpact(team.id, { op: "delete" })}
-            onReadyChange={setReady}
+            onReadyChange={(r) => setReadyFor(r ? previewKey : null)}
           />
         ) : null}
         {error ? (
