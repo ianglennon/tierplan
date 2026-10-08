@@ -9,7 +9,9 @@
       "none": "No file chosen"
     },
     "passphrase": {
-      "label": "Passphrase"
+      "label": "Passphrase",
+      "show": "Show passphrase",
+      "hide": "Hide passphrase"
     },
     "check": {
       "submit": "Check backup",
@@ -29,7 +31,10 @@
       "auditEntries_one": "{{count}} audit entry",
       "auditEntries_other": "{{count}} audit entries",
       "chooseAnother": "Choose another file",
-      "restore": "Restore backup"
+      "restore": "Restore backup",
+      "older": "This backup is from an older Bayplan and is upgraded while restoring.",
+      "publicUrl": "Restored public URL: {{url}}.",
+      "publicUrlDiffers": "This isn't the address you're using now. After you sign in, check Settings → General, or set BAYPLAN_PUBLIC_URL."
     },
     "confirm": {
       "title": "Restore this backup?",
@@ -39,10 +44,18 @@
       "pending": "Applying backup…"
     },
     "errors": {
+      "unreadable": "Couldn't open this backup. Check the passphrase, and that the file isn't damaged.",
+      "newer": "This backup is from a newer Bayplan ({{version}}). Upgrade this Bayplan, then try again.",
+      "newerUnnamed": "This backup is from a newer Bayplan. Upgrade this Bayplan, then try again.",
+      "notABackup": "That isn't a Bayplan backup file.",
+      "cutOff": "The upload was cut off. If Bayplan runs behind a reverse proxy, check its upload size limit.",
+      "busy": "Another restore is being prepared. Try again in a few minutes.",
       "check": "Couldn't check this backup. Check the container logs, then try again."
     },
     "failed": {
-      "generic": "The restore didn't finish."
+      "nothingChanged": "The restore didn't finish and nothing was changed.",
+      "rolledBack": "The restore failed and Bayplan went back to the snapshot.",
+      "timeout": "Bayplan hasn't come back yet. Reload this page in a minute. If it doesn't load, check the container logs."
     },
     "overlay": {
       "title": "Restoring…",

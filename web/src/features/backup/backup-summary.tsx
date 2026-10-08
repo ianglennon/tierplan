@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { Info, TriangleAlert } from "lucide-react";
+
 import type { RestoreSummary } from "@/api/backup";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useT } from "@/i18n/use-t";
 import { formatAbsolute } from "@/lib/format";
 
@@ -28,7 +31,28 @@ export function BackupSummary({ summary }: { summary: RestoreSummary }) {
         <li>{t("restore.summary.made", { date: formatAbsolute(summary.created) })}</li>
         <li>{t("restore.summary.version", { version: summary.appVersion })}</li>
         <li>{counts}</li>
+        {summary.publicUrl ? (
+          <li className="break-all">
+            {t("restore.summary.publicUrl", { url: summary.publicUrl })}
+          </li>
+        ) : null}
       </ul>
+      {summary.older ? (
+        <Alert role="note">
+          <Info aria-hidden="true" />
+          <AlertDescription className="text-foreground">
+            {t("restore.summary.older")}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {summary.publicUrlDiffers ? (
+        <Alert variant="warning">
+          <TriangleAlert aria-hidden="true" />
+          <AlertDescription className="text-foreground">
+            {t("restore.summary.publicUrlDiffers")}
+          </AlertDescription>
+        </Alert>
+      ) : null}
     </section>
   );
 }

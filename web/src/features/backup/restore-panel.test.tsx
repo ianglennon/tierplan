@@ -152,7 +152,8 @@ describe("Restore card (tracer): Settings > Backup to Backup restored", () => {
     expect(upload[0]?.method).toBe("POST");
     expect(upload[0]?.contentType).toBe("application/octet-stream");
     expect(upload[0]?.csrf).toBe("csrf-1");
-    expect((upload[0]?.body as File).name).toBe("lab.bayplan");
+    expect(upload[0]?.body).toBeInstanceOf(File);
+    expect((upload[0]?.body as File | undefined)?.name).toBe("lab.bayplan");
     expect(calls("/api/backup/restore/check")[0]?.body).toEqual({
       uploadId: "up-1",
       passphrase: PASS,
@@ -415,9 +416,13 @@ describe("Restore card failures", () => {
   it("says Bayplan went back to the snapshot when it came back and still accepts the session", async () => {
     vi.mocked(outcome.waitForRestoreOutcome).mockResolvedValue("rolled_back");
     await confirmRestore();
-    const dialog = await screen.findByRole("alertdialog");
-    const alert = await within(dialog).findByRole("alert");
+    const alert = await screen.findByRole("alert");
+    const dialog = screen.getByRole("alertdialog");
     expect(alert.textContent).toBe("The restore failed and Bayplan went back to the snapshot.");
+    // Reopened for another go, the name has to be typed again.
+    expect(
+      within(dialog).getByRole("button", { name: "Restore backup" }).getAttribute("aria-disabled"),
+    ).toBe("true");
     expect(screen.queryByRole("heading", { name: "Backup restored" })).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
   });

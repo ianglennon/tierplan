@@ -42,7 +42,13 @@ export function RestorePanel({ onRestored }: RestorePanelProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [applying, setApplying] = useState(false);
   const [waiting, setWaiting] = useState(false);
+  // What went wrong with the last restore, for the dialog.
   const [applyError, setApplyError] = useState<string | null>(null);
+  // Nothing answered after the restart: the card says so and claims no result.
+  const [timedOut, setTimedOut] = useState(false);
+  // A new dialog for each restore that gets as far as the restart, so the name is
+  // typed afresh if the dialog comes back.
+  const [round, setRound] = useState(0);
   const inFlight = useRef(false);
   useBlockUnload(applying);
 
@@ -52,6 +58,7 @@ export function RestorePanel({ onRestored }: RestorePanelProps) {
     inFlight.current = true;
     setApplying(true);
     setApplyError(null);
+    setTimedOut(false);
     // From here on a refused request is expected: the restart ends the session.
     const release = suspendSessionReactions();
     let restarting = true;
@@ -63,7 +70,11 @@ export function RestorePanel({ onRestored }: RestorePanelProps) {
       if (err instanceof RestoreError) {
         restarting = false;
         release();
-        setApplyError(t("restore.failed.generic"));
+        setApplyError(
+          err.detail
+            ? `${t("restore.failed.nothingChanged")} ${err.detail}`
+            : t("restore.failed.nothingChanged"),
+        );
       }
     }
     setApplying(false);
@@ -72,6 +83,7 @@ export function RestorePanel({ onRestored }: RestorePanelProps) {
       return;
     }
     setDialogOpen(false);
+    setRound((r) => r + 1);
     setWaiting(true);
     const outcome = await waitForRestoreOutcome(sessionProbes());
     setWaiting(false);
@@ -85,13 +97,23 @@ export function RestorePanel({ onRestored }: RestorePanelProps) {
       return;
     }
     release();
-    setApplyError(t("restore.failed.generic"));
+    if (outcome === "timeout") {
+      setDialogOpen(false);
+      setTimedOut(true);
+      return;
+    }
+    setApplyError(t("restore.failed.rolledBack"));
     setDialogOpen(true);
   }
 
   return (
     <SettingsCard title={t("restore.title")}>
       <p className="text-sm">{t("restore.body")}</p>
+      {timedOut ? (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>{t("restore.failed.timeout")}</AlertDescription>
+        </Alert>
+      ) : null}
       {form.checked ? (
         <div className="flex flex-col gap-4">
           <BackupSummary summary={form.checked.summary} />
@@ -134,6 +156,7 @@ export function RestorePanel({ onRestored }: RestorePanelProps) {
           <fieldset disabled={form.checking} className="contents">
             <RestoreFields
               idPrefix="restore"
+              file={form.file}
               fileKey={form.fileKey}
               onFile={form.setFile}
               passphrase={form.passphrase}
@@ -160,6 +183,7 @@ export function RestorePanel({ onRestored }: RestorePanelProps) {
         </form>
       )}
       <RestoreConfirmDialog
+        key={round}
         open={dialogOpen}
         name={instance?.instanceName ?? ""}
         pending={applying}

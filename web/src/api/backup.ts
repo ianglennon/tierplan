@@ -227,8 +227,35 @@ export interface RestoreMessage {
   values?: Record<string, string>;
 }
 
+// The version a "newer Bayplan" answer names, as in "made by a newer Bayplan (v1.2.3)".
+function newerVersion(detail: string | undefined): string | undefined {
+  return detail?.match(/newer Bayplan \(([^)]+)\)/)?.[1];
+}
+
 // restoreProblem turns whatever a restore step threw into the message to show.
+// Any 413 is a cut-off upload, whoever answered it: the server's own limit and a
+// reverse proxy's both mean the file did not arrive whole. A thrown error that is
+// not a RestoreError is a connection that failed.
 export function restoreProblem(err: unknown): RestoreMessage {
   if (!(err instanceof RestoreError)) return { key: "common.errors.unreachable" };
-  return { key: "restore.errors.check" };
+  if (err.status === 413) return { key: "restore.errors.cutOff" };
+  switch (err.type) {
+    case "backup_unreadable":
+      return { key: "restore.errors.unreadable" };
+    case "not_a_backup":
+      return { key: "restore.errors.notABackup" };
+    case "upload_incomplete":
+    case "upload_too_large":
+      return { key: "restore.errors.cutOff" };
+    case "restore_busy":
+      return { key: "restore.errors.busy" };
+    case "backup_newer": {
+      const version = newerVersion(err.detail);
+      return version
+        ? { key: "restore.errors.newer", values: { version } }
+        : { key: "restore.errors.newerUnnamed" };
+    }
+    default:
+      return { key: "restore.errors.check" };
+  }
 }
