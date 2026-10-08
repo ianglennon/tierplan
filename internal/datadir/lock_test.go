@@ -75,10 +75,10 @@ func TestLockHelperProcess(t *testing.T) {
 	}
 	release, err := datadir.Lock(dir)
 	if err != nil {
-		os.Stdout.WriteString("error " + err.Error() + "\n")
+		_, _ = os.Stdout.WriteString("error " + err.Error() + "\n")
 		os.Exit(3)
 	}
-	os.Stdout.WriteString("locked\n")
+	_, _ = os.Stdout.WriteString("locked\n")
 	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 	_ = release()
 }

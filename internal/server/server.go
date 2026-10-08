@@ -105,6 +105,9 @@ type Server struct {
 	// tlsConfig is nil when the server speaks plain HTTP (D-12).
 	tlsConfig *tls.Config
 
+	// unlock releases the data-directory lock; Close calls it last.
+	unlock func() error
+
 	// stopBackground ends the nightly audit prune and waits for it, so Close
 	// never closes the database under a running prune.
 	stopBackground context.CancelFunc
@@ -194,7 +197,7 @@ func WithSelfContainerID(id string) Option {
 // master key, opens and migrates the database and assembles the server. It logs the effective configuration with secrets
 // redacted. A migration failure (or a database newer than this binary) is
 // returned as an error so `serve` exits non-zero before it listens (D-82, D-84).
-func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Option) (*Server, error) {
+func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Option) (srv *Server, err error) {
 	var bo buildOptions
 	for _, opt := range opts {
 		opt(&bo)
@@ -222,6 +225,19 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		log.Warn("the data directory is not persisted: data written to it is lost when the container is removed; mount a named volume or bind mount at "+info.Path,
 			"path", info.Path, "reason", info.Reason)
 	}
+
+	// One server per data directory, and no offline `bayplan restore` beside it:
+	// the lock is held until Close, and by every error path below it. It comes
+	// before the key and the database, so a refused start writes nothing.
+	unlock, err := datadir.Lock(info.Path)
+	if err != nil {
+		return nil, fmt.Errorf("another Bayplan is using the data directory %s: %w", info.Path, err)
+	}
+	defer func() {
+		if err != nil {
+			_ = unlock()
+		}
+	}()
 
 	// The master key comes before the database: a bad BAYPLAN_ENCRYPTION_KEY
 	// should stop startup before anything is written (D-13).
@@ -525,7 +541,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		_ = st.Close()
 		return nil, err
 	}
-	srv := &Server{
+	srv = &Server{
+		unlock:     unlock,
 		refusals:   refusals,
 		cfg:        cfg,
 		log:        log,
@@ -661,7 +678,9 @@ func (s *Server) Close() error {
 	s.aggregator.Close()
 	s.hub.Close()
 	s.monitor.StopAll()
-	return s.store.Close()
+	// The lock goes last: until the database is closed, an offline restore must
+	// still be kept out.
+	return errors.Join(s.store.Close(), s.unlock())
 }
 
 // DataDir reports the prepared data directory, for the admin banner (plan 14).

@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/backup"
 	"github.com/ianglennon/bayplan/internal/buildinfo"
+	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/vault"
 )
@@ -98,6 +99,20 @@ func runRestore(cmd *cobra.Command, file string, yes bool) error {
 		fmt.Fprintln(cmd.ErrOrStderr(), "restore: this would replace the current data in "+cfg.DataDir+"; re-run with --yes to replace the current data")
 		return &exitCodeError{code: 2, msg: "restore: not confirmed"}
 	}
+
+	// Nothing may write the database while it is replaced: the running server
+	// holds this lock for as long as it runs, so a restore waits for it to stop.
+	// It is taken before the key is loaded, so a refused restore creates nothing.
+	release, err := datadir.Lock(cfg.DataDir)
+	if errors.Is(err, datadir.ErrLocked) {
+		fmt.Fprintln(cmd.ErrOrStderr(), "restore: Bayplan is running on this data directory ("+err.Error()+")")
+		fmt.Fprintln(cmd.ErrOrStderr(), "stop it, then run: docker run --rm -i -v <volume>:/data ghcr.io/ianglennon/bayplan restore --yes <file>")
+		return &exitCodeError{code: 1, msg: "restore: " + err.Error()}
+	}
+	if err != nil {
+		return fail(err)
+	}
+	defer func() { _ = release() }()
 
 	// The target key is this data directory's: an existing install keeps its
 	// own, a fresh volume gets a new one. Nothing from the backup's instance
