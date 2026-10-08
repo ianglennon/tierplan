@@ -199,7 +199,7 @@ describe("a user with no access to any environment (D-08)", () => {
     expect(screen.getByText("Ask an administrator to give you access.")).toBeTruthy();
     expect(screen.getByText("Administrators: admin, ops-lead")).toBeTruthy();
     // The shell works: the user menu is there and the page did not redirect.
-    expect(screen.getByRole("button", { name: /viewer/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "User menu" })).toBeTruthy();
     expect(router.state.location.pathname).toBe("/");
   });
 
