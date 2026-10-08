@@ -1340,6 +1340,11 @@
     "licence": "MIT"
   },
   {
+    "name": "go.yaml.in/yaml/v3",
+    "version": "v3.0.5",
+    "licence": "MIT"
+  },
+  {
     "name": "golang.org/x/crypto",
     "version": "v0.57.0",
     "licence": "BSD-3-Clause"
