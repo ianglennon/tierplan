@@ -9,6 +9,7 @@ import { type MouseEvent, useRef, useState } from "react";
 import { environmentsQuery } from "@/api/environments";
 import { NoPermission } from "@/components/full-page-state";
 import { LiveChip } from "@/components/live-chip";
+import { NoAccessState } from "@/components/no-access-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -27,6 +28,7 @@ import { LocalHostPanel } from "@/features/environments/local-host-panel";
 import { EnvOverviewTable } from "@/features/environments/overview-table";
 import { SORT_KEYS, type SortDir, type SortKey } from "@/features/environments/sort";
 import {
+  hasNoEnvironmentAccess,
   hasPermission,
   useAnyEnvironmentPermission,
   useDocumentTitle,
@@ -73,6 +75,9 @@ function EnvironmentsPage() {
 
   const trigger = useRef<HTMLElement | null>(null);
 
+  // A user with no access to any environment is told who to ask, as on the home
+  // page (D-08); other users who may not read the overview get No permission.
+  if (hasNoEnvironmentAccess(me)) return <NoAccessState administrators={me?.administrators} />;
   if (!allowed) return <NoPermission />;
 
   const items = environments.data?.items ?? [];

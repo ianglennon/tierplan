@@ -19,8 +19,10 @@ const ADMIN = makeMe({ instanceAdmin: true });
 const VIEWER = makeMe({ permissions: { global: [], environments: {} } });
 
 // A user who may read environments but nothing in Settings.
+// It holds a grant on every environment: a user with none sees the no-access
+// state instead (D-08).
 const READER = {
-  ...VIEWER,
+  ...makeMe({ allEnvironments: "viewer" }),
   permissions: { global: [], environments: { "*": ["environments.read"] } },
 };
 

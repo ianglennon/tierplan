@@ -63,6 +63,13 @@ export function isInstanceAdmin(me: Me | undefined): boolean {
   return me?.user.instanceAdmin === true;
 }
 
+// hasNoEnvironmentAccess is true for a signed-in user who holds no grant on any
+// environment and is not an instance admin: the one case the whole app shows the
+// no-access state (D-08). Like hasPermission it only decides what to show.
+export function hasNoEnvironmentAccess(me: Me | undefined): boolean {
+  return me !== undefined && !isInstanceAdmin(me) && Object.keys(me.access).length === 0;
+}
+
 export function useInstanceAdmin(): boolean {
   const { data } = useMe();
   return isInstanceAdmin(data);
