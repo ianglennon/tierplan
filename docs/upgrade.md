@@ -12,10 +12,19 @@ rather than a floating tag.
 ## Before you upgrade
 
 1. Read the release notes for every version between yours and the one you want.
-2. Take a backup. If your version has `bayplan backup`, use it. Otherwise stop the container
-   and copy `/data/bayplan.db` and `/data/bayplan.key` somewhere safe. Copy both: the key
-   encrypts stored secrets and keys the audit log, and the database is unreadable in part
-   without it. If you supply `BAYPLAN_ENCRYPTION_KEY` yourself, keep that value too.
+2. Take a backup with `bayplan backup`, or from Settings, Backup. Both write the same
+   encrypted `.bayplan` file, and [backup.md](backup.md) covers the passphrase and how to
+   restore it:
+
+   ```sh
+   docker exec -i bayplan bayplan backup --out - > bayplan-backup.bayplan
+   ```
+
+   A backup does not hold the master key. Also copy `/data/bayplan.key` somewhere safe: the key
+   encrypts stored secrets and keys the audit log. If you supply `BAYPLAN_ENCRYPTION_KEY`
+   yourself, keep that value too. If your version is older than the one that added
+   `bayplan backup`, stop the container and copy `/data/bayplan.db` and `/data/bayplan.key`
+   instead.
 3. Check free space. Bayplan writes a snapshot of the database before it changes it, and
    refuses to start if the volume has less than twice the database's size free.
 
@@ -93,7 +102,10 @@ To go back to the older version:
 4. Start the older image on the same volume.
 
 Anything saved after the upgrade started is lost by a rollback, because the snapshot predates
-it. Keep `/data/bayplan.key` as it was.
+it. Keep `/data/bayplan.key` as it was. If you rotated the master key after the upgrade, the
+snapshot is sealed under the old key and opens only while `bayplan.key.old` is kept (see
+[backup.md](backup.md)). A backup you took with `bayplan backup` before the upgrade is the other way back: run the
+older image and restore it there.
 
 ## Version checks
 
