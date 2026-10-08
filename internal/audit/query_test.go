@@ -175,14 +175,14 @@ func TestActorsReturnsDistinctNamesSortedAndCappedAt200(t *testing.T) {
 	for _, a := range []string{"bob", "alice", "bob", "alice", "carol"} {
 		f.recordAs(t, a, "auth.login", "ua")
 	}
-	got, err := audit.Actors(context.Background(), f.s)
+	got, err := audit.Actors(context.Background(), f.s, audit.Filter{})
 	if err != nil || fmt.Sprint(got) != "[alice bob carol]" {
 		t.Fatalf("actors = %v, err %v", got, err)
 	}
 	for i := range 250 {
 		f.recordAs(t, fmt.Sprintf("user-%03d", i), "auth.login", "ua")
 	}
-	got, err = audit.Actors(context.Background(), f.s)
+	got, err = audit.Actors(context.Background(), f.s, audit.Filter{})
 	if err != nil || len(got) != 200 {
 		t.Fatalf("actors = %d, err %v; want 200", len(got), err)
 	}

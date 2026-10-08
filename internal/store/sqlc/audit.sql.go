@@ -131,11 +131,22 @@ func (q *Queries) LastAuditHMAC(ctx context.Context) ([]byte, error) {
 }
 
 const listAuditActors = `-- name: ListAuditActors :many
-SELECT DISTINCT actor_name FROM audit_log ORDER BY actor_name LIMIT 200
+SELECT DISTINCT actor_name FROM audit_log
+WHERE CAST(?1 AS INTEGER) = 0
+   OR (CAST(?2 AS INTEGER) = 1 AND env_id IS NOT NULL)
+   OR env_id IN (SELECT value FROM json_each(CAST(?3 AS TEXT)))
+ORDER BY actor_name LIMIT 200
 `
 
-func (q *Queries) ListAuditActors(ctx context.Context) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listAuditActors)
+type ListAuditActorsParams struct {
+	Scoped int64
+	AnyEnv int64
+	Envs   string
+}
+
+// The distinct actor names, under the same scope as ListAuditPage.
+func (q *Queries) ListAuditActors(ctx context.Context, arg ListAuditActorsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditActors, arg.Scoped, arg.AnyEnv, arg.Envs)
 	if err != nil {
 		return nil, err
 	}
@@ -269,8 +280,11 @@ WHERE (CAST(?1 AS TEXT) = '' OR actor_name = ?1)
   AND (CAST(?3 AS INTEGER) = 0 OR ts >= ?3)
   AND (CAST(?4 AS INTEGER) = 0 OR ts <= ?4)
   AND (CAST(?5 AS INTEGER) = 0 OR seq < ?5)
+  AND (CAST(?6 AS INTEGER) = 0
+       OR (CAST(?7 AS INTEGER) = 1 AND env_id IS NOT NULL)
+       OR env_id IN (SELECT value FROM json_each(CAST(?8 AS TEXT))))
 ORDER BY seq DESC
-LIMIT ?6
+LIMIT ?9
 `
 
 type ListAuditPageParams struct {
@@ -279,12 +293,19 @@ type ListAuditPageParams struct {
 	FromTs  int64
 	ToTs    int64
 	Cursor  int64
+	Scoped  int64
+	AnyEnv  int64
+	Envs    string
 	Lim     int64
 }
 
 // actions is a JSON array of action keys, not sqlc.slice: sqlc numbers a slice
 // placeholder as an anonymous "?" among numbered ones, which collides as soon as
-// two actions are given.
+// two actions are given. envs is a JSON array of environment IDs the same way.
+// A scoped read (an env Admin, D-09) keeps only entries on one of envs, or on any
+// environment when any_env is set; an entry with no environment, an instance-level
+// event, never matches. The scope is part of the WHERE clause, so it applies
+// before the cursor and the limit and a page is never short of entries.
 func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([]AuditLog, error) {
 	rows, err := q.db.QueryContext(ctx, listAuditPage,
 		arg.Actor,
@@ -292,6 +313,9 @@ func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([
 		arg.FromTs,
 		arg.ToTs,
 		arg.Cursor,
+		arg.Scoped,
+		arg.AnyEnv,
+		arg.Envs,
 		arg.Lim,
 	)
 	if err != nil {

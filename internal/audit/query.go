@@ -28,11 +28,41 @@ const (
 // Filter narrows the audit log. The zero value matches every entry. Actor is an
 // exact match on the stored actor name, Actions matches any of the listed
 // action keys, and From and To are inclusive bounds on the entry time.
+//
+// Scoped narrows the log to the entries of certain environments, for a reader
+// who is not an instance admin (D-09): an entry matches when its environment is
+// in Envs, or, with AnyEnv, when it has an environment at all. An instance-level
+// event has none, so it never matches a scoped read. The scope is applied in SQL
+// before paging, so cursors, the actor list and both exports see exactly the
+// scoped entries. A scoped filter with no Envs and no AnyEnv matches nothing.
 type Filter struct {
 	Actor   string
 	Actions []string
 	From    time.Time
 	To      time.Time
+
+	Scoped bool
+	Envs   []string
+	AnyEnv bool
+}
+
+// scope encodes the scope as query parameters.
+func (f Filter) scope() (scoped, anyEnv int64, envs string, err error) {
+	ids := f.Envs
+	if ids == nil {
+		ids = []string{}
+	}
+	enc, err := json.Marshal(ids)
+	if err != nil {
+		return 0, 0, "", fmt.Errorf("audit: encode environments: %w", err)
+	}
+	if f.Scoped {
+		scoped = 1
+	}
+	if f.AnyEnv {
+		anyEnv = 1
+	}
+	return scoped, anyEnv, string(enc), nil
 }
 
 // Row is one audit entry as read: who (actor), what (action, target), where
@@ -65,7 +95,14 @@ func (f Filter) params(cursor int64, limit int) (sqlc.ListAuditPageParams, error
 	if err != nil {
 		return sqlc.ListAuditPageParams{}, fmt.Errorf("audit: encode actions: %w", err)
 	}
-	p := sqlc.ListAuditPageParams{Actor: f.Actor, Actions: string(enc), Cursor: cursor, Lim: int64(limit)}
+	scoped, anyEnv, envs, err := f.scope()
+	if err != nil {
+		return sqlc.ListAuditPageParams{}, err
+	}
+	p := sqlc.ListAuditPageParams{
+		Actor: f.Actor, Actions: string(enc), Cursor: cursor, Lim: int64(limit),
+		Scoped: scoped, AnyEnv: anyEnv, Envs: envs,
+	}
 	if !f.From.IsZero() {
 		p.FromTs = f.From.UTC().UnixNano()
 	}
@@ -131,10 +168,15 @@ func Query(ctx context.Context, s *store.Store, f Filter, cursor int64, limit in
 	return rows, next, nil
 }
 
-// Actors returns the distinct actor names in the log, sorted, at most 200. It
-// feeds the user filter.
-func Actors(ctx context.Context, s *store.Store) ([]string, error) {
-	names, err := s.RQ.ListAuditActors(ctx)
+// Actors returns the distinct actor names in the log that f's scope reaches,
+// sorted, at most 200. It feeds the user filter. Only the scope of f applies; its
+// other fields narrow entries, not the list of who acted.
+func Actors(ctx context.Context, s *store.Store, f Filter) ([]string, error) {
+	scoped, anyEnv, envs, err := f.scope()
+	if err != nil {
+		return nil, err
+	}
+	names, err := s.RQ.ListAuditActors(ctx, sqlc.ListAuditActorsParams{Scoped: scoped, AnyEnv: anyEnv, Envs: envs})
 	if err != nil {
 		return nil, fmt.Errorf("audit: list actors: %w", err)
 	}

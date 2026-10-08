@@ -99,6 +99,23 @@ export function useAnyEnvironmentPermission(perm: string): boolean {
   return hasAnyEnvironmentPermission(data, perm);
 }
 
+// canReadAudit is true for whoever the audit log opens for: an instance admin,
+// who reads every entry, and an env Admin, who reads the entries of the
+// environments they administer (D-09). Operators and Viewers hold neither. Like
+// hasPermission it only decides what to show; the server scopes the read.
+export function canReadAudit(me: Me | undefined): boolean {
+  return (
+    hasPermission(me, "audit.read") ||
+    isInstanceAdmin(me) ||
+    hasAnyEnvironmentPermission(me, "environments.audit")
+  );
+}
+
+export function useCanReadAudit(): boolean {
+  const { data } = useMe();
+  return canReadAudit(data);
+}
+
 // useDocumentTitle sets the tab title to "{page} · {instance name}", or just
 // the instance name when there is no page.
 export function useDocumentTitle(page?: string): void {

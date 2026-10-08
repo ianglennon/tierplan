@@ -5,6 +5,7 @@
     "retention_one": "Entries are kept for {{count}} day.",
     "retention_other": "Entries are kept for {{count}} days.",
     "retentionForever": "Entries are kept forever.",
+    "scopedCaption": "Showing entries for the environments you administer.",
     "integrity": {
       "before": "Verify integrity with",
       "command": "bayplan audit verify",

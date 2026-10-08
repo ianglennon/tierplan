@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List audit entries
-         * @description Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. Needs audit.read.
+         * @description Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. An instance admin reads every entry. An Admin of one or more environments (environments.audit) reads only the entries on those environments, or on every environment when they are Admin of all of them, never an instance-level event such as a sign-in or a settings change; the scope is applied before paging. Anyone else gets 403, audited as permission.denied with reason no_audit_scope.
          */
         get: operations["listAudit"];
         put?: never;
@@ -33,7 +33,7 @@ export interface paths {
         };
         /**
          * List the actor names in the audit log
-         * @description The distinct actor names seen, sorted, at most 200, for the user filter. Needs audit.read.
+         * @description The distinct actor names seen, sorted, at most 200, for the user filter. Under the same scope as the list: an Admin of environments sees only the actors of entries on those environments. 403 as for the list.
          */
         get: operations["listAuditActors"];
         put?: never;
@@ -53,7 +53,7 @@ export interface paths {
         };
         /**
          * Export the audit log as CSV or JSON
-         * @description Streams every entry matching the filters, newest first, as a download named bayplan-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are reads and are not audited. Needs audit.read.
+         * @description Streams every entry matching the filters, newest first, as a download named bayplan-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are reads and are not audited. Under the same scope as the list: an Admin of environments exports only the entries on those environments. 403 as for the list.
          */
         get: operations["exportAudit"];
         put?: never;

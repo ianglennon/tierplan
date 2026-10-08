@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/sidebar";
 import { VersionFooter } from "@/components/version-footer";
 import { visibleSettingsTabs } from "@/features/settings/tabs";
-import { useAnyEnvironmentPermission, useMe, usePermission } from "@/hooks/use-me";
+import { useAnyEnvironmentPermission, useCanReadAudit, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // AppSidebar is the left navigation (D-53): the environment switcher on top,
@@ -82,8 +82,9 @@ export function AppSidebar() {
   // (D-53, D-07). The server checks each of them again.
   const { data: me } = useMe();
   const canSettings = visibleSettingsTabs(me).length > 0;
-  // Audit is global and admin only in this phase (D-43).
-  const canAudit = usePermission("audit.read");
+  // Audit shows to instance admins and to env Admins, who read only the entries of
+  // the environments they administer (D-09, D-43). The server scopes the read.
+  const canAudit = useCanReadAudit();
   // The overview is global. environments.read is held per environment, so it
   // shows for anyone who may read at least one; the server limits its rows.
   const canOverview = useAnyEnvironmentPermission("environments.read");

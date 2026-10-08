@@ -574,7 +574,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Events:       api.EventsDeps{Aggregator: aggregator, Log: log},
 		EnvStream:    api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:       api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
-		Audit:        api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Log: log},
+		Audit:        api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
 		Settings:     api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log},
 		Backup:       api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, AppVersion: buildinfo.Get().Version, Log: log},
 		AgentConnect: tunnelHub.Handler(),

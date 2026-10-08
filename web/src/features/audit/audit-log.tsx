@@ -26,6 +26,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedText } from "@/features/resources/resource-table";
+import { useInstanceAdmin } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatAbsolute, formatAbsoluteUtc } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -297,6 +298,8 @@ export function AuditLog() {
   const navigate = route.useNavigate();
   const query = useInfiniteQuery(auditListQuery(search));
   const environments = useQuery(environmentsQuery);
+  // Anyone who is not an instance admin reads a scoped log (D-09).
+  const scoped = !useInstanceAdmin();
 
   function change(patch: Partial<typeof search>) {
     void navigate({ search: (prev) => ({ ...prev, ...patch }), replace: true });
@@ -329,6 +332,9 @@ export function AuditLog() {
           </code>{" "}
           {t("audit.integrity.after")}
         </p>
+        {scoped ? (
+          <p className="text-sm text-muted-foreground">{t("audit.scopedCaption")}</p>
+        ) : null}
       </header>
 
       <FilterBar search={search} onChange={change} onClear={clear} />

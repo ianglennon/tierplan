@@ -39,15 +39,27 @@ SELECT * FROM audit_log WHERE seq = ?;
 -- name: ListAuditPage :many
 -- actions is a JSON array of action keys, not sqlc.slice: sqlc numbers a slice
 -- placeholder as an anonymous "?" among numbered ones, which collides as soon as
--- two actions are given.
+-- two actions are given. envs is a JSON array of environment IDs the same way.
+-- A scoped read (an env Admin, D-09) keeps only entries on one of envs, or on any
+-- environment when any_env is set; an entry with no environment, an instance-level
+-- event, never matches. The scope is part of the WHERE clause, so it applies
+-- before the cursor and the limit and a page is never short of entries.
 SELECT * FROM audit_log
 WHERE (CAST(sqlc.arg(actor) AS TEXT) = '' OR actor_name = sqlc.arg(actor))
   AND (json_array_length(sqlc.arg(actions)) = 0 OR action IN (SELECT value FROM json_each(sqlc.arg(actions))))
   AND (CAST(sqlc.arg(from_ts) AS INTEGER) = 0 OR ts >= sqlc.arg(from_ts))
   AND (CAST(sqlc.arg(to_ts) AS INTEGER) = 0 OR ts <= sqlc.arg(to_ts))
   AND (CAST(sqlc.arg(cursor) AS INTEGER) = 0 OR seq < sqlc.arg(cursor))
+  AND (CAST(sqlc.arg(scoped) AS INTEGER) = 0
+       OR (CAST(sqlc.arg(any_env) AS INTEGER) = 1 AND env_id IS NOT NULL)
+       OR env_id IN (SELECT value FROM json_each(CAST(sqlc.arg(envs) AS TEXT))))
 ORDER BY seq DESC
 LIMIT sqlc.arg(lim);
 
 -- name: ListAuditActors :many
-SELECT DISTINCT actor_name FROM audit_log ORDER BY actor_name LIMIT 200;
+-- The distinct actor names, under the same scope as ListAuditPage.
+SELECT DISTINCT actor_name FROM audit_log
+WHERE CAST(sqlc.arg(scoped) AS INTEGER) = 0
+   OR (CAST(sqlc.arg(any_env) AS INTEGER) = 1 AND env_id IS NOT NULL)
+   OR env_id IN (SELECT value FROM json_each(CAST(sqlc.arg(envs) AS TEXT)))
+ORDER BY actor_name LIMIT 200;
