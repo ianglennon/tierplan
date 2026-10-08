@@ -4,7 +4,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Lock } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -39,7 +39,7 @@ import { SavedBackupsTable } from "@/features/backup/saved-backups-table";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useT } from "@/i18n/use-t";
 import { formatAbsolute, formatBytes } from "@/lib/format";
-import { toastError, toastSuccess } from "@/lib/toast";
+import { toastSuccess } from "@/lib/toast";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
@@ -57,6 +57,9 @@ const KEY = {
   required: "schedule.passphrase.required",
 } as const;
 
+// Sunday first, as the server counts the days.
+const WEEKDAYS = ["0", "1", "2", "3", "4", "5", "6"] as const;
+
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // The server counts characters, so the check does too.
@@ -66,7 +69,8 @@ function schemaFor(min: number, passphraseSaved: boolean) {
   return z
     .object({
       enabled: z.boolean(),
-      frequency: z.literal("daily"),
+      frequency: z.enum(["daily", "weekly"]),
+      weekday: z.string().regex(/^[0-6]$/),
       timeUtc: z.string().regex(TIME, { error: KEY.time }),
       keep: z
         .string()
@@ -89,7 +93,8 @@ function schemaFor(min: number, passphraseSaved: boolean) {
 
 type Values = {
   enabled: boolean;
-  frequency: "daily";
+  frequency: BackupSchedule["frequency"];
+  weekday: string;
   timeUtc: string;
   keep: string;
   passphrase: string;
@@ -101,7 +106,8 @@ type Values = {
 function valuesOf(s: BackupSchedule): Values {
   return {
     enabled: s.enabled,
-    frequency: "daily",
+    frequency: s.frequency,
+    weekday: String(s.weekday),
     timeUtc: s.timeUtc,
     keep: String(s.keep),
     passphrase: "",
@@ -165,16 +171,20 @@ function ScheduleForm({ schedule }: { schedule: BackupSchedule }) {
     return typeof message === "string" ? t(message, { min }) : undefined;
   };
 
+  // A save the server did not take: the message stays until the next try or Cancel.
+  const [failed, setFailed] = useState(false);
+
   const save = useMutation({
     mutationFn: (v: Values) =>
       saveSchedule({
         enabled: v.enabled,
         frequency: v.frequency,
-        weekday: 0,
+        weekday: Number(v.weekday),
         timeUtc: v.timeUtc,
         keep: Number(v.keep),
         passphrase: v.passphrase,
       }),
+    onMutate: () => setFailed(false),
     onSuccess: (saved) => {
       queryClient.setQueryData(SCHEDULE_KEY, saved);
       // The passphrase leaves the form as soon as it is saved.
@@ -187,7 +197,7 @@ function ScheduleForm({ schedule }: { schedule: BackupSchedule }) {
       } else if (error instanceof ScheduleSaveError && error.type === "passphrase_required") {
         form.setError("passphrase", { type: "server", message: KEY.required });
       } else {
-        toastError(t("common.mutationFailed"));
+        setFailed(true);
       }
     },
   });
@@ -197,6 +207,8 @@ function ScheduleForm({ schedule }: { schedule: BackupSchedule }) {
   const show = t("schedule.passphrase.show");
   const hide = t("schedule.passphrase.hide");
   const pending = save.isPending;
+  const frequency = form.watch("frequency");
+  const dirty = form.formState.isDirty;
 
   const last = schedule.lastSuccess;
 
@@ -235,11 +247,36 @@ function ScheduleForm({ schedule }: { schedule: BackupSchedule }) {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="daily">{t("schedule.frequency.daily")}</SelectItem>
+                    <SelectItem value="weekly">{t("schedule.frequency.weekly")}</SelectItem>
                   </SelectContent>
                 </Select>
               )}
             />
           </Field>
+
+          {frequency === "weekly" ? (
+            <Field>
+              <FieldLabel htmlFor="schedule-weekday">{t("schedule.weekday.label")}</FieldLabel>
+              <Controller
+                control={form.control}
+                name="weekday"
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger id="schedule-weekday" className={`${TOUCH_HEIGHT} w-full`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {WEEKDAYS.map((day) => (
+                        <SelectItem key={day} value={day}>
+                          {t(`schedule.weekday.day.${day}`)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </Field>
+          ) : null}
 
           <Field data-invalid={errors.timeUtc ? true : undefined}>
             <FieldLabel htmlFor="schedule-time">{t("schedule.time.label")}</FieldLabel>
@@ -321,6 +358,17 @@ function ScheduleForm({ schedule }: { schedule: BackupSchedule }) {
         </FieldGroup>
 
         <div className="flex flex-col gap-1 text-sm text-muted-foreground">
+          {schedule.lastRun?.ok === false ? (
+            <p className="text-destructive">
+              <Sentence
+                text={t("schedule.status.failed", {
+                  time: SLOT,
+                  reason: (schedule.lastRun.error ?? "").replace(/\.+$/, ""),
+                })}
+                slot={<RelativeTime value={schedule.lastRun.at} />}
+              />
+            </p>
+          ) : null}
           {last ? (
             <p>
               <Sentence
@@ -332,12 +380,19 @@ function ScheduleForm({ schedule }: { schedule: BackupSchedule }) {
               />
             </p>
           ) : null}
+          {!schedule.lastRun && !last ? <p>{t("schedule.status.none")}</p> : null}
           {schedule.enabled && schedule.nextRun ? (
             <p>{t("schedule.status.next", { time: formatAbsolute(schedule.nextRun) })}</p>
           ) : null}
         </div>
 
-        <div>
+        {failed ? (
+          <Alert variant="destructive" role="alert">
+            <AlertDescription>{t("schedule.failed")}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <div className="flex flex-wrap gap-2">
           <Button type="submit" className={`${TOUCH_HEIGHT} max-md:w-full`}>
             {pending ? (
               <>
@@ -348,6 +403,19 @@ function ScheduleForm({ schedule }: { schedule: BackupSchedule }) {
               t("schedule.save")
             )}
           </Button>
+          {dirty || failed ? (
+            <Button
+              type="button"
+              variant="outline"
+              className={`${TOUCH_HEIGHT} max-md:w-full`}
+              onClick={() => {
+                setFailed(false);
+                form.reset(valuesOf(schedule));
+              }}
+            >
+              {t("schedule.cancel")}
+            </Button>
+          ) : null}
         </div>
       </fieldset>
     </form>

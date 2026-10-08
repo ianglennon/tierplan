@@ -835,7 +835,7 @@ describe("HealthBell failed scheduled backups", () => {
     await openBell("Warnings, 1 item");
     expect(await screen.findByText("The scheduled backup failed")).toBeTruthy();
     expect(
-      screen.getByText("no space left on device. The last good backup was 2 days ago."),
+      screen.getByText("no space left on device. The last good backup was 2 d ago."),
     ).toBeTruthy();
     const link = screen.getByRole("link", { name: "Open backups" });
     expect(link.getAttribute("href")).toContain("/settings/backup");

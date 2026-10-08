@@ -112,6 +112,7 @@ type Entry =
   | { kind: "keyBackup"; key: string; severity: "warning"; since?: string }
   | { kind: "proxy"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "refusalBurst"; key: string; severity: "warning"; since?: string; w: Warning }
+  | { kind: "backupFailed"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "env"; key: string; severity: EnvWarning["severity"]; since?: string; w: EnvWarning }
   | { kind: "manyOffline"; key: string; severity: "error"; since?: string; count: number };
 
@@ -122,7 +123,13 @@ const entryKey = (w: EnvWarning) => `${w.id}:${w.envId ?? ""}:${w.agentId ?? w.n
 // offline environments are one item.
 export function bellEntries(
   env: EnvWarning[],
-  instance: { plainHttp: boolean; keyBackup: boolean; proxy: Warning[]; bursts?: Warning[] },
+  instance: {
+    plainHttp: boolean;
+    keyBackup: boolean;
+    proxy: Warning[];
+    bursts?: Warning[];
+    backupFailed?: Warning[];
+  },
 ): Entry[] {
   const offline = env.filter((w) => w.id === "env_offline");
   const collapse = offline.length > COLLAPSE_OFFLINE_ABOVE;
@@ -157,6 +164,11 @@ export function bellEntries(
       severity: "warning",
       w,
     });
+  }
+  // Not dated by the failure: since is the last good backup, which says nothing
+  // about when this began, so it sorts with the undated items.
+  for (const w of instance.backupFailed ?? []) {
+    entries.push({ kind: "backupFailed", key: "backup_failed", severity: "warning", w });
   }
   if (instance.keyBackup)
     entries.push({ kind: "keyBackup", key: "key_backup", severity: "warning" });
@@ -206,6 +218,28 @@ function BellItem({ id, title, children }: { id: string; title: string; children
         {children}
       </ItemContent>
     </Item>
+  );
+}
+
+// The scheduled backup failed (D-32): why, and when the last good one finished. It
+// is derived from the newest run, so there is nothing to dismiss; it ends when a
+// later run works.
+function BackupFailedEntry({ w, close }: { w: Warning; close: () => void }) {
+  const t = useT();
+  const now = useNow();
+  const reason = (w.subject ?? "").replace(/\.+$/, "");
+  const time = w.since ? formatRelative(w.since, new Date(now), t) : "";
+  return (
+    <BellItem id="backup_failed" title={t("bell.backupFailed.title")}>
+      <ItemDescription className="line-clamp-none wrap-anywhere">
+        {time
+          ? t("bell.backupFailed.description", { reason, time })
+          : t("bell.backupFailed.descriptionNoTime", { reason })}
+      </ItemDescription>
+      <Link to="/settings/backup" className={`${linkClass} text-sm ${touchLink}`} onClick={close}>
+        {t("bell.backupFailed.link")}
+      </Link>
+    </BellItem>
   );
 }
 
@@ -401,7 +435,14 @@ export function HealthBell() {
   const keyBackup = items.some((w) => w.id === "key_backup");
   const proxyItems = items.filter((w) => proxyCopy(w.id) !== undefined);
   const bursts = items.filter((w) => w.id === "refusal_burst");
-  const entries = bellEntries(envItems, { plainHttp, keyBackup, proxy: proxyItems, bursts });
+  const backupFailed = items.filter((w) => w.id === "backup_failed");
+  const entries = bellEntries(envItems, {
+    plainHttp,
+    keyBackup,
+    proxy: proxyItems,
+    bursts,
+    backupFailed,
+  });
   const loading = instanceLoading || envLoading;
   const count = loading ? 0 : entries.length;
 
@@ -585,6 +626,10 @@ export function HealthBell() {
                             {t("bell.refusalBurst.link")}
                           </Link>
                         </BellItem>
+                      );
+                    case "backupFailed":
+                      return (
+                        <BackupFailedEntry key={entry.key} w={entry.w} close={actions.close} />
                       );
                     case "keyBackup":
                       return (

@@ -68,6 +68,12 @@
         "title": "WebSocket connections are failing",
         "body": "Agents or terminals can't connect through your proxy. Check that it passes the Upgrade headers."
       }
+    },
+    "backupFailed": {
+      "title": "The scheduled backup failed",
+      "description": "{{reason}}. The last good backup was {{time}}.",
+      "descriptionNoTime": "{{reason}}.",
+      "link": "Open backups"
     }
   }
 }

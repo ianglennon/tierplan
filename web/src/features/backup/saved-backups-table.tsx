@@ -8,6 +8,7 @@ import { type BackupFileItem, backupFilesQuery, downloadBackupFile, saveBlob } f
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -20,6 +21,9 @@ import { Truncated } from "@/features/access/truncated";
 import { useT } from "@/i18n/use-t";
 import { formatBytes } from "@/lib/format";
 import { toastError } from "@/lib/toast";
+
+// Placeholder rows while the first list is out (UI-SPEC: six).
+const SKELETON_ROWS = 6;
 
 // SavedBackupsTable lists the scheduled backups on disk, newest first, each with a
 // Download. The names are monospace and truncate with the whole name in a tooltip.
@@ -42,6 +46,7 @@ export function SavedBackupsTable() {
   }
 
   const items: BackupFileItem[] = files.data ?? [];
+  const columns = 4;
   return (
     <>
       <Separator />
@@ -58,6 +63,30 @@ export function SavedBackupsTable() {
           </TableRow>
         </TableHeader>
         <TableBody>
+          {files.isPending
+            ? Array.from({ length: SKELETON_ROWS }, (_, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no identity
+                <TableRow key={i} aria-hidden="true" data-loading="true">
+                  <TableCell colSpan={columns}>
+                    <Skeleton className="h-5 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            : null}
+          {files.isError ? (
+            <TableRow>
+              <TableCell colSpan={columns} className="text-muted-foreground">
+                {t("schedule.files.loadFailed")}
+              </TableCell>
+            </TableRow>
+          ) : null}
+          {files.isSuccess && items.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={columns} className="text-muted-foreground">
+                {t("schedule.files.empty")}
+              </TableCell>
+            </TableRow>
+          ) : null}
           {items.map((f) => (
             <TableRow key={f.name}>
               <TableCell>

@@ -29,6 +29,7 @@ let schedule: BackupSchedule;
 let files: { name: string; size: number; created: string }[];
 let putAnswer: (body: Record<string, unknown>) => Response | Promise<Response>;
 let filesGate: Promise<void> | null;
+let filesStatus: number;
 let successToast: ReturnType<typeof vi.spyOn>;
 let errorToast: ReturnType<typeof vi.spyOn>;
 
@@ -50,6 +51,7 @@ beforeEach(() => {
   schedule = saved;
   files = [{ name: NAME, size: 1_572_864, created: "2026-10-08T03:00:00Z" }];
   filesGate = null;
+  filesStatus = 200;
   successToast = vi.spyOn(toast, "success");
   errorToast = vi.spyOn(toast, "error");
   setCsrfToken("csrf-1");
@@ -70,6 +72,7 @@ beforeEach(() => {
       }
       if (path === "/api/backup/files") {
         await filesGate;
+        if (filesStatus !== 200) return Response.json({}, { status: filesStatus });
         return Response.json({ items: files });
       }
       if (path === `/api/backup/files/${NAME}`) {
@@ -316,10 +319,13 @@ describe("Saved backups: empty, loading and long names", () => {
     expect(name.getAttribute("tabindex")).toBe("0");
   });
 
-  it("says when the list cannot be read", async () => {
-    vi.mocked(fetch).mockImplementationOnce(async () => Response.json({}, { status: 500 }));
+  it("says when the list cannot be read, instead of claiming there are none", async () => {
+    filesStatus = 500;
     renderPanel();
-    await card().findByRole("switch", { name: "Back up automatically" });
+    // The query retries once, a second later, before it gives up.
+    expect(
+      await card().findByText("Couldn't load the saved backups.", {}, { timeout: 5000 }),
+    ).toBeTruthy();
     expect(card().queryByText("No scheduled backups yet.")).toBeNull();
   });
 });
