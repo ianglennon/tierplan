@@ -197,6 +197,26 @@ func TestFoldLocalRetiresTheLocalEnvironmentRecordsTheNodeAndTheSocketAndAuditsI
 	}
 }
 
+func TestFoldLocalDeletesTheRetiredLocalEnvironmentsGrantsAndOwnedRowsAndKeepsTheSwarmsOwn(t *testing.T) {
+	f := newFoldRig(t, nil)
+	seedGrantsOn(t, f.st, f.localEnv.ID)
+	if _, err := f.st.Write.Exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at) VALUES ('ra-swarm', 'user', 'u1', 'admin', ?, 1)`, f.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.fold(t)
+
+	if a, x, o := grantRowsOn(t, f.st, f.localEnv.ID); a != 0 || x != 0 || o != 0 {
+		t.Fatalf("left behind for the retired local environment: %d assignments, %d extras, %d owned rows", a, x, o)
+	}
+	if a, _, _ := grantRowsOn(t, f.st, f.env.ID); a != 1 {
+		t.Fatalf("the swarm environment's own assignments = %d, want 1 kept", a)
+	}
+	rows := f.audits(t, "environment.local_folded")
+	if len(rows) != 1 || !strings.Contains(rows[0].Details, `"grants":"2"`) {
+		t.Fatalf("audit = %+v, want one entry carrying grants 2", rows)
+	}
+}
+
 func TestFoldLocalOfAnUnknownEnvironmentIsNotFound(t *testing.T) {
 	f := newFoldRig(t, nil)
 	if err := f.svc.FoldLocal(context.Background(), admin, "no-such-environment", "", ""); !errors.Is(err, ErrNotFound) {

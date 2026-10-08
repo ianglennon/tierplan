@@ -6,7 +6,9 @@ package access_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/access"
@@ -151,5 +153,399 @@ func TestAGrantToAnUnknownUserTeamOrEnvironmentIsRefusedAndWritesNothing(t *test
 	f.exec(t, `UPDATE users SET deleted_at = 5 WHERE id = 'alice'`)
 	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "viewer")); !errors.Is(err, access.ErrSubjectNotFound) {
 		t.Fatalf("a deleted user = %v, want ErrSubjectNotFound (tombstones hold no grants)", err)
+	}
+}
+
+// --- extras, one grant per subject and scope, team and all-environments grants,
+// stale edits, and removal or downgrade with its impact (plan 03-19 task 2) ---
+
+func TestExtrasAreAcceptedOnlyOnOperatorGrantsAndOnlyFromTheRegistry(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addEnv(t, "env-a", "Alpha")
+	before := f.snapshot(t)
+
+	for _, c := range []struct {
+		role   string
+		extras []string
+		want   error
+	}{
+		{"viewer", []string{"containers.exec"}, access.ErrViewerExtras},
+		{"admin", []string{"containers.exec"}, access.ErrExtrasImplied},
+		{"admin", []string{"secrets.reveal", "janitor.policy"}, access.ErrExtrasImplied},
+		{"operator", []string{"environments.read"}, access.ErrUnknownExtra},
+		{"operator", []string{"users.manage"}, access.ErrUnknownExtra},
+		{"operator", []string{"containers.exec", "no.such"}, access.ErrUnknownExtra},
+		{"viewer", []string{"no.such"}, access.ErrUnknownExtra},
+	} {
+		if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", c.role, c.extras...)); !errors.Is(err, c.want) {
+			t.Fatalf("%s with %q = %v, want %v", c.role, c.extras, err, c.want)
+		}
+	}
+	if got := f.snapshot(t); got != before {
+		t.Fatalf("a refused grant wrote something: %s, was %s", got, before)
+	}
+
+	// An Operator may carry any of the four, once each, and they are kept sorted.
+	g, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "operator", "volumes.delete", "containers.exec", "containers.exec"))
+	if err != nil || !slices.Equal(g.Extras, []string{"containers.exec", "volumes.delete"}) {
+		t.Fatalf("Operator grant = %+v, %v, want the two extras once each, sorted", g, err)
+	}
+	if d := f.detailsMap(t, "access.granted"); d["extras"] != "containers.exec,volumes.delete" {
+		t.Fatalf("audit extras = %q", d["extras"])
+	}
+}
+
+func TestOperatorExtrasAreHeldSeparatelyFromTheRole(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addEnv(t, "env-a", "Alpha")
+	f.addEnv(t, "env-b", "Beta")
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "operator", "containers.exec")); err != nil {
+		t.Fatal(err)
+	}
+	checker := rbac.NewChecker(f.st) // the real registry, which has the extras
+	alice := &rbac.Principal{Type: rbac.PrincipalUser, ID: "alice"}
+	allowed := func(p rbac.Perm, env string) bool {
+		return checker.Check(f.ctx, alice, rbac.Require(p), env).Allowed
+	}
+	if !allowed(rbac.PermContainersExec, "env-a") {
+		t.Error("an Operator carrying the container shell was refused it")
+	}
+	if allowed(rbac.PermSecretsReveal, "env-a") {
+		t.Error("an Operator without the reveal-secrets extra was allowed to reveal secrets")
+	}
+	if allowed(rbac.PermContainersExec, "env-b") {
+		t.Error("the container shell on A reached B")
+	}
+
+	// Withdrawing the extra leaves the role and takes the shell away.
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "operator")); err != nil {
+		t.Fatal(err)
+	}
+	if allowed(rbac.PermContainersExec, "env-a") {
+		t.Error("the container shell survived withdrawing it")
+	}
+	a, _ := checker.Access(f.ctx, alice)
+	if a.For("env-a").Role != rbac.RoleOperator {
+		t.Errorf("role after withdrawing the extra = %v, want Operator", a.For("env-a").Role)
+	}
+}
+
+func TestUpsertEditsTheSameRowForASubjectAndScopeAndAnotherScopeIsAnotherRow(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addEnv(t, "env-a", "Alpha")
+	first, created, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "viewer"))
+	if err != nil || !created {
+		t.Fatal(first, created, err)
+	}
+	second, created, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "operator"))
+	if err != nil || created || second.ID != first.ID || second.Role != "operator" {
+		t.Fatalf("second save = %+v, created %v, %v, want the same row edited", second, created, err)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM role_assignments WHERE principal_id = 'alice'`); n != 1 {
+		t.Fatalf("rows for alice = %d, want 1", n)
+	}
+	if f.auditCount(t, "access.granted") != 1 || f.auditCount(t, "access.updated") != 1 {
+		t.Fatalf("entries: %d granted, %d updated, want 1 and 1", f.auditCount(t, "access.granted"), f.auditCount(t, "access.updated"))
+	}
+	if env := f.auditEnvID(t, "access.updated"); env != "env-a" {
+		t.Fatalf("the update's env_id = %q", env)
+	}
+
+	// Saving what is already there changes nothing and writes no entry.
+	again, created, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "operator"))
+	if err != nil || created || again.ID != first.ID {
+		t.Fatalf("repeat = %+v, %v, %v", again, created, err)
+	}
+	if f.auditCount(t, "access.updated") != 1 {
+		t.Fatal("a save that changed nothing was audited")
+	}
+
+	// All environments is a second scope: a second row.
+	all, created, err := f.svc.PutGrant(f.ctx, testAdmin, access.GrantInput{SubjectType: "user", SubjectID: "alice", Scope: access.ScopeAll, Role: "viewer"})
+	if err != nil || !created || all.ID == first.ID || all.EnvID != "" {
+		t.Fatalf("all-environments grant = %+v, %v, %v", all, created, err)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM role_assignments WHERE principal_id = 'alice'`); n != 2 {
+		t.Fatalf("rows for alice = %d, want 2", n)
+	}
+	if d := f.detailsMap(t, "access.updated"); d["scope"] != "env-a" || d["role"] != "operator" {
+		t.Fatalf("update details = %v", d)
+	}
+}
+
+func TestAllEnvironmentsGivesEveryEnvironmentAndMarksOnesWithoutAnOwnGrantInherited(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addEnv(t, "env-a", "Alpha")
+	f.addEnv(t, "env-b", "Beta")
+	f.addEnv(t, "env-c", "Gamma")
+	for _, in := range []access.GrantInput{
+		{SubjectType: "user", SubjectID: "alice", Scope: access.ScopeAll, Role: "viewer"},
+		envGrant("alice", "env-b", "operator", "secrets.reveal"),
+	} {
+		if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A new environment is reached through All environments at once.
+	f.addEnv(t, "env-d", "Delta")
+	_, rows, err := f.svc.EffectiveAccess(f.ctx, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.EnvName+":"+r.Role+":"+fmt.Sprint(r.Inherited))
+	}
+	want := []string{"Alpha:viewer:true", "Beta:operator:false", "Delta:viewer:true", "Gamma:viewer:true"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("rows = %q, want %q", got, want)
+	}
+	beta := rows[1]
+	if !slices.Equal(beta.Extras, []string{"secrets.reveal"}) || !slices.Equal(sourceKinds(beta), []rbac.SourceKind{rbac.SourceAllEnvironments, rbac.SourceDirect}) {
+		t.Fatalf("Beta = %+v, want the extra and the sources All environments then Direct", beta)
+	}
+}
+
+func TestTeamGrantGivesEveryMemberTheRoleWithTheTeamAsSourceAndSeveralSourcesShowTogether(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addUser(t, "bob")
+	f.addEnv(t, "env-a", "Alpha")
+	team := f.createTeam(t, "ops")
+	f.join(t, team.ID, "alice", "bob")
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, access.GrantInput{
+		SubjectType: access.SubjectTeam, SubjectID: team.ID, Scope: access.ScopeEnv, EnvID: "env-a", Role: "operator", Extras: []string{"containers.exec"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "viewer")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, bob, err := f.svc.EffectiveAccess(f.ctx, "bob")
+	if err != nil || len(bob) != 1 || bob[0].Role != "operator" || bob[0].Inherited ||
+		len(bob[0].Sources) != 1 || bob[0].Sources[0].Kind != rbac.SourceTeam || bob[0].Sources[0].TeamName != "ops" {
+		t.Fatalf("bob = %+v, %v, want Operator from Team ops", bob, err)
+	}
+	_, alice, err := f.svc.EffectiveAccess(f.ctx, "alice")
+	if err != nil || len(alice) != 1 || alice[0].Role != "operator" || !slices.Equal(alice[0].Extras, []string{"containers.exec"}) ||
+		!slices.Equal(sourceKinds(alice[0]), []rbac.SourceKind{rbac.SourceTeam, rbac.SourceDirect}) {
+		t.Fatalf("alice = %+v, %v, want one row: the highest role, the extra and both sources", alice, err)
+	}
+	if d := f.detailsMap(t, "access.granted"); d["subject_type"] == "" {
+		t.Fatalf("details = %v", d)
+	}
+	var teamEntry string
+	if err := f.st.Read.QueryRow(`SELECT details FROM audit_log WHERE action = 'access.granted' ORDER BY seq LIMIT 1`).Scan(&teamEntry); err != nil || !strings.Contains(teamEntry, `"subject":"ops"`) || !strings.Contains(teamEntry, `"subject_type":"team"`) {
+		t.Fatalf("the team grant's entry = %s (%v), want the team named", teamEntry, err)
+	}
+}
+
+func TestAStaleEditIsRefusedAndChangesNothing(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addEnv(t, "env-a", "Alpha")
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "viewer")); err != nil {
+		t.Fatal(err)
+	}
+	// Another admin makes it Operator while the first has the dialog open.
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "operator")); err != nil {
+		t.Fatal(err)
+	}
+	stale := envGrant("alice", "env-a", "admin")
+	stale.Expected = &access.GrantState{Role: "viewer", Extras: []string{}}
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, stale); !errors.Is(err, access.ErrStaleChange) {
+		t.Fatalf("a stale edit = %v, want ErrStaleChange", err)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM role_assignments WHERE role_id = 'admin'`); n != 0 {
+		t.Fatal("a stale edit was applied")
+	}
+	// An edit based on the current state goes through; so does one of a grant that
+	// has since been removed, as a stale edit, not as a quiet re-creation.
+	fresh := envGrant("alice", "env-a", "admin")
+	fresh.Expected = &access.GrantState{Role: "operator", Extras: []string{}}
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, fresh); err != nil {
+		t.Fatalf("an edit from the current state = %v", err)
+	}
+	f.exec(t, `DELETE FROM role_assignments WHERE principal_id = 'alice'`)
+	fresh.Expected = &access.GrantState{Role: "admin", Extras: []string{}}
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, fresh); !errors.Is(err, access.ErrStaleChange) {
+		t.Fatalf("an edit of a removed grant = %v, want ErrStaleChange", err)
+	}
+}
+
+func TestGrantImpactEqualsWhatTheChangeProducesAndTheDatabaseIsUnchangedByAskingAndAGrantHasNoExpiry(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addUser(t, "bob")
+	f.addEnv(t, "env-a", "Alpha")
+	team := f.createTeam(t, "ops")
+	f.join(t, team.ID, "alice", "bob")
+	f.assign(t, "alice", "viewer", "env-a") // alice keeps Viewer directly
+	tg, _, err := f.svc.PutGrant(f.ctx, testAdmin, access.GrantInput{
+		SubjectType: access.SubjectTeam, SubjectID: team.ID, Scope: access.ScopeEnv, EnvID: "env-a", Role: "operator",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := f.snapshot(t)
+
+	del, err := f.svc.GrantImpact(f.ctx, access.SubjectTeam, team.ID, tg.ID, access.GrantChange{Op: access.OpDeleteGrant})
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := f.svc.GrantImpact(f.ctx, access.SubjectTeam, team.ID, tg.ID, access.GrantChange{Op: access.OpUpdateGrant, Role: "viewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.snapshot(t); got != before {
+		t.Fatalf("a preview changed the database: %s, was %s", got, before)
+	}
+	describe := func(rows []access.ImpactRow) string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, fmt.Sprintf("%s %s %s>%s", r.Username, r.EnvID, r.Before, r.After))
+		}
+		return strings.Join(out, "; ")
+	}
+	// alice falls to her own Viewer, bob to nothing; a downgrade to Viewer takes bob to Viewer, alice nowhere.
+	if got, want := describe(del), "alice env-a operator>viewer; bob env-a operator>none"; got != want {
+		t.Fatalf("delete impact = %q, want %q", got, want)
+	}
+	if got, want := describe(down), "bob env-a operator>viewer"; got != want {
+		t.Fatalf("downgrade impact = %q, want %q", got, want)
+	}
+
+	rows, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectTeam, team.ID, tg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if describe(rows) != describe(del) {
+		t.Fatalf("the removal produced %q, the preview said %q", describe(rows), describe(del))
+	}
+	if n := f.auditCount(t, "access.revoked"); n != 1 {
+		t.Fatalf("access.revoked entries = %d, want exactly one", n)
+	}
+	d := f.detailsMap(t, "access.revoked")
+	if d["subject_type"] != "team" || d["subject"] != "ops" || d["role"] != "operator" || d["scope"] != "env-a" || d["impact_count"] != "2" ||
+		!strings.Contains(d["impact"], "alice: Alpha operator→viewer") || !strings.Contains(d["impact"], "bob: Alpha operator→none") {
+		t.Fatalf("details = %v", d)
+	}
+	if env := f.auditEnvID(t, "access.revoked"); env != "env-a" {
+		t.Fatalf("the entry's env_id = %q", env)
+	}
+	a, _ := f.svc.Checker.AccessQ(f.ctx, f.st.Q, "bob")
+	if a.For("env-a").Role != rbac.RoleNone {
+		t.Fatalf("bob's role after the removal = %v, want none", a.For("env-a").Role)
+	}
+
+	// No grant carries an expiry anywhere (D-21).
+	cols, err := f.st.Read.Query(`SELECT name FROM pragma_table_info('role_assignments')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cols.Close() }()
+	for cols.Next() {
+		var name string
+		if err := cols.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(name, "expir") || strings.Contains(name, "until") {
+			t.Fatalf("role_assignments has a %q column: a grant lasts until it is removed", name)
+		}
+	}
+}
+
+func TestRemovingOrLoweringAGrantPausesTheOwnedAutomationsOfAnOwnerWhoNoLongerQualifies(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addEnv(t, "env-a", "Alpha")
+	g, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "operator"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.register(t, syncResource("alice"))
+	if s := f.state(t, kindTestSync, "r1"); s != "active" {
+		t.Fatalf("state with Operator = %s", s)
+	}
+
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "viewer")); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.state(t, kindTestSync, "r1"); s != "paused_lacks_permission" {
+		t.Fatalf("state after the downgrade = %s, want paused_lacks_permission", s)
+	}
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "operator")); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.state(t, kindTestSync, "r1"); s != "active" {
+		t.Fatalf("state after the role came back = %s, want active", s)
+	}
+	if _, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectUser, "alice", g.ID); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.state(t, kindTestSync, "r1"); s != "paused_lacks_permission" {
+		t.Fatalf("state after the removal = %s, want paused_lacks_permission", s)
+	}
+}
+
+func TestAGrantThatIsNotTheSubjectsIsNotFoundForPreviewAndRemovalAndNothingIsWritten(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addUser(t, "bob")
+	f.addEnv(t, "env-a", "Alpha")
+	g, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "viewer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := f.snapshot(t)
+	if _, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectUser, "bob", g.ID); !errors.Is(err, access.ErrGrantNotFound) {
+		t.Fatalf("removing alice's grant as bob's = %v, want ErrGrantNotFound", err)
+	}
+	if _, err := f.svc.DeleteGrant(f.ctx, testAdmin, access.SubjectUser, "alice", "no-such"); !errors.Is(err, access.ErrGrantNotFound) {
+		t.Fatalf("removing an unknown grant = %v, want ErrGrantNotFound", err)
+	}
+	if _, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "bob", g.ID, access.GrantChange{Op: access.OpDeleteGrant}); !errors.Is(err, access.ErrGrantNotFound) {
+		t.Fatalf("previewing alice's grant as bob's = %v, want ErrGrantNotFound", err)
+	}
+	if _, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "ghost", g.ID, access.GrantChange{Op: access.OpDeleteGrant}); !errors.Is(err, access.ErrSubjectNotFound) {
+		t.Fatalf("previewing for an unknown user = %v, want ErrSubjectNotFound", err)
+	}
+	for _, bad := range []access.GrantChange{
+		{Op: "rename"},
+		{Op: access.OpUpdateGrant, Role: "owner"},
+		{Op: access.OpUpdateGrant, Role: "viewer", Extras: []string{"containers.exec"}},
+	} {
+		if _, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "alice", g.ID, bad); err == nil {
+			t.Fatalf("GrantImpact(%+v) was accepted", bad)
+		}
+	}
+	if got := f.snapshot(t); got != before {
+		t.Fatalf("refusals wrote something: %s, was %s", got, before)
+	}
+}
+
+func TestLoweringOnlyTheExtrasIsNotAnImpactRowButIsStillAudited(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.addEnv(t, "env-a", "Alpha")
+	g, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "operator", "containers.exec"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.svc.GrantImpact(f.ctx, access.SubjectUser, "alice", g.ID, access.GrantChange{Op: access.OpUpdateGrant, Role: "operator"})
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("impact of dropping an extra = %+v, %v, want none (the role does not fall)", rows, err)
+	}
+	if _, _, err := f.svc.PutGrant(f.ctx, testAdmin, envGrant("alice", "env-a", "operator")); err != nil {
+		t.Fatal(err)
+	}
+	d := f.detailsMap(t, "access.updated")
+	if d["extras"] != "" || d["impact_count"] != "0" {
+		t.Fatalf("details = %v, want no extras and impact_count 0", d)
 	}
 }

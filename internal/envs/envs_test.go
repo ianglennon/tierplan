@@ -392,6 +392,80 @@ func TestRemoveDeletesTheRowStopsTheMonitorAndChangesNothingInDocker(t *testing.
 	}
 }
 
+// seedGrantsOn gives an environment what removing it must take with it: a direct
+// and a team assignment (one with an extra) and an owned automation. It also adds an
+// assignment and an owned row on another environment and an all-environments
+// assignment, which must survive.
+func seedGrantsOn(t *testing.T, st *store.Store, envID string) {
+	t.Helper()
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO users (id, username, password_hash, created_at, updated_at, password_changed_at) VALUES ('u1', 'alice', 'x', 1, 1, 1)`, nil},
+		{`INSERT INTO teams (id, name, created_at, updated_at) VALUES ('t1', 'ops', 1, 1)`, nil},
+		{`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at) VALUES ('ra-user', 'user', 'u1', 'operator', ?, 1)`, []any{envID}},
+		{`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at) VALUES ('ra-team', 'team', 't1', 'viewer', ?, 1)`, []any{envID}},
+		{`INSERT INTO assignment_extras (assignment_id, permission) VALUES ('ra-user', 'containers.exec')`, nil},
+		{`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at) VALUES ('ra-other', 'user', 'u1', 'viewer', 'some-other-env', 1)`, nil},
+		{`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at) VALUES ('ra-all', 'user', 'u1', 'viewer', NULL, 1)`, nil},
+		{`INSERT INTO owned_resources (kind, resource_id, env_id, name, owner_id, created_at, updated_at) VALUES ('test.sync', 'r1', ?, 'Sync', 'u1', 1, 1)`, []any{envID}},
+		{`INSERT INTO owned_resources (kind, resource_id, env_id, name, owner_id, created_at, updated_at) VALUES ('test.sync', 'r2', 'some-other-env', 'Sync', 'u1', 1, 1)`, nil},
+	} {
+		if _, err := st.Write.Exec(q.sql, q.args...); err != nil {
+			t.Fatalf("%s: %v", q.sql, err)
+		}
+	}
+}
+
+// grantRowsOn counts what is left of an environment's grants, extras and owned rows.
+func grantRowsOn(t *testing.T, st *store.Store, envID string) (assignments, extras, owned int) {
+	t.Helper()
+	for q, dst := range map[string]*int{
+		`SELECT COUNT(*) FROM role_assignments WHERE env_id = ?`:                                                           &assignments,
+		`SELECT COUNT(*) FROM assignment_extras WHERE assignment_id IN (SELECT id FROM role_assignments WHERE env_id = ?)`: &extras,
+		`SELECT COUNT(*) FROM owned_resources WHERE env_id = ?`:                                                            &owned,
+	} {
+		if err := st.Read.QueryRow(q, envID).Scan(dst); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	return assignments, extras, owned
+}
+
+func TestRemoveDeletesTheEnvironmentsGrantsAndOwnedRowsInTheSameTransactionAndAuditsTheCount(t *testing.T) {
+	r := newRig(t, dockertest.FakeConfig{})
+	e := r.add(t)
+	seedGrantsOn(t, r.st, e.ID)
+
+	if err := r.svc.Remove(context.Background(), admin, e.ID, "203.0.113.9", "ua", false); err != nil {
+		t.Fatal(err)
+	}
+	if a, x, o := grantRowsOn(t, r.st, e.ID); a != 0 || x != 0 || o != 0 {
+		t.Fatalf("left behind: %d assignments, %d extras, %d owned rows", a, x, o)
+	}
+	var elsewhere int
+	if err := r.st.Read.QueryRow(`SELECT COUNT(*) FROM role_assignments WHERE id IN ('ra-other', 'ra-all')`).Scan(&elsewhere); err != nil || elsewhere != 2 {
+		t.Fatalf("another environment's and the all-environments assignment = %d (%v), want both kept", elsewhere, err)
+	}
+	if n := countRows(t, r.st, `SELECT COUNT(*) FROM owned_resources WHERE env_id = 'some-other-env'`); n != 1 {
+		t.Fatalf("another environment's owned row = %d, want kept", n)
+	}
+	entries := r.audits(t, audit.ActionEnvironmentRemoved)
+	if len(entries) != 1 || !strings.Contains(entries[0].Details, `"grants":"2"`) {
+		t.Fatalf("environment.removed entries = %+v, want one carrying grants 2", entries)
+	}
+}
+
+func countRows(t *testing.T, st *store.Store, q string) int {
+	t.Helper()
+	var n int
+	if err := st.Read.QueryRow(q).Scan(&n); err != nil {
+		t.Fatalf("%s: %v", q, err)
+	}
+	return n
+}
+
 // --- Resolve ----------------------------------------------------------------
 
 func TestResolveDistinguishesUnknownDisabledAndEnabled(t *testing.T) {
