@@ -4,7 +4,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AccessChangeKind } from "@/api/client";
 import {
   ACCESS_REFETCH_THROTTLE_MS,
   createAccessChangeHandler,
@@ -46,21 +45,15 @@ function setup(envId: string | undefined, before: Me) {
   const moveTo = vi.fn();
   const notifyChanged = vi.fn();
   const notifyRefused = vi.fn();
-  const created = createAccessChangeHandler({
+  const { handle, dispose } = createAccessChangeHandler({
     queryClient: qc,
     currentEnvId: () => current,
     moveTo,
     notifyChanged,
     notifyRefused,
     now: () => clock,
-  }) as unknown as
-    | ((kind: AccessChangeKind, path: string) => Promise<void>)
-    | {
-        handle: (kind: AccessChangeKind, path: string) => Promise<void>;
-        dispose: () => void;
-      };
-  const handle = typeof created === "function" ? created : created.handle;
-  if (typeof created !== "function") handlers.push(created);
+  });
+  handlers.push({ dispose });
   return { handle, moveTo, notifyChanged, notifyRefused };
 }
 
