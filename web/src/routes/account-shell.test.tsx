@@ -35,6 +35,14 @@ beforeEach(() => {
         return Response.json({ instanceName: "Lab", needsSetup: false, rememberDays: 30 });
       }
       if (path === "/api/me") return Response.json(me);
+      if (path === "/api/me/profile") {
+        return Response.json({
+          username: "viewer",
+          displayName: "",
+          email: "",
+          updatedAt: "2026-10-07T10:00:00Z",
+        });
+      }
       if (path === "/api/me/sessions") {
         return Response.json([
           {
@@ -93,12 +101,24 @@ describe("account and warnings in the app shell", () => {
     const labels = within(menu)
       .getAllByRole("menuitem")
       .map((i) => i.textContent);
-    expect(labels).toEqual(["Sessions", "Change password", "Log out"]);
+    expect(labels).toEqual(["Profile", "Sessions", "Change password", "Log out"]);
     const text = menu.textContent ?? "";
     expect(text.indexOf("Instance admin")).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf("Instance admin")).toBeLessThan(text.indexOf("Sessions"));
+    expect(text.indexOf("Instance admin")).toBeLessThan(text.indexOf("Profile"));
+    expect(text.indexOf("Profile")).toBeLessThan(text.indexOf("Sessions"));
     expect(text.indexOf("Sessions")).toBeLessThan(text.indexOf("Change password"));
     expect(text.indexOf("Change password")).toBeLessThan(text.indexOf("Theme"));
+
+    // Profile opens outside the menu content too, and focus comes back to the trigger.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Profile" }));
+    const profileDialog = await screen.findByRole("dialog", { name: "Profile" });
+    expect(await within(profileDialog).findByLabelText("Display name")).toBeTruthy();
+    fireEvent.click(within(profileDialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    await screen.findByRole("menu");
 
     // Sessions opens outside the menu content, so closing the menu keeps it open.
     fireEvent.click(screen.getByRole("menuitem", { name: "Sessions" }));

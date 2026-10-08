@@ -30,6 +30,23 @@ function userBody(over: Record<string, unknown> = {}) {
   };
 }
 
+const CHROME =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
+const FIREFOX = "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0";
+const TOKEN = "ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210_-ZyXwV";
+
+function sessionBody(over: Record<string, unknown> = {}) {
+  return {
+    id: "a".repeat(32),
+    userAgent: CHROME,
+    ip: "203.0.113.5",
+    createdAt: "2026-10-01T10:00:00Z",
+    lastSeenAt: new Date().toISOString(),
+    current: false,
+    ...over,
+  };
+}
+
 let current: Record<string, unknown>;
 let user: Record<string, unknown>;
 // What GET /api/users/u1 answers: the user, or a status for a failure.
@@ -38,6 +55,12 @@ let lifecycle: (path: string) => Response | Promise<Response>;
 // What the other write routes answer: PATCH, instance-admin, unlock and DELETE.
 let write: (req: Request, body: unknown) => Response | Promise<Response>;
 let seen: string[];
+// Where the user is signed in, what ending them all answers, and what a password
+// reset answers (plan 03-15).
+let userSessions: Array<Record<string, unknown>>;
+let sessionsStatus: number;
+let revokeAll: () => Response | Promise<Response>;
+let reset: () => Response | Promise<Response>;
 // The JSON bodies the page sent, by "METHOD path".
 let sent: Record<string, unknown>;
 
@@ -53,6 +76,21 @@ beforeEach(() => {
     return Response.json(user);
   };
   seen = [];
+  userSessions = [
+    sessionBody({ id: "a".repeat(32), ip: "203.0.113.5" }),
+    sessionBody({ id: "b".repeat(32), userAgent: FIREFOX, ip: "198.51.100.7" }),
+  ];
+  sessionsStatus = 200;
+  revokeAll = () => {
+    const ended = userSessions.length;
+    userSessions = [];
+    return Response.json({ ended });
+  };
+  reset = () =>
+    Response.json({
+      url: `/invite#token=${TOKEN}`,
+      expiresAt: new Date(Date.now() + 72 * 3_600_000).toISOString(),
+    });
   setCsrfToken(null);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -76,6 +114,13 @@ beforeEach(() => {
       }
       if (path === "/api/users" && req.method === "GET") return Response.json([user]);
       if (path === "/api/users/u1" && req.method === "GET") return getUser();
+      if (path === "/api/users/u1/sessions" && req.method === "GET") {
+        return sessionsStatus === 200
+          ? Response.json(userSessions)
+          : Response.json({ title: "boom" }, { status: sessionsStatus });
+      }
+      if (path === "/api/users/u1/sessions/revoke-all") return revokeAll();
+      if (path === "/api/users/u1/reset-password") return reset();
       if (/^\/api\/users\/u1\/(disable|enable)$/.test(path)) return lifecycle(path);
       if (/^\/api\/users\/u1(\/(instance-admin|unlock))?$/.test(path)) {
         const body =
@@ -501,5 +546,164 @@ describe("Delete user", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Delete user…" }));
     const title = await screen.findByRole("heading", { name: `Delete ${"a".repeat(32)}?` });
     expect(title.className).toContain("break-words");
+  });
+});
+
+describe("the Sessions card (D-23)", () => {
+  it("lists where the user is signed in with no row actions, and the caption says whose", async () => {
+    renderAt(PAGE);
+    expect(await screen.findByText("Where alice is signed in.")).toBeTruthy();
+    const card = screen.getByRole("region", { name: "Sessions" });
+    await within(card).findByText("Chrome on Windows");
+    expect(within(card).getByText("Firefox on Linux")).toBeTruthy();
+    expect(within(card).getByText("203.0.113.5")).toBeTruthy();
+    // An admin ends them all or none: there is no Revoke on a row.
+    expect(within(card).queryByRole("button", { name: /^Revoke/ })).toBeNull();
+    expect(within(card).queryByText("This session")).toBeNull();
+  });
+
+  it("asks before ending every session, starting on Cancel, then does it, toasts and shows the empty line", async () => {
+    renderAt(PAGE);
+    const card = await screen.findByRole("region", { name: "Sessions" });
+    await within(card).findByText("Chrome on Windows");
+    fireEvent.click(within(card).getByRole("button", { name: "End all sessions" }));
+
+    const confirm = await screen.findByRole("alertdialog", { name: "End all sessions for alice?" });
+    expect(
+      within(confirm).getByText("They are signed out everywhere and have to sign in again."),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(seen).not.toContain("POST /api/users/u1/sessions/revoke-all");
+
+    fireEvent.click(within(confirm).getByRole("button", { name: "End all sessions" }));
+    expect(await screen.findByText("alice is signed out everywhere.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(seen.filter((s) => s === "POST /api/users/u1/sessions/revoke-all")).toHaveLength(1);
+    expect(await within(card).findByText("alice isn't signed in anywhere.")).toBeTruthy();
+    expect(within(card).queryByText("Chrome on Windows")).toBeNull();
+  });
+
+  it("does nothing when the confirm is cancelled", async () => {
+    renderAt(PAGE);
+    const card = await screen.findByRole("region", { name: "Sessions" });
+    await within(card).findByText("Chrome on Windows");
+    fireEvent.click(within(card).getByRole("button", { name: "End all sessions" }));
+    const confirm = await screen.findByRole("alertdialog");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(seen).not.toContain("POST /api/users/u1/sessions/revoke-all");
+  });
+
+  it("says alice isn't signed in anywhere, with nothing to end, when there are no sessions", async () => {
+    userSessions = [];
+    renderAt(PAGE);
+    const card = await screen.findByRole("region", { name: "Sessions" });
+    expect(await within(card).findByText("alice isn't signed in anywhere.")).toBeTruthy();
+    expect(
+      (within(card).getByRole("button", { name: "End all sessions" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows a refusal inline in the confirm, changes nothing and reads the list again", async () => {
+    revokeAll = () => Response.json({ title: "boom" }, { status: 500 });
+    renderAt(PAGE);
+    const card = await screen.findByRole("region", { name: "Sessions" });
+    await within(card).findByText("Chrome on Windows");
+    const before = seen.filter((s) => s === "GET /api/users/u1/sessions").length;
+    fireEvent.click(within(card).getByRole("button", { name: "End all sessions" }));
+    const confirm = await screen.findByRole("alertdialog");
+    fireEvent.click(within(confirm).getByRole("button", { name: "End all sessions" }));
+    const alert = await within(confirm).findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't end alice's sessions.");
+    expect(within(card).getByText("Chrome on Windows")).toBeTruthy();
+    await waitFor(() =>
+      expect(seen.filter((s) => s === "GET /api/users/u1/sessions").length).toBeGreaterThan(before),
+    );
+  });
+
+  it("shows a retry inside the card when the sessions cannot be loaded, and the rest of the page stays usable", async () => {
+    sessionsStatus = 500;
+    renderAt(PAGE);
+    const card = await screen.findByRole("region", { name: "Sessions" });
+    expect(await within(card).findByText("Couldn't load the sessions.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Disable user" })).toBeTruthy();
+    sessionsStatus = 200;
+    fireEvent.click(within(card).getByRole("button", { name: "Retry" }));
+    expect(await within(card).findByText("Chrome on Windows")).toBeTruthy();
+  });
+
+  it("sits between the Instance administrator and Account cards", async () => {
+    renderAt(PAGE);
+    await screen.findByText("Where alice is signed in.");
+    const titles = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+    expect(titles).toEqual(["Profile", "Instance administrator", "Sessions", "Account"]);
+  });
+});
+
+describe("Reset password (D-22b)", () => {
+  const openReset = async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Reset password" }));
+    return screen.findByRole("alertdialog", { name: "Reset password for alice?" });
+  };
+
+  it("says what happens first, starts on Cancel and generates nothing until the button is pressed", async () => {
+    renderAt(PAGE);
+    const confirm = await openReset();
+    expect(
+      within(confirm).getByText(
+        "Their sessions end now, and you get a one-time link to give them.",
+      ),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(seen).not.toContain("POST /api/users/u1/reset-password");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(seen).not.toContain("POST /api/users/u1/reset-password");
+  });
+
+  it("generates the link, shows it once in the link dialog with the notice, and reads the sessions again", async () => {
+    renderAt(PAGE);
+    await screen.findByText("Where alice is signed in.");
+    const before = seen.filter((s) => s === "GET /api/users/u1/sessions").length;
+    const confirm = await openReset();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Generate reset link" }));
+
+    const link = await screen.findByRole("dialog", { name: "Password reset link for alice" });
+    expect(seen.filter((s) => s === "POST /api/users/u1/reset-password")).toHaveLength(1);
+    expect(within(link).getByText(/^Works once\. Expires /)).toBeTruthy();
+    expect(within(link).getByText(/Send this link to alice yourself/)).toBeTruthy();
+    // The secret is masked until asked for.
+    expect(within(link).queryByText(TOKEN)).toBeNull();
+    expect(link.textContent).not.toContain(TOKEN);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() =>
+      expect(seen.filter((s) => s === "GET /api/users/u1/sessions").length).toBeGreaterThan(before),
+    );
+
+    fireEvent.click(within(link).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // A closed dialog holds no secret.
+    expect(document.body.textContent).not.toContain(TOKEN);
+  });
+
+  it("keeps the reason inside the dialog when the user is disabled", async () => {
+    reset = () =>
+      Response.json({ type: "user_disabled", title: "Conflict", status: 409 }, { status: 409 });
+    renderAt(PAGE);
+    const confirm = await openReset();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Generate reset link" }));
+    const alert = await within(confirm).findByRole("alert");
+    expect(alert.textContent).toContain("alice is disabled. Enable them first");
+    expect(screen.queryByRole("dialog", { name: /Password reset link/ })).toBeNull();
+  });
+
+  it("says so inside the dialog when the link cannot be made", async () => {
+    reset = () => Response.json({ title: "boom" }, { status: 500 });
+    renderAt(PAGE);
+    const confirm = await openReset();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Generate reset link" }));
+    const alert = await within(confirm).findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't create the link.");
   });
 });

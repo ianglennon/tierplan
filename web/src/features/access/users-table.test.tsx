@@ -83,6 +83,9 @@ beforeEach(() => {
       sent.push({ path, method: req.method });
       if (path === "/api/users" && req.method === "GET") return answer();
       if (/^\/api\/users\/[^/]+\/invite$/.test(path) && req.method === "POST") return regenerate();
+      if (/^\/api\/users\/[^/]+\/reset-password$/.test(path) && req.method === "POST") {
+        return regenerate();
+      }
       if (/^\/api\/users\/[^/]+\/(disable|enable)$/.test(path) && req.method === "POST") {
         return lifecycle(path);
       }
@@ -656,5 +659,47 @@ describe("Unlock and Delete user… in the row menu", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Disable" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(sent.some((s) => s.method === "POST")).toBe(false);
+  });
+});
+
+// Reset password in the row menu (plan 03-15, D-22b).
+
+describe("Reset password", () => {
+  beforeEach(() => {
+    users = [
+      userRow({ id: "u0", username: "admin", instanceAdmin: true }),
+      userRow({ id: "u1", username: "alice" }),
+      userRow({ id: "u2", username: "carol", status: "invite_pending" }),
+    ];
+  });
+
+  it("is in the row menu of an active user, and asks before generating anything", async () => {
+    renderTable();
+    await screen.findByText("alice");
+    openMenu("alice");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Reset password" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Reset password for alice?" });
+    expect(
+      within(confirm).getByText(
+        "Their sessions end now, and you get a one-time link to give them.",
+      ),
+    ).toBeTruthy();
+    expect(sent.some((s) => s.path.endsWith("/reset-password"))).toBe(false);
+
+    fireEvent.click(within(confirm).getByRole("button", { name: "Generate reset link" }));
+    const link = await screen.findByRole("dialog", { name: "Password reset link for alice" });
+    expect(sent.filter((s) => s.path === "/api/users/u1/reset-password")).toHaveLength(1);
+    expect(link.textContent).not.toContain(TOKEN);
+  });
+
+  it("sits right after Open in the menu", async () => {
+    renderTable();
+    await screen.findByText("alice");
+    openMenu("alice");
+    const menu = await screen.findByRole("menu");
+    const labels = within(menu)
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent);
+    expect(labels.slice(0, 2)).toEqual(["Open", "Reset password"]);
   });
 });
