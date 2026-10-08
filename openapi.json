@@ -2807,6 +2807,60 @@
         ],
         "type": "object"
       },
+      "OwnedBody": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment it acts on",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The environment's name; its ID when the environment no longer exists",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The kind of automation, such as git.sync. Stable; the label is for people",
+            "type": "string"
+          },
+          "label": {
+            "description": "The kind named for people, such as Git sync",
+            "type": "string"
+          },
+          "name": {
+            "description": "The automation's name",
+            "type": "string"
+          },
+          "needsEnvAdmin": {
+            "description": "True when its last run used host-escalating compose keys, so its owner must hold Admin on the environment",
+            "type": "boolean"
+          },
+          "resourceId": {
+            "description": "The automation's ID within its kind",
+            "type": "string"
+          },
+          "state": {
+            "description": "active, or why it is paused: the owner no longer holds the permission it needs, the owner is disabled, or the owner was deleted",
+            "enum": [
+              "active",
+              "paused_lacks_permission",
+              "paused_disabled",
+              "paused_deleted"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "resourceId",
+          "name",
+          "envId",
+          "envName",
+          "state",
+          "needsEnvAdmin"
+        ],
+        "type": "object"
+      },
       "PermissionsBody": {
         "additionalProperties": false,
         "properties": {
@@ -3584,6 +3638,21 @@
         ],
         "type": "object"
       },
+      "TransferOwnedInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "ownerId": {
+            "description": "The ID of the user who takes it over",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "ownerId"
+        ],
+        "type": "object"
+      },
       "UpdateAgentsBody": {
         "additionalProperties": false,
         "properties": {
@@ -3851,6 +3920,29 @@
           "teams",
           "teamCount",
           "lastInstanceAdmin"
+        ],
+        "type": "object"
+      },
+      "UserRefBody": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "description": "The name shown for the user; empty when none was set",
+            "type": "string"
+          },
+          "id": {
+            "description": "The user's ID",
+            "type": "string"
+          },
+          "username": {
+            "description": "The lower-cased username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "displayName"
         ],
         "type": "object"
       },
@@ -6646,6 +6738,148 @@
         ]
       }
     },
+    "/api/owned/{kind}/{resourceId}/eligible-owners": {
+      "get": {
+        "description": "The active users, other than its owner, who hold what the automation needs on its environment right now: Admin when it needs that, otherwise the permission of its kind. Sorted by username. The transfer checks again, so this is a convenience. An unknown automation answers 404 automation_not_found.",
+        "operationId": "listEligibleOwners",
+        "parameters": [
+          {
+            "description": "The automation's kind, as the owned list gives it",
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "description": "The automation's kind, as the owned list gives it",
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "description": "The automation's ID within its kind",
+            "in": "path",
+            "name": "resourceId",
+            "required": true,
+            "schema": {
+              "description": "The automation's ID within its kind",
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UserRefBody"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List who an automation could be handed to",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/owned/{kind}/{resourceId}/transfer": {
+      "post": {
+        "description": "The new owner must be able to run it now, which is checked again here: a user who could not answers 422 owner_not_eligible and nothing changes. A paused automation is active again under its new owner. Audited as owner.transferred. Answers the automation as it now is. An unknown automation answers 404 automation_not_found.",
+        "operationId": "transferOwned",
+        "parameters": [
+          {
+            "description": "The automation's kind, as the owned list gives it",
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "description": "The automation's kind, as the owned list gives it",
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "description": "The automation's ID within its kind",
+            "in": "path",
+            "name": "resourceId",
+            "required": true,
+            "schema": {
+              "description": "The automation's ID within its kind",
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferOwnedInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnedBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Hand an automation to another user",
+        "tags": [
+          "users"
+        ]
+      }
+    },
     "/api/settings": {
       "get": {
         "description": "publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19). agentEndpointRefused is true when agentEndpoint is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off: agents cannot connect to it (G-02-R4-3).",
@@ -8199,6 +8433,63 @@
           }
         },
         "summary": "Replace a user's invite link",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/users/{userId}/owned": {
+      "get": {
+        "description": "The git syncs and webhooks that run with the user's permissions, with the environment each acts on and whether it is active or paused because its owner was disabled, deleted or no longer holds the permission it needs. Empty when they own nothing. An unknown or deleted user answers 404 user_not_found.",
+        "operationId": "listUserOwned",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OwnedBody"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the automations a user owns",
         "tags": [
           "users"
         ]

@@ -790,7 +790,7 @@ describe("the Owned automations card (D-14)", () => {
     const select = await within(dialog).findByRole("combobox", { name: "New owner" });
     await waitFor(() => expect((select as HTMLButtonElement).disabled).toBe(false));
     fireEvent.keyDown(select, { key: "Enter" });
-    fireEvent.click(await screen.findByRole("option", { name: "bob" }));
+    fireEvent.keyDown(await screen.findByRole("option", { name: "bob" }), { key: "Enter" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Transfer ownership" }));
 
     expect(await screen.findByText("Sync r1 now belongs to bob.")).toBeTruthy();

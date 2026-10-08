@@ -858,6 +858,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/owned/{kind}/{resourceId}/eligible-owners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List who an automation could be handed to
+         * @description The active users, other than its owner, who hold what the automation needs on its environment right now: Admin when it needs that, otherwise the permission of its kind. Sorted by username. The transfer checks again, so this is a convenience. An unknown automation answers 404 automation_not_found.
+         */
+        get: operations["listEligibleOwners"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/owned/{kind}/{resourceId}/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hand an automation to another user
+         * @description The new owner must be able to run it now, which is checked again here: a user who could not answers 422 owner_not_eligible and nothing changes. A paused automation is active again under its new owner. Audited as owner.transferred. Answers the automation as it now is. An unknown automation answers 404 automation_not_found.
+         */
+        post: operations["transferOwned"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -1301,6 +1341,26 @@ export interface paths {
          * @description For a user who has not yet set a password. The new link replaces the previous one, which stops working at once, and is valid for BAYPLAN_INVITE_TTL. A user who has already set a password answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.
          */
         post: operations["regenerateInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/owned": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the automations a user owns
+         * @description The git syncs and webhooks that run with the user's permissions, with the environment each acts on and whether it is active or paused because its owner was disabled, deleted or no longer holds the permission it needs. Empty when they own nothing. An unknown or deleted user answers 404 user_not_found.
+         */
+        get: operations["listUserOwned"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2526,6 +2586,27 @@ export interface components {
             /** Format: int64 */
             volumes: number;
         };
+        OwnedBody: {
+            /** @description The environment it acts on */
+            envId: string;
+            /** @description The environment's name; its ID when the environment no longer exists */
+            envName: string;
+            /** @description The kind of automation, such as git.sync. Stable; the label is for people */
+            kind: string;
+            /** @description The kind named for people, such as Git sync */
+            label: string;
+            /** @description The automation's name */
+            name: string;
+            /** @description True when its last run used host-escalating compose keys, so its owner must hold Admin on the environment */
+            needsEnvAdmin: boolean;
+            /** @description The automation's ID within its kind */
+            resourceId: string;
+            /**
+             * @description active, or why it is paused: the owner no longer holds the permission it needs, the owner is disabled, or the owner was deleted
+             * @enum {string}
+             */
+            state: "active" | "paused_lacks_permission" | "paused_disabled" | "paused_deleted";
+        };
         PermissionsBody: {
             /** @description Permissions per environment ID; the key * holds those that apply to every environment */
             environments: {
@@ -2872,6 +2953,10 @@ export interface components {
              */
             generation: number;
         };
+        TransferOwnedInputBody: {
+            /** @description The ID of the user who takes it over */
+            ownerId: string;
+        };
         UpdateAgentsBody: {
             /**
              * Format: int64
@@ -2985,6 +3070,14 @@ export interface components {
              * @description The version of the user a profile save is based on; send it back unchanged to PATCH
              */
             updatedAt: string;
+            /** @description The lower-cased username */
+            username: string;
+        };
+        UserRefBody: {
+            /** @description The name shown for the user; empty when none was set */
+            displayName: string;
+            /** @description The user's ID */
+            id: string;
             /** @description The lower-cased username */
             username: string;
         };
@@ -4751,6 +4844,80 @@ export interface operations {
             };
         };
     };
+    listEligibleOwners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The automation's kind, as the owned list gives it */
+                kind: string;
+                /** @description The automation's ID within its kind */
+                resourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRefBody"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    transferOwned: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The automation's kind, as the owned list gives it */
+                kind: string;
+                /** @description The automation's ID within its kind */
+                resourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferOwnedInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getSettings: {
         parameters: {
             query?: never;
@@ -5734,6 +5901,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LinkBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listUserOwned: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnedBody"][] | null;
                 };
             };
             /** @description Error */

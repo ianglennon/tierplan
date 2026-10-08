@@ -9,6 +9,47 @@ import (
 	"context"
 )
 
+const getOwnedDetail = `-- name: GetOwnedDetail :one
+SELECT o.kind, o.resource_id, o.env_id, o.name, o.owner_id, o.state, o.needs_env_admin,
+       COALESCE(e.name, '') AS env_name
+FROM owned_resources o
+LEFT JOIN environments e ON e.id = o.env_id
+WHERE o.kind = ? AND o.resource_id = ?
+`
+
+type GetOwnedDetailParams struct {
+	Kind       string
+	ResourceID string
+}
+
+type GetOwnedDetailRow struct {
+	Kind          string
+	ResourceID    string
+	EnvID         string
+	Name          string
+	OwnerID       string
+	State         string
+	NeedsEnvAdmin int64
+	EnvName       string
+}
+
+// One automation as ListOwnedDetailByOwner gives it, with its owner.
+func (q *Queries) GetOwnedDetail(ctx context.Context, arg GetOwnedDetailParams) (GetOwnedDetailRow, error) {
+	row := q.db.QueryRowContext(ctx, getOwnedDetail, arg.Kind, arg.ResourceID)
+	var i GetOwnedDetailRow
+	err := row.Scan(
+		&i.Kind,
+		&i.ResourceID,
+		&i.EnvID,
+		&i.Name,
+		&i.OwnerID,
+		&i.State,
+		&i.NeedsEnvAdmin,
+		&i.EnvName,
+	)
+	return i, err
+}
+
 const getOwnedResource = `-- name: GetOwnedResource :one
 SELECT kind, resource_id, env_id, name, owner_id, state, needs_env_admin, created_at, updated_at FROM owned_resources WHERE kind = ? AND resource_id = ?
 `
@@ -72,6 +113,43 @@ func (q *Queries) InsertOwnedResource(ctx context.Context, arg InsertOwnedResour
 		arg.UpdatedAt,
 	)
 	return err
+}
+
+const listActiveUsersForEligibility = `-- name: ListActiveUsersForEligibility :many
+SELECT id, username, display_name FROM users
+WHERE deleted_at IS NULL AND disabled = 0
+ORDER BY username
+`
+
+type ListActiveUsersForEligibilityRow struct {
+	ID          string
+	Username    string
+	DisplayName string
+}
+
+// The users an automation could be handed to before their rights are looked at:
+// not deleted and not disabled (D-14).
+func (q *Queries) ListActiveUsersForEligibility(ctx context.Context) ([]ListActiveUsersForEligibilityRow, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveUsersForEligibility)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveUsersForEligibilityRow
+	for rows.Next() {
+		var i ListActiveUsersForEligibilityRow
+		if err := rows.Scan(&i.ID, &i.Username, &i.DisplayName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listOwnedByOwner = `-- name: ListOwnedByOwner :many
@@ -152,6 +230,58 @@ func (q *Queries) ListOwnedByOwners(ctx context.Context, owners string) ([]Owned
 	return items, nil
 }
 
+const listOwnedDetailByOwner = `-- name: ListOwnedDetailByOwner :many
+SELECT o.kind, o.resource_id, o.env_id, o.name, o.state, o.needs_env_admin,
+       COALESCE(e.name, '') AS env_name
+FROM owned_resources o
+LEFT JOIN environments e ON e.id = o.env_id
+WHERE o.owner_id = ?
+ORDER BY o.kind, o.resource_id
+`
+
+type ListOwnedDetailByOwnerRow struct {
+	Kind          string
+	ResourceID    string
+	EnvID         string
+	Name          string
+	State         string
+	NeedsEnvAdmin int64
+	EnvName       string
+}
+
+// Every automation an owner holds, with the name of its environment (empty when
+// the environment no longer exists), for the owner's page.
+func (q *Queries) ListOwnedDetailByOwner(ctx context.Context, ownerID string) ([]ListOwnedDetailByOwnerRow, error) {
+	rows, err := q.db.QueryContext(ctx, listOwnedDetailByOwner, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOwnedDetailByOwnerRow
+	for rows.Next() {
+		var i ListOwnedDetailByOwnerRow
+		if err := rows.Scan(
+			&i.Kind,
+			&i.ResourceID,
+			&i.EnvID,
+			&i.Name,
+			&i.State,
+			&i.NeedsEnvAdmin,
+			&i.EnvName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setOwnedNeedsEnvAdmin = `-- name: SetOwnedNeedsEnvAdmin :exec
 UPDATE owned_resources SET needs_env_admin = ?, updated_at = ? WHERE kind = ? AND resource_id = ?
 `
@@ -168,6 +298,29 @@ type SetOwnedNeedsEnvAdminParams struct {
 func (q *Queries) SetOwnedNeedsEnvAdmin(ctx context.Context, arg SetOwnedNeedsEnvAdminParams) error {
 	_, err := q.db.ExecContext(ctx, setOwnedNeedsEnvAdmin,
 		arg.NeedsEnvAdmin,
+		arg.UpdatedAt,
+		arg.Kind,
+		arg.ResourceID,
+	)
+	return err
+}
+
+const transferOwned = `-- name: TransferOwned :exec
+UPDATE owned_resources SET owner_id = ?, updated_at = ? WHERE kind = ? AND resource_id = ?
+`
+
+type TransferOwnedParams struct {
+	OwnerID    string
+	UpdatedAt  int64
+	Kind       string
+	ResourceID string
+}
+
+// Hands an automation to another owner. Only the access service calls it, after
+// checking the new owner could run it (D-14).
+func (q *Queries) TransferOwned(ctx context.Context, arg TransferOwnedParams) error {
+	_, err := q.db.ExecContext(ctx, transferOwned,
+		arg.OwnerID,
 		arg.UpdatedAt,
 		arg.Kind,
 		arg.ResourceID,

@@ -1,0 +1,61 @@
+{
+  "owned": {
+    "card": {
+      "title": "Owned automations",
+      "caption": "Git syncs and webhooks run with {{username}}'s permissions.",
+      "tableLabel": "Owned automations",
+      "columns": {
+        "automation": "Automation",
+        "type": "Type",
+        "environment": "Environment",
+        "state": "State",
+        "actions": "Actions"
+      },
+      "transfer": "Transfer…",
+      "transferLabel": "Transfer {{automation}}…",
+      "loadFailed": "Couldn't load the automations this user owns.",
+      "loadFailedBody": "Check the connection and try again.",
+      "retry": "Retry"
+    },
+    "state": {
+      "active": "Active",
+      "paused_lacks_permission": "Paused: owner lacks permission",
+      "paused_disabled": "Paused: owner disabled",
+      "paused_deleted": "Paused: owner deleted"
+    },
+    "transfer": {
+      "title": "Transfer {{automation}}",
+      "body": "Choose who owns it. It runs with their permissions from now on.",
+      "owner": "New owner",
+      "placeholder": "Choose a user",
+      "helper": "Only users with enough access are listed.",
+      "none": "No user has enough access to take this over. Give someone Admin on {{environment}} first.",
+      "loading": "Loading users",
+      "loadFailed": "Couldn't load who can take this over.",
+      "retry": "Retry",
+      "cancel": "Cancel",
+      "confirm": "Transfer ownership",
+      "pending": "Transferring…",
+      "done": "{{automation}} now belongs to {{username}}.",
+      "errors": {
+        "notEligible": "That user no longer has enough access to run this. Choose someone else.",
+        "gone": "{{automation}} doesn't exist any more.",
+        "generic": "Couldn't transfer {{automation}}. Try again, and check the Bayplan logs if it keeps happening."
+      }
+    },
+    "disable": {
+      "alert_one": "They own {{count}} automation. It pauses until you enable {{username}} again or transfer it.",
+      "alert_other": "They own {{count}} automations. These pause until you enable {{username}} again or transfer them."
+    },
+    "delete": {
+      "heading": "Automations {{username}} owns",
+      "list": "Automations {{username}} owns",
+      "owner": "Owner",
+      "leavePaused": "Leave paused",
+      "helper": "Only users with enough access to run it are listed. Paused items show “Owner deleted” until someone takes them over.",
+      "loadFailed": "Couldn't load who could take over {{automation}}. It will be left paused.",
+      "ownerLabel": "Owner of {{automation}}",
+      "reassignFailed": "{{automation}} could not be handed to {{username}} because they no longer have enough access. Choose someone else, or leave it paused."
+    }
+  }
+}

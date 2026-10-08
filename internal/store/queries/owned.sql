@@ -29,3 +29,33 @@ UPDATE owned_resources SET state = ?, updated_at = ? WHERE kind = ? AND resource
 -- Recorded by the stack phases when the last run used host-escalating keys, so
 -- the recheck demands env Admin from the owner (D-13, D-14).
 UPDATE owned_resources SET needs_env_admin = ?, updated_at = ? WHERE kind = ? AND resource_id = ?;
+
+-- name: ListOwnedDetailByOwner :many
+-- Every automation an owner holds, with the name of its environment (empty when
+-- the environment no longer exists), for the owner's page.
+SELECT o.kind, o.resource_id, o.env_id, o.name, o.state, o.needs_env_admin,
+       COALESCE(e.name, '') AS env_name
+FROM owned_resources o
+LEFT JOIN environments e ON e.id = o.env_id
+WHERE o.owner_id = ?
+ORDER BY o.kind, o.resource_id;
+
+-- name: GetOwnedDetail :one
+-- One automation as ListOwnedDetailByOwner gives it, with its owner.
+SELECT o.kind, o.resource_id, o.env_id, o.name, o.owner_id, o.state, o.needs_env_admin,
+       COALESCE(e.name, '') AS env_name
+FROM owned_resources o
+LEFT JOIN environments e ON e.id = o.env_id
+WHERE o.kind = ? AND o.resource_id = ?;
+
+-- name: ListActiveUsersForEligibility :many
+-- The users an automation could be handed to before their rights are looked at:
+-- not deleted and not disabled (D-14).
+SELECT id, username, display_name FROM users
+WHERE deleted_at IS NULL AND disabled = 0
+ORDER BY username;
+
+-- name: TransferOwned :exec
+-- Hands an automation to another owner. Only the access service calls it, after
+-- checking the new owner could run it (D-14).
+UPDATE owned_resources SET owner_id = ?, updated_at = ? WHERE kind = ? AND resource_id = ?;

@@ -29,6 +29,10 @@ const (
 	problemStaleChange = "stale_change"
 	// problemUserDisabled is a password reset for a user who is disabled.
 	problemUserDisabled = "user_disabled"
+	// problemOwnerNotEligible is a new owner who could not run the automation.
+	problemOwnerNotEligible = "owner_not_eligible"
+	// problemAutomationNotFound is an automation that is not recorded.
+	problemAutomationNotFound = "automation_not_found"
 )
 
 // invalidLinkDetail is the one message every unusable link carries: expired,
@@ -72,6 +76,7 @@ func RegisterAccess(r *httpx.Router, d AccessDeps) {
 	registerUsers(r, d)
 	registerTeams(r, d)
 	registerGrants(r, d)
+	registerOwned(r, d)
 	registerEnvAccess(r, d)
 	registerInvite(r, d)
 	registerSessions(r, d)

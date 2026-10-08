@@ -33,6 +33,13 @@ var (
 	// ErrUnknownSystemPrincipal is a system principal name that is not in
 	// rbac.SystemPrincipals. Nothing runs as it.
 	ErrUnknownSystemPrincipal = errors.New("access: that is not a system principal")
+	// ErrOwnedNotFound is an automation that is not recorded.
+	ErrOwnedNotFound = errors.New("access: no such automation")
+	// ErrNotEligible is a new owner who could not run the automation right now:
+	// unknown, deleted, disabled, already its owner, or without the permission its
+	// kind needs on its environment (Admin when it needs env Admin). Nothing is
+	// changed (AUTH-10, D-14).
+	ErrNotEligible = errors.New("access: that user could not run this automation")
 )
 
 // OwnedResource is an automation recorded as acting on a user's authority: a
@@ -163,25 +170,34 @@ func (s *Service) recheckRowsTx(ctx context.Context, tx *sql.Tx, q *sqlc.Queries
 		if want == r.State || r.State == OwnedPausedDeleted {
 			continue
 		}
-		if err := q.UpdateOwnedState(ctx, sqlc.UpdateOwnedStateParams{
-			State: want, UpdatedAt: s.now().UnixNano(), Kind: r.Kind, ResourceID: r.ResourceID,
-		}); err != nil {
-			return changed, fmt.Errorf("access: update owned %s %s: %w", r.Kind, r.ResourceID, err)
-		}
-		action := audit.ActionAutomationPaused
-		if want == OwnedActive {
-			action = audit.ActionAutomationResumed
-		}
-		if err := s.Audit.RecordTx(ctx, tx, audit.Entry{
-			Actor: actor, Action: action, TargetType: "automation", TargetID: r.ResourceID, EnvID: r.EnvID,
-			Result:  audit.ResultSuccess,
-			Details: map[string]string{"kind": r.Kind, "resource": r.ResourceID, "state": want, "owner": r.OwnerID},
-		}); err != nil {
-			return changed, fmt.Errorf("access: audit %s: %w", action, err)
+		if err := s.setOwnedStateTx(ctx, tx, q, r, want, actor); err != nil {
+			return changed, err
 		}
 		changed++
 	}
 	return changed, nil
+}
+
+// setOwnedStateTx moves a row to a state and audits the move: a move back to
+// active is automation.resumed, any other is automation.paused.
+func (s *Service) setOwnedStateTx(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, r sqlc.OwnedResource, want string, actor audit.Actor) error {
+	if err := q.UpdateOwnedState(ctx, sqlc.UpdateOwnedStateParams{
+		State: want, UpdatedAt: s.now().UnixNano(), Kind: r.Kind, ResourceID: r.ResourceID,
+	}); err != nil {
+		return fmt.Errorf("access: update owned %s %s: %w", r.Kind, r.ResourceID, err)
+	}
+	action := audit.ActionAutomationPaused
+	if want == OwnedActive {
+		action = audit.ActionAutomationResumed
+	}
+	if err := s.Audit.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: action, TargetType: "automation", TargetID: r.ResourceID, EnvID: r.EnvID,
+		Result:  audit.ResultSuccess,
+		Details: map[string]string{"kind": r.Kind, "resource": r.ResourceID, "state": want, "owner": r.OwnerID},
+	}); err != nil {
+		return fmt.Errorf("access: audit %s: %w", action, err)
+	}
+	return nil
 }
 
 // RunAs is called before an automation acts. It rechecks that one row in its own
@@ -225,4 +241,161 @@ func (s *Service) RunAs(ctx context.Context, kind, resourceID, systemID string) 
 		return nil, res, fmt.Errorf("%w (%s)", ErrOwnerLacksPermission, res.State)
 	}
 	return rbac.OnBehalf(systemID, res.OwnerID), res, nil
+}
+
+// UserRef names a user without anything private: who an automation could be
+// handed to.
+type UserRef struct {
+	ID, Username, DisplayName string
+}
+
+// OwnedItem is an owned automation as an admin sees it: the row, the label of its
+// kind and the name of its environment.
+type OwnedItem struct {
+	OwnedResource
+	// Label names the kind to people ("Git sync"), as rbac.OwnedKind.Label gives it.
+	Label string
+	// EnvName is the environment's name, or its ID when it no longer exists.
+	EnvName string
+}
+
+func (s *Service) ownedItem(kind, resourceID, envID, name, ownerID, state string, needsEnvAdmin int64, envName string) OwnedItem {
+	label := kind
+	if k, ok := rbac.LookupOwnedKind(kind); ok {
+		label = k.Label
+	}
+	if envName == "" {
+		envName = envID
+	}
+	return OwnedItem{
+		OwnedResource: OwnedResource{
+			Kind: kind, ResourceID: resourceID, EnvID: envID, Name: name,
+			OwnerID: ownerID, State: state, NeedsEnvAdmin: needsEnvAdmin != 0,
+		},
+		Label: label, EnvName: envName,
+	}
+}
+
+// ListOwned lists every automation a user owns, sorted by kind and ID. The
+// caller has checked users.manage.
+func (s *Service) ListOwned(ctx context.Context, ownerID string) ([]OwnedItem, error) {
+	rows, err := s.Store.RQ.ListOwnedDetailByOwner(ctx, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("access: list owned by %s: %w", ownerID, err)
+	}
+	out := make([]OwnedItem, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, s.ownedItem(r.Kind, r.ResourceID, r.EnvID, r.Name, ownerID, r.State, r.NeedsEnvAdmin, r.EnvName))
+	}
+	return out, nil
+}
+
+// GetOwned reads one automation. One that is not recorded is ErrOwnedNotFound.
+func (s *Service) GetOwned(ctx context.Context, kind, resourceID string) (OwnedItem, error) {
+	r, err := s.Store.RQ.GetOwnedDetail(ctx, sqlc.GetOwnedDetailParams{Kind: kind, ResourceID: resourceID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return OwnedItem{}, ErrOwnedNotFound
+	}
+	if err != nil {
+		return OwnedItem{}, fmt.Errorf("access: read owned %s %s: %w", kind, resourceID, err)
+	}
+	return s.ownedItem(r.Kind, r.ResourceID, r.EnvID, r.Name, r.OwnerID, r.State, r.NeedsEnvAdmin, r.EnvName), nil
+}
+
+// EligibleOwners lists the users an automation could be handed to right now:
+// active users, other than its owner, who pass the permission its kind needs on
+// its environment (env Admin when it needs that), judged from their grants as
+// they are at this moment. Sorted by username. TransferOwned checks again, so
+// the answer is a convenience and never the authority.
+func (s *Service) EligibleOwners(ctx context.Context, kind, resourceID string) ([]UserRef, error) {
+	row, err := s.Store.RQ.GetOwnedResource(ctx, sqlc.GetOwnedResourceParams{Kind: kind, ResourceID: resourceID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrOwnedNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("access: read owned %s %s: %w", kind, resourceID, err)
+	}
+	users, err := s.Store.RQ.ListActiveUsersForEligibility(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("access: list users: %w", err)
+	}
+	out := []UserRef{}
+	for _, u := range users {
+		if u.ID == row.OwnerID {
+			continue
+		}
+		o, err := s.readOwner(ctx, s.Store.RQ, u.ID)
+		if err != nil {
+			return nil, err
+		}
+		if s.desiredState(row, o) == OwnedActive {
+			out = append(out, UserRef{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName})
+		}
+	}
+	return out, nil
+}
+
+// TransferOwned hands an automation to another user (D-14). The new owner must
+// be able to run it at this moment: the check is made inside the transaction
+// that makes the change, so a grant removed after the list was read is seen. If
+// they could not, the answer is ErrNotEligible and nothing changes. A paused
+// automation is active again under its new owner, even one paused because its
+// owner was deleted. The transfer is audited as owner.transferred. The caller
+// has checked users.manage.
+func (s *Service) TransferOwned(ctx context.Context, actor audit.Actor, kind, resourceID, newOwnerID string, opts ...Option) error {
+	o := optionsOf(opts)
+	tx, err := s.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("access: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	if err := s.transferTx(ctx, tx, s.Store.Q.WithTx(tx), actor, kind, resourceID, newOwnerID, o); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("access: commit: %w", err)
+	}
+	return nil
+}
+
+// transferTx is TransferOwned inside the caller's write transaction, so a user's
+// deletion can hand automations over in the same transaction as the tombstone.
+func (s *Service) transferTx(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, actor audit.Actor, kind, resourceID, newOwnerID string, o options) error {
+	row, err := q.GetOwnedResource(ctx, sqlc.GetOwnedResourceParams{Kind: kind, ResourceID: resourceID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrOwnedNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("access: read owned %s %s: %w", kind, resourceID, err)
+	}
+	if _, ok := rbac.LookupOwnedKind(kind); !ok {
+		return fmt.Errorf("%w: %q", ErrUnknownOwnedKind, kind)
+	}
+	if newOwnerID == row.OwnerID {
+		return ErrNotEligible
+	}
+	next, err := s.readOwner(ctx, q, newOwnerID)
+	if err != nil {
+		return err
+	}
+	if s.desiredState(row, next) != OwnedActive {
+		return ErrNotEligible
+	}
+	if err := q.TransferOwned(ctx, sqlc.TransferOwnedParams{
+		OwnerID: newOwnerID, UpdatedAt: s.now().UnixNano(), Kind: kind, ResourceID: resourceID,
+	}); err != nil {
+		return fmt.Errorf("access: transfer owned %s %s: %w", kind, resourceID, err)
+	}
+	if err := s.Audit.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: audit.ActionOwnerTransferred, TargetType: "automation", TargetID: resourceID, EnvID: row.EnvID,
+		Result: audit.ResultSuccess, IP: o.ip, UserAgent: o.userAgent,
+		Details: map[string]string{"kind": kind, "resource": resourceID, "from": row.OwnerID, "to": newOwnerID},
+	}); err != nil {
+		return fmt.Errorf("access: audit owner transferred: %w", err)
+	}
+	if row.State != OwnedActive {
+		row.OwnerID = newOwnerID
+		return s.setOwnedStateTx(ctx, tx, q, row, OwnedActive, actor)
+	}
+	return nil
 }
