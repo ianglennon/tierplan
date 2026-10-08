@@ -37,8 +37,9 @@ func (f *authFixture) enable(t *testing.T, cookie, csrf, id string) *httptest.Re
 
 type userDetailResp struct {
 	userSummary
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	LastInstanceAdmin bool   `json:"lastInstanceAdmin"`
+	CreatedAt         string `json:"createdAt"`
+	UpdatedAt         string `json:"updatedAt"`
 }
 
 func decodeDetail(t *testing.T, rec *httptest.ResponseRecorder) userDetailResp {
@@ -431,5 +432,27 @@ func TestTheUserWriteRoutesNeedUsersManage(t *testing.T) {
 	}
 	if rec := f.patchUser(t, bob, bobCSRF, id, `{"displayName":"x","updatedAt":"2026-01-01T00:00:00Z"}`); rec.Code != http.StatusForbidden {
 		t.Fatalf("patch: %d, want 403", rec.Code)
+	}
+}
+
+func TestTheDetailAndTheListSayWhoIsTheLastActiveInstanceAdmin(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, _ := f.signIn(t, "admin", false)
+
+	d := decodeDetail(t, f.userAction(t, cookie, "", http.MethodGet, "id-admin", "", ""))
+	if !d.LastInstanceAdmin {
+		t.Fatalf("detail = %+v, want the only admin marked", d)
+	}
+	var list []struct {
+		ID                string `json:"id"`
+		LastInstanceAdmin bool   `json:"lastInstanceAdmin"`
+	}
+	if err := json.Unmarshal(f.listUsers(t, cookie).Body.Bytes(), &list); err != nil || len(list) != 1 || !list[0].LastInstanceAdmin {
+		t.Fatalf("list = %+v (%v), want the only admin marked", list, err)
+	}
+
+	f.addUser(t, "second", true)
+	if d := decodeDetail(t, f.userAction(t, cookie, "", http.MethodGet, "id-admin", "", "")); d.LastInstanceAdmin {
+		t.Fatalf("detail = %+v, want nobody marked with two admins", d)
 	}
 }

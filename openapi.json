@@ -2760,6 +2760,10 @@
             "description": "True for an instance admin",
             "type": "boolean"
           },
+          "lastInstanceAdmin": {
+            "description": "True for the only instance admin who can still sign in. Demoting, disabling or deleting them answers 409 last_instance_admin, so a screen can show those actions as unavailable",
+            "type": "boolean"
+          },
           "lastLoginAt": {
             "description": "When the user last signed in; absent if they never have",
             "format": "date-time",
@@ -2817,7 +2821,8 @@
           "instanceAdmin",
           "status",
           "teams",
-          "teamCount"
+          "teamCount",
+          "lastInstanceAdmin"
         ],
         "type": "object"
       },
@@ -2838,6 +2843,10 @@
           },
           "instanceAdmin": {
             "description": "True for an instance admin",
+            "type": "boolean"
+          },
+          "lastInstanceAdmin": {
+            "description": "True for the only instance admin who can still sign in. Demoting, disabling or deleting them answers 409 last_instance_admin, so a screen can show those actions as unavailable",
             "type": "boolean"
           },
           "lastLoginAt": {
@@ -2890,7 +2899,8 @@
           "instanceAdmin",
           "status",
           "teams",
-          "teamCount"
+          "teamCount",
+          "lastInstanceAdmin"
         ],
         "type": "object"
       },

@@ -643,3 +643,40 @@ func TestNoQueryEverSetsAUsername(t *testing.T) {
 		}
 	}
 }
+
+func TestOnlyTheLastActiveInstanceAdminIsMarkedAsSuchInTheListAndOnThePage(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addAdmin(t, "root")
+	f.addUser(t, "alice")
+
+	last := func() map[string]bool {
+		out := map[string]bool{}
+		list, err := f.svc.ListUsers(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, u := range list {
+			out[u.ID] = u.LastInstanceAdmin
+			d, err := f.svc.GetUser(f.ctx, u.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.LastInstanceAdmin != u.LastInstanceAdmin {
+				t.Fatalf("%s: the list says %v, the page says %v", u.ID, u.LastInstanceAdmin, d.LastInstanceAdmin)
+			}
+		}
+		return out
+	}
+	if got := last(); !got["root"] || got["alice"] {
+		t.Fatalf("one admin: %v, want only root marked", got)
+	}
+	f.addAdmin(t, "second")
+	if got := last(); got["root"] || got["second"] || got["alice"] {
+		t.Fatalf("two admins: %v, want none marked", got)
+	}
+	// A disabled admin is not an active one: the other is the last again.
+	f.exec(t, `UPDATE users SET disabled = 1 WHERE id = 'second'`)
+	if got := last(); !got["root"] || got["second"] {
+		t.Fatalf("one active of two: %v, want only root marked", got)
+	}
+}

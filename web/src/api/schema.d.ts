@@ -2082,6 +2082,8 @@ export interface components {
             id: string;
             /** @description True for an instance admin */
             instanceAdmin: boolean;
+            /** @description True for the only instance admin who can still sign in. Demoting, disabling or deleting them answers 409 last_instance_admin, so a screen can show those actions as unavailable */
+            lastInstanceAdmin: boolean;
             /**
              * Format: date-time
              * @description When the user last signed in; absent if they never have
@@ -2121,6 +2123,8 @@ export interface components {
             id: string;
             /** @description True for an instance admin */
             instanceAdmin: boolean;
+            /** @description True for the only instance admin who can still sign in. Demoting, disabling or deleting them answers 409 last_instance_admin, so a screen can show those actions as unavailable */
+            lastInstanceAdmin: boolean;
             /**
              * Format: date-time
              * @description When the user last signed in; absent if they never have

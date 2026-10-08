@@ -176,6 +176,10 @@ type UserSummary struct {
 	// LastLoginAt is nil for a user who has never signed in.
 	LastLoginAt *time.Time
 	TeamCount   int
+	// LastInstanceAdmin is true for the one instance admin who can still sign in
+	// when there is no other: demoting, disabling or deleting them is refused
+	// (D-02), so a screen can say so up front.
+	LastInstanceAdmin bool
 }
 
 // ListUsers returns every user who is not deleted, sorted by username, with the
@@ -187,12 +191,19 @@ func (s *Service) ListUsers(ctx context.Context) ([]UserSummary, error) {
 	}
 	now := s.now()
 	out := make([]UserSummary, 0, len(rows))
+	activeAdmins := 0
+	for _, r := range rows {
+		if r.InstanceAdmin != 0 && r.Disabled == 0 {
+			activeAdmins++
+		}
+	}
 	for _, r := range rows {
 		u := sqlc.User{PasswordHash: r.PasswordHash, Disabled: r.Disabled, LockedUntil: r.LockedUntil}
 		sum := UserSummary{
 			ID: r.ID, Username: r.Username, DisplayName: r.DisplayName, Email: r.Email,
 			InstanceAdmin: r.InstanceAdmin != 0, TeamCount: int(r.TeamCount),
-			Status: Status(u, now, r.LinkExpiresAt.Valid && r.LinkExpiresAt.Int64 > now.UnixNano()),
+			Status:            Status(u, now, r.LinkExpiresAt.Valid && r.LinkExpiresAt.Int64 > now.UnixNano()),
+			LastInstanceAdmin: activeAdmins == 1 && r.InstanceAdmin != 0 && r.Disabled == 0,
 		}
 		if u.LockedUntil.Valid && u.LockedUntil.Int64 > now.UnixNano() {
 			t := time.Unix(0, u.LockedUntil.Int64).UTC()

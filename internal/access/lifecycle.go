@@ -52,11 +52,20 @@ func (s *Service) GetUser(ctx context.Context, id string) (UserDetail, error) {
 	}
 	now := s.now()
 	u := sqlc.User{PasswordHash: r.PasswordHash, Disabled: r.Disabled, LockedUntil: r.LockedUntil}
+	last := false
+	if r.InstanceAdmin != 0 && r.Disabled == 0 {
+		n, err := s.Store.RQ.CountActiveInstanceAdmins(ctx)
+		if err != nil {
+			return UserDetail{}, fmt.Errorf("access: count instance admins: %w", err)
+		}
+		last = n == 1
+	}
 	d := UserDetail{
 		UserSummary: UserSummary{
 			ID: r.ID, Username: r.Username, DisplayName: r.DisplayName, Email: r.Email,
 			InstanceAdmin: r.InstanceAdmin != 0, TeamCount: int(r.TeamCount),
-			Status: Status(u, now, r.LinkExpiresAt.Valid && r.LinkExpiresAt.Int64 > now.UnixNano()),
+			Status:            Status(u, now, r.LinkExpiresAt.Valid && r.LinkExpiresAt.Int64 > now.UnixNano()),
+			LastInstanceAdmin: last,
 		},
 		CreatedAt: time.Unix(0, r.CreatedAt).UTC(),
 		UpdatedAt: time.Unix(0, r.UpdatedAt).UTC(),

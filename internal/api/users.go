@@ -31,16 +31,17 @@ type TeamRefBody struct {
 
 // UserSummaryBody is a user as an admin sees them in the users table.
 type UserSummaryBody struct {
-	ID            string        `json:"id" doc:"The user's ID"`
-	Username      string        `json:"username" doc:"The lower-cased username"`
-	DisplayName   string        `json:"displayName" doc:"The name shown for the user; empty when none was set"`
-	Email         string        `json:"email" doc:"The user's email address; empty when none was set. Bayplan never sends mail to it"`
-	InstanceAdmin bool          `json:"instanceAdmin" doc:"True for an instance admin"`
-	Status        string        `json:"status" enum:"active,disabled,locked,invite_pending,invite_expired,deleted" doc:"Locked, then disabled, then invite expired, then invite pending, then active"`
-	LockedUntil   string        `json:"lockedUntil,omitempty" format:"date-time" doc:"While the account is locked: when the lock ends"`
-	LastLoginAt   string        `json:"lastLoginAt,omitempty" format:"date-time" doc:"When the user last signed in; absent if they never have"`
-	Teams         []TeamRefBody `json:"teams" doc:"The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows"`
-	TeamCount     int           `json:"teamCount" doc:"How many teams the user belongs to"`
+	ID                string        `json:"id" doc:"The user's ID"`
+	Username          string        `json:"username" doc:"The lower-cased username"`
+	DisplayName       string        `json:"displayName" doc:"The name shown for the user; empty when none was set"`
+	Email             string        `json:"email" doc:"The user's email address; empty when none was set. Bayplan never sends mail to it"`
+	InstanceAdmin     bool          `json:"instanceAdmin" doc:"True for an instance admin"`
+	Status            string        `json:"status" enum:"active,disabled,locked,invite_pending,invite_expired,deleted" doc:"Locked, then disabled, then invite expired, then invite pending, then active"`
+	LockedUntil       string        `json:"lockedUntil,omitempty" format:"date-time" doc:"While the account is locked: when the lock ends"`
+	LastLoginAt       string        `json:"lastLoginAt,omitempty" format:"date-time" doc:"When the user last signed in; absent if they never have"`
+	Teams             []TeamRefBody `json:"teams" doc:"The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows"`
+	TeamCount         int           `json:"teamCount" doc:"How many teams the user belongs to"`
+	LastInstanceAdmin bool          `json:"lastInstanceAdmin" doc:"True for the only instance admin who can still sign in. Demoting, disabling or deleting them answers 409 last_instance_admin, so a screen can show those actions as unavailable"`
 }
 
 // UserDetailBody is a user as the user page shows them.
@@ -119,6 +120,7 @@ func summaryOfAccess(u access.UserSummary) UserSummaryBody {
 	b := UserSummaryBody{
 		ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email,
 		InstanceAdmin: u.InstanceAdmin, Status: u.Status, Teams: []TeamRefBody{}, TeamCount: u.TeamCount,
+		LastInstanceAdmin: u.LastInstanceAdmin,
 	}
 	if u.LockedUntil != nil {
 		b.LockedUntil = u.LockedUntil.UTC().Format(time.RFC3339)
