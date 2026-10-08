@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -171,5 +172,18 @@ func runServe(cmd *cobra.Command, selfID string) error {
 	if err != nil {
 		return err
 	}
-	return srv.Run(ctx)
+	return finishRun(srv.Run(ctx), cfg.RestoreRestart)
+}
+
+// finishRun turns what Run returned into the process's end. A restore asks for a
+// restart by returning a *server.RestartError: the swap runs here, with the
+// database closed and the data-directory lock still held, and then the process is
+// replaced by a new Bayplan ("exec") or ends with status 0 ("exit"), leaving the
+// start to the container's restart policy.
+func finishRun(err error, mode string) error {
+	var re *server.RestartError
+	if errors.As(err, &re) {
+		return server.Restart(mode, re.Request)
+	}
+	return err
 }

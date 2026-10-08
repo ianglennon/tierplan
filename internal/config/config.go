@@ -61,6 +61,13 @@ type Config struct {
 	AuditRetentionDays   int // 0 means keep forever
 	SkipPreMigrateBackup bool
 
+	// RestoreRestart is how Bayplan restarts after a restore from the web UI:
+	// "exec" replaces the process image so a container's PID 1 survives, "exit"
+	// exits 0 and leaves the restart to the container's restart policy.
+	RestoreRestart string
+	// BackupMaxUpload caps an uploaded backup, in bytes.
+	BackupMaxUpload int64
+
 	TLSCertFile   string
 	TLSKeyFile    string
 	TLSSelfSigned bool
@@ -161,6 +168,13 @@ var settings = []setting{
 	{env: "BAYPLAN_SKIP_PRE_MIGRATE_BACKUP", flag: "skip-pre-migrate-backup", def: "false", desc: "do not back up the database before a migration",
 		apply: func(c *Config, raw string) (err error) {
 			c.SkipPreMigrateBackup, err = strconv.ParseBool(raw)
+			return err
+		}},
+	{env: "BAYPLAN_RESTORE_RESTART", flag: "restore-restart", def: "exec", desc: "how Bayplan restarts after a restore from the web UI: exec or exit",
+		apply: func(c *Config, raw string) error { c.RestoreRestart = raw; return nil }},
+	{env: "BAYPLAN_BACKUP_MAX_UPLOAD", flag: "backup-max-upload", def: "1073741824", desc: "the largest backup file the web UI accepts, in bytes",
+		apply: func(c *Config, raw string) (err error) {
+			c.BackupMaxUpload, err = strconv.ParseInt(raw, 10, 64)
 			return err
 		}},
 	{env: "BAYPLAN_TLS_CERT_FILE", flag: "tls-cert-file", desc: "path to a TLS certificate (PEM)",

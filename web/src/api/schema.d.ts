@@ -133,11 +133,51 @@ export interface paths {
         };
         /**
          * Get the rules for a backup passphrase
-         * @description The shortest passphrase a backup accepts and the file extension a backup file has. Needs backup.manage.
+         * @description The shortest passphrase a backup accepts, the file extension a backup file has and the largest file a restore accepts. Needs backup.manage.
          */
         get: operations["getBackupInfo"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/restore/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore an uploaded backup over this instance
+         * @description Replaces everything in this Bayplan with the uploaded backup. The backup is opened, migrated to this version, re-keyed to this instance's master key and verified on a private copy first; nothing live changes until all of that has worked. Then Bayplan saves the current database as backups/prerestore-<time>.db, swaps the restored one in and restarts itself. The answer is 202 and Bayplan is unreachable for a moment; everyone is signed out, including the caller. confirm must be this instance's name (422 confirm_mismatch). The same refusals as the check apply and leave everything as it was. Audited in the restored log as audit.reanchored then backup.restored. Needs backup.manage.
+         */
+        post: operations["applyRestore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backup/restore/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check an uploaded backup
+         * @description Opens the uploaded file with the passphrase and answers what is in it, without changing anything. 422 backup_unreadable for a wrong passphrase or a damaged file, 422 not_a_backup for a file that is not a backup, 409 backup_newer for a backup from a newer Bayplan, 404 upload_not_found for an upload that is gone or expired, 409 restore_busy while another check or restore runs. Audited as backup.checked. Needs backup.manage.
+         */
+        post: operations["checkRestore"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1723,6 +1763,11 @@ export interface components {
             fileExtension: string;
             /**
              * Format: int64
+             * @description The largest backup file a restore accepts, in bytes
+             */
+            maxUploadBytes: number;
+            /**
+             * Format: int64
              * @description The fewest characters a backup passphrase may have
              */
             minPassphraseLength: number;
@@ -2709,6 +2754,72 @@ export interface components {
              */
             role?: "viewer" | "operator" | "admin";
         };
+        RestoreApplyBody: {
+            /** @description Always true: Bayplan is swapping the database and restarting, and everyone is signed out */
+            restarting: boolean;
+        };
+        RestoreApplyInputBody: {
+            /** @description The name of this instance, typed to confirm that everything in it is replaced */
+            confirm: string;
+            /** @description The passphrase the backup was made with */
+            passphrase: string;
+            /** @description The ID the upload answered */
+            uploadId: string;
+        };
+        RestoreCheckInputBody: {
+            /** @description The passphrase the backup was made with */
+            passphrase: string;
+            /** @description The ID the upload answered */
+            uploadId: string;
+        };
+        RestoreCountsBody: {
+            /**
+             * Format: int64
+             * @description Audit entries in the backup
+             */
+            auditEntries: number;
+            /**
+             * Format: int64
+             * @description Environments in the backup
+             */
+            environments: number;
+            /**
+             * Format: int64
+             * @description Teams in the backup
+             */
+            teams: number;
+            /**
+             * Format: int64
+             * @description Users in the backup
+             */
+            users: number;
+        };
+        RestoreSummaryBody: {
+            /** @description The Bayplan release that made it */
+            appVersion: string;
+            /** @description False when the audit log did not verify when the backup was made */
+            chainVerified: boolean;
+            /** @description What the backup holds */
+            counts: components["schemas"]["RestoreCountsBody"];
+            /**
+             * Format: date-time
+             * @description When the backup was made
+             */
+            created: string;
+            /** @description The instance the backup was made on */
+            instanceName: string;
+            /** @description True when the backup is from an older Bayplan and is upgraded while restoring */
+            older: boolean;
+            /** @description The public URL stored in the backup, empty when it had none */
+            publicUrl: string;
+            /** @description True when the backup's public URL is not the address in use now */
+            publicUrlDiffers: boolean;
+            /**
+             * Format: int64
+             * @description The database schema version of the backup
+             */
+            schema: number;
+        };
         RevokeAgentBody: {
             /** @description Why the node is revoked, for the audit log and the node table. Optional */
             reason?: string;
@@ -3445,6 +3556,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BackupInfoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    applyRestore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreApplyInputBody"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreApplyBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkRestore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreCheckInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreSummaryBody"];
                 };
             };
             /** @description Error */

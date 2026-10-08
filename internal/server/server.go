@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/access"
@@ -108,6 +109,12 @@ type Server struct {
 
 	// unlock releases the data-directory lock; Close calls it last.
 	unlock func() error
+	// keepLock makes Close leave the lock held. A restore sets it before it closes
+	// the server: nothing may take the data directory between the database swap and
+	// the re-exec, which drops the lock by closing its close-on-exec descriptor.
+	keepLock atomic.Bool
+	// restart carries a restore's request to restart the process.
+	restart *restarter
 
 	// stopBackground ends the nightly audit prune and waits for it, so Close
 	// never closes the database under a running prune.
@@ -137,6 +144,7 @@ type RouterDeps struct {
 	Audit        api.AuditDeps
 	Settings     api.SettingsDeps
 	Backup       api.BackupDeps
+	Restore      api.RestoreDeps
 	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
 	// route outside the policy besides the probes and the setup page, because the
 	// handshake inside it is its own authentication. Nil mounts a handler that
@@ -169,6 +177,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterRecent(r, d.Recent)
 	api.RegisterAudit(r, d.Audit)
 	api.RegisterBackup(r, d.Backup)
+	api.RegisterRestore(r, d.Restore)
 	return r
 }
 
@@ -280,6 +289,38 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		log.Warn("finished or discarded a master-key rotation that was interrupted")
 	}
 
+	// A restore from the web UI leaves its marker when it swaps the database. The
+	// restored database gets one start: if it cannot start, the snapshot taken
+	// before the swap goes back and the old state starts instead (T-03-105).
+	marker, pending, merr := backup.ReadMarker(info.Path)
+	if merr != nil {
+		log.Error("a restore was pending but its marker cannot be read; starting without the safety net", "error", merr)
+		_ = backup.RemoveMarker(info.Path)
+		pending = false
+	}
+	// Nothing staged or uploaded before this start is of any use to it.
+	if err := backup.ClearStaging(info.Path); err != nil {
+		log.Warn("could not clear the restore staging directory", "error", err)
+	}
+
+	srv, err = assemble(ctx, cfg, log, bo, info, unlock, socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if pending {
+		if err := backup.RemoveMarker(info.Path); err != nil {
+			log.Warn("restore completed but its marker could not be removed", "error", err)
+		} else {
+			log.Info("restore completed", "snapshot", marker.Snapshot)
+		}
+	}
+	return srv, nil
+}
+
+// assemble loads the master key, opens and migrates the database and builds the
+// server on the prepared, locked data directory. It closes what it opened when it
+// fails, and leaves the lock to its caller.
+func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo buildOptions, info datadir.Info, unlock func() error, socketPath string) (srv *Server, err error) {
 	// The master key comes before the database: a bad BAYPLAN_ENCRYPTION_KEY
 	// should stop startup before anything is written (D-13).
 	vlt, err := vault.LoadOrCreate(cfg.EncryptionKey, info.Path, log)
@@ -499,6 +540,22 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
+	// The wizard restore routes share the setup routes' gate, limiter and audit.
+	setupDeps := api.SetupDeps{
+		Gate: gate,
+		// 5 attempts at once, then one every 12 seconds, per client address (D-05).
+		Limiter:   auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
+		Audit:     aud,
+		AnonAudit: anonAudit,
+		Store:     st,
+		Config:    cfg,
+		Instance:  inst,
+		Sessions:  sessions,
+		SPA:       spa,
+		Log:       log,
+	}
+	restart := newRestarter()
+
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -523,19 +580,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 			},
 		},
 		System: api.SystemDeps{Ready: ready},
-		Setup: api.SetupDeps{
-			Gate: gate,
-			// 5 attempts at once, then one every 12 seconds, per client address (D-05).
-			Limiter:   auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
-			Audit:     aud,
-			AnonAudit: anonAudit,
-			Store:     st,
-			Config:    cfg,
-			Instance:  inst,
-			Sessions:  sessions,
-			SPA:       spa,
-			Log:       log,
-		},
+		Setup:  setupDeps,
 		Auth: api.AuthDeps{
 			Login:    login,
 			Sessions: sessions,
@@ -576,7 +621,12 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		Recent:       api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Log: log},
 		Audit:        api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
 		Settings:     api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log},
-		Backup:       api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, AppVersion: buildinfo.Get().Version, Log: log},
+		Backup:       api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
+		Restore: api.RestoreDeps{
+			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
+			Setup: setupDeps, DataDir: info.Path, AppVersion: buildinfo.Get().Version, Log: log,
+			Restart: func(swap func(context.Context) error) bool { return restart.request(RestartRequest{Swap: swap}) },
+		},
 		AgentConnect: tunnelHub.Handler(),
 	})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
@@ -590,6 +640,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	}
 	srv = &Server{
 		unlock:     unlock,
+		restart:    restart,
 		refusals:   refusals,
 		cfg:        cfg,
 		log:        log,
@@ -726,8 +777,13 @@ func (s *Server) Close() error {
 	s.hub.Close()
 	s.monitor.StopAll()
 	// The lock goes last: until the database is closed, an offline restore must
-	// still be kept out.
-	return errors.Join(s.store.Close(), s.unlock())
+	// still be kept out. A restore that is about to swap the database and re-exec
+	// keeps it, so no one can take the directory in between (T-03-106).
+	err := s.store.Close()
+	if s.keepLock.Load() {
+		return err
+	}
+	return errors.Join(err, s.unlock())
 }
 
 // DataDir reports the prepared data directory, for the admin banner (plan 14).
@@ -746,14 +802,39 @@ func (s *Server) Handler() http.Handler {
 	return httpx.StripBasePath(s.inst.BasePath)(s.router.Handler())
 }
 
-// Run serves until ctx is cancelled, then shuts down gracefully within 10s.
+// Run serves until ctx is cancelled, then shuts down gracefully within 10s. When
+// a restore asks for a restart it stops serving the same way, closes the database
+// but not the data-directory lock, and returns a *RestartError (errors.Is
+// ErrRestart); the caller then runs Restart.
 func (s *Server) Run(ctx context.Context) error {
 	defer func() { _ = s.Close() }()
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen on %s (BAYPLAN_LISTEN): %w", s.cfg.Listen, err)
 	}
-	return s.serve(ctx, ln)
+	return s.run(ctx, ln)
+}
+
+func (s *Server) run(ctx context.Context, ln net.Listener) error {
+	err := s.serve(ctx, ln)
+	req, restart := s.restart.take()
+	if !restart {
+		return err
+	}
+	if ctx.Err() != nil {
+		// A stop signal arrived as well. A process that was told to stop does not
+		// start another one; the staged restore is cleared at the next start.
+		s.log.Warn("a restore asked for a restart but Bayplan is stopping; the restore was not applied")
+		return err
+	}
+	if err != nil {
+		s.log.Warn("the server stopped with an error while a restore was waiting for it", "error", err)
+	}
+	s.keepLock.Store(true)
+	if cerr := s.Close(); cerr != nil {
+		s.log.Warn("closing the server for a restore", "error", cerr)
+	}
+	return &RestartError{Request: req}
 }
 
 func (s *Server) serve(ctx context.Context, ln net.Listener) error {
@@ -787,13 +868,29 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 		}
 		return err
 	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		if err := srv.Shutdown(shutdown); err != nil {
-			return fmt.Errorf("graceful shutdown: %w", err)
-		}
-		return nil
+		return s.shutdown(srv, false)
+	case <-s.restart.requested():
+		// The request that asked for the restart is still being answered; Shutdown
+		// waits for it, so the browser gets its 202 before the listener goes.
+		return s.shutdown(srv, true)
 	}
+}
+
+// shutdown stops the HTTP server gracefully. For a restart a connection that does
+// not finish in time is cut instead of failing the restart: the process is about
+// to be replaced anyway.
+func (s *Server) shutdown(srv *http.Server, restarting bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		if restarting {
+			s.log.Warn("some connections were still open at the restart and were closed", "error", err)
+			_ = srv.Close()
+			return nil
+		}
+		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+	return nil
 }
 
 // settingsAgents gives the settings routes what they know of agents: the agents

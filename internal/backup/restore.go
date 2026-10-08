@@ -41,9 +41,26 @@ const (
 // refused like a downgrade, naming the version that made it (D-30).
 var ErrNewerBackup = errors.New("backup was made by a newer Bayplan")
 
+// NewerBackupError is the error behind ErrNewerBackup. It carries the version
+// that made the backup so a caller can name it without parsing the message.
+type NewerBackupError struct {
+	// AppVersion is the Bayplan release that made the backup.
+	AppVersion string
+	// Schema is the backup's database schema version and BinarySchema this
+	// binary's.
+	Schema, BinarySchema int64
+}
+
+func (e *NewerBackupError) Error() string {
+	return fmt.Sprintf("%s: it was made by Bayplan %s (schema version %d) and this Bayplan knows schema version %d; "+
+		"restore it with Bayplan %s or newer", ErrNewerBackup, e.AppVersion, e.Schema, e.BinarySchema, e.AppVersion)
+}
+
+// Is makes errors.Is(err, ErrNewerBackup) true.
+func (e *NewerBackupError) Is(target error) bool { return target == ErrNewerBackup }
+
 func newerBackup(appVersion string, schema, binarySchema int64) error {
-	return fmt.Errorf("%w: it was made by Bayplan %s (schema version %d) and this Bayplan knows schema version %d; "+
-		"restore it with Bayplan %s or newer", ErrNewerBackup, appVersion, schema, binarySchema, appVersion)
+	return &NewerBackupError{AppVersion: appVersion, Schema: schema, BinarySchema: binarySchema}
 }
 
 // Inspection is what a restore shows before it replaces anything: the outer

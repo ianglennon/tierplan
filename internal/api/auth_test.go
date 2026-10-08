@@ -132,6 +132,9 @@ type authFixture struct {
 	inviteAudit   httpx.Auditor
 	// access is the service behind the user and invite routes, built with the router.
 	access *access.Service
+	// restore is what the restore routes (plan 03-25) restart through and keep
+	// their upload in; build creates it on first use and keeps it across builds.
+	restore *restoreHook
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -236,6 +239,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Now: f.clk.now, Log: log})
 	api.RegisterAudit(r, api.AuditDeps{Store: f.st, RetentionDays: f.auditRetention, Now: f.clk.now, Checker: checker, Refusals: f.aud, Log: log})
 	api.RegisterBackup(r, api.BackupDeps{Store: f.st, Vault: f.v, Audit: f.aud, Instance: f.inst, DataDir: f.dataInfo.Path, AppVersion: "v9.9.9", Now: f.clk.now, Log: log})
+	api.RegisterRestore(r, f.restoreDeps(log))
 	if err := httpx.VerifyAllGuarded(r); err != nil {
 		t.Fatal(err)
 	}

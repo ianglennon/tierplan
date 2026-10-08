@@ -547,6 +547,11 @@
             "description": "The extension of a backup file, with the dot",
             "type": "string"
           },
+          "maxUploadBytes": {
+            "description": "The largest backup file a restore accepts, in bytes",
+            "format": "int64",
+            "type": "integer"
+          },
           "minPassphraseLength": {
             "description": "The fewest characters a backup passphrase may have",
             "format": "int64",
@@ -555,7 +560,8 @@
         },
         "required": [
           "minPassphraseLength",
-          "fileExtension"
+          "fileExtension",
+          "maxUploadBytes"
         ],
         "type": "object"
       },
@@ -3159,6 +3165,152 @@
         ],
         "type": "object"
       },
+      "RestoreApplyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "restarting": {
+            "description": "Always true: Bayplan is swapping the database and restarting, and everyone is signed out",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "restarting"
+        ],
+        "type": "object"
+      },
+      "RestoreApplyInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "description": "The name of this instance, typed to confirm that everything in it is replaced",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "passphrase": {
+            "description": "The passphrase the backup was made with",
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "uploadId": {
+            "description": "The ID the upload answered",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId",
+          "passphrase",
+          "confirm"
+        ],
+        "type": "object"
+      },
+      "RestoreCheckInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "passphrase": {
+            "description": "The passphrase the backup was made with",
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "uploadId": {
+            "description": "The ID the upload answered",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId",
+          "passphrase"
+        ],
+        "type": "object"
+      },
+      "RestoreCountsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "auditEntries": {
+            "description": "Audit entries in the backup",
+            "format": "int64",
+            "type": "integer"
+          },
+          "environments": {
+            "description": "Environments in the backup",
+            "format": "int64",
+            "type": "integer"
+          },
+          "teams": {
+            "description": "Teams in the backup",
+            "format": "int64",
+            "type": "integer"
+          },
+          "users": {
+            "description": "Users in the backup",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "users",
+          "teams",
+          "environments",
+          "auditEntries"
+        ],
+        "type": "object"
+      },
+      "RestoreSummaryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "appVersion": {
+            "description": "The Bayplan release that made it",
+            "type": "string"
+          },
+          "chainVerified": {
+            "description": "False when the audit log did not verify when the backup was made",
+            "type": "boolean"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/RestoreCountsBody",
+            "description": "What the backup holds"
+          },
+          "created": {
+            "description": "When the backup was made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "instanceName": {
+            "description": "The instance the backup was made on",
+            "type": "string"
+          },
+          "older": {
+            "description": "True when the backup is from an older Bayplan and is upgraded while restoring",
+            "type": "boolean"
+          },
+          "publicUrl": {
+            "description": "The public URL stored in the backup, empty when it had none",
+            "type": "string"
+          },
+          "publicUrlDiffers": {
+            "description": "True when the backup's public URL is not the address in use now",
+            "type": "boolean"
+          },
+          "schema": {
+            "description": "The database schema version of the backup",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "instanceName",
+          "created",
+          "appVersion",
+          "schema",
+          "counts",
+          "publicUrl",
+          "older",
+          "publicUrlDiffers",
+          "chainVerified"
+        ],
+        "type": "object"
+      },
       "RevokeAgentBody": {
         "additionalProperties": false,
         "properties": {
@@ -4716,7 +4868,7 @@
     },
     "/api/backup/info": {
       "get": {
-        "description": "The shortest passphrase a backup accepts and the file extension a backup file has. Needs backup.manage.",
+        "description": "The shortest passphrase a backup accepts, the file extension a backup file has and the largest file a restore accepts. Needs backup.manage.",
         "operationId": "getBackupInfo",
         "responses": {
           "200": {
@@ -4748,6 +4900,104 @@
           }
         },
         "summary": "Get the rules for a backup passphrase",
+        "tags": [
+          "backup"
+        ]
+      }
+    },
+    "/api/backup/restore/apply": {
+      "post": {
+        "description": "Replaces everything in this Bayplan with the uploaded backup. The backup is opened, migrated to this version, re-keyed to this instance's master key and verified on a private copy first; nothing live changes until all of that has worked. Then Bayplan saves the current database as backups/prerestore-\u003ctime\u003e.db, swaps the restored one in and restarts itself. The answer is 202 and Bayplan is unreachable for a moment; everyone is signed out, including the caller. confirm must be this instance's name (422 confirm_mismatch). The same refusals as the check apply and leave everything as it was. Audited in the restored log as audit.reanchored then backup.restored. Needs backup.manage.",
+        "operationId": "applyRestore",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreApplyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreApplyBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Restore an uploaded backup over this instance",
+        "tags": [
+          "backup"
+        ]
+      }
+    },
+    "/api/backup/restore/check": {
+      "post": {
+        "description": "Opens the uploaded file with the passphrase and answers what is in it, without changing anything. 422 backup_unreadable for a wrong passphrase or a damaged file, 422 not_a_backup for a file that is not a backup, 409 backup_newer for a backup from a newer Bayplan, 404 upload_not_found for an upload that is gone or expired, 409 restore_busy while another check or restore runs. Audited as backup.checked. Needs backup.manage.",
+        "operationId": "checkRestore",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreCheckInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreSummaryBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Check an uploaded backup",
         "tags": [
           "backup"
         ]

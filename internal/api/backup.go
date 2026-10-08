@@ -45,6 +45,10 @@ type BackupDeps struct {
 	DataDir string
 	// AppVersion is recorded in the backup.
 	AppVersion string
+	// MaxUploadBytes is the largest backup file a restore accepts, reported by the
+	// info route so the page can refuse a file before sending it. Zero means the
+	// default.
+	MaxUploadBytes int64
 	// Now stamps the file name and the backup. Nil means time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
@@ -55,6 +59,7 @@ type BackupDeps struct {
 type BackupInfoBody struct {
 	MinPassphraseLength int    `json:"minPassphraseLength" doc:"The fewest characters a backup passphrase may have"`
 	FileExtension       string `json:"fileExtension" doc:"The extension of a backup file, with the dot"`
+	MaxUploadBytes      int64  `json:"maxUploadBytes" doc:"The largest backup file a restore accepts, in bytes"`
 }
 
 // BackupInfoOutput wraps BackupInfoBody for huma.
@@ -93,11 +98,15 @@ func RegisterBackup(r *httpx.Router, d BackupDeps) {
 		Method:      http.MethodGet,
 		Path:        "/api/backup/info",
 		Summary:     "Get the rules for a backup passphrase",
-		Description: "The shortest passphrase a backup accepts and the file extension a backup file has. Needs backup.manage.",
+		Description: "The shortest passphrase a backup accepts, the file extension a backup file has and the largest file a restore accepts. Needs backup.manage.",
 		Tags:        []string{"backup"},
 	}, need, func(context.Context, *struct{}) (*BackupInfoOutput, error) {
+		maxUpload := d.MaxUploadBytes
+		if maxUpload <= 0 {
+			maxUpload = backup.DefaultMaxUpload
+		}
 		return &BackupInfoOutput{CacheControl: "no-store", Body: BackupInfoBody{
-			MinPassphraseLength: backup.MinPassphraseLen, FileExtension: backup.FileExtension,
+			MinPassphraseLength: backup.MinPassphraseLen, FileExtension: backup.FileExtension, MaxUploadBytes: maxUpload,
 		}}, nil
 	})
 
