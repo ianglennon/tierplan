@@ -76,7 +76,13 @@ afterEach(() => {
   setCsrfToken(null);
 });
 
-function Harness({ onClosed }: { onClosed?: () => void }) {
+function Harness({
+  onClosed,
+  onSetUpAccess,
+}: {
+  onClosed?: () => void;
+  onSetUpAccess?: (userId: string) => void;
+}) {
   const [open, setOpen] = useState(true);
   return (
     <>
@@ -89,16 +95,17 @@ function Harness({ onClosed }: { onClosed?: () => void }) {
           setOpen(next);
           if (!next) onClosed?.();
         }}
+        onSetUpAccess={onSetUpAccess}
       />
     </>
   );
 }
 
-function renderDialog(onClosed?: () => void) {
+function renderDialog(onClosed?: () => void, onSetUpAccess?: (userId: string) => void) {
   queryClient.setQueryData(usersQuery.queryKey, []);
   render(
     <QueryClientProvider client={queryClient}>
-      <Harness onClosed={onClosed} />
+      <Harness onClosed={onClosed} onSetUpAccess={onSetUpAccess} />
       <Toaster />
     </QueryClientProvider>,
   );
@@ -162,6 +169,30 @@ describe("CreateUserDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenCalledWith(`${window.location.origin}${LINK}`);
+  });
+
+  it("offers Set up access on the link step when the page can open the new user, and hands over their ID", async () => {
+    const onClosed = vi.fn();
+    const onSetUpAccess = vi.fn();
+    renderDialog(onClosed, onSetUpAccess);
+    // The form has no such button: there is no user yet.
+    expect(screen.queryByRole("button", { name: "Set up access" })).toBeNull();
+    fill("alice");
+    submit();
+    await screen.findByRole("dialog", { name: "alice is ready" });
+    fireEvent.click(screen.getByRole("button", { name: "Set up access" }));
+    expect(onSetUpAccess).toHaveBeenCalledWith("u9");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(onClosed).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain(TOKEN);
+  });
+
+  it("has no Set up access button when the page gives no way to open the user", async () => {
+    renderDialog();
+    fill("alice");
+    submit();
+    await screen.findByRole("dialog", { name: "alice is ready" });
+    expect(screen.queryByRole("button", { name: "Set up access" })).toBeNull();
   });
 
   it("closes from the link step, refreshes the users list and forgets the link", async () => {
