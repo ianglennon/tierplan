@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
@@ -29,9 +30,27 @@ export function useBlockUnload(active: boolean): void {
 export function RestoringOverlay() {
   const t = useT();
   useBlockUnload(true);
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-      <Card role="status" className="w-full max-w-sm">
+  const host = useRef<HTMLDivElement>(null);
+  const card = useRef<HTMLDivElement>(null);
+  // The overlay only looks modal. Everything else on the page is made inert, so
+  // the keyboard cannot reach the sidebar behind it, and focus moves onto the
+  // status so a screen reader lands on it.
+  useEffect(() => {
+    const behind = Array.from(document.body.children).filter(
+      (el) => el !== host.current && !el.hasAttribute("inert"),
+    );
+    for (const el of behind) el.setAttribute("inert", "");
+    card.current?.focus();
+    return () => {
+      for (const el of behind) el.removeAttribute("inert");
+    };
+  }, []);
+  return createPortal(
+    <div
+      ref={host}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+    >
+      <Card ref={card} tabIndex={-1} role="status" className="w-full max-w-sm outline-none">
         <CardHeader>
           <h3 className="flex items-center gap-2 text-base font-semibold">
             <Spinner aria-hidden="true" />
@@ -42,6 +61,7 @@ export function RestoringOverlay() {
           <p className="text-sm text-muted-foreground">{t("restore.overlay.body")}</p>
         </CardContent>
       </Card>
-    </div>
+    </div>,
+    document.body,
   );
 }

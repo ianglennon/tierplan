@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { applyRestore, checkRestore, RestoreError, uploadRestore } from "@/api/backup";
 import { setCsrfToken, suspendSessionReactions } from "@/api/client";
@@ -19,6 +19,7 @@ import { RestoringOverlay, useBlockUnload } from "@/features/backup/restoring-ov
 import { useRestoreCheck } from "@/features/backup/use-restore-check";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useT } from "@/i18n/use-t";
+import { withBase } from "@/lib/base-path";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
@@ -50,6 +51,14 @@ export function RestorePanel({ onRestored }: RestorePanelProps) {
   // typed afresh if the dialog comes back.
   const [round, setRound] = useState(0);
   const inFlight = useRef(false);
+  // The restart can take longer than the user stays on this page.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   useBlockUnload(applying);
 
   async function restore() {
@@ -91,9 +100,17 @@ export function RestorePanel({ onRestored }: RestorePanelProps) {
     if (outcome === "restored") {
       // The session is gone: nothing it cached is true any more.
       form.reset();
-      onRestored(release);
       queryClient.clear();
       setCsrfToken(null);
+      if (!mounted.current) {
+        // The page that would have shown the result, and released the session
+        // reactions when left, is already gone. Release them now, or no refusal
+        // would ever move the browser again, and go where the dead session leads.
+        release();
+        window.location.assign(withBase("/login"));
+        return;
+      }
+      onRestored(release);
       return;
     }
     release();

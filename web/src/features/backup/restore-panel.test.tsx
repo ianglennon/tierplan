@@ -5,7 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getCsrfToken, setCsrfToken } from "@/api/client";
+import { api, getCsrfToken, setCsrfToken, setUnauthorizedHandler } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { BackupPage } from "@/features/backup/backup-page";
 import * as outcome from "@/features/backup/restore-outcome";
@@ -97,7 +97,7 @@ afterEach(() => {
 });
 
 function renderPage() {
-  render(
+  return render(
     <QueryClientProvider client={queryClient}>
       <BackupPage />
     </QueryClientProvider>,
@@ -227,6 +227,65 @@ describe("Restore card (tracer): Settings > Backup to Backup restored", () => {
     expect(getCsrfToken()).toBeNull();
     // The old page is gone.
     expect(screen.queryByRole("heading", { name: "Download a backup" })).toBeNull();
+  });
+});
+
+describe("leaving the Backup page while Bayplan restarts (WR-C-04)", () => {
+  async function startRestore() {
+    const view = renderPage();
+    await screen.findByRole("heading", { name: "Restore from a backup" });
+    chooseAndCheck();
+    await card().findByText("What's in this backup");
+    fireEvent.click(card().getByRole("button", { name: "Restore backup" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Restore this backup?" });
+    await within(dialog).findByLabelText("Type Home lab to confirm");
+    fireEvent.change(within(dialog).getByLabelText("Type Home lab to confirm"), {
+      target: { value: "Home lab" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restore backup" }));
+    await screen.findByRole("status");
+    return view;
+  }
+
+  it("releases the session reactions and goes to sign-in when the restore finishes after the page was left", async () => {
+    let settle: (o: outcome.RestoreOutcome) => void = () => {};
+    vi.mocked(outcome.waitForRestoreOutcome).mockImplementation(
+      () => new Promise((resolve) => (settle = resolve)),
+    );
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign });
+    const unauthorized = vi.fn();
+    setUnauthorizedHandler(unauthorized);
+    try {
+      const view = await startRestore();
+      view.unmount();
+      settle("restored");
+      await waitFor(() => expect(assign).toHaveBeenCalledWith("/login"));
+
+      // The reactions are back: a 401 now moves the browser to sign-in again.
+      answers["/api/me"] = () =>
+        Response.json({ status: 401, type: "unauthorized" }, { status: 401 });
+      await api.GET("/api/me");
+      expect(unauthorized).toHaveBeenCalledTimes(1);
+    } finally {
+      setUnauthorizedHandler(null);
+    }
+  });
+
+  it("holds the rest of the page inert and puts focus on the status while Bayplan restarts", async () => {
+    let settle: (o: outcome.RestoreOutcome) => void = () => {};
+    vi.mocked(outcome.waitForRestoreOutcome).mockImplementation(
+      () => new Promise((resolve) => (settle = resolve)),
+    );
+    const view = await startRestore();
+    const status = screen.getByRole("status");
+    expect(document.activeElement).toBe(status);
+    expect(view.container.hasAttribute("inert")).toBe(true);
+    expect(status.closest("[inert]")).toBeNull();
+
+    settle("restored");
+    await screen.findByRole("heading", { name: "Backup restored" });
+    expect(view.container.hasAttribute("inert")).toBe(false);
   });
 });
 
