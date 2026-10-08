@@ -4814,6 +4814,138 @@
         ]
       }
     },
+    "/api/env/{envId}/access/{grantId}": {
+      "delete": {
+        "description": "As deleteUserGrant, for a grant on this environment: the subject loses what it gave on their next request, the automations they own that no longer qualify pause, and the answer lists who lost which access. Audited as one access.revoked entry with this environment's ID. A grant that does not exist answers 404 grant_not_found; a grant on every environment or on another environment, or an instance admin's, answers 403 delegation_denied and is audited as permission.denied with that reason. An env Admin may remove their own Admin grant. Needs environments.access on the environment.",
+        "operationId": "deleteEnvAccess",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The grant's ID",
+            "in": "path",
+            "name": "grantId",
+            "required": true,
+            "schema": {
+              "description": "The grant's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Remove one of the environment's grants",
+        "tags": [
+          "grants"
+        ]
+      }
+    },
+    "/api/env/{envId}/access/{grantId}/impact": {
+      "post": {
+        "description": "As previewUserGrantImpact, for a grant on this environment: who would lose which access if it were deleted (op delete) or saved with a lower role (op update). Nothing is written. A grant that does not exist answers 404 grant_not_found; a grant on every environment or on another environment, or an instance admin's, answers 403 delegation_denied. Needs environments.access on the environment.",
+        "operationId": "previewEnvAccessImpact",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The grant's ID",
+            "in": "path",
+            "name": "grantId",
+            "required": true,
+            "schema": {
+              "description": "The grant's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantChangeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview what removing or changing one of the environment's grants takes away",
+        "tags": [
+          "grants"
+        ]
+      }
+    },
     "/api/env/{envId}/adopt-cluster": {
       "post": {
         "description": "A manager reported a swarm cluster ID different from the one the environment was bound to, so the environment is cluster_changed and nothing was rebound. This binds it to the new cluster (the pendingClusterId the environment shows), clears cluster_changed and audits environment.cluster_adopted with the cluster it was and the one it is. The environment's agents are not changed. 404 environment_not_found; 409 no_cluster_change when none is recorded, or cluster_in_use when another environment manages the new cluster. Needs environments.configure on the environment (env Admin or instance admin).",

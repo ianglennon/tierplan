@@ -208,6 +208,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/access/{grantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove one of the environment's grants
+         * @description As deleteUserGrant, for a grant on this environment: the subject loses what it gave on their next request, the automations they own that no longer qualify pause, and the answer lists who lost which access. Audited as one access.revoked entry with this environment's ID. A grant that does not exist answers 404 grant_not_found; a grant on every environment or on another environment, or an instance admin's, answers 403 delegation_denied and is audited as permission.denied with that reason. An env Admin may remove their own Admin grant. Needs environments.access on the environment.
+         */
+        delete: operations["deleteEnvAccess"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/access/{grantId}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview what removing or changing one of the environment's grants takes away
+         * @description As previewUserGrantImpact, for a grant on this environment: who would lose which access if it were deleted (op delete) or saved with a lower role (op update). Nothing is written. A grant that does not exist answers 404 grant_not_found; a grant on every environment or on another environment, or an instance admin's, answers 403 delegation_denied. Needs environments.access on the environment.
+         */
+        post: operations["previewEnvAccessImpact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/adopt-cluster": {
         parameters: {
             query?: never;
@@ -3432,6 +3472,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvAccessCandidatesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteEnvAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewEnvAccessImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantChangeBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
                 };
             };
             /** @description Error */

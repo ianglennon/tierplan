@@ -118,6 +118,23 @@ type PutEnvAccessInput struct {
 	Body      EnvGrantInputBody
 }
 
+// PreviewEnvAccessInput is a change to one of the environment's grants to preview.
+type PreviewEnvAccessInput struct {
+	// UserAgent is read only to record a refusal in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	EnvID     string `path:"envId" doc:"The environment ID"`
+	GrantID   string `path:"grantId" doc:"The grant's ID"`
+	Body      GrantChangeBody
+}
+
+// DeleteEnvAccessInput names one of the environment's grants to remove.
+type DeleteEnvAccessInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	EnvID     string `path:"envId" doc:"The environment ID"`
+	GrantID   string `path:"grantId" doc:"The grant's ID"`
+}
+
 func grantRefOf(id, role string, extras []string) *GrantRef {
 	if id == "" {
 		return nil
@@ -187,6 +204,7 @@ func registerEnvAccess(r *httpx.Router, d AccessDeps) {
 		}
 		return httpx.Problem(http.StatusForbidden, problemDelegationDenied, "You can't give that access.")
 	}
+	limit := func(envID string) access.GrantScopeLimit { return access.GrantScopeLimit{DelegatedEnv: envID} }
 	signedIn := func(ctx context.Context) (*rbac.Principal, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
@@ -277,5 +295,66 @@ func registerEnvAccess(r *httpx.Router, d AccessDeps) {
 			status = http.StatusCreated
 		}
 		return &PutGrantOutput{CacheControl: "no-store", Status: status, Body: grantBodyOf(g)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewEnvAccessImpact",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/access/{grantId}/impact",
+		Summary:     "Preview what removing or changing one of the environment's grants takes away",
+		Description: "As previewUserGrantImpact, for a grant on this environment: who would lose which access if it were deleted " +
+			"(op delete) or saved with a lower role (op update). Nothing is written. A grant that does not exist answers 404 " +
+			"grant_not_found; a grant on every environment or on another environment, or an instance admin's, answers 403 " +
+			"delegation_denied. Needs environments.access on the environment.",
+		Tags: []string{"grants"},
+	}, need, func(ctx context.Context, in *PreviewEnvAccessInput) (*ImpactOutput, error) {
+		p, err := signedIn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if in.Body.Op == access.OpUpdateGrant && in.Body.Role == "" {
+			return nil, validationProblem("body.role", "required for update")
+		}
+		route := "POST /api/env/{envId}/access/{grantId}/impact"
+		typ, id, err := d.Access.GrantSubject(ctx, in.GrantID, limit(in.EnvID))
+		if err != nil {
+			return nil, fail(ctx, p, route, in.EnvID, in.UserAgent, access.SubjectUser, "preview environment access impact", err)
+		}
+		change := access.GrantChange{Op: in.Body.Op, Role: in.Body.Role, Extras: in.Body.Extras}
+		rows, err := d.Access.GrantImpact(ctx, typ, id, in.GrantID, change, limit(in.EnvID))
+		if err != nil {
+			return nil, fail(ctx, p, route, in.EnvID, in.UserAgent, typ, "preview environment access impact", err)
+		}
+		return &ImpactOutput{CacheControl: "no-store", Body: impactBodyOf(rows)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "deleteEnvAccess",
+		Method:      http.MethodDelete,
+		Path:        "/api/env/{envId}/access/{grantId}",
+		Summary:     "Remove one of the environment's grants",
+		Description: "As deleteUserGrant, for a grant on this environment: the subject loses what it gave on their next request, " +
+			"the automations they own that no longer qualify pause, and the answer lists who lost which access. Audited as one " +
+			"access.revoked entry with this environment's ID. A grant that does not exist answers 404 grant_not_found; a grant " +
+			"on every environment or on another environment, or an instance admin's, answers 403 delegation_denied and is audited " +
+			"as permission.denied with that reason. An env Admin may remove their own Admin grant. Needs environments.access on " +
+			"the environment.",
+		Tags: []string{"grants"},
+	}, need, func(ctx context.Context, in *DeleteEnvAccessInput) (*ImpactOutput, error) {
+		p, err := signedIn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		route := "DELETE /api/env/{envId}/access/{grantId}"
+		typ, id, err := d.Access.GrantSubject(ctx, in.GrantID, limit(in.EnvID))
+		if err != nil {
+			return nil, fail(ctx, p, route, in.EnvID, in.UserAgent, access.SubjectUser, "delete environment access", err)
+		}
+		rows, err := d.Access.DeleteGrant(ctx, p.AuditActor(), typ, id, in.GrantID, limit(in.EnvID),
+			access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent))
+		if err != nil {
+			return nil, fail(ctx, p, route, in.EnvID, in.UserAgent, typ, "delete environment access", err)
+		}
+		return &ImpactOutput{CacheControl: "no-store", Body: impactBodyOf(rows)}, nil
 	})
 }
