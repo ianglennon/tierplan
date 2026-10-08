@@ -19,6 +19,41 @@ let recent: string[];
 let calls: string[];
 let qc: QueryClient;
 let handlers: { dispose: () => void }[];
+// A read of /api/me waits for this while it is set, so a test can hold one.
+let meGate: Promise<void> | undefined;
+// The timers the handler asked for; a test fires them itself.
+interface Timer {
+  fn: () => void;
+  delay: number;
+  cancelled: boolean;
+  fired: boolean;
+}
+let timers: Timer[];
+
+const liveTimers = () => timers.filter((t) => !t.cancelled && !t.fired);
+const fire = () => {
+  const t = liveTimers()[0];
+  if (!t) throw new Error("no timer is scheduled");
+  t.fired = true;
+  t.fn();
+};
+const schedule = (fn: () => void, delay: number) => {
+  const t: Timer = { fn, delay, cancelled: false, fired: false };
+  timers.push(t);
+  return () => {
+    t.cancelled = true;
+  };
+};
+function holdMe(): () => void {
+  let release: () => void = () => {};
+  meGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return () => {
+    meGate = undefined;
+    release();
+  };
+}
 
 function stubFetch() {
   vi.stubGlobal(
@@ -26,7 +61,10 @@ function stubFetch() {
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
       calls.push(path);
-      if (path === "/api/me") return Response.json(meAnswer);
+      if (path === "/api/me") {
+        await meGate;
+        return Response.json(meAnswer);
+      }
       if (path === "/api/environments") {
         return Response.json({ items: items.map((id) => ({ id, name: id })) });
       }
@@ -52,9 +90,10 @@ function setup(envId: string | undefined, before: Me) {
     notifyChanged,
     notifyRefused,
     now: () => clock,
+    schedule,
   });
   handlers.push({ dispose });
-  return { handle, moveTo, notifyChanged, notifyRefused };
+  return { handle, dispose, moveTo, notifyChanged, notifyRefused };
 }
 
 const meReads = () => calls.filter((c) => c === "/api/me").length;
@@ -65,6 +104,8 @@ beforeEach(() => {
   items = [];
   recent = [];
   handlers = [];
+  timers = [];
+  meGate = undefined;
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   stubFetch();
 });
@@ -76,7 +117,7 @@ afterEach(() => {
 });
 
 describe("the throttle (T-03-100)", () => {
-  it("refetches /api/me once for ten refusals inside a second, and again after the window", async () => {
+  it("answers ten refusals inside a second with one read now and one when the window ends", async () => {
     const me = makeMe({ envs: { a: "viewer" } });
     meAnswer = me;
     const { handle } = setup("a", me);
@@ -87,10 +128,95 @@ describe("the throttle (T-03-100)", () => {
     }
     await Promise.all(runs);
     expect(meReads()).toBe(1);
+    // One trailing run for all nine, for the moment the window ends: the first run
+    // started at +100 and the second refusal came at +200.
+    expect(liveTimers()).toHaveLength(1);
+    expect(liveTimers()[0]?.delay).toBe(ACCESS_REFETCH_THROTTLE_MS - 100);
 
-    clock += ACCESS_REFETCH_THROTTLE_MS + 1_000;
+    clock += ACCESS_REFETCH_THROTTLE_MS;
+    fire();
+    await vi.waitFor(() => expect(meReads()).toBe(2));
+    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+    expect(liveTimers()).toHaveLength(0);
+    expect(timers).toHaveLength(1);
+  });
+
+  it("acts on a refusal that arrives inside the window after a run that found nothing", async () => {
+    meAnswer = makeMe({ envs: { a: "viewer" } });
+    const { handle, moveTo, notifyChanged } = setup("a", meAnswer);
     await handle("unseen", "/api/env/a/summary");
+    expect(moveTo).not.toHaveBeenCalled();
+    expect(meReads()).toBe(1);
+
+    // The grant is withdrawn, and the next refusal comes a second later.
+    meAnswer = makeMe({ envs: {}, administrators: ["admin"] });
+    qc.setQueryData(["me"], meAnswer);
+    clock += 1_000;
+    await handle("unseen", "/api/env/a/containers");
+    expect(meReads()).toBe(1);
+    expect(moveTo).not.toHaveBeenCalled();
+
+    clock += ACCESS_REFETCH_THROTTLE_MS;
+    fire();
+    await vi.waitFor(() => expect(moveTo).toHaveBeenCalledExactlyOnceWith(undefined));
+    expect(notifyChanged).toHaveBeenCalledTimes(1);
     expect(meReads()).toBe(2);
+  });
+
+  it("never has two reads of /api/me outstanding", async () => {
+    meAnswer = makeMe({ envs: { a: "viewer" } });
+    const { handle } = setup("a", meAnswer);
+    const release = holdMe();
+    const first = handle("unseen", "/api/env/a/summary");
+    await vi.waitFor(() => expect(meReads()).toBe(1));
+
+    clock += 1_000;
+    await handle("unseen", "/api/env/a/containers");
+    clock += ACCESS_REFETCH_THROTTLE_MS;
+    fire();
+    // The window is over but the first read has not answered.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(meReads()).toBe(1);
+
+    release();
+    await first;
+    await vi.waitFor(() => expect(meReads()).toBe(2));
+    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+  });
+
+  it("counts the trailing run as unseen when any refusal folded into it was", async () => {
+    meAnswer = makeMe({ envs: { a: "operator" } });
+    const { handle, moveTo, notifyChanged, notifyRefused } = setup("a", meAnswer);
+    await handle("refused", "/api/env/a/reconnect");
+    expect(notifyChanged).not.toHaveBeenCalled();
+
+    // The role shrank; then a refused action and an unseen read come in the window.
+    meAnswer = makeMe({ envs: { a: "viewer" } });
+    clock += 1_000;
+    await handle("refused", "/api/env/a/reconnect");
+    await handle("unseen", "/api/env/a/summary");
+    // Every refused action is told at once, folded or not.
+    expect(notifyRefused).toHaveBeenCalledTimes(2);
+
+    clock += ACCESS_REFETCH_THROTTLE_MS;
+    fire();
+    await vi.waitFor(() => expect(notifyChanged).toHaveBeenCalledTimes(1));
+    expect(moveTo).not.toHaveBeenCalled();
+  });
+
+  it("does not show the access toast for a trailing run of refused actions alone", async () => {
+    meAnswer = makeMe({ envs: { a: "operator" } });
+    const { handle, notifyChanged, notifyRefused } = setup("a", meAnswer);
+    await handle("refused", "/api/env/a/reconnect");
+    meAnswer = makeMe({ envs: { a: "viewer" } });
+    clock += 1_000;
+    await handle("refused", "/api/env/a/reconnect");
+    clock += ACCESS_REFETCH_THROTTLE_MS;
+    fire();
+    await vi.waitFor(() => expect(meReads()).toBe(2));
+    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+    expect(notifyRefused).toHaveBeenCalledTimes(2);
+    expect(notifyChanged).not.toHaveBeenCalled();
   });
 
   it("uses a window of five seconds", () => {
@@ -139,11 +265,18 @@ describe("the move after an environment is lost (D-10)", () => {
     expect(notifyChanged).toHaveBeenCalledTimes(1);
   });
 
-  it("changes nothing for an environment that never existed", async () => {
+  it("changes nothing and shows no skeleton for an environment the user never held", async () => {
     const me = makeMe({ envs: { a: "viewer" } });
     meAnswer = me;
     const { handle, moveTo, notifyChanged } = setup("ghost", me);
-    await handle("unseen", "/api/env/ghost/summary");
+    const release = holdMe();
+    const run = handle("unseen", "/api/env/ghost/summary");
+    await vi.waitFor(() => expect(meReads()).toBe(1));
+    // The plain Page not found is not held back for a read of /api/me (D-08).
+    expect(isAccessRefetching()).toBe(false);
+    release();
+    await run;
+    expect(isAccessRefetching()).toBe(false);
     expect(moveTo).not.toHaveBeenCalled();
     expect(notifyChanged).not.toHaveBeenCalled();
   });
@@ -278,5 +411,50 @@ describe("the baseline (G-03-2)", () => {
     await handle("unseen", "/api/env/a/summary");
     expect(moveTo).not.toHaveBeenCalled();
     expect(notifyChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispose", () => {
+  it("cancels the trailing run, releases the skeleton and silences a run still in flight", async () => {
+    meAnswer = makeMe({ envs: { a: "viewer", b: "viewer" } });
+    const { handle, dispose, moveTo, notifyChanged } = setup("a", meAnswer);
+    const release = holdMe();
+    const first = handle("unseen", "/api/env/a/summary");
+    await vi.waitFor(() => expect(meReads()).toBe(1));
+    expect(isAccessRefetching()).toBe(true);
+    clock += 1_000;
+    await handle("unseen", "/api/env/a/containers");
+    expect(liveTimers()).toHaveLength(1);
+
+    dispose();
+    expect(liveTimers()).toHaveLength(0);
+    expect(timers[0]?.cancelled).toBe(true);
+    expect(isAccessRefetching()).toBe(false);
+
+    // The read answers with the grant gone, and nothing reacts to it.
+    meAnswer = makeMe({ envs: { b: "viewer" } });
+    items = ["b"];
+    release();
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(moveTo).not.toHaveBeenCalled();
+    expect(notifyChanged).not.toHaveBeenCalled();
+    expect(isAccessRefetching()).toBe(false);
+
+    // The skeleton count was released once: a new handler raises it and drops it.
+    clock += 10_000;
+    meAnswer = makeMe({ envs: { a: "viewer" } });
+    const next = setup("a", meAnswer);
+    const run = next.handle("unseen", "/api/env/a/summary");
+    expect(isAccessRefetching()).toBe(true);
+    await run;
+    expect(isAccessRefetching()).toBe(false);
+  });
+
+  it("stops observing /api/me", () => {
+    const { dispose } = setup("a", makeMe({ envs: { a: "viewer" } }));
+    expect(qc.getQueryCache().hasListeners()).toBe(true);
+    dispose();
+    expect(qc.getQueryCache().hasListeners()).toBe(false);
   });
 });

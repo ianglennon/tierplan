@@ -800,6 +800,41 @@ describe("access changes under a user (D-08, D-10)", () => {
     },
   );
 
+  it("shows the plain Page not found without the skeleton while /api/me is read again for an environment the user never held", async () => {
+    me = makeMe({ envs: { e2: "viewer" } });
+    stub.environments = () => Response.json({ items: [SECOND] });
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let refused = false;
+    let heldReads = 0;
+    stub.summary = () => {
+      refused = true;
+      return problem(404, "environment_not_found");
+    };
+    const inner = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (refused && new URL(req.url).pathname === "/api/me") {
+          heldReads++;
+          await held;
+        }
+        return inner(req);
+      }),
+    );
+    renderAt("/env/e1");
+    // The read of /api/me is under way and the answer is not held back for it.
+    await waitFor(() => expect(heldReads).toBeGreaterThanOrEqual(1));
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeTruthy();
+    expect(screen.queryByLabelText("Checking what you can see")).toBeNull();
+    release?.();
+    await waitFor(() => expect(meReads()).toBeGreaterThanOrEqual(2));
+    expect(screen.getByRole("heading", { name: "Page not found" })).toBeTruthy();
+    expect(screen.queryByText("Your access changed. Showing what you can see now.")).toBeNull();
+  });
+
   it("shows the refusal toast and re-renders from the new /api/me when an action is refused", async () => {
     me = makeMe({ envs: { e1: "operator" } });
     stub.summary = () => problem(503, "environment_offline", { reason: "unreachable" });
