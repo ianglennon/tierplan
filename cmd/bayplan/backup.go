@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -49,7 +50,9 @@ func newBackupCmd() *cobra.Command {
 		Long: "Writes the same encrypted .bayplan file as Settings > Backup, from a consistent copy of the database, while Bayplan runs.\n" +
 			"The passphrase is read from the file named by " + passphraseFileEnv + ", or else from the first line of standard input; " +
 			"it is never a flag. It must be at least " + strconv.Itoa(backup.MinPassphraseLen) + " characters.\n" +
-			"The file goes to --out: a path, or - for standard output. By default it goes to backups/ in the data directory.\n" +
+			"The file goes to --out: a path (an existing file there is replaced), or - for standard output. By default it goes to " +
+			"BAYPLAN_BACKUP_DIR, or backups/ in the data directory, as bayplan-manual-<date>-<time>.bayplan; a default name is never " +
+			"given to a file that exists. Scheduled-backup retention does not touch these files, and Settings > Backup does not list them.\n" +
 			"A broken audit chain refuses the backup unless --allow-broken-chain is given; the backup then records that it did not verify.\n" +
 			"The backup is audited as backup.exported by system:cli.",
 		Args: cobra.NoArgs,
@@ -57,7 +60,7 @@ func newBackupCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE:          func(cmd *cobra.Command, _ []string) error { return runBackup(cmd, out, allowBroken) },
 	}
-	cmd.Flags().StringVar(&out, "out", "", "where to write the backup: a file path, or - for standard output (default: backups/ in the data directory)")
+	cmd.Flags().StringVar(&out, "out", "", "where to write the backup: a file path, or - for standard output (default: bayplan-manual-<date>-<time>.bayplan in BAYPLAN_BACKUP_DIR, or in backups/ in the data directory)")
 	cmd.Flags().BoolVar(&allowBroken, "allow-broken-chain", false, "back up even if the audit chain does not verify")
 	return cmd
 }
@@ -109,7 +112,7 @@ func runBackup(cmd *cobra.Command, out string, allowBroken bool) error {
 	}
 
 	now := time.Now().UTC()
-	dest, err := newBackupDestination(cmd, cfg.DataDir, out, now)
+	dest, err := newBackupDestination(cmd, cfg.DataDir, cfg.BackupDir, out, now)
 	if err != nil {
 		return fail(err)
 	}
@@ -192,25 +195,67 @@ type destination struct {
 	label string // the file name for the audit entry; "stdout" for standard output
 	path  string // the final path; empty for standard output
 	tmp   *os.File
+	// reserved is set when path is an empty file this command created to claim its
+	// name; a backup that fails removes it.
+	reserved bool
 }
 
-func newBackupDestination(cmd *cobra.Command, dataDir, out string, now time.Time) (*destination, error) {
+// maxNameAttempts bounds the search for a free default name. Two backups in the
+// same second are the only reason to go past the first.
+const maxNameAttempts = 100
+
+func newBackupDestination(cmd *cobra.Command, dataDir, backupDir, out string, now time.Time) (*destination, error) {
 	if out == "-" {
 		return &destination{w: cmd.OutOrStdout(), label: "stdout"}, nil
 	}
-	path := out
+	path, reserved := out, false
 	if path == "" {
-		dir := filepath.Join(dataDir, "backups")
+		// The folder the server writes its scheduled backups to, but under a name
+		// of its own: a scheduled name here would be counted and deleted by the
+		// retention of the scheduled backups, and could replace one (T-03-113).
+		dir := backupDir
+		if dir == "" {
+			dir = filepath.Join(dataDir, "backups")
+		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("create backups directory %s: %w", dir, err)
 		}
-		path = filepath.Join(dir, "bayplan-backup-"+now.Format("20060102-1504")+backup.FileExtension)
+		var err error
+		if path, err = reserveName(dir, now); err != nil {
+			return nil, err
+		}
+		reserved = true
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".bayplan-backup-*.tmp")
 	if err != nil {
+		if reserved {
+			_ = os.Remove(path)
+		}
 		return nil, fmt.Errorf("create the backup file: %w", err)
 	}
-	return &destination{w: tmp, label: filepath.Base(path), path: path, tmp: tmp}, nil
+	return &destination{w: tmp, label: filepath.Base(path), path: path, tmp: tmp, reserved: reserved}, nil
+}
+
+// reserveName claims a default file name by creating it, empty and exclusively,
+// so a file that exists, a scheduled backup or another manual one, is never
+// replaced. commit later renames the finished backup over the empty claim.
+func reserveName(dir string, now time.Time) (string, error) {
+	for n := 1; n <= maxNameAttempts; n++ {
+		path := filepath.Join(dir, backup.ManualName(now, n))
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // a name this command builds in the backups folder
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("create the backup file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			_ = os.Remove(path)
+			return "", fmt.Errorf("create the backup file: %w", err)
+		}
+		return path, nil
+	}
+	return "", fmt.Errorf("no free backup name in %s for %s: use --out", dir, now.Format("2006-01-02 15:04:05"))
 }
 
 // commit moves a finished file into place, mode 0600.
@@ -220,17 +265,23 @@ func (d *destination) commit() error {
 	}
 	tmp := d.tmp
 	d.tmp = nil
+	fail := func() {
+		_ = os.Remove(tmp.Name())
+		if d.reserved {
+			_ = os.Remove(d.path)
+		}
+	}
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
+		fail()
 		return fmt.Errorf("restrict the backup file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmp.Name())
+		fail()
 		return fmt.Errorf("write the backup file: %w", err)
 	}
 	if err := os.Rename(tmp.Name(), d.path); err != nil {
-		_ = os.Remove(tmp.Name())
+		fail()
 		return fmt.Errorf("move the backup into place: %w", err)
 	}
 	return nil
@@ -243,4 +294,7 @@ func (d *destination) abort() {
 	}
 	_ = d.tmp.Close()
 	_ = os.Remove(d.tmp.Name())
+	if d.reserved {
+		_ = os.Remove(d.path)
+	}
 }

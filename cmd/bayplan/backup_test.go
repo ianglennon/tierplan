@@ -9,8 +9,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/backup"
 )
@@ -167,14 +170,18 @@ func TestBackupToDashWritesTheFileToStandardOutput(t *testing.T) {
 	}
 }
 
-func TestBackupDefaultsToTheBackupsFolderOfTheDataDirectory(t *testing.T) {
+func TestBackupDefaultsToTheBackupsFolderOfTheDataDirectoryUnderAManualName(t *testing.T) {
+	t.Setenv("BAYPLAN_BACKUP_DIR", "")
 	dir, _ := seedDataDir(t, 0)
 	if _, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "backup"); err != nil {
 		t.Fatalf("backup = %v, stderr %q", err, errOut)
 	}
-	matches, err := filepath.Glob(filepath.Join(dir, "backups", "bayplan-backup-*.bayplan"))
+	matches, err := filepath.Glob(filepath.Join(dir, "backups", "bayplan-manual-*.bayplan"))
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("backups in the data directory = %v, %v; want one", matches, err)
+	}
+	if backup.IsScheduledName(filepath.Base(matches[0])) {
+		t.Fatalf("%s is named like a scheduled backup, so retention would delete it", matches[0])
 	}
 	file, err := os.ReadFile(matches[0]) //nolint:gosec // a path the test made
 	if err != nil {
@@ -186,6 +193,7 @@ func TestBackupDefaultsToTheBackupsFolderOfTheDataDirectory(t *testing.T) {
 // BAYPLAN_DATA_DIR is commonly relative (./.devdata under make dev); the backup
 // must work from it, to --out and to the default folder (UAT gap G-03-4).
 func TestBackupWorksWithARelativeDataDirectory(t *testing.T) {
+	t.Setenv("BAYPLAN_BACKUP_DIR", "")
 	abs, _ := seedDataDir(t, 1)
 	t.Chdir(filepath.Dir(abs))
 	rel := "./" + filepath.Base(abs)
@@ -203,7 +211,7 @@ func TestBackupWorksWithARelativeDataDirectory(t *testing.T) {
 	if _, errOut, err := runCLIWith(t, rel, cliPass+"\n", "", "backup"); err != nil || strings.Contains(errOut, "invalid uri authority") {
 		t.Fatalf("backup = %v, stderr %q", err, errOut)
 	}
-	matches, err := filepath.Glob(filepath.Join(rel, "backups", "bayplan-backup-*.bayplan"))
+	matches, err := filepath.Glob(filepath.Join(rel, "backups", "bayplan-manual-*.bayplan"))
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("backups in the data directory = %v, %v; want one", matches, err)
 	}
@@ -239,5 +247,111 @@ func TestBackupRefusesABrokenChainUnlessAllowed(t *testing.T) {
 	manifest, _ := readBackup(t, file, cliPass)
 	if !bytes.Contains(manifest, []byte(`"chainVerified":false`)) {
 		t.Fatalf("manifest = %s, want chainVerified false", manifest)
+	}
+}
+
+// T-03-113: the default file goes where the server keeps its backups, under a name the
+// scheduled-backup retention never matches, and never replaces a file.
+
+func TestBackupDefaultFileGoesToBackupDirWhenItIsSet(t *testing.T) {
+	dir, _ := seedDataDir(t, 0)
+	folder := filepath.Join(t.TempDir(), "elsewhere")
+	t.Setenv("BAYPLAN_BACKUP_DIR", folder)
+	stdout, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "backup")
+	if err != nil {
+		t.Fatalf("backup = %v, stderr %q", err, errOut)
+	}
+	matches, err := filepath.Glob(filepath.Join(folder, "bayplan-manual-*.bayplan"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("backups in BAYPLAN_BACKUP_DIR = %v, %v; want one", matches, err)
+	}
+	if !strings.Contains(string(stdout), matches[0]) {
+		t.Fatalf("output %q does not name %s", stdout, matches[0])
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "backups", "*.bayplan")); len(left) != 0 {
+		t.Fatalf("the data directory's backups folder holds %v, want nothing while BAYPLAN_BACKUP_DIR is set", left)
+	}
+	if tmp, _ := filepath.Glob(filepath.Join(folder, ".bayplan-backup-*")); len(tmp) != 0 {
+		t.Fatalf("work files left behind: %v", tmp)
+	}
+	file, err := os.ReadFile(matches[0]) //nolint:gosec // a path the test made
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBackup(t, file, cliPass)
+}
+
+func TestBackupDefaultNameNeverReplacesAScheduledBackupOfTheSameMinute(t *testing.T) {
+	t.Setenv("BAYPLAN_BACKUP_DIR", "")
+	dir, _ := seedDataDir(t, 0)
+	folder := filepath.Join(dir, "backups")
+	if err := os.MkdirAll(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A scheduled backup made in this very minute, and one a minute either side.
+	var seeded []string
+	for _, d := range []time.Duration{-time.Minute, 0, time.Minute} {
+		name := backup.ScheduledName(time.Now().Add(d))
+		seeded = append(seeded, name)
+		if err := os.WriteFile(filepath.Join(folder, name), []byte("scheduled: keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "backup"); err != nil {
+		t.Fatalf("backup = %v, stderr %q", err, errOut)
+	}
+	for _, name := range seeded {
+		got, err := os.ReadFile(filepath.Join(folder, name)) //nolint:gosec // a path the test made
+		if err != nil || string(got) != "scheduled: keep" {
+			t.Fatalf("scheduled backup %s = %q, %v; want it untouched", name, got, err)
+		}
+	}
+	if matches, _ := filepath.Glob(filepath.Join(folder, "bayplan-manual-*.bayplan")); len(matches) != 1 {
+		t.Fatalf("manual backups = %v, want one", matches)
+	}
+}
+
+func TestBackupDefaultNameTakesAFreeNameWhenTheSecondIsTaken(t *testing.T) {
+	folder := t.TempDir()
+	at := time.Date(2026, 10, 8, 14, 5, 9, 0, time.UTC)
+	var paths []string
+	for i := range 3 {
+		d, err := newBackupDestination(newBackupCmd(), t.TempDir(), folder, "", at)
+		if err != nil {
+			t.Fatalf("destination %d: %v", i, err)
+		}
+		if _, err := d.w.Write([]byte("backup " + strconv.Itoa(i))); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.commit(); err != nil {
+			t.Fatalf("commit %d: %v", i, err)
+		}
+		paths = append(paths, d.path)
+	}
+	want := []string{
+		filepath.Join(folder, "bayplan-manual-20261008-140509.bayplan"),
+		filepath.Join(folder, "bayplan-manual-20261008-140509-2.bayplan"),
+		filepath.Join(folder, "bayplan-manual-20261008-140509-3.bayplan"),
+	}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+	for i, p := range paths {
+		got, err := os.ReadFile(p) //nolint:gosec // a path the test made
+		if err != nil || string(got) != "backup "+strconv.Itoa(i) {
+			t.Fatalf("%s = %q, %v; want the first run's file kept as it was", p, got, err)
+		}
+	}
+}
+
+func TestBackupDefaultNameClaimIsRemovedWhenTheBackupIsAbandoned(t *testing.T) {
+	folder := t.TempDir()
+	d, err := newBackupDestination(newBackupCmd(), t.TempDir(), folder, "", time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.abort()
+	if entries, _ := os.ReadDir(folder); len(entries) != 0 {
+		t.Fatalf("an abandoned backup left %v behind", entries)
 	}
 }

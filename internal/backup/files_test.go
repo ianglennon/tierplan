@@ -198,3 +198,31 @@ func TestStaleWorkFilesOfAKilledExportAreSweptAndNothingElseIs(t *testing.T) {
 		}
 	}
 }
+
+func TestManualBackupNamesHaveSecondsAreNeverScheduledNamesAndAreNeitherListedNorServed(t *testing.T) {
+	at := time.Date(2026, 10, 8, 14, 5, 9, 0, time.UTC)
+	if got := backup.ManualName(at, 1); got != "bayplan-manual-20261008-140509.bayplan" {
+		t.Fatalf("ManualName = %q", got)
+	}
+	if got := backup.ManualName(at, 0); got != backup.ManualName(at, 1) {
+		t.Fatalf("attempt 0 = %q, want the plain name", got)
+	}
+	if got := backup.ManualName(at, 2); got != "bayplan-manual-20261008-140509-2.bayplan" {
+		t.Fatalf("attempt 2 = %q", got)
+	}
+	dir := t.TempDir()
+	for n := 1; n <= 3; n++ {
+		name := backup.ManualName(at, n)
+		if backup.IsScheduledName(name) {
+			t.Errorf("%q matches the scheduled pattern", name)
+		}
+		writeFile(t, dir, name, "manual")
+		if _, _, err := backup.OpenBackupFile(dir, name); !errors.Is(err, backup.ErrNoSuchBackup) {
+			t.Errorf("OpenBackupFile(%q) = %v, want ErrNoSuchBackup: manual backups are not served", name, err)
+		}
+	}
+	files, err := backup.ListBackupFiles(dir)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("listing = %v, %v; want manual backups left out", files, err)
+	}
+}

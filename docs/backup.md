@@ -61,9 +61,18 @@ printf '%s\n' "$PASSPHRASE" | docker exec -i bayplan bayplan backup --out /data/
 ```
 
 Or keep it in a Docker secret or a mounted file and set `BAYPLAN_BACKUP_PASSPHRASE_FILE` in the
-container's environment. Without `--out` the file goes into `backups/` in the data directory.
+container's environment. Without `--out` the file goes into the folder the scheduled backups use
+(`BAYPLAN_BACKUP_DIR` if it is set, else `backups/` in the data directory) and is named
+`bayplan-manual-YYYYMMDD-HHMMSS.bayplan` (UTC). Two backups in the same second get `-2`, `-3` and so
+on, and a name that is not free is never reused, so the command never replaces a file when it
+chooses the name. `--out <file>` is your own name and does replace an existing file, as before.
 `--out -` writes to standard output, so the file leaves the container without ever touching its
 disk.
+
+A manual backup is **not** a scheduled one. Retention never counts or deletes it, and
+**Settings, Backup** does not list or offer it for download (that list and the download accept only
+the scheduled name, which keeps the download from reaching any other file). Copy it off the host
+yourself, for example with `docker cp`, and delete it when you no longer need it.
 
 Bayplan checks the audit log's chain first and refuses to back up a log that does not verify.
 `--allow-broken-chain` overrides that, and the backup records that the chain did not verify.
@@ -79,8 +88,9 @@ time you choose (UTC) and keeps the newest N, 7 by default.
   Mount a volume or a host folder somewhere else and set `BAYPLAN_BACKUP_DIR` to it, or mount it
   at `/data/backups`, to keep backups off the data volume. Nothing leaves the machine by itself:
   there are no S3 or SFTP targets in 0.x.
-- Retention only ever deletes scheduled `bayplan-backup-*.bayplan` files in that folder. It never
-  touches the pre-migration snapshots, pre-restore snapshots or other files.
+- Retention only ever deletes scheduled `bayplan-backup-YYYYMMDD-HHMM.bayplan` files in that
+  folder. It never touches the pre-migration snapshots, pre-restore snapshots, manual backups
+  made with `bayplan backup` (`bayplan-manual-*.bayplan`) or other files.
 - The schedule's passphrase has to be stored so backups can run unattended. It is encrypted with
   the master key. **Anyone who can read `/data` and the master key can read it**, and with it open
   the backups. That is a risk you accept by turning the schedule on. Use a passphrase that you do

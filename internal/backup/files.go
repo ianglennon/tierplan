@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,6 +35,28 @@ const (
 // ScheduledName is the file name of a scheduled backup made at t (UTC).
 func ScheduledName(t time.Time) string {
 	return scheduledNamePrefix + t.UTC().Format(scheduledNameLayout) + scheduledNameSuffix
+}
+
+// manualNamePrefix and manualNameLayout build the name of a backup made by hand
+// with the bayplan backup command and no --out. It differs from a scheduled
+// backup's name in its prefix and has seconds, so the scheduled pattern never
+// matches it: retention does not count or delete it, and the backups listing and
+// download do not offer it. It is meant to be copied off the host, not kept by
+// Bayplan (T-03-113).
+const (
+	manualNamePrefix = "bayplan-manual-"
+	manualNameLayout = "20060102-150405"
+)
+
+// ManualName is the file name of a manual backup made at t (UTC). n is the
+// attempt: 0 and 1 give the plain name, and a larger n adds -n before the
+// extension so a second backup in the same second can take a free name.
+func ManualName(t time.Time, n int) string {
+	name := manualNamePrefix + t.UTC().Format(manualNameLayout)
+	if n > 1 {
+		name += "-" + strconv.Itoa(n)
+	}
+	return name + FileExtension
 }
 
 // IsScheduledName reports whether name is exactly the name of a scheduled backup.

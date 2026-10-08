@@ -370,6 +370,37 @@ func TestPruneKeepsTheNewestBackupsAndTouchesNoOtherFile(t *testing.T) {
 	}
 }
 
+// T-03-113: a backup made by hand with "bayplan backup" lands in the same folder under
+// a name of its own, which retention must neither count nor delete.
+func TestPruneLeavesManualBackupsAloneAndDoesNotCountThem(t *testing.T) {
+	f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
+	in := dailyAt3(exportPass)
+	in.Keep = 1
+	if _, err := f.saveSchedule(t, in); err != nil {
+		t.Fatal(err)
+	}
+	manual := []string{
+		backup.ManualName(utc(2026, 9, 1, 12, 0), 1), backup.ManualName(utc(2026, 9, 1, 12, 0), 2),
+		backup.ManualName(utc(2026, 10, 1, 3, 0), 1), backup.ManualName(utc(2026, 10, 8, 3, 0), 1),
+	}
+	for _, n := range manual {
+		if backup.IsScheduledName(n) {
+			t.Fatalf("manual name %q matches the scheduled pattern", n)
+		}
+		writeFile(t, f.dir, n, "manual")
+	}
+	writeFile(t, f.dir, "bayplan-backup-20261001-0300.bayplan", "old scheduled")
+	f.runOnce(t)
+
+	got := f.names(t)
+	want := append([]string{"bayplan-backup-20261008-0300.bayplan"}, manual...)
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("the folder holds\n  %v\nwant the newest scheduled backup and every manual one\n  %v", got, want)
+	}
+}
+
 func TestPruneRunsOnlyAfterABackupSucceeded(t *testing.T) {
 	f := newSchedFixture(t, utc(2026, 10, 8, 1, 0))
 	in := dailyAt3(exportPass)
