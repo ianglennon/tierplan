@@ -2300,6 +2300,19 @@
         ],
         "type": "object"
       },
+      "SetInstanceAdminInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "True to make the user an instance admin, false to remove it",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
       "SettingsBody": {
         "additionalProperties": false,
         "properties": {
@@ -2668,6 +2681,30 @@
         },
         "required": [
           "state"
+        ],
+        "type": "object"
+      },
+      "UpdateUserInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "description": "The name shown for the user; at most 64 characters. Send an empty string to clear it; leave it out to keep it",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "email": {
+            "description": "A bare address, or empty to clear it; leave it out to keep it. Bayplan never sends mail",
+            "maxLength": 254,
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "The updatedAt of the user this edit is based on. If the user changed since, the answer is 409 stale_change",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "updatedAt"
         ],
         "type": "object"
       },
@@ -5344,6 +5381,41 @@
       }
     },
     "/api/users/{userId}": {
+      "delete": {
+        "description": "Turns the user into a tombstone and cannot be undone: they are disabled, their password, email and display name are cleared, instance admin is turned off, and their sessions, links, direct access and team memberships are removed in one step. Their username stays reserved, so creating it again answers 409 username_reserved. The automations they own pause. The last active instance admin cannot be deleted: 409 last_instance_admin. A user who is already deleted answers 404 user_not_found.",
+        "operationId": "deleteUser",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a user",
+        "tags": [
+          "users"
+        ]
+      },
       "get": {
         "description": "The user as the user page shows them. An unknown or deleted user answers 404 user_not_found.",
         "operationId": "getUser",
@@ -5389,6 +5461,65 @@
           }
         },
         "summary": "Read one user",
+        "tags": [
+          "users"
+        ]
+      },
+      "patch": {
+        "description": "Send displayName, email or both, with the updatedAt you read. If the user changed since, nothing is saved and the answer is 409 stale_change. The username can never be changed and is not accepted. An invalid field answers 422 on body.displayName or body.email. Saving what is already there changes nothing.",
+        "operationId": "updateUser",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Edit a user's display name and email",
         "tags": [
           "users"
         ]
@@ -5496,6 +5627,67 @@
         ]
       }
     },
+    "/api/users/{userId}/instance-admin": {
+      "post": {
+        "description": "Instance authority belongs to a user, never to a team. Setting what is already set changes nothing. Turning it off for the last active instance admin answers 409 last_instance_admin. Answers the user as they now are.",
+        "operationId": "setInstanceAdmin",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetInstanceAdminInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Turn instance admin on or off for a user",
+        "tags": [
+          "users"
+        ]
+      }
+    },
     "/api/users/{userId}/invite": {
       "post": {
         "description": "For a user who has not yet set a password. The new link replaces the previous one, which stops working at once, and is valid for BAYPLAN_INVITE_TTL. A user who has already set a password answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.",
@@ -5542,6 +5734,57 @@
           }
         },
         "summary": "Replace a user's invite link",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/users/{userId}/unlock": {
+      "post": {
+        "description": "Clears the lock and the failed sign-in count, audited as auth.unlocked with the caller as actor. A user who is not locked is left alone and nothing is audited. Answers the user as they now are.",
+        "operationId": "unlockUser",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Unlock a locked user",
         "tags": [
           "users"
         ]

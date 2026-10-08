@@ -628,7 +628,7 @@ func TestNoQueryEverSetsAUsername(t *testing.T) {
 	where := regexp.MustCompile(`(?i)\bwhere\b`)
 	assignsUsername := regexp.MustCompile(`(?i)(^|[\s,])username\s*=`)
 	for _, file := range files {
-		b, err := os.ReadFile(file)
+		b, err := os.ReadFile(file) //nolint:gosec // a query file found by globbing the repository
 		if err != nil {
 			t.Fatal(err)
 		}

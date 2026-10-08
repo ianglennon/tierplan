@@ -60,6 +60,20 @@ func (q *Queries) DeleteAllUserSessions(ctx context.Context, userID string) (int
 	return result.RowsAffected()
 }
 
+const deleteUserAssignments = `-- name: DeleteUserAssignments :execrows
+DELETE FROM role_assignments WHERE principal_type = 'user' AND principal_id = ?
+`
+
+// Every role assignment made to the user themselves; their extras go with them.
+// Assignments made to a team are the team's.
+func (q *Queries) DeleteUserAssignments(ctx context.Context, principalID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteUserAssignments, principalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteUserLinks = `-- name: DeleteUserLinks :exec
 DELETE FROM user_links WHERE user_id = ?
 `
@@ -68,6 +82,18 @@ DELETE FROM user_links WHERE user_id = ?
 func (q *Queries) DeleteUserLinks(ctx context.Context, userID string) error {
 	_, err := q.db.ExecContext(ctx, deleteUserLinks, userID)
 	return err
+}
+
+const deleteUserMemberships = `-- name: DeleteUserMemberships :execrows
+DELETE FROM team_members WHERE user_id = ?
+`
+
+func (q *Queries) DeleteUserMemberships(ctx context.Context, userID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteUserMemberships, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getUserByUsernameAny = `-- name: GetUserByUsernameAny :one
@@ -327,4 +353,59 @@ type SetUserDisabledParams struct {
 func (q *Queries) SetUserDisabled(ctx context.Context, arg SetUserDisabledParams) error {
 	_, err := q.db.ExecContext(ctx, setUserDisabled, arg.Disabled, arg.UpdatedAt, arg.ID)
 	return err
+}
+
+const tombstoneUser = `-- name: TombstoneUser :execrows
+UPDATE users
+SET disabled = 1, deleted_at = ?, password_hash = '', email = '', display_name = '',
+    instance_admin = 0, failed_count = 0, locked_until = NULL, updated_at = ?
+WHERE id = ? AND deleted_at IS NULL
+`
+
+type TombstoneUserParams struct {
+	DeletedAt sql.NullInt64
+	UpdatedAt int64
+	ID        string
+}
+
+// Deletes a user without deleting the row (D-22c): what lets them in is erased,
+// and the row, the username and every audit reference to the ID stay. The
+// username is never touched, so it stays reserved. Zero rows means the user was
+// already a tombstone.
+func (q *Queries) TombstoneUser(ctx context.Context, arg TombstoneUserParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, tombstoneUser, arg.DeletedAt, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateUserProfile = `-- name: UpdateUserProfile :execrows
+UPDATE users SET display_name = ?, email = ?, updated_at = ?
+WHERE id = ? AND updated_at = ? AND deleted_at IS NULL
+`
+
+type UpdateUserProfileParams struct {
+	DisplayName string
+	Email       string
+	UpdatedAt   int64
+	ID          string
+	UpdatedAt_2 int64
+}
+
+// Saves the display name and email only if the user is still at the version the
+// caller read (updated_at), so two admins never silently overwrite each other
+// (T-03-57). Zero rows means the version moved.
+func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateUserProfile,
+		arg.DisplayName,
+		arg.Email,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.UpdatedAt_2,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

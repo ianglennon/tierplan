@@ -283,3 +283,179 @@ func userFieldProblems(err error) error {
 		Errors: problems,
 	}
 }
+
+// SetInstanceAdminInput turns instance authority on or off for one user.
+type SetInstanceAdminInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	UserID    string `path:"userId" doc:"The user's ID"`
+	Body      struct {
+		Enabled bool `json:"enabled" doc:"True to make the user an instance admin, false to remove it"`
+	}
+}
+
+// UpdateUserInput is an admin's edit of a user's profile. The username is not a
+// field: it never changes, and a body that names it is refused.
+type UpdateUserInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	UserID    string `path:"userId" doc:"The user's ID"`
+	Body      struct {
+		DisplayName *string   `json:"displayName,omitempty" maxLength:"256" doc:"The name shown for the user; at most 64 characters. Send an empty string to clear it; leave it out to keep it"`
+		Email       *string   `json:"email,omitempty" maxLength:"254" doc:"A bare address, or empty to clear it; leave it out to keep it. Bayplan never sends mail"`
+		UpdatedAt   time.Time `json:"updatedAt" format:"date-time" doc:"The updatedAt of the user this edit is based on. If the user changed since, the answer is 409 stale_change"`
+	}
+}
+
+// registerUserLifecycle registers the routes of one user's page: read, edit,
+// disable, enable, delete, instance admin and unlock. All need users.manage.
+func registerUserLifecycle(r *httpx.Router, d AccessDeps) {
+	manage := rbac.Requirement{Perm: rbac.PermUsersManage, Scope: rbac.ScopeGlobal}
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getUser",
+		Method:      http.MethodGet,
+		Path:        "/api/users/{userId}",
+		Summary:     "Read one user",
+		Description: "The user as the user page shows them. An unknown or deleted user answers 404 user_not_found.",
+		Tags:        []string{"users"},
+	}, manage, func(ctx context.Context, in *UserIDInput) (*UserDetailOutput, error) {
+		return readUser(ctx, d, in.UserID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "updateUser",
+		Method:      http.MethodPatch,
+		Path:        "/api/users/{userId}",
+		Summary:     "Edit a user's display name and email",
+		Description: "Send displayName, email or both, with the updatedAt you read. If the user changed since, nothing is " +
+			"saved and the answer is 409 stale_change. The username can never be changed and is not accepted. " +
+			"An invalid field answers 422 on body.displayName or body.email. Saving what is already there changes nothing.",
+		Tags: []string{"users"},
+	}, manage, func(ctx context.Context, in *UpdateUserInput) (*UserDetailOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		err := d.Access.UpdateProfile(ctx, p.AuditActor(), in.UserID, access.ProfileInput{
+			DisplayName: in.Body.DisplayName, Email: in.Body.Email, UpdatedAt: in.Body.UpdatedAt,
+		}, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent))
+		if errors.Is(err, access.ErrInvalidEmail) || errors.Is(err, access.ErrDisplayNameTooLong) {
+			return nil, userFieldProblems(err)
+		}
+		if err != nil {
+			return nil, lifecycleError(d, "update user", err)
+		}
+		return readUser(ctx, d, in.UserID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "disableUser",
+		Method:      http.MethodPost,
+		Path:        "/api/users/{userId}/disable",
+		Summary:     "Disable a user",
+		Description: "Ends every session of the user at once and refuses their sign-in. Their grants and team " +
+			"memberships are kept and the automations they own pause. Answers the user as they now are. " +
+			"Disabling a disabled user changes nothing. " +
+			"The last active instance admin cannot be disabled: 409 last_instance_admin.",
+		Tags: []string{"users"},
+	}, manage, func(ctx context.Context, in *UserIDInput) (*UserDetailOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if err := d.Access.DisableUser(ctx, p.AuditActor(), in.UserID, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent)); err != nil {
+			return nil, lifecycleError(d, "disable user", err)
+		}
+		return readUser(ctx, d, in.UserID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "enableUser",
+		Method:      http.MethodPost,
+		Path:        "/api/users/{userId}/enable",
+		Summary:     "Enable a user",
+		Description: "Lets a disabled user sign in again with the grants and teams they had. Enabling an enabled user changes nothing.",
+		Tags:        []string{"users"},
+	}, manage, func(ctx context.Context, in *UserIDInput) (*UserDetailOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if err := d.Access.EnableUser(ctx, p.AuditActor(), in.UserID, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent)); err != nil {
+			return nil, lifecycleError(d, "enable user", err)
+		}
+		return readUser(ctx, d, in.UserID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "deleteUser",
+		Method:        http.MethodDelete,
+		Path:          "/api/users/{userId}",
+		Summary:       "Delete a user",
+		DefaultStatus: http.StatusNoContent,
+		Description: "Turns the user into a tombstone and cannot be undone: they are disabled, their password, email and " +
+			"display name are cleared, instance admin is turned off, and their sessions, links, direct access and team " +
+			"memberships are removed in one step. Their username stays reserved, so creating it again answers 409 " +
+			"username_reserved. The automations they own pause. The last active instance admin cannot be deleted: 409 " +
+			"last_instance_admin. A user who is already deleted answers 404 user_not_found.",
+		Tags: []string{"users"},
+	}, manage, func(ctx context.Context, in *UserIDInput) (*struct{}, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if err := d.Access.DeleteUser(ctx, p.AuditActor(), in.UserID, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent)); err != nil {
+			return nil, lifecycleError(d, "delete user", err)
+		}
+		return nil, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "setInstanceAdmin",
+		Method:      http.MethodPost,
+		Path:        "/api/users/{userId}/instance-admin",
+		Summary:     "Turn instance admin on or off for a user",
+		Description: "Instance authority belongs to a user, never to a team. Setting what is already set changes nothing. " +
+			"Turning it off for the last active instance admin answers 409 last_instance_admin. Answers the user as they now are.",
+		Tags: []string{"users"},
+	}, manage, func(ctx context.Context, in *SetInstanceAdminInput) (*UserDetailOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if err := d.Access.SetInstanceAdmin(ctx, p.AuditActor(), in.UserID, in.Body.Enabled, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent)); err != nil {
+			return nil, lifecycleError(d, "set instance admin", err)
+		}
+		return readUser(ctx, d, in.UserID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "unlockUser",
+		Method:      http.MethodPost,
+		Path:        "/api/users/{userId}/unlock",
+		Summary:     "Unlock a locked user",
+		Description: "Clears the lock and the failed sign-in count, audited as auth.unlocked with the caller as actor. " +
+			"A user who is not locked is left alone and nothing is audited. Answers the user as they now are.",
+		Tags: []string{"users"},
+	}, manage, func(ctx context.Context, in *UserIDInput) (*UserDetailOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if err := d.Access.UnlockUser(ctx, p.AuditActor(), in.UserID, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent)); err != nil {
+			return nil, lifecycleError(d, "unlock user", err)
+		}
+		return readUser(ctx, d, in.UserID)
+	})
+}
+
+// readUser answers a lifecycle route with the user as it is after the change, so
+// the page can show the new state without a second request.
+func readUser(ctx context.Context, d AccessDeps, id string) (*UserDetailOutput, error) {
+	u, err := d.Access.GetUser(ctx, id)
+	if err != nil {
+		return nil, lifecycleError(d, "read user", err)
+	}
+	return &UserDetailOutput{CacheControl: "no-store", Body: detailOf(u)}, nil
+}

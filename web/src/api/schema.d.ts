@@ -789,10 +789,18 @@ export interface paths {
         get: operations["getUser"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a user
+         * @description Turns the user into a tombstone and cannot be undone: they are disabled, their password, email and display name are cleared, instance admin is turned off, and their sessions, links, direct access and team memberships are removed in one step. Their username stays reserved, so creating it again answers 409 username_reserved. The automations they own pause. The last active instance admin cannot be deleted: 409 last_instance_admin. A user who is already deleted answers 404 user_not_found.
+         */
+        delete: operations["deleteUser"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Edit a user's display name and email
+         * @description Send displayName, email or both, with the updatedAt you read. If the user changed since, nothing is saved and the answer is 409 stale_change. The username can never be changed and is not accepted. An invalid field answers 422 on body.displayName or body.email. Saving what is already there changes nothing.
+         */
+        patch: operations["updateUser"];
         trace?: never;
     };
     "/api/users/{userId}/disable": {
@@ -835,6 +843,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users/{userId}/instance-admin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Turn instance admin on or off for a user
+         * @description Instance authority belongs to a user, never to a team. Setting what is already set changes nothing. Turning it off for the last active instance admin answers 409 last_instance_admin. Answers the user as they now are.
+         */
+        post: operations["setInstanceAdmin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users/{userId}/invite": {
         parameters: {
             query?: never;
@@ -849,6 +877,26 @@ export interface paths {
          * @description For a user who has not yet set a password. The new link replaces the previous one, which stops working at once, and is valid for BAYPLAN_INVITE_TTL. A user who has already set a password answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.
          */
         post: operations["regenerateInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unlock a locked user
+         * @description Clears the lock and the failed sign-in count, audited as auth.unlocked with the caller as actor. A user who is not locked is left alone and nothing is audited. Answers the user as they now are.
+         */
+        post: operations["unlockUser"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1821,6 +1869,10 @@ export interface components {
             /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
             install: components["schemas"]["InstallBody"];
         };
+        SetInstanceAdminInputBody: {
+            /** @description True to make the user an instance admin, false to remove it */
+            enabled: boolean;
+        };
         SettingsBody: {
             /** @description The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set */
             agentEndpoint: string;
@@ -1994,6 +2046,17 @@ export interface components {
              * @enum {string}
              */
             state: "idle" | "updating" | "failed";
+        };
+        UpdateUserInputBody: {
+            /** @description The name shown for the user; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
+            displayName?: string;
+            /** @description A bare address, or empty to clear it; leave it out to keep it. Bayplan never sends mail */
+            email?: string;
+            /**
+             * Format: date-time
+             * @description The updatedAt of the user this edit is based on. If the user changed since, the answer is 409 stale_change
+             */
+            updatedAt: string;
         };
         UserBody: {
             /** @description The name shown for the user; empty when none was set, and the SPA then shows the username */
@@ -3708,6 +3771,73 @@ export interface operations {
             };
         };
     };
+    deleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUserInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     disableUser: {
         parameters: {
             query?: never;
@@ -3774,6 +3904,43 @@ export interface operations {
             };
         };
     };
+    setInstanceAdmin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetInstanceAdminInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     regenerateInvite: {
         parameters: {
             query?: never;
@@ -3794,6 +3961,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LinkBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unlockUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetailBody"];
                 };
             };
             /** @description Error */

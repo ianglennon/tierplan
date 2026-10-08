@@ -73,3 +73,28 @@ SELECT COUNT(*) FROM users WHERE instance_admin = 1 AND disabled = 0 AND deleted
 -- name: DeleteAllUserSessions :execrows
 -- Ends every session of a user and says how many there were.
 DELETE FROM sessions WHERE user_id = ?;
+
+-- name: TombstoneUser :execrows
+-- Deletes a user without deleting the row (D-22c): what lets them in is erased,
+-- and the row, the username and every audit reference to the ID stay. The
+-- username is never touched, so it stays reserved. Zero rows means the user was
+-- already a tombstone.
+UPDATE users
+SET disabled = 1, deleted_at = ?, password_hash = '', email = '', display_name = '',
+    instance_admin = 0, failed_count = 0, locked_until = NULL, updated_at = ?
+WHERE id = ? AND deleted_at IS NULL;
+
+-- name: DeleteUserAssignments :execrows
+-- Every role assignment made to the user themselves; their extras go with them.
+-- Assignments made to a team are the team's.
+DELETE FROM role_assignments WHERE principal_type = 'user' AND principal_id = ?;
+
+-- name: DeleteUserMemberships :execrows
+DELETE FROM team_members WHERE user_id = ?;
+
+-- name: UpdateUserProfile :execrows
+-- Saves the display name and email only if the user is still at the version the
+-- caller read (updated_at), so two admins never silently overwrite each other
+-- (T-03-57). Zero rows means the version moved.
+UPDATE users SET display_name = ?, email = ?, updated_at = ?
+WHERE id = ? AND updated_at = ? AND deleted_at IS NULL;
