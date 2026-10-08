@@ -63,6 +63,12 @@ let revokeAll: () => Response | Promise<Response>;
 let reset: () => Response | Promise<Response>;
 // The JSON bodies the page sent, by "METHOD path".
 let sent: Record<string, unknown>;
+// What the user owns, who could take an automation over, and what transferring it
+// answers (plan 03-22).
+let owned: Array<Record<string, unknown>>;
+let eligible: Array<Record<string, unknown>>;
+let ownedStatus: number;
+let transferStatus: number;
 
 const defaultQueryOptions = queryClient.getDefaultOptions();
 
@@ -74,6 +80,10 @@ beforeEach(() => {
   current = makeMe({ instanceAdmin: true, id: "me" });
   user = userBody();
   sent = {};
+  owned = [];
+  eligible = [];
+  ownedStatus = 200;
+  transferStatus = 200;
   write = () => Response.json(user);
   getUser = () => Response.json(user);
   lifecycle = (path) => {
@@ -123,6 +133,25 @@ beforeEach(() => {
         return sessionsStatus === 200
           ? Response.json(userSessions)
           : Response.json({ title: "boom" }, { status: sessionsStatus });
+      }
+      if (path === "/api/users/u1/owned") {
+        return ownedStatus === 200
+          ? Response.json(owned)
+          : Response.json({ title: "boom" }, { status: ownedStatus });
+      }
+      if (/^\/api\/owned\/[^/]+\/[^/]+\/eligible-owners$/.test(path))
+        return Response.json(eligible);
+      if (/^\/api\/owned\/[^/]+\/[^/]+\/transfer$/.test(path)) {
+        sent[`${req.method} ${path}`] = await req.clone().json();
+        if (transferStatus !== 200) {
+          return Response.json(
+            { status: transferStatus, type: "owner_not_eligible", title: "x", detail: "x" },
+            { status: transferStatus },
+          );
+        }
+        const moved = owned[0];
+        owned = [];
+        return Response.json({ ...moved, state: "active" });
       }
       if (path === "/api/users/u1/access") {
         return Response.json({ instanceAdmin: false, environments: [], grants: [] });
@@ -721,5 +750,62 @@ describe("Reset password (D-22b)", () => {
     fireEvent.click(within(confirm).getByRole("button", { name: "Generate reset link" }));
     const alert = await within(confirm).findByRole("alert");
     expect(alert.textContent).toContain("Couldn't create the link.");
+  });
+});
+
+function ownedBody(over: Record<string, unknown> = {}) {
+  return {
+    kind: "test.sync",
+    label: "Test sync",
+    resourceId: "r1",
+    name: "Sync r1",
+    envId: "env-a",
+    envName: "Alpha",
+    state: "paused_disabled",
+    needsEnvAdmin: false,
+    ...over,
+  };
+}
+
+describe("the Owned automations card (D-14)", () => {
+  it("lists what the user owns with its paused state, and Transfer… hands it to an eligible user who can run it", async () => {
+    owned = [ownedBody()];
+    eligible = [{ id: "u2", username: "bob", displayName: "" }];
+    renderAt(PAGE);
+
+    const card = await screen.findByRole("region", { name: "Owned automations" });
+    expect(
+      within(card).getByText("Git syncs and webhooks run with alice's permissions."),
+    ).toBeTruthy();
+    const row = within(card).getByRole("row", { name: /Sync r1/ });
+    expect(within(row).getByText("Test sync")).toBeTruthy();
+    expect(within(row).getByText("Alpha")).toBeTruthy();
+    expect(within(row).getByText("Paused: owner disabled")).toBeTruthy();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Transfer Sync r1…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Transfer Sync r1" });
+    expect(
+      within(dialog).getByText("Choose who owns it. It runs with their permissions from now on."),
+    ).toBeTruthy();
+    const select = await within(dialog).findByRole("combobox", { name: "New owner" });
+    await waitFor(() => expect((select as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.keyDown(select, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "bob" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Transfer ownership" }));
+
+    expect(await screen.findByText("Sync r1 now belongs to bob.")).toBeTruthy();
+    expect(sent["POST /api/owned/test.sync/r1/transfer"]).toEqual({ ownerId: "u2" });
+    // The row leaves the card, and with nothing left the card goes.
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Owned automations" })).toBeNull(),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("is not on the page when the user owns nothing", async () => {
+    renderAt(PAGE);
+    await screen.findByRole("heading", { level: 2, name: "alice" });
+    await waitFor(() => expect(seen).toContain("GET /api/users/u1/owned"));
+    expect(screen.queryByRole("region", { name: "Owned automations" })).toBeNull();
   });
 });

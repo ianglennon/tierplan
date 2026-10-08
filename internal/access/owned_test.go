@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 
@@ -398,5 +399,207 @@ func TestOwnedRegistrationRefusesAnUnknownKindAnOwnerWhoLacksThePermissionAndAnU
 	}
 	if _, _, err := f.svc.RunAs(f.ctx, kindTestSync, "missing", "system:gitsync"); !errors.Is(err, access.ErrNotFound) {
 		t.Errorf("a resource that is not recorded = %v", err)
+	}
+}
+
+// The listing, the eligible owners and the transfer (plan 03-22, D-14, AUTH-10).
+
+func (f *ownedFixture) ownerOf(t *testing.T, kind, id string) string {
+	t.Helper()
+	var o string
+	if err := f.st.Read.QueryRow(`SELECT owner_id FROM owned_resources WHERE kind = ? AND resource_id = ?`, kind, id).Scan(&o); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func usernames(refs []access.UserRef) []string {
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, r.Username)
+	}
+	return out
+}
+
+// eligibilityFixture is alice owning r1 on env-a, with one candidate of each
+// kind: bob (Operator there), carol (no grant), dave (Viewer, below the kind's
+// Operator minimum), erin (Operator but disabled), frank (Operator but deleted),
+// grace (instance admin with no assignments) and heidi (Admin there).
+func eligibilityFixture(t *testing.T) *ownedFixture {
+	t.Helper()
+	f := newOwnedFixture(t)
+	f.addEnv(t, "env-a", "Alpha")
+	for _, u := range []string{"alice", "bob", "carol", "dave", "erin", "frank", "grace", "heidi"} {
+		f.addUser(t, u)
+	}
+	f.assign(t, "alice", "operator", "env-a")
+	f.assign(t, "bob", "operator", "env-a")
+	f.assign(t, "dave", "viewer", "env-a")
+	f.assign(t, "erin", "operator", "env-a")
+	f.assign(t, "frank", "operator", "env-a")
+	f.assign(t, "heidi", "admin", "env-a")
+	f.setUser(t, "erin", "disabled = 1")
+	f.setUser(t, "frank", "deleted_at = 5")
+	f.setUser(t, "grace", "instance_admin = 1")
+	f.register(t, syncResource("alice"))
+	return f
+}
+
+func TestEligibleOwnersAreTheActiveUsersWhoPassTheKindsPermissionOnItsEnvironmentRightNow(t *testing.T) {
+	f := eligibilityFixture(t)
+
+	got, err := f.svc.EligibleOwners(f.ctx, kindTestSync, "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bob", "grace", "heidi"}
+	if g := usernames(got); !slices.Equal(g, want) {
+		t.Fatalf("eligible = %v, want %v (a Viewer, a user with no grant, a disabled one, a deleted one and the owner are not offered)", g, want)
+	}
+
+	// The list follows the grants as they are now.
+	f.unassign(t, "bob")
+	got, err = f.svc.EligibleOwners(f.ctx, kindTestSync, "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := usernames(got); !slices.Equal(g, []string{"grace", "heidi"}) {
+		t.Fatalf("eligible after bob lost his grant = %v", g)
+	}
+}
+
+func TestEligibleOwnersOfARowThatNeedsEnvAdminAreEnvAdminsAndInstanceAdminsOnly(t *testing.T) {
+	f := eligibilityFixture(t)
+	f.exec(t, `UPDATE owned_resources SET needs_env_admin = 1 WHERE kind = ? AND resource_id = 'r1'`, kindTestSync)
+
+	got, err := f.svc.EligibleOwners(f.ctx, kindTestSync, "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := usernames(got); !slices.Equal(g, []string{"grace", "heidi"}) {
+		t.Fatalf("eligible = %v, want only the env Admin and the instance admin", g)
+	}
+	if err := f.svc.TransferOwned(f.ctx, testAdmin, kindTestSync, "r1", "bob"); !errors.Is(err, access.ErrNotEligible) {
+		t.Fatalf("transfer of an env-Admin-only row to an Operator = %v, want ErrNotEligible", err)
+	}
+}
+
+func TestEligibleOwnersOfAnUnknownAutomationIsNotFound(t *testing.T) {
+	f := eligibilityFixture(t)
+	if _, err := f.svc.EligibleOwners(f.ctx, kindTestSync, "nope"); !errors.Is(err, access.ErrOwnedNotFound) {
+		t.Fatalf("eligible owners of an unknown automation = %v, want ErrOwnedNotFound", err)
+	}
+	if _, err := f.svc.EligibleOwners(f.ctx, kindUnknown, "r1"); !errors.Is(err, access.ErrOwnedNotFound) {
+		t.Fatalf("eligible owners of an unknown kind = %v, want ErrOwnedNotFound", err)
+	}
+}
+
+func TestListOwnedNamesTheKindTheEnvironmentAndTheStateOfEveryRowOfAnOwner(t *testing.T) {
+	f := eligibilityFixture(t)
+	f.exec(t, `INSERT INTO owned_resources (kind, resource_id, env_id, name, owner_id, state, needs_env_admin, created_at, updated_at)
+		VALUES (?, 'r2', 'env-gone', 'Sync r2', 'alice', 'active', 1, 1, 1), (?, 'x1', 'env-a', 'Other', 'bob', 'active', 0, 1, 1)`, kindTestSync, kindTestSync)
+	f.setUser(t, "alice", "disabled = 1")
+	f.recheck(t, "alice")
+
+	got, err := f.svc.ListOwned(f.ctx, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("alice owns %d rows, want 2: %+v", len(got), got)
+	}
+	r1, r2 := got[0], got[1]
+	if r1.Kind != kindTestSync || r1.Label != "Test sync" || r1.ResourceID != "r1" || r1.Name != "Sync r1" ||
+		r1.EnvID != "env-a" || r1.EnvName != "Alpha" || r1.State != access.OwnedPausedDisabled || r1.NeedsEnvAdmin {
+		t.Errorf("r1 = %+v", r1)
+	}
+	// An environment that no longer exists is named by its ID rather than left blank.
+	if r2.ResourceID != "r2" || r2.EnvName != "env-gone" || !r2.NeedsEnvAdmin {
+		t.Errorf("r2 = %+v", r2)
+	}
+	if none, err := f.svc.ListOwned(f.ctx, "carol"); err != nil || len(none) != 0 {
+		t.Errorf("carol owns %+v (%v), want nothing", none, err)
+	}
+}
+
+func TestTransferOwnedMovesAPausedAutomationToAnEligibleUserAndItRunsAgainUnderThem(t *testing.T) {
+	f := eligibilityFixture(t)
+	f.setUser(t, "alice", "disabled = 1")
+	f.recheck(t, "alice")
+	if got := f.state(t, kindTestSync, "r1"); got != "paused_disabled" {
+		t.Fatalf("state = %s, want paused_disabled", got)
+	}
+
+	if err := f.svc.TransferOwned(f.ctx, testAdmin, kindTestSync, "r1", "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if o, s := f.ownerOf(t, kindTestSync, "r1"), f.state(t, kindTestSync, "r1"); o != "bob" || s != "active" {
+		t.Fatalf("owner %s, state %s, want bob and active", o, s)
+	}
+	if n := f.auditCount(t, "owner.transferred"); n != 1 {
+		t.Fatalf("owner.transferred entries = %d, want 1", n)
+	}
+	if got := f.auditDetails(t, "owner.transferred"); got != `{"from":"alice","kind":"test.sync","resource":"r1","to":"bob"}` {
+		t.Fatalf("details = %s", got)
+	}
+	if n := f.auditCount(t, "automation.resumed"); n != 1 {
+		t.Fatalf("automation.resumed entries = %d, want the move back to active written once", n)
+	}
+	p, _, err := f.svc.RunAs(f.ctx, kindTestSync, "r1", "system:gitsync")
+	if err != nil || p.OnBehalfOf != "bob" {
+		t.Fatalf("RunAs after the transfer = %+v, %v, want it to run as bob", p, err)
+	}
+	if left, err := f.svc.ListOwned(f.ctx, "alice"); err != nil || len(left) != 0 {
+		t.Fatalf("alice still lists %+v (%v)", left, err)
+	}
+}
+
+func TestTransferOwnedGivesADeletedOwnersAutomationALivingOwnerAgain(t *testing.T) {
+	f := eligibilityFixture(t)
+	f.setUser(t, "alice", "deleted_at = 5")
+	f.recheck(t, "alice")
+	if got := f.state(t, kindTestSync, "r1"); got != "paused_deleted" {
+		t.Fatalf("state = %s, want paused_deleted", got)
+	}
+	if err := f.svc.TransferOwned(f.ctx, testAdmin, kindTestSync, "r1", "heidi"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.state(t, kindTestSync, "r1"); got != "active" {
+		t.Fatalf("state after the transfer = %s, want active: only a transfer revives a paused_deleted row", got)
+	}
+}
+
+func TestTransferOwnedToAnIneligibleUserIsRefusedAndChangesNothing(t *testing.T) {
+	f := eligibilityFixture(t)
+	for _, who := range []string{"carol", "dave", "erin", "frank", "alice", "nobody"} {
+		err := f.svc.TransferOwned(f.ctx, testAdmin, kindTestSync, "r1", who)
+		if !errors.Is(err, access.ErrNotEligible) {
+			t.Errorf("transfer to %s = %v, want ErrNotEligible", who, err)
+		}
+	}
+	if o := f.ownerOf(t, kindTestSync, "r1"); o != "alice" {
+		t.Fatalf("owner = %s after refused transfers, want alice", o)
+	}
+	if n := f.auditCount(t, "owner.transferred"); n != 0 {
+		t.Fatalf("owner.transferred entries = %d after refused transfers, want none", n)
+	}
+	if err := f.svc.TransferOwned(f.ctx, testAdmin, kindTestSync, "gone", "bob"); !errors.Is(err, access.ErrOwnedNotFound) {
+		t.Errorf("transfer of an unknown automation = %v, want ErrOwnedNotFound", err)
+	}
+}
+
+func TestTransferOwnedRechecksTheNewOwnerInsideTheTransactionAgainstTheirGrantAsItIsThen(t *testing.T) {
+	f := eligibilityFixture(t)
+	// The eligible list was read while bob held the grant; it is gone by the time
+	// the admin confirms. The transfer reads the grant again.
+	if _, err := f.svc.EligibleOwners(f.ctx, kindTestSync, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	f.unassign(t, "bob")
+	if err := f.svc.TransferOwned(f.ctx, testAdmin, kindTestSync, "r1", "bob"); !errors.Is(err, access.ErrNotEligible) {
+		t.Fatalf("transfer to a user who just lost the grant = %v, want ErrNotEligible", err)
+	}
+	if o := f.ownerOf(t, kindTestSync, "r1"); o != "alice" {
+		t.Fatalf("owner = %s, want alice", o)
 	}
 }
