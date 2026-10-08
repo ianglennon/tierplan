@@ -438,7 +438,7 @@ func TestSwarmChangedCluster(t *testing.T) {
 	}
 	t.Logf("cluster_changed status: %s", summarise(got))
 
-	code, body := f.srv.Do(http.MethodPost, "/api/environments/"+f.env.ID+"/adopt-cluster", nil)
+	code, body := f.srv.Do(http.MethodPost, "/api/env/"+f.env.ID+"/adopt-cluster", nil)
 	if code != http.StatusOK || !strings.Contains(string(body), newCluster) {
 		t.Fatalf("POST adopt-cluster = %d %s, want 200 naming %s", code, body, newCluster)
 	}
