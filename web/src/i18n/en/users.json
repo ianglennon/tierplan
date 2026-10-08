@@ -40,6 +40,7 @@
     "instanceAdmin": "Instance admin",
     "actions": {
       "open": "Open",
+      "reset": "Reset password",
       "regenerate": "Regenerate invite link",
       "disable": "Disable",
       "enable": "Enable",

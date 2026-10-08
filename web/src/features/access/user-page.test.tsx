@@ -64,7 +64,12 @@ let reset: () => Response | Promise<Response>;
 // The JSON bodies the page sent, by "METHOD path".
 let sent: Record<string, unknown>;
 
+const defaultQueryOptions = queryClient.getDefaultOptions();
+
 beforeEach(() => {
+  // The app retries a failed read once after a second; a test of an error state
+  // should not wait for it.
+  queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   // Not the user being looked at, unless a test says so.
   current = makeMe({ instanceAdmin: true, id: "me" });
   user = userBody();
@@ -139,6 +144,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  queryClient.setDefaultOptions(defaultQueryOptions);
   cleanup();
   vi.unstubAllGlobals();
   queryClient.clear();

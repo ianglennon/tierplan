@@ -240,3 +240,69 @@ export async function updateUser(userId: string, change: ProfileChange): Promise
     return { kind: "error" };
   }
 }
+
+export type ResetResult =
+  | { kind: "ok"; link: OneTimeLink }
+  // A disabled user cannot sign in, so there is nothing a link could do for them
+  // until they are enabled (409 user_disabled).
+  | { kind: "disabled" }
+  | { kind: "not_found" }
+  | { kind: "error" };
+
+// resetUserPassword ends every session of the user and returns the one-time link
+// that lets them choose a new password. Like createUser it hands the link to the
+// caller and keeps it nowhere else.
+export async function resetUserPassword(userId: string): Promise<ResetResult> {
+  try {
+    const { data, error, response } = await api.POST("/api/users/{userId}/reset-password", {
+      params: { path: { userId } },
+    });
+    if (data) return { kind: "ok", link: data };
+    const problem = readProblem(error, response);
+    if (problem.status === 409 && problem.type === "user_disabled") return { kind: "disabled" };
+    if (problem.status === 404) return { kind: "not_found" };
+    return { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+export type MyProfile = components["schemas"]["ProfileBody"];
+
+// The ["profile"] query: the signed-in user's own display name and email, with
+// the version a save must be based on. It is dropped the moment nothing shows it,
+// so the next open reads the profile again and never edits a stale copy.
+export const myProfileQuery = queryOptions({
+  queryKey: ["profile"],
+  queryFn: async (): Promise<MyProfile> => {
+    const { data } = await api.GET("/api/me/profile");
+    if (!data) throw new Error("GET /api/me/profile failed");
+    return data;
+  },
+  gcTime: 0,
+  staleTime: 0,
+});
+
+export type ProfileResult =
+  | { kind: "ok"; profile: MyProfile }
+  | { kind: "stale_change" }
+  | { kind: "fields"; fields: ProblemField[] }
+  | { kind: "error" };
+
+// updateMyProfile saves the caller's own display name and email. If the profile
+// changed since updatedAt was read, nothing is saved and the result is
+// stale_change.
+export async function updateMyProfile(change: ProfileChange): Promise<ProfileResult> {
+  try {
+    const { data, error, response } = await api.PATCH("/api/me/profile", { body: change });
+    if (data) return { kind: "ok", profile: data };
+    const problem = readProblem(error, response);
+    if (problem.status === 409 && problem.type === "stale_change") return { kind: "stale_change" };
+    if (problem.status === 422 && problem.fields.length > 0) {
+      return { kind: "fields", fields: problem.fields };
+    }
+    return { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}

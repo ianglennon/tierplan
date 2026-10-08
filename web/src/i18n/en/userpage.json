@@ -14,7 +14,8 @@
     "sections": {
       "profile": "Profile",
       "instanceAdmin": "Instance administrator",
-      "account": "Account"
+      "account": "Account",
+      "sessions": "Sessions"
     },
     "profile": {
       "username": "Username",
@@ -46,6 +47,7 @@
       "failed": "Couldn't change {{username}}. Try again, and check the Bayplan logs if it keeps happening."
     },
     "account": {
+      "reset": "Reset password",
       "disable": "Disable user",
       "enable": "Enable user",
       "enablePending": "Enabling…",
@@ -81,6 +83,16 @@
       "lastAdmin": "Bayplan needs at least one active instance admin. Make someone else an instance admin first.",
       "stale": "This changed while you were looking at it. Reload the page and try again.",
       "gone": "{{username}} no longer exists."
+    },
+    "reset": {
+      "title": "Reset password for {{username}}?",
+      "body": "Their sessions end now, and you get a one-time link to give them.",
+      "cancel": "Cancel",
+      "confirm": "Generate reset link",
+      "pending": "Generating…",
+      "disabled": "{{username}} is disabled. Enable them first, then reset their password.",
+      "disabledReason": "Enable {{username}} first",
+      "failed": "Couldn't create the link. Try again, and check the Bayplan logs if it keeps happening."
     }
   }
 }

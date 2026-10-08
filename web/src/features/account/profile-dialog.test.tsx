@@ -9,7 +9,9 @@ import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { Toaster } from "@/components/ui/sonner";
 import { ProfileDialog } from "@/features/account/profile-dialog";
+import { meQueryOptions } from "@/hooks/use-me";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
 let profile: Record<string, unknown>;
 let getStatus: number;
@@ -63,6 +65,7 @@ afterEach(() => {
 });
 
 function renderDialog(onOpenChange = vi.fn()) {
+  queryClient.setQueryData(meQueryOptions.queryKey, makeMe({ id: "id-alice", username: "alice" }));
   render(
     <QueryClientProvider client={queryClient}>
       <ProfileDialog open onOpenChange={onOpenChange} />
@@ -111,8 +114,10 @@ describe("the Profile dialog (D-24)", () => {
     ]);
     expect(csrfSeen).toEqual(["csrf-1"]);
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    // The caller is told who they are again, so the name shown follows the save.
-    await waitFor(() => expect(calls.filter((c) => c === "GET /api/me").length).toBeGreaterThan(0));
+    // The caller's own record is marked out of date, so the name shown follows the save.
+    await waitFor(() =>
+      expect(queryClient.getQueryState(meQueryOptions.queryKey)?.isInvalidated).toBe(true),
+    );
   });
 
   it("refuses an email that is not an address before asking the server", async () => {

@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
-import { enableUser, type UserDetail, unlockUser } from "@/api/users";
+import { userSessionsQuery } from "@/api/sessions";
+
+import { enableUser, type OneTimeLink, type UserDetail, unlockUser } from "@/api/users";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { DeleteUserDialog } from "@/features/access/delete-user-dialog";
 import { DisableUserDialog } from "@/features/access/disable-user-dialog";
+import { OneTimeLinkDialog } from "@/features/access/one-time-link-dialog";
+import { ResetPasswordDialog } from "@/features/access/reset-password-dialog";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useT } from "@/i18n/use-t";
 import { formatAbsolute } from "@/lib/format";
@@ -31,12 +36,18 @@ interface AccountCardProps {
 // the account works at all (UI-SPEC "User page"): Unlock while the account is
 // locked, Disable user or Enable user, and Delete user…. For the last active
 // instance admin, Disable and Delete are shown but unavailable, with the reason,
-// because the server would refuse (T-03-54). Reset password joins them with its
-// own API.
+// because the server would refuse (T-03-54). Reset password asks first, ends the
+// user's sessions and shows the one-time link once (D-22b); a disabled user has
+// to be enabled first.
 export function AccountCard({ user, onChanged, onDeleted }: AccountCardProps) {
   const t = useT();
   const [disabling, setDisabling] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  // The reset link just made, held here until its dialog is closed and not a
+  // moment longer.
+  const [issued, setIssued] = useState<OneTimeLink | null>(null);
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState<"enable" | "unlock" | null>(null);
   const [error, setError] = useState<string | null>(null);
   // A second click can land before the pending state has rendered.
@@ -106,6 +117,20 @@ export function AccountCard({ user, onChanged, onDeleted }: AccountCardProps) {
         </div>
       ) : null}
       <div className="flex flex-wrap items-center gap-3">
+        <NeedsTooltip
+          reason={
+            isDisabled ? t("userpage.reset.disabledReason", { username: user.username }) : undefined
+          }
+        >
+          <Button
+            type="button"
+            variant="outline"
+            className={`${TOUCH_HEIGHT} max-md:w-full`}
+            onClick={() => setResetting(true)}
+          >
+            {t("userpage.account.reset")}
+          </Button>
+        </NeedsTooltip>
         {isDisabled ? (
           <Button
             type="button"
@@ -146,6 +171,23 @@ export function AccountCard({ user, onChanged, onDeleted }: AccountCardProps) {
           </Button>
         </NeedsTooltip>
       </div>
+      <ResetPasswordDialog
+        user={resetting ? user : null}
+        onClose={() => setResetting(false)}
+        onGenerated={(_, link) => {
+          setResetting(false);
+          setIssued(link);
+          // Every session of theirs just ended.
+          void queryClient.invalidateQueries({ queryKey: userSessionsQuery(user.id).queryKey });
+        }}
+        onStale={() => onChanged()}
+      />
+      <OneTimeLinkDialog
+        title="reset"
+        username={user.username}
+        link={issued}
+        onClose={() => setIssued(null)}
+      />
       <DisableUserDialog
         user={disabling ? user : null}
         onClose={() => setDisabling(false)}

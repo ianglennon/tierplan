@@ -34,6 +34,7 @@ import { DisableUserDialog } from "@/features/access/disable-user-dialog";
 import { InstanceAdminBadge } from "@/features/access/instance-admin-badge";
 import { OneTimeLinkDialog } from "@/features/access/one-time-link-dialog";
 import { RegenerateInviteDialog } from "@/features/access/regenerate-invite-dialog";
+import { ResetPasswordDialog } from "@/features/access/reset-password-dialog";
 import { UserStatusBadge } from "@/features/access/user-status-badge";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { useT } from "@/i18n/use-t";
@@ -70,6 +71,7 @@ function canRegenerate(user: UserSummary): boolean {
 
 interface RowActionsProps {
   user: UserSummary;
+  onReset: (user: UserSummary) => void;
   onRegenerate: (user: UserSummary) => void;
   onDisable: (user: UserSummary) => void;
   onEnable: (user: UserSummary) => void;
@@ -77,13 +79,15 @@ interface RowActionsProps {
   onDelete: (user: UserSummary) => void;
 }
 
-// RowActions is the "Actions for {username}" menu: Open always, Regenerate
+// RowActions is the "Actions for {username}" menu: Open always, Reset password
+// (unavailable, with the reason, while the user is disabled), Regenerate
 // invite link while an invite is outstanding, Unlock while the account is
 // locked, Disable or Enable, and Delete user…. For the last active instance
 // admin, Disable and Delete are shown but unavailable, with the reason, because
 // the server would refuse.
 function RowActions({
   user,
+  onReset,
   onRegenerate,
   onDisable,
   onEnable,
@@ -111,6 +115,17 @@ function RowActions({
             {t("users.actions.open")}
           </Link>
         </DropdownMenuItem>
+        <NeedsTooltip
+          reason={
+            user.status === "disabled"
+              ? t("userpage.reset.disabledReason", { username: user.username })
+              : undefined
+          }
+        >
+          <DropdownMenuItem onSelect={() => onReset(user)}>
+            {t("users.actions.reset")}
+          </DropdownMenuItem>
+        </NeedsTooltip>
         {canRegenerate(user) ? (
           <DropdownMenuItem onSelect={() => onRegenerate(user)}>
             {t("users.actions.regenerate")}
@@ -142,9 +157,10 @@ function RowActions({
   );
 }
 
-// An invite link just made, held here until its dialog is closed and not a
+// A one-time link just made, held here until its dialog is closed and not a
 // moment longer.
 interface IssuedLink {
+  title: "invite" | "reset";
   username: string;
   link: OneTimeLink;
 }
@@ -160,6 +176,7 @@ export function UsersTable() {
   const [createOpen, setCreateOpen] = useState(false);
   const queryClient = useQueryClient();
   const [regenerateFor, setRegenerateFor] = useState<UserSummary | null>(null);
+  const [resetFor, setResetFor] = useState<UserSummary | null>(null);
   const [issued, setIssued] = useState<IssuedLink | null>(null);
   const [disableFor, setDisableFor] = useState<UserSummary | null>(null);
   const [deleteFor, setDeleteFor] = useState<UserSummary | null>(null);
@@ -220,6 +237,7 @@ export function UsersTable() {
       cell: (u) => (
         <RowActions
           user={u}
+          onReset={setResetFor}
           onRegenerate={setRegenerateFor}
           onDisable={setDisableFor}
           onEnable={(user) => void enable(user)}
@@ -380,14 +398,24 @@ export function UsersTable() {
         onClose={() => setRegenerateFor(null)}
         onGenerated={(user, link) => {
           setRegenerateFor(null);
-          setIssued({ username: user.username, link });
+          setIssued({ title: "invite", username: user.username, link });
           // An expired invite is pending again.
           refresh();
         }}
         onStale={refresh}
       />
+      <ResetPasswordDialog
+        user={resetFor}
+        onClose={() => setResetFor(null)}
+        onGenerated={(user, link) => {
+          setResetFor(null);
+          setIssued({ title: "reset", username: user.username, link });
+          refresh();
+        }}
+        onStale={refresh}
+      />
       <OneTimeLinkDialog
-        title="invite"
+        title={issued?.title ?? "invite"}
         username={issued?.username ?? ""}
         link={issued?.link ?? null}
         onClose={() => setIssued(null)}

@@ -37,6 +37,27 @@
       "pending": "Signing out…",
       "done": "Signed out everywhere else.",
       "failed": "Couldn't sign out the other sessions. Try again, and check the Bayplan logs if it keeps happening."
+    },
+    "profile": {
+      "title": "Profile",
+      "description": "How you appear in Bayplan.",
+      "note": "To change your password, use Change password in the user menu.",
+      "cancel": "Cancel",
+      "loading": "Loading your profile",
+      "loadFailed": "Couldn't load your profile."
+    },
+    "card": {
+      "caption": "Where {{username}} is signed in.",
+      "empty": "{{username}} isn't signed in anywhere.",
+      "endAll": "End all sessions",
+      "title": "End all sessions for {{username}}?",
+      "body": "They are signed out everywhere and have to sign in again.",
+      "cancel": "Cancel",
+      "confirm": "End all sessions",
+      "pending": "Ending…",
+      "done": "{{username}} is signed out everywhere.",
+      "failed": "Couldn't end {{username}}'s sessions. Try again, and check the Bayplan logs if it keeps happening.",
+      "gone": "{{username}} no longer exists."
     }
   }
 }
