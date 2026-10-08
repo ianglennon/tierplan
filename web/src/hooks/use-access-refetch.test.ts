@@ -4,6 +4,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { AccessChangeKind } from "@/api/client";
 import {
   ACCESS_REFETCH_THROTTLE_MS,
   createAccessChangeHandler,
@@ -18,6 +19,7 @@ let items: string[];
 let recent: string[];
 let calls: string[];
 let qc: QueryClient;
+let handlers: { dispose: () => void }[];
 
 function stubFetch() {
   vi.stubGlobal(
@@ -35,19 +37,30 @@ function stubFetch() {
   );
 }
 
+// The environment page the user is on; a test moves the user by assigning it.
+let current: string | undefined;
+
 function setup(envId: string | undefined, before: Me) {
+  current = envId;
   qc.setQueryData(["me"], before);
   const moveTo = vi.fn();
   const notifyChanged = vi.fn();
   const notifyRefused = vi.fn();
-  const handle = createAccessChangeHandler({
+  const created = createAccessChangeHandler({
     queryClient: qc,
-    currentEnvId: () => envId,
+    currentEnvId: () => current,
     moveTo,
     notifyChanged,
     notifyRefused,
     now: () => clock,
-  });
+  }) as unknown as
+    | ((kind: AccessChangeKind, path: string) => Promise<void>)
+    | {
+        handle: (kind: AccessChangeKind, path: string) => Promise<void>;
+        dispose: () => void;
+      };
+  const handle = typeof created === "function" ? created : created.handle;
+  if (typeof created !== "function") handlers.push(created);
   return { handle, moveTo, notifyChanged, notifyRefused };
 }
 
@@ -58,11 +71,13 @@ beforeEach(() => {
   calls = [];
   items = [];
   recent = [];
+  handlers = [];
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   stubFetch();
 });
 
 afterEach(() => {
+  for (const h of handlers) h.dispose();
   vi.unstubAllGlobals();
   qc.clear();
 });
@@ -186,5 +201,89 @@ describe("a refused action (D-10)", () => {
     await handle("unseen", "/api/env/a/summary");
     expect(moveTo).not.toHaveBeenCalled();
     expect(isAccessRefetching()).toBe(false);
+  });
+});
+
+describe("the baseline (G-03-2)", () => {
+  it("moves and tells a user whose /api/me was already re-read when the refusal arrives", async () => {
+    // Opening a page mounts components that read /api/me, and the server audits a
+    // refusal before it sends it, so the cache already holds the new access.
+    meAnswer = makeMe({ envs: { b: "viewer" } });
+    items = ["b"];
+    const { handle, moveTo, notifyChanged } = setup(
+      "a",
+      makeMe({ envs: { a: "viewer", b: "viewer" } }),
+    );
+    qc.setQueryData(["me"], meAnswer);
+    await handle("unseen", "/api/env/a/containers");
+    expect(moveTo).toHaveBeenCalledExactlyOnceWith("b");
+    expect(notifyChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells a user whose role shrank when /api/me was already re-read, without moving them", async () => {
+    meAnswer = makeMe({ envs: { a: "viewer" } });
+    const { handle, moveTo, notifyChanged } = setup("a", makeMe({ envs: { a: "operator" } }));
+    qc.setQueryData(["me"], meAnswer);
+    await handle("unseen", "/api/env/a/containers");
+    expect(notifyChanged).toHaveBeenCalledTimes(1);
+    expect(moveTo).not.toHaveBeenCalled();
+  });
+
+  it("remembers an environment gained and then lost through re-reads of /api/me", async () => {
+    const b = makeMe({ envs: { b: "viewer" } });
+    meAnswer = b;
+    items = ["b"];
+    const { handle, moveTo, notifyChanged } = setup("a", b);
+    qc.setQueryData(["me"], makeMe({ envs: { a: "viewer", b: "viewer" } }));
+    qc.setQueryData(["me"], b);
+    await handle("unseen", "/api/env/a/summary");
+    expect(moveTo).toHaveBeenCalledExactlyOnceWith("b");
+    expect(notifyChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing the second time after the user was told about a loss", async () => {
+    meAnswer = makeMe({ envs: { b: "viewer" } });
+    items = ["b"];
+    const { handle, moveTo, notifyChanged } = setup(
+      "a",
+      makeMe({ envs: { a: "viewer", b: "viewer" } }),
+    );
+    await handle("unseen", "/api/env/a/summary");
+    expect(moveTo).toHaveBeenCalledTimes(1);
+    expect(notifyChanged).toHaveBeenCalledTimes(1);
+
+    clock += ACCESS_REFETCH_THROTTLE_MS + 1_000;
+    await handle("unseen", "/api/env/a/summary");
+    expect(moveTo).toHaveBeenCalledTimes(1);
+    expect(notifyChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not forget a lost environment because of a refusal elsewhere that said nothing", async () => {
+    meAnswer = makeMe({ envs: { b: "viewer" } });
+    items = ["b"];
+    const { handle, moveTo, notifyChanged } = setup(
+      "a",
+      makeMe({ envs: { a: "viewer", b: "viewer" } }),
+    );
+    qc.setQueryData(["me"], meAnswer);
+    current = "ghost";
+    await handle("unseen", "/api/env/ghost/summary");
+    expect(moveTo).not.toHaveBeenCalled();
+    expect(notifyChanged).not.toHaveBeenCalled();
+
+    clock += ACCESS_REFETCH_THROTTLE_MS + 1_000;
+    current = "a";
+    await handle("unseen", "/api/env/a/summary");
+    expect(moveTo).toHaveBeenCalledExactlyOnceWith("b");
+    expect(notifyChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts again for a different user", async () => {
+    meAnswer = makeMe({ id: "u9", envs: { b: "viewer" } });
+    const { handle, moveTo, notifyChanged } = setup("a", makeMe({ envs: { a: "viewer" } }));
+    qc.setQueryData(["me"], meAnswer);
+    await handle("unseen", "/api/env/a/summary");
+    expect(moveTo).not.toHaveBeenCalled();
+    expect(notifyChanged).not.toHaveBeenCalled();
   });
 });

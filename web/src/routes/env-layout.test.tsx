@@ -4,6 +4,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -667,6 +668,12 @@ describe("access changes under a user (D-08, D-10)", () => {
   const SECOND = { ...LAB, id: "e2", name: "Second host" };
   const meReads = () => sent.filter((s) => s.path === "/api/me").length;
 
+  // Sonner keeps its toasts in a store outside the rendered tree, so one test's
+  // toast would otherwise still be on screen in the next.
+  afterEach(() => {
+    toast.dismiss();
+  });
+
   it("shows the plain Page not found for an environment the user cannot see, and no toast", async () => {
     me = makeMe({ envs: { e2: "viewer" } });
     stub.environments = () => Response.json({ items: [SECOND] });
@@ -742,6 +749,56 @@ describe("access changes under a user (D-08, D-10)", () => {
       await screen.findByRole("heading", { name: "You don't have access to any environments yet" }),
     ).toBeTruthy();
   });
+
+  // G-03-2: clicking a sidebar link mounts components that read /api/me again,
+  // and the server audits a refusal before it sends it, so /api/me can answer
+  // before the refused request does. The handler must not need the refusal to
+  // come first.
+  it.each([
+    { order: "/api/me answers before the refused request", meDelay: 0, refusalDelay: 30 },
+    { order: "the refused request answers first", meDelay: 30, refusalDelay: 0 },
+  ])(
+    "moves a Viewer whose grant was removed to the no-access state with the toast when $order",
+    async ({ meDelay, refusalDelay }) => {
+      me = makeMe({ envs: { e1: "viewer" } });
+      const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+      let flipped = false;
+      const inner = globalThis.fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (req: Request) => {
+          const path = new URL(req.url).pathname;
+          if (path === "/api/env/e1/containers" && !flipped) {
+            return Response.json({ items: [], nodes: [] });
+          }
+          if (flipped && (path === "/api/env/e1/summary" || path === "/api/env/e1/containers")) {
+            await sleep(refusalDelay);
+            return problem(404, "environment_not_found");
+          }
+          if (flipped && path === "/api/me") await sleep(meDelay);
+          if (flipped && path === "/api/environments") return Response.json({ items: [] });
+          return inner(req);
+        }),
+      );
+      const router = renderAt("/env/e1");
+      expect(await screen.findByRole("heading", { name: "Lab host" })).toBeTruthy();
+
+      // The grant is withdrawn while the page is open.
+      flipped = true;
+      me = makeMe({ envs: {}, administrators: ["admin"] });
+      // The dashboard's summary is older than its stale time, so the next page reads it.
+      queryClient.setQueryData(["env", "e1", "summary"], SUMMARY, { updatedAt: 0 });
+      fireEvent.click(await screen.findByRole("link", { name: "Containers" }));
+
+      expect(
+        await screen.findByRole("heading", {
+          name: "You don't have access to any environments yet",
+        }),
+      ).toBeTruthy();
+      expect(router.state.location.pathname).toBe("/");
+      expect(screen.getByText("Your access changed. Showing what you can see now.")).toBeTruthy();
+    },
+  );
 
   it("shows the refusal toast and re-renders from the new /api/me when an action is refused", async () => {
     me = makeMe({ envs: { e1: "operator" } });
