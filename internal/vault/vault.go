@@ -112,6 +112,30 @@ func load(configKey, dataDir string, log *slog.Logger, create bool) (*Vault, err
 	if log == nil {
 		log = slog.Default()
 	}
+	v, err := loadActive(configKey, dataDir, log, create)
+	if err != nil {
+		return nil, err
+	}
+	addOldKey(v, dataDir, log)
+	return v, nil
+}
+
+// addOldKey makes the key a rotation kept as bayplan.key.old readable, so
+// values and audit attestations it produced still open and verify (D-33). The
+// file is a convenience, never a requirement: one that is missing, unreadable
+// or not a key is logged and skipped, and never stops a start.
+func addOldKey(v *Vault, dataDir string, log *slog.Logger) {
+	key, err := ReadKeyFile(dataDir, OldKeyFile)
+	switch {
+	case err == nil:
+		_, _ = v.AddKey(key) // cannot fail: ReadKeyFile checked the length
+	case errors.Is(err, fs.ErrNotExist):
+	default:
+		log.Warn("ignoring the previous encryption key file: "+err.Error(), "path", filepath.Join(dataDir, OldKeyFile))
+	}
+}
+
+func loadActive(configKey, dataDir string, log *slog.Logger, create bool) (*Vault, error) {
 	if configKey != "" {
 		key, err := decodeKey(configKey)
 		if err != nil {
@@ -290,6 +314,25 @@ func (v *Vault) AddKey(key []byte) (string, error) {
 		v.keys[id] = append([]byte(nil), key...)
 	}
 	return id, nil
+}
+
+// Succeed returns a new vault whose active key is key and that still holds every
+// key v holds, so it can open what v sealed and verify what v signed. v is not
+// changed. A master-key rotation uses it to seal under the new key and check the
+// old key's attestation in the same run.
+func (v *Vault) Succeed(key []byte) (*Vault, error) {
+	next, err := New(key, v.source)
+	if err != nil {
+		return nil, err
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for id, k := range v.keys {
+		if _, ok := next.keys[id]; !ok {
+			next.keys[id] = append([]byte(nil), k...)
+		}
+	}
+	return next, nil
 }
 
 func newVault(key []byte, source string) *Vault {
