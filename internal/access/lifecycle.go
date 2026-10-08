@@ -206,3 +206,33 @@ func (s *Service) EnableUser(ctx context.Context, actor audit.Actor, id string, 
 	}
 	return nil
 }
+
+// errNotImplemented marks the lifecycle functions the next commit fills in.
+var errNotImplemented = errors.New("access: not implemented")
+
+// ProfileInput is a profile save. A nil field is left as it is. UpdatedAt is the
+// version of the user the save was based on.
+type ProfileInput struct {
+	DisplayName, Email *string
+	UpdatedAt          time.Time
+}
+
+// DeleteUser turns a user into a tombstone (D-22c).
+func (s *Service) DeleteUser(ctx context.Context, actor audit.Actor, id string, opts ...Option) error {
+	return errNotImplemented
+}
+
+// SetInstanceAdmin turns instance authority on or off for one user.
+func (s *Service) SetInstanceAdmin(ctx context.Context, actor audit.Actor, id string, enabled bool, opts ...Option) error {
+	return errNotImplemented
+}
+
+// UnlockUser clears a locked account's lock and failure count.
+func (s *Service) UnlockUser(ctx context.Context, actor audit.Actor, id string, opts ...Option) error {
+	return errNotImplemented
+}
+
+// UpdateProfile saves a user's display name and email.
+func (s *Service) UpdateProfile(ctx context.Context, actor audit.Actor, id string, in ProfileInput, opts ...Option) error {
+	return errNotImplemented
+}
