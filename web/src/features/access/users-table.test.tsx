@@ -40,7 +40,12 @@ function newLink(): Response {
   });
 }
 
+const defaultQueryOptions = queryClient.getDefaultOptions();
+
 beforeEach(() => {
+  // The app retries a failed read once after a second; a test of the error
+  // state should not wait for it.
+  queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   sent = [];
   users = [
     userRow({
@@ -66,6 +71,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  queryClient.setDefaultOptions(defaultQueryOptions);
   cleanup();
   vi.unstubAllGlobals();
   queryClient.clear();
@@ -265,5 +271,210 @@ describe("Regenerate invite link", () => {
         sent.filter((s) => s.method === "GET" && s.path === "/api/users").length,
       ).toBeGreaterThan(1),
     );
+  });
+});
+
+// Search, loading, error, long text, plurals and many users (plan 03-12 Task 3).
+
+const searchField = () =>
+  screen.getByRole("searchbox", { name: "Search users" }) as HTMLInputElement;
+const typeSearch = (value: string) => fireEvent.change(searchField(), { target: { value } });
+const bodyRows = () =>
+  within(screen.getByRole("table", { name: "Users" }))
+    .getAllByRole("row")
+    .slice(1);
+
+describe("UsersTable search", () => {
+  beforeEach(() => {
+    users = [
+      userRow({
+        id: "u1",
+        username: "alice",
+        displayName: "Alice Liddell",
+        email: "a@wonder.test",
+      }),
+      userRow({ id: "u2", username: "bob", displayName: "Robert Table" }),
+      userRow({ id: "u3", username: "carol", email: "Carol@Example.test" }),
+    ];
+  });
+
+  it("filters in the browser, case-insensitively, over username, display name and email", async () => {
+    renderTable();
+    await screen.findByText("carol");
+    const requests = sent.length;
+
+    typeSearch("ALI");
+    expect(bodyRows()).toHaveLength(1);
+    expect(screen.getByText("alice")).toBeTruthy();
+
+    typeSearch("robert");
+    expect(bodyRows()).toHaveLength(1);
+    expect(screen.getByText("bob")).toBeTruthy();
+
+    typeSearch("carol@example");
+    expect(bodyRows()).toHaveLength(1);
+    expect(screen.getByText("carol")).toBeTruthy();
+
+    typeSearch("");
+    expect(bodyRows()).toHaveLength(3);
+    // Searching asks the server for nothing.
+    expect(sent).toHaveLength(requests);
+  });
+
+  it("says nothing matches, names the query and keeps the search field", async () => {
+    renderTable();
+    await screen.findByText("carol");
+
+    typeSearch("zed");
+
+    expect(screen.getByText("No users match “zed”.")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "Users" })).toBeNull();
+    expect(searchField().value).toBe("zed");
+    expect(screen.getByRole("button", { name: "Create user" })).toBeTruthy();
+
+    typeSearch("bob");
+    expect(screen.queryByText(/No users match/)).toBeNull();
+    expect(bodyRows()).toHaveLength(1);
+  });
+});
+
+describe("UsersTable loading and failing", () => {
+  it("shows six skeleton rows at once with the toolbar already there", async () => {
+    let release: (r: Response) => void = () => undefined;
+    answer = () => new Promise<Response>((resolve) => (release = resolve));
+    renderTable();
+    await waitFor(() => expect(sent.some((s) => s.path === "/api/users")).toBe(true));
+
+    expect(screen.getByRole("button", { name: "Create user" })).toBeTruthy();
+    expect(searchField()).toBeTruthy();
+    const table = screen.getByRole("table", { name: "Users" });
+    expect(table.getAttribute("aria-busy")).toBe("true");
+    expect(bodyRows()).toHaveLength(6);
+    expect(table.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^\d+ users?$/)).toBeNull();
+
+    release(Response.json([userRow({ username: "alice" })]));
+    await screen.findByText("alice");
+    expect(screen.getByRole("table", { name: "Users" }).getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("shows the load error with Retry, keeps the toolbar and refetches on Retry", async () => {
+    answer = () => Response.json({ status: 500, title: "x", detail: "x" }, { status: 500 });
+    renderTable();
+
+    expect(await screen.findByText("Couldn't load users.")).toBeTruthy();
+    expect(screen.getByText("Check the connection and try again.")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "Users" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Create user" })).toBeTruthy();
+
+    answer = () => Response.json([userRow({ username: "alice" })]);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("alice")).toBeTruthy();
+    expect(screen.queryByText("Couldn't load users.")).toBeNull();
+  });
+});
+
+describe("UsersTable cells", () => {
+  it("cuts a long username and display name with an ellipsis and keeps the whole text in a tooltip", async () => {
+    const longName = `${"a".repeat(60)}.${"b".repeat(60)}`;
+    const longDisplay = "Maximilian ".repeat(20).trim();
+    users = [userRow({ username: longName, displayName: longDisplay })];
+    renderTable();
+
+    const name = await screen.findByText(longName);
+    expect(name.className).toContain("truncate");
+    expect(screen.getByText(longDisplay).className).toContain("truncate");
+
+    fireEvent.focus(name);
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe(longName);
+  });
+
+  it("never cuts a badge or a status", async () => {
+    users = [userRow({ username: "a".repeat(80), instanceAdmin: true, status: "invite_expired" })];
+    renderTable();
+    const badge = await screen.findByText("Instance admin");
+    expect(badge.className).toContain("shrink-0");
+    expect(badge.className).toContain("whitespace-nowrap");
+    expect(screen.getByText("Invite expired").className).toContain("whitespace-nowrap");
+  });
+
+  it("shows the username alone when there is no display name", async () => {
+    users = [userRow({ username: "alice", displayName: "" })];
+    renderTable();
+    const cell = (await screen.findByText("alice")).closest("td") as HTMLElement;
+    expect(cell.textContent).toBe("alice");
+  });
+
+  it("counts users and teams with plurals and writes 0, never blank", async () => {
+    users = [userRow({ id: "u1", username: "alice", teamCount: 0 })];
+    renderTable();
+    expect(await screen.findByText("1 user")).toBeTruthy();
+    const row = screen.getByText("alice").closest("tr") as HTMLElement;
+    expect(within(row).getByText("0")).toBeTruthy();
+    cleanup();
+    queryClient.clear();
+
+    users = [
+      userRow({ id: "u1", username: "alice", teamCount: 1 }),
+      userRow({ id: "u2", username: "bob", teamCount: 12 }),
+    ];
+    renderTable();
+    expect(await screen.findByText("2 users")).toBeTruthy();
+    expect(screen.getByText("12")).toBeTruthy();
+    cleanup();
+    queryClient.clear();
+
+    users = [];
+    renderTable();
+    expect(await screen.findByText("0 users")).toBeTruthy();
+  });
+
+  it("shows Never in muted text for a user who has not signed in", async () => {
+    users = [userRow({ username: "alice" })];
+    renderTable();
+    expect((await screen.findByText("Never")).className).toContain("text-muted-foreground");
+  });
+});
+
+describe("UsersTable with many users", () => {
+  it("renders 500 users in one table with a sticky header, no paging and a responsive search", async () => {
+    users = Array.from({ length: 500 }, (_, i) =>
+      userRow({ id: `u${i}`, username: `user${String(i).padStart(3, "0")}` }),
+    );
+    renderTable();
+    expect(await screen.findByText("500 users")).toBeTruthy();
+    expect(bodyRows()).toHaveLength(500);
+    for (const th of screen.getAllByRole("columnheader")) {
+      expect(th.className).toContain("sticky");
+      expect(th.className).toContain("top-0");
+      expect(th.className).toContain("h-12");
+    }
+    expect(screen.queryByRole("button", { name: /next|previous/i })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: /pagination/i })).toBeNull();
+
+    typeSearch("user042");
+    expect(bodyRows()).toHaveLength(1);
+    expect(screen.getByText("500 users")).toBeTruthy();
+  });
+});
+
+describe("UsersTable on a phone", () => {
+  it("stacks the toolbar, makes Create user full width and 44px high and row triggers 44px", async () => {
+    users = [userRow({ username: "carol", status: "invite_pending" })];
+    renderTable();
+    await screen.findByText("carol");
+
+    const create = screen.getByRole("button", { name: "Create user" });
+    expect(create.className).toContain("w-full");
+    expect(create.className).toContain("h-11");
+    expect((create.parentElement as HTMLElement).className).toContain("flex-col");
+    expect(searchField().className).toContain("h-11");
+    expect(screen.getByRole("button", { name: "Actions for carol" }).className).toContain(
+      "max-md:size-11",
+    );
+    const wrapper = screen.getByRole("table", { name: "Users" }).parentElement as HTMLElement;
+    expect(wrapper.className).toContain("overflow-x-auto");
   });
 });

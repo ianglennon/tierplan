@@ -45,6 +45,10 @@ function created(username: string): Response {
   );
 }
 
+function problem(status: number, type: string, errors?: { location: string; message: string }[]) {
+  return Response.json({ status, type, title: type, detail: type, errors }, { status });
+}
+
 beforeEach(() => {
   sent = [];
   setCsrfToken("csrf");
@@ -178,5 +182,132 @@ describe("CreateUserDialog", () => {
     expect(await screen.findByRole("dialog", { name: "Create user" })).toBeTruthy();
     expect(field("Username").value).toBe("");
     expect(document.body.textContent).not.toContain(TOKEN);
+  });
+});
+
+// Errors, validation and pending (plan 03-12 Task 3).
+
+describe("CreateUserDialog errors", () => {
+  it("shows a taken username inline, keeps the dialog open and raises no toast", async () => {
+    answer = () => problem(409, "username_taken");
+    renderDialog();
+    fill("alice");
+    submit();
+
+    const alert = await screen.findByText("That username is already taken.");
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(screen.getByRole("dialog", { name: "Create user" })).toBeTruthy();
+    expect(field("Username").getAttribute("aria-invalid")).toBe("true");
+    expect(document.querySelector("[data-sonner-toast]")).toBeNull();
+    // The typed values stay for another try.
+    expect(field("Username").value).toBe("alice");
+  });
+
+  it("says a deleted account's username cannot be used again", async () => {
+    answer = () => problem(409, "username_reserved");
+    renderDialog();
+    fill("gone");
+    submit();
+    expect(
+      await screen.findByText(
+        "That username belonged to a deleted account and can't be used again.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("maps the server's 422 field codes to their messages, each on its field", async () => {
+    answer = () =>
+      problem(422, "validation_failed", [
+        { location: "body.email", message: "invalid_email" },
+        { location: "body.displayName", message: "display_name_too_long" },
+      ]);
+    renderDialog();
+    fill("alice", { displayName: "x", email: "a@example.test" });
+    submit();
+
+    expect(await screen.findByText("Enter a valid email address.")).toBeTruthy();
+    expect(screen.getByText("Use 64 characters or fewer.")).toBeTruthy();
+    expect(field("Email (optional)").getAttribute("aria-invalid")).toBe("true");
+    expect(field("Display name (optional)").getAttribute("aria-invalid")).toBe("true");
+    expect(field("Username").getAttribute("aria-invalid")).toBe("false");
+  });
+
+  it("shows the server error in an alert on a 500 and nothing else", async () => {
+    answer = () => problem(500, "about:blank");
+    renderDialog();
+    fill("alice");
+    submit();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+    );
+    expect(screen.getByRole("dialog", { name: "Create user" })).toBeTruthy();
+    expect(document.querySelector("[data-sonner-toast]")).toBeNull();
+  });
+
+  it("says the server cannot be reached when the request fails", async () => {
+    answer = () => {
+      throw new TypeError("network down");
+    };
+    renderDialog();
+    fill("alice");
+    submit();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Can't reach Bayplan. Check your connection and try again.",
+    );
+  });
+
+  it("checks the fields before sending anything", async () => {
+    renderDialog();
+    fill("ab", { displayName: "x".repeat(65), email: "not an email" });
+    submit();
+
+    expect(
+      await screen.findByText("Use 3 to 32 characters: letters, numbers, dot, dash or underscore."),
+    ).toBeTruthy();
+    expect(screen.getByText("Use 64 characters or fewer.")).toBeTruthy();
+    expect(screen.getByText("Enter a valid email address.")).toBeTruthy();
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("leaves the optional fields out of the request when they are empty", async () => {
+    renderDialog();
+    fill("alice");
+    submit();
+    await screen.findByRole("dialog", { name: "alice is ready" });
+    expect(posts()[0]?.body).toEqual({ username: "alice" });
+  });
+});
+
+describe("CreateUserDialog while creating", () => {
+  it("shows the spinner and pending label, disables the fields and sends one request", async () => {
+    let release: (r: Response) => void = () => undefined;
+    answer = () => new Promise<Response>((resolve) => (release = resolve));
+    renderDialog();
+    fill("alice");
+    submit();
+
+    const pending = await screen.findByRole("button", { name: "Creating…" });
+    expect(pending.querySelector('[data-slot="spinner"], svg')).toBeTruthy();
+    expect(field("Username").matches(":disabled")).toBe(true);
+    expect(field("Email (optional)").matches(":disabled")).toBe(true);
+    fireEvent.click(pending);
+    fireEvent.submit(pending.closest("form") as HTMLFormElement);
+    expect(posts()).toHaveLength(1);
+
+    // It cannot be dismissed with a request in flight.
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    release(created("alice"));
+    expect(await screen.findByRole("dialog", { name: "alice is ready" })).toBeTruthy();
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("generates nothing until the button is pressed", () => {
+    renderDialog();
+    expect(posts()).toHaveLength(0);
+    expect(sent.some((s) => s.method === "POST")).toBe(false);
   });
 });
