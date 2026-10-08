@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
+	"github.com/ianglennon/bayplan/internal/backup"
 	"github.com/ianglennon/bayplan/internal/buildinfo"
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/datadir"
@@ -238,6 +239,19 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 			_ = unlock()
 		}
 	}()
+
+	// A rotation that a crash cut short is finished or discarded before the key
+	// is loaded: LoadOrCreate would otherwise mint a fresh key beside a
+	// half-swapped pair of key files (D-33).
+	recovered, err := vault.RecoverRotation(ctx, info.Path, cfg.EncryptionKey != "", func(ctx context.Context) (string, error) {
+		return backup.StoredActiveKeyID(ctx, info.Path)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("recover an interrupted key rotation: %w", err)
+	}
+	if recovered {
+		log.Warn("finished or discarded a master-key rotation that was interrupted")
+	}
 
 	// The master key comes before the database: a bad BAYPLAN_ENCRYPTION_KEY
 	// should stop startup before anything is written (D-13).
