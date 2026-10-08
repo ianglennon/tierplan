@@ -45,6 +45,7 @@ let sent: Sent[];
 let environments: () => Response | Promise<Response>;
 let put: (body: Record<string, unknown>) => Response | Promise<Response>;
 let preview: (body: Record<string, unknown>) => Response | Promise<Response>;
+let candidates: () => Response | Promise<Response>;
 
 function problem(status: number, type: string) {
   return Response.json({ status, type, title: type, detail: type }, { status });
@@ -57,6 +58,8 @@ beforeEach(() => {
     Response.json({ items: [envBody("env-b", "Beta"), envBody("env-a", "Alpha")], total: 2 });
   put = () => Response.json(grant(), { status: 201 });
   preview = () => Response.json({ impact: [] });
+  candidates = () =>
+    Response.json({ users: [{ id: "u2", username: "bob", displayName: "Bob B" }], teams: [] });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
@@ -67,6 +70,9 @@ beforeEach(() => {
       if (path === "/api/environments") return environments();
       if (path === "/api/users/u1/grants" && req.method === "PUT") return put(entry.body ?? {});
       if (path === "/api/users/u1/grants/g1/impact") return preview(entry.body ?? {});
+      if (path === "/api/env/env-a/access/candidates") return candidates();
+      if (path === "/api/env/env-a/access" && req.method === "PUT") return put(entry.body ?? {});
+      if (path === "/api/env/env-a/access/g1/impact") return preview(entry.body ?? {});
       return Response.json({}, { status: 404 });
     }),
   );
@@ -396,5 +402,84 @@ describe("editing access", () => {
     preview = () => Response.json({ impact: [] });
     fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
     expect(await within(dialog).findByText("No one loses access.")).toBeTruthy();
+  });
+});
+
+// The dialog opened from an environment's Access tab (plan 03-20, D-12, UI-SPEC
+// "Grants" and the delegating env Admin partial).
+function EnvHarness({
+  existing = null,
+  onSaved = () => {},
+}: {
+  existing?: Grant | null;
+  onSaved?: () => void;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <QueryClientProvider client={queryClient}>
+      <GrantDialog
+        mode="env"
+        environment={{ id: "env-a", name: "Alpha" }}
+        subject={existing ? SUBJECT : undefined}
+        open={open}
+        onOpenChange={setOpen}
+        grant={existing}
+        onSaved={onSaved}
+      />
+      <Toaster />
+    </QueryClientProvider>
+  );
+}
+
+describe("the dialog on an environment's Access tab", () => {
+  it("has no environment field and no All environments option: the environment is a line of text", async () => {
+    render(<EnvHarness />);
+    const dialog = await screen.findByRole("dialog", { name: "Add access" });
+    expect(within(dialog).getByText("On Alpha")).toBeTruthy();
+    expect(within(dialog).queryByRole("combobox", { name: "Environment" })).toBeNull();
+    expect(within(dialog).queryByText("All environments")).toBeNull();
+    expect(within(dialog).getByRole("combobox", { name: "Who" })).toBeTruthy();
+  });
+
+  it("edits through the environment route with Who and the environment as read-only text and no Who field", async () => {
+    render(<EnvHarness existing={grant()} />);
+    const dialog = await screen.findByRole("dialog", { name: "Edit access" });
+    expect(within(dialog).queryByRole("combobox", { name: "Who" })).toBeNull();
+    expect(within(dialog).getByText("alice")).toBeTruthy();
+    expect(within(dialog).getByText("Alpha")).toBeTruthy();
+    fireEvent.click(radio(dialog, "Viewer"));
+    expect(await within(dialog).findByText("No one loses access.")).toBeTruthy();
+    expect(sent.find((s) => s.path.endsWith("/impact"))?.path).toBe(
+      "/api/env/env-a/access/g1/impact",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save access" }));
+    await screen.findByText("Access saved.");
+    const saved = sent.find((s) => s.method === "PUT");
+    expect(saved?.path).toBe("/api/env/env-a/access");
+    expect(saved?.body).toEqual({
+      subjectType: "user",
+      subjectId: "u1",
+      role: "viewer",
+      extras: [],
+      expected: { role: "operator", extras: ["containers.exec"] },
+    });
+  });
+
+  it("keeps Add access off until someone is chosen in the Who list", async () => {
+    render(<EnvHarness />);
+    const dialog = await screen.findByRole("dialog", { name: "Add access" });
+    const add = within(dialog).getByRole("button", { name: "Add access" }) as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Who" }));
+    fireEvent.click(await screen.findByRole("option", { name: /bob/ }));
+    await waitFor(() => expect(add.disabled).toBe(false));
+    expect(within(dialog).getByRole("combobox", { name: "Who" }).textContent).toContain("bob");
+  });
+
+  it("shows Everyone already has access here. when the list is empty", async () => {
+    candidates = () => Response.json({ users: [], teams: [] });
+    render(<EnvHarness />);
+    const dialog = await screen.findByRole("dialog", { name: "Add access" });
+    expect(await within(dialog).findByText("Everyone already has access here.")).toBeTruthy();
   });
 });
