@@ -215,6 +215,64 @@ describe("the throttle (T-03-100)", () => {
     expect(notifyChanged).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the skeleton for a held environment from a folded refusal until the trailing run decides (WR-G-02)", async () => {
+    meAnswer = makeMe({ envs: { a: "viewer" } });
+    const { handle, moveTo, notifyChanged } = setup("a", meAnswer);
+    await handle("unseen", "/api/env/a/summary");
+    expect(isAccessRefetching()).toBe(false);
+
+    // The grant is withdrawn and the page's 404 comes inside the window: the page
+    // must not show Page not found for the seconds until the trailing run.
+    meAnswer = makeMe({ envs: {}, administrators: ["admin"] });
+    clock += 2_000;
+    await handle("unseen", "/api/env/a/containers");
+    expect(meReads()).toBe(1);
+    expect(isAccessRefetching()).toBe(true);
+    // A second folded refusal does not raise a second hold.
+    await handle("unseen", "/api/env/a/networks");
+    expect(isAccessRefetching()).toBe(true);
+
+    // The trailing run takes over without a frame between.
+    const release = holdMe();
+    clock += ACCESS_REFETCH_THROTTLE_MS;
+    fire();
+    expect(isAccessRefetching()).toBe(true);
+    await vi.waitFor(() => expect(meReads()).toBe(2));
+    expect(isAccessRefetching()).toBe(true);
+    release();
+    await vi.waitFor(() => expect(moveTo).toHaveBeenCalledExactlyOnceWith(undefined));
+    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+    expect(notifyChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no skeleton for a folded refusal on an environment the user never held (D-08)", async () => {
+    meAnswer = makeMe({ envs: { a: "viewer" } });
+    const { handle, moveTo, notifyChanged } = setup("ghost", meAnswer);
+    await handle("unseen", "/api/env/ghost/summary");
+    clock += 2_000;
+    await handle("unseen", "/api/env/ghost/containers");
+    expect(liveTimers()).toHaveLength(1);
+    expect(isAccessRefetching()).toBe(false);
+
+    clock += ACCESS_REFETCH_THROTTLE_MS;
+    fire();
+    await vi.waitFor(() => expect(meReads()).toBe(2));
+    await vi.waitFor(() => expect(isAccessRefetching()).toBe(false));
+    expect(moveTo).not.toHaveBeenCalled();
+    expect(notifyChanged).not.toHaveBeenCalled();
+  });
+
+  it("lets go of the waiting skeleton when the handler is disposed", async () => {
+    meAnswer = makeMe({ envs: { a: "viewer" } });
+    const { handle, dispose } = setup("a", meAnswer);
+    await handle("unseen", "/api/env/a/summary");
+    clock += 2_000;
+    await handle("unseen", "/api/env/a/containers");
+    expect(isAccessRefetching()).toBe(true);
+    dispose();
+    expect(isAccessRefetching()).toBe(false);
+  });
+
   it("counts the trailing run as unseen when any refusal folded into it was", async () => {
     meAnswer = makeMe({ envs: { a: "operator" } });
     const { handle, moveTo, notifyChanged, notifyRefused } = setup("a", meAnswer);

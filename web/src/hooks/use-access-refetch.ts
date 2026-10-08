@@ -166,6 +166,10 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
   // The run in flight, which never rejects, and the skeleton holds it has raised.
   let inFlight: Promise<void> | undefined;
   const holds = new Set<() => void>();
+  // The skeleton hold kept while a refusal folded into the trailing run waits for
+  // its time, so the page that was refused does not show Page not found or the
+  // no-access state until that run decides. The run takes over from it.
+  let releaseWaiting: (() => void) | undefined;
 
   const baseline: Baseline = new Map();
   let baselineUser: string | undefined;
@@ -199,6 +203,26 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
   const heldFor = (envId: string): Holding =>
     merge(baseline.get("*") ?? emptyHolding(), baseline.get(envId) ?? emptyHolding());
   const has = (envId: string): boolean => baseline.has(envId) || baseline.has("*");
+
+  // holdWhileWaiting keeps the skeleton up for the environment the user is on, if
+  // they held it, from a refusal folded into the trailing run until that run
+  // starts (or is dropped, or the handler is disposed).
+  const holdWhileWaiting = (): void => {
+    if (releaseWaiting) return;
+    const envId = deps.currentEnvId();
+    if (envId === undefined || !has(envId)) return;
+    let held = true;
+    const release = (): void => {
+      if (!held) return;
+      held = false;
+      holds.delete(release);
+      if (releaseWaiting === release) releaseWaiting = undefined;
+      setPending(-1);
+    };
+    releaseWaiting = release;
+    holds.add(release);
+    setPending(1);
+  };
   // Whether the user keeps everything the baseline held for an environment.
   const keeps = (me: Me, envId: string): boolean =>
     covers(merge(holding(me, "*"), holding(me, envId)), heldFor(envId));
@@ -219,6 +243,9 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
       holds.add(release);
       setPending(1);
     }
+    // The run has its own hold now, if it needs one, so the wait's can go without
+    // a frame in between.
+    releaseWaiting?.();
     const done = (async (): Promise<void> => {
       try {
         let after: Me;
@@ -281,7 +308,10 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
   async function runTrailing(): Promise<void> {
     while (inFlight) await inFlight;
     // A run that started in the meantime already answered what was waiting.
-    if (disposed || !trailingWaiting) return;
+    if (disposed || !trailingWaiting) {
+      releaseWaiting?.();
+      return;
+    }
     const at = now();
     if (at - lastRun < ACCESS_REFETCH_THROTTLE_MS) {
       trailingWaiting = false;
@@ -313,6 +343,7 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
     if (inFlight || at - lastRun < ACCESS_REFETCH_THROTTLE_MS) {
       // Not dropped: answered once when the window ends and the run is done.
       if (kind === "unseen") foldedUnseen = true;
+      holdWhileWaiting();
       if (!cancelTrailing && !trailingWaiting) {
         const wait = Math.max(0, lastRun + ACCESS_REFETCH_THROTTLE_MS - at);
         cancelTrailing = schedule(runTrailingSoon, wait);
