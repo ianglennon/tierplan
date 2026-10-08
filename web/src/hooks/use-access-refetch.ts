@@ -15,12 +15,16 @@ import { SUCCESS_TOAST_MS, toastError, toastInfo } from "@/lib/toast";
 
 // At most one /api/me refetch in this long, however many requests are refused
 // (T-03-100). There is no polling and no stream for access changes: only a 403
-// or 404 the app was going to see anyway sets this off (D-10).
+// or 404 the app was going to see anyway sets this off (D-10). A refusal inside
+// the window is not dropped: all of them are answered by one more refetch when
+// the window ends, so a run that found nothing cannot silence a later change.
 export const ACCESS_REFETCH_THROTTLE_MS = 5000;
 
-// While the refetch and the move run, the environment page shows its skeleton:
-// a page that just answered 404 must not flash "Page not found" or the no-access
-// state before the app knows where the user belongs now.
+// While the refetch and the move run for an environment the user held, its page
+// shows a skeleton: a page that just answered 404 must not flash "Page not found"
+// or the no-access state before the app knows where the user belongs now. An
+// environment the user never held gets no skeleton: it is a plain Page not found
+// at once (D-08).
 let pending = 0;
 const listeners = new Set<() => void>();
 
@@ -55,6 +59,9 @@ export interface AccessChangeDeps {
   // "You no longer have permission to do that."
   notifyRefused: () => void;
   now?: () => number;
+  // Runs fn after delayMs and returns a function that cancels it. Defaults to
+  // setTimeout; a test passes its own to fire the trailing run itself.
+  schedule?: (fn: () => void, delayMs: number) => () => void;
 }
 
 // Whether the user may open this environment, as /api/me says. The "*" entry is
@@ -132,11 +139,33 @@ function covers(now: Holding, then: Holding): boolean {
 // baseline is fed by every /api/me answer through a cache subscription and is
 // only ever added to until the user is told about a change, so a re-read can
 // never hide a loss: lost means held in the baseline and not openable now.
+//
+// /api/me is read at most once per window. A refusal inside the window schedules
+// one trailing run for when it ends, however many arrive, and never starts a read
+// while another is outstanding. The skeleton shows only while a run for an
+// environment in the baseline is in flight. dispose ends all of it.
 export function createAccessChangeHandler(deps: AccessChangeDeps) {
   const { queryClient } = deps;
   const now = deps.now ?? Date.now;
+  const schedule =
+    deps.schedule ??
+    ((fn: () => void, delayMs: number) => {
+      const id = setTimeout(fn, delayMs);
+      return () => clearTimeout(id);
+    });
   const meKey = meQueryOptions.queryKey;
   let lastRun = Number.NEGATIVE_INFINITY;
+  let disposed = false;
+  // The trailing run, if one is scheduled, and whether any refusal folded into it
+  // was an unseen environment.
+  let cancelTrailing: (() => void) | undefined;
+  let foldedUnseen = false;
+  // True from when the trailing run's time came until it starts its read: refusals
+  // that arrive meanwhile fold into it rather than scheduling another.
+  let trailingWaiting = false;
+  // The run in flight, which never rejects, and the skeleton holds it has raised.
+  let inFlight: Promise<void> | undefined;
+  const holds = new Set<() => void>();
 
   const baseline: Baseline = new Map();
   let baselineUser: string | undefined;
@@ -174,64 +203,137 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
   const keeps = (me: Me, envId: string): boolean =>
     covers(merge(holding(me, "*"), holding(me, envId)), heldFor(envId));
 
+  async function run(kind: AccessChangeKind): Promise<void> {
+    lastRun = now();
+    // The skeleton is for an environment the user held. This runs before the first
+    // await so the page never shows a frame without it.
+    const startEnv = deps.currentEnvId();
+    let held = startEnv !== undefined && has(startEnv);
+    const release = (): void => {
+      if (!held) return;
+      held = false;
+      holds.delete(release);
+      setPending(-1);
+    };
+    if (held) {
+      holds.add(release);
+      setPending(1);
+    }
+    const done = (async (): Promise<void> => {
+      try {
+        let after: Me;
+        try {
+          // A read already in flight may have been asked before the change, so it
+          // is dropped and a new one is made.
+          await queryClient.cancelQueries({ queryKey: meKey });
+          after = await queryClient.fetchQuery({ ...meQueryOptions, staleTime: 0 });
+        } catch {
+          // Signed out (the 401 handler takes over) or Bayplan unreachable: there
+          // is nothing to move to, and the pages show their own errors.
+          return;
+        }
+        if (disposed) return;
+        const envId = deps.currentEnvId();
+        let lost = false;
+        let narrowed = false;
+        if (envId !== undefined) {
+          lost = has(envId) && !mayOpen(after, envId);
+          narrowed = has(envId) && !lost && !keeps(after, envId);
+        } else {
+          // Off an environment page there is nothing to move from, but a refusal
+          // still deserves the toast when what the user held has shrunk.
+          for (const key of baseline.keys()) {
+            const open = key === "*" ? after.access["*"] !== undefined : mayOpen(after, key);
+            if (!open || !keeps(after, key)) narrowed = true;
+          }
+        }
+        let told = false;
+        if (lost) {
+          let target: string | undefined;
+          if (!hasNoEnvironmentAccess(after)) {
+            target = await nextEnvironment(queryClient).catch(() => undefined);
+          }
+          if (disposed) return;
+          deps.moveTo(target);
+          deps.notifyChanged();
+          told = true;
+        } else if (narrowed && kind === "unseen") {
+          deps.notifyChanged();
+          told = true;
+        }
+        // Once the user knows, the baseline is what they hold now, so the same
+        // loss is not reported twice. A run with nothing to say leaves it alone.
+        if (told || kind === "refused") reset(after);
+      } finally {
+        release();
+      }
+    })();
+    inFlight = done;
+    try {
+      await done;
+    } finally {
+      if (inFlight === done) inFlight = undefined;
+    }
+  }
+
+  // The trailing run waits for a read still outstanding, and for the window to be
+  // over again if a run started meanwhile, so reads stay a window apart.
+  async function runTrailing(): Promise<void> {
+    while (inFlight) await inFlight;
+    // A run that started in the meantime already answered what was waiting.
+    if (disposed || !trailingWaiting) return;
+    const at = now();
+    if (at - lastRun < ACCESS_REFETCH_THROTTLE_MS) {
+      trailingWaiting = false;
+      cancelTrailing = schedule(runTrailingSoon, lastRun + ACCESS_REFETCH_THROTTLE_MS - at);
+      return;
+    }
+    trailingWaiting = false;
+    const kind: AccessChangeKind = foldedUnseen ? "unseen" : "refused";
+    foldedUnseen = false;
+    await run(kind);
+  }
+
+  function runTrailingSoon(): void {
+    cancelTrailing = undefined;
+    trailingWaiting = true;
+    void runTrailing();
+  }
+
   async function handle(kind: AccessChangeKind, _path: string): Promise<void> {
+    if (disposed) return;
     // The person asked for something and was told no: say so every time, even
     // when the refetch below is held back.
     if (kind === "refused") deps.notifyRefused();
 
     const at = now();
-    if (at - lastRun < ACCESS_REFETCH_THROTTLE_MS) return;
-    lastRun = at;
-
-    setPending(1);
-    try {
-      let after: Me;
-      try {
-        // A read already in flight may have been asked before the change, so it is
-        // dropped and a new one is made.
-        await queryClient.cancelQueries({ queryKey: meKey });
-        after = await queryClient.fetchQuery({ ...meQueryOptions, staleTime: 0 });
-      } catch {
-        // Signed out (the 401 handler takes over) or Bayplan unreachable: there
-        // is nothing to move to, and the pages show their own errors.
-        return;
+    if (at - lastRun < ACCESS_REFETCH_THROTTLE_MS) {
+      // Not dropped: answered once when the window ends.
+      if (kind === "unseen") foldedUnseen = true;
+      if (!cancelTrailing && !trailingWaiting) {
+        cancelTrailing = schedule(runTrailingSoon, lastRun + ACCESS_REFETCH_THROTTLE_MS - at);
       }
-      const envId = deps.currentEnvId();
-      let lost = false;
-      let narrowed = false;
-      if (envId !== undefined) {
-        lost = has(envId) && !mayOpen(after, envId);
-        narrowed = has(envId) && !lost && !keeps(after, envId);
-      } else {
-        // Off an environment page there is nothing to move from, but a refusal
-        // still deserves the toast when what the user held has shrunk.
-        for (const key of baseline.keys()) {
-          const open = key === "*" ? after.access["*"] !== undefined : mayOpen(after, key);
-          if (!open || !keeps(after, key)) narrowed = true;
-        }
-      }
-      let told = false;
-      if (lost) {
-        let target: string | undefined;
-        if (!hasNoEnvironmentAccess(after)) {
-          target = await nextEnvironment(queryClient).catch(() => undefined);
-        }
-        deps.moveTo(target);
-        deps.notifyChanged();
-        told = true;
-      } else if (narrowed && kind === "unseen") {
-        deps.notifyChanged();
-        told = true;
-      }
-      // Once the user knows, the baseline is what they hold now, so the same loss
-      // is not reported twice. A run with nothing to say leaves it alone.
-      if (told || kind === "refused") reset(after);
-    } finally {
-      setPending(-1);
+      return;
     }
+    // This run answers anything that was waiting for the window to end.
+    cancelTrailing?.();
+    cancelTrailing = undefined;
+    trailingWaiting = false;
+    const unseen = kind === "unseen" || foldedUnseen;
+    foldedUnseen = false;
+    await run(unseen ? "unseen" : "refused");
   }
 
-  return { handle, dispose: unsubscribe };
+  function dispose(): void {
+    disposed = true;
+    unsubscribe();
+    cancelTrailing?.();
+    cancelTrailing = undefined;
+    trailingWaiting = false;
+    for (const release of [...holds]) release();
+  }
+
+  return { handle, dispose };
 }
 
 // useAccessRefetch arms the access-change handler while the signed-in layout is
