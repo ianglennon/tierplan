@@ -91,13 +91,17 @@ interface CopyableCodeProps {
   // Copy always takes the real text, so the command that lands on the
   // clipboard works.
   secret?: string;
+  // The wording of the reveal toggle, for a secret that is not a token ("Show
+  // link"). Both default to the install dialog's "Show token" / "Hide token".
+  showLabel?: string;
+  hideLabel?: string;
 }
 
 // CopyableCode is a read-only monospace block with a copy button. If the copy
 // fails everywhere the text is selected instead and a toast tells the user to
 // copy it by hand (UI-SPEC "Clipboard"). With a secret the block is masked
 // until Show token is pressed (D-20).
-export function CopyableCode({ code, label, secret }: CopyableCodeProps) {
+export function CopyableCode({ code, label, secret, showLabel, hideLabel }: CopyableCodeProps) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   const [revealed, setRevealed] = useState(false);
@@ -184,7 +188,9 @@ export function CopyableCode({ code, label, secret }: CopyableCodeProps) {
           onClick={() => setRevealed((v) => !v)}
         >
           {revealed ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-          {revealed ? t("install.token.hide") : t("install.token.show")}
+          {revealed
+            ? (hideLabel ?? t("install.token.hide"))
+            : (showLabel ?? t("install.token.show"))}
         </Button>
       ) : null}
     </section>

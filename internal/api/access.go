@@ -78,22 +78,8 @@ func linkURL(inst *instance.Instance, token string) string {
 	return base + "/invite#token=" + token
 }
 
-// userStatus is a user's one-word state. When several apply the first of
-// deleted, locked, disabled, invite expired, invite pending wins (UI-SPEC).
-// hasPassword is false until an invited user sets one; linkLive says whether
-// they still hold an unexpired link.
+// userStatus is a user's one-word state: access.Status, which holds the
+// precedence. linkLive says whether they still hold an unexpired link.
 func userStatus(u sqlc.User, now time.Time, linkLive bool) string {
-	switch {
-	case u.DeletedAt.Valid:
-		return "deleted"
-	case u.LockedUntil.Valid && u.LockedUntil.Int64 > now.UTC().UnixNano():
-		return "locked"
-	case u.Disabled != 0:
-		return "disabled"
-	case u.PasswordHash == "" && !linkLive:
-		return "invite_expired"
-	case u.PasswordHash == "":
-		return "invite_pending"
-	}
-	return "active"
+	return access.Status(u, now, linkLive)
 }

@@ -36,3 +36,15 @@ WHERE l.token_hash = ? AND l.expires_at > ?;
 -- Spends a link. The delete and the read of who it was for are one statement, so
 -- of any number of concurrent accepts exactly one gets a row back.
 DELETE FROM user_links WHERE token_hash = ? AND expires_at > ? RETURNING user_id, kind;
+
+-- name: ListUsersForAdmin :many
+-- Every user who is not deleted, for the admin's users table, with the expiry of
+-- the invite link they hold (NULL when none) and how many teams they belong to.
+-- The status is worked out in Go so the precedence lives in one place.
+SELECT u.id, u.username, u.display_name, u.email, u.instance_admin, u.disabled,
+       u.locked_until, u.password_hash, u.last_login_at, l.expires_at AS link_expires_at,
+       (SELECT COUNT(*) FROM team_members m WHERE m.user_id = u.id) AS team_count
+FROM users u
+LEFT JOIN user_links l ON l.user_id = u.id
+WHERE u.deleted_at IS NULL
+ORDER BY u.username;

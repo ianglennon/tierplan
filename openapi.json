@@ -2740,8 +2740,13 @@
             ],
             "type": "string"
           },
+          "teamCount": {
+            "description": "How many teams the user belongs to",
+            "format": "int64",
+            "type": "integer"
+          },
           "teams": {
-            "description": "The teams the user belongs to",
+            "description": "The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows",
             "items": {
               "$ref": "#/components/schemas/TeamRefBody"
             },
@@ -2762,7 +2767,8 @@
           "email",
           "instanceAdmin",
           "status",
-          "teams"
+          "teams",
+          "teamCount"
         ],
         "type": "object"
       },
@@ -5161,6 +5167,49 @@
       }
     },
     "/api/users": {
+      "get": {
+        "description": "Every user who is not deleted, sorted by username, with the status the users table shows: locked, disabled, invite expired, invite pending or active, in that order of precedence.",
+        "operationId": "listUsers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UserSummaryBody"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List users",
+        "tags": [
+          "users"
+        ]
+      },
       "post": {
         "description": "The user has no password. The response carries a link, valid for BAYPLAN_INVITE_TTL (72 hours by default), that opens a page where they choose one. Bayplan sends no email: the admin hands the link over. A username that belonged to a deleted user answers 409 username_reserved.",
         "operationId": "createUser",

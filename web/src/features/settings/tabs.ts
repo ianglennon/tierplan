@@ -22,6 +22,7 @@ export const SETTINGS_TABS = [
     perm: "environments.configure",
     scope: "anyEnvironment",
   },
+  { key: "access", to: "/settings/access", perm: "users.manage", scope: "global" },
   { key: "backup", to: "/settings/backup", perm: "backup.manage", scope: "global" },
   { key: "about", to: "/settings/about", perm: "settings.read", scope: "global" },
 ] as const;

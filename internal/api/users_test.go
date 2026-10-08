@@ -307,3 +307,125 @@ func TestSigningInSetsTheLastSignInTimeShownForTheUser(t *testing.T) {
 		t.Fatalf("last_login_at = %+v, %v, want the sign-in time", u.LastLoginAt, err)
 	}
 }
+
+// Listing users (plan 03-12, AUTH-04, D-25).
+
+func (f *authFixture) listUsers(t *testing.T, cookie string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(t, authReq{method: http.MethodGet, path: "/api/users", cookie: cookie})
+}
+
+func TestListUsersShowsEveryLiveUserSortedWithStatusAndTeamCount(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.invite(t, cookie, csrf, "carol")
+	f.addUser(t, "bob", false)
+	f.addTeam(t, "ops", "bob")
+	f.addTeam(t, "dev", "bob")
+	f.addUser(t, "dave", false)
+	if _, err := f.st.Write.Exec(`UPDATE users SET deleted_at = ? WHERE username = 'dave'`, f.clk.now().UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := f.listUsers(t, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cc)
+	}
+	var got []struct {
+		userSummary
+		TeamCount int `json:"teamCount"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	byName := map[string]int{}
+	for i, u := range got {
+		names = append(names, u.Username)
+		byName[u.Username] = i
+	}
+	if strings.Join(names, ",") != "admin,bob,carol" {
+		t.Fatalf("users = %v, want admin, bob, carol sorted and the deleted dave left out", names)
+	}
+	if u := got[byName["carol"]]; u.Status != "invite_pending" || u.TeamCount != 0 || u.LastLoginAt != "" {
+		t.Fatalf("carol = %+v, want invite_pending with no teams and no sign-in", u)
+	}
+	if u := got[byName["bob"]]; u.Status != "active" || u.TeamCount != 2 {
+		t.Fatalf("bob = %+v, want active in two teams", u)
+	}
+	if u := got[byName["admin"]]; !u.InstanceAdmin || u.Status != "active" || u.LastLoginAt == "" {
+		t.Fatalf("admin = %+v, want an active instance admin with a last sign-in", u)
+	}
+}
+
+func TestListUsersStatusPrecedenceIsLockedDisabledInviteExpiredInvitePendingActive(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.invite(t, cookie, csrf, "pending")
+	f.invite(t, cookie, csrf, "expired")
+	f.invite(t, cookie, csrf, "lockedinvite")
+	f.addUser(t, "off", false)
+	f.addUser(t, "lockedoff", false)
+	future := f.clk.now().Add(time.Hour).UnixNano()
+	for _, q := range []string{
+		`UPDATE user_links SET expires_at = 1 WHERE user_id = (SELECT id FROM users WHERE username = 'expired')`,
+		`UPDATE users SET disabled = 1 WHERE username IN ('off', 'lockedoff')`,
+	} {
+		if _, err := f.st.Write.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.st.Write.Exec(`UPDATE users SET locked_until = ? WHERE username IN ('lockedoff', 'lockedinvite')`, future); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []userSummary
+	if err := json.Unmarshal(f.listUsers(t, cookie).Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	status := map[string]string{}
+	for _, u := range got {
+		status[u.Username] = u.Status
+	}
+	want := map[string]string{
+		"admin": "active", "pending": "invite_pending", "expired": "invite_expired",
+		"lockedinvite": "locked", "off": "disabled", "lockedoff": "locked",
+	}
+	for name, w := range want {
+		if status[name] != w {
+			t.Errorf("%s = %q, want %q (all: %v)", name, status[name], w, status)
+		}
+	}
+
+	// A lock that has ended no longer counts.
+	if _, err := f.st.Write.Exec(`UPDATE users SET locked_until = 1 WHERE username = 'lockedoff'`); err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	if err := json.Unmarshal(f.listUsers(t, cookie).Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range got {
+		if u.Username == "lockedoff" && u.Status != "disabled" {
+			t.Errorf("lockedoff after its lock ended = %q, want disabled", u.Status)
+		}
+	}
+}
+
+func TestListUsersNeedsUsersManage(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addUser(t, "bob", false)
+	bobCookie, _ := f.signIn(t, "bob", false)
+
+	if rec := f.listUsers(t, bobCookie); rec.Code != http.StatusForbidden {
+		t.Fatalf("a user who is not an instance admin: %d %s, want 403", rec.Code, rec.Body)
+	} else if strings.Contains(rec.Body.String(), "bob") && strings.Contains(rec.Body.String(), "admin") {
+		t.Fatalf("a refusal must not list users: %s", rec.Body)
+	}
+	if rec := f.listUsers(t, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous: %d %s, want 401", rec.Code, rec.Body)
+	}
+}

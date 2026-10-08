@@ -206,3 +206,36 @@ func TestCreateUserRefusesBadFieldsAndNamesEveryOne(t *testing.T) {
 		t.Fatalf("users = %d, %v; the refused submissions must create none", n, err)
 	}
 }
+
+func TestListUsersLeavesOutDeletedUsersAndJudgesTheLinkAtTheClock(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, _, err := f.svc.CreateUser(ctx, testAdmin, access.CreateUserInput{Username: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	gone, _, err := f.svc.CreateUser(ctx, testAdmin, access.CreateUserInput{Username: "gone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.Write.Exec(`UPDATE users SET deleted_at = ? WHERE id = ?`, testNow.UnixNano(), gone.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.svc.ListUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Username != "alice" || got[0].Status != access.StatusInvitePending {
+		t.Fatalf("users = %+v, want only alice, invite pending", got)
+	}
+
+	// Past the link's expiry the same user reads as invite expired.
+	f.clk.t = testNow.Add(73 * time.Hour)
+	got, err = f.svc.ListUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Status != access.StatusInviteExpired {
+		t.Fatalf("status after the link expired = %q, want invite_expired", got[0].Status)
+	}
+}

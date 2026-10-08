@@ -71,12 +71,28 @@ let environments: ReturnType<typeof environment>[];
 let host: Record<string, unknown>;
 let patchAnswer: (body: Record<string, unknown>) => Response | Promise<Response>;
 let deleteAnswer: () => Response | Promise<Response>;
+let users: Record<string, unknown>[];
+
+function userRow(over: Record<string, unknown> = {}) {
+  return {
+    id: "u1",
+    username: "alice",
+    displayName: "",
+    email: "",
+    instanceAdmin: false,
+    status: "active",
+    teams: [],
+    teamCount: 0,
+    ...over,
+  };
+}
 
 beforeEach(() => {
   calls = [];
   me = ADMIN;
   environments = [environment()];
   host = localHost({ managed: true });
+  users = [userRow({ id: "u0", username: "admin", instanceAdmin: true })];
   setCsrfToken(null);
   patchAnswer = (body) => {
     const env = environments[0];
@@ -101,6 +117,7 @@ beforeEach(() => {
       if (path === "/api/me") return Response.json(me);
       if (path === "/api/environments") return Response.json({ items: environments });
       if (path === "/api/local-host") return Response.json(host);
+      if (path === "/api/users") return Response.json(users);
       if (path === "/api/env/e1" && req.method === "PATCH") return patchAnswer(call.body ?? {});
       if (path === "/api/environments/e1" && req.method === "DELETE") return deleteAnswer();
       if (path === "/api/version") {
@@ -281,6 +298,53 @@ describe("Backup tab", () => {
     renderAt("/settings/backup");
     expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Download a backup" })).toBeNull();
+  });
+});
+
+describe("Access tab", () => {
+  it("shows the Access tab to an instance admin between Environments and Backup", async () => {
+    renderAt("/settings/general");
+    await screen.findByRole("tab", { name: "Access" });
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "General",
+      "Environments",
+      "Access",
+      "Backup",
+      "About",
+    ]);
+  });
+
+  it("opens the Users sub-tab from /settings/access and lists the users from the API", async () => {
+    users = [
+      userRow({ id: "u0", username: "admin", instanceAdmin: true }),
+      userRow({ id: "u1", username: "carol", status: "invite_pending" }),
+    ];
+    const router = renderAt("/settings/access");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/access/users"));
+    const tab = await screen.findByRole("tab", { name: "Access" });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(await main().findByText("carol")).toBeTruthy();
+    expect(main().getByText("admin")).toBeTruthy();
+    expect(main().getByText("Invite pending")).toBeTruthy();
+    expect(main().getByText("Instance admin")).toBeTruthy();
+    expect(main().getByRole("tab", { name: "Users" }).getAttribute("aria-selected")).toBe("true");
+    await waitFor(() => expect(document.title).toBe("Users · Lab"));
+  });
+
+  it("keeps the Access tab from anyone without users.manage and asks the server for no users", async () => {
+    me = {
+      ...ADMIN,
+      permissions: { global: ["settings.read"], environments: {} },
+    };
+    renderAt("/settings/general");
+    await screen.findByRole("tab", { name: "General" });
+    expect(screen.queryByRole("tab", { name: "Access" })).toBeNull();
+    cleanup();
+    queryClient.clear();
+
+    renderAt("/settings/access/users");
+    expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
+    expect(calls.some((c) => c.path === "/api/users")).toBe(false);
   });
 });
 

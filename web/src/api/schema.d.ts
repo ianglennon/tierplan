@@ -758,7 +758,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List users
+         * @description Every user who is not deleted, sorted by username, with the status the users table shows: locked, disabled, invite expired, invite pending or active, in that order of precedence.
+         */
+        get: operations["listUsers"];
         put?: never;
         /**
          * Create a user and a one-time invite link
@@ -1945,7 +1949,12 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "disabled" | "locked" | "invite_pending" | "invite_expired" | "deleted";
-            /** @description The teams the user belongs to */
+            /**
+             * Format: int64
+             * @description How many teams the user belongs to
+             */
+            teamCount: number;
+            /** @description The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows */
             teams: components["schemas"]["TeamRefBody"][] | null;
             /** @description The lower-cased username */
             username: string;
@@ -3465,6 +3474,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSummaryBody"][] | null;
                 };
             };
             /** @description Error */

@@ -172,3 +172,65 @@ func (q *Queries) InsertUserLink(ctx context.Context, arg InsertUserLinkParams) 
 	)
 	return err
 }
+
+const listUsersForAdmin = `-- name: ListUsersForAdmin :many
+SELECT u.id, u.username, u.display_name, u.email, u.instance_admin, u.disabled,
+       u.locked_until, u.password_hash, u.last_login_at, l.expires_at AS link_expires_at,
+       (SELECT COUNT(*) FROM team_members m WHERE m.user_id = u.id) AS team_count
+FROM users u
+LEFT JOIN user_links l ON l.user_id = u.id
+WHERE u.deleted_at IS NULL
+ORDER BY u.username
+`
+
+type ListUsersForAdminRow struct {
+	ID            string
+	Username      string
+	DisplayName   string
+	Email         string
+	InstanceAdmin int64
+	Disabled      int64
+	LockedUntil   sql.NullInt64
+	PasswordHash  string
+	LastLoginAt   sql.NullInt64
+	LinkExpiresAt sql.NullInt64
+	TeamCount     int64
+}
+
+// Every user who is not deleted, for the admin's users table, with the expiry of
+// the invite link they hold (NULL when none) and how many teams they belong to.
+// The status is worked out in Go so the precedence lives in one place.
+func (q *Queries) ListUsersForAdmin(ctx context.Context) ([]ListUsersForAdminRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUsersForAdmin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsersForAdminRow
+	for rows.Next() {
+		var i ListUsersForAdminRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.DisplayName,
+			&i.Email,
+			&i.InstanceAdmin,
+			&i.Disabled,
+			&i.LockedUntil,
+			&i.PasswordHash,
+			&i.LastLoginAt,
+			&i.LinkExpiresAt,
+			&i.TeamCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

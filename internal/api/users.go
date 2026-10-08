@@ -39,7 +39,8 @@ type UserSummaryBody struct {
 	Status        string        `json:"status" enum:"active,disabled,locked,invite_pending,invite_expired,deleted" doc:"Locked, then disabled, then invite expired, then invite pending, then active"`
 	LockedUntil   string        `json:"lockedUntil,omitempty" format:"date-time" doc:"While the account is locked: when the lock ends"`
 	LastLoginAt   string        `json:"lastLoginAt,omitempty" format:"date-time" doc:"When the user last signed in; absent if they never have"`
-	Teams         []TeamRefBody `json:"teams" doc:"The teams the user belongs to"`
+	Teams         []TeamRefBody `json:"teams" doc:"The teams the user belongs to; the list fills in on the user's own page, and teamCount is what the users table shows"`
+	TeamCount     int           `json:"teamCount" doc:"How many teams the user belongs to"`
 }
 
 // LinkBody is a one-time link, shown once to the admin who asked for it.
@@ -87,7 +88,48 @@ type CreateUserOutput struct {
 	Body         CreateUserBody
 }
 
+// ListUsersOutput is the users table.
+type ListUsersOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         []UserSummaryBody
+}
+
+// summaryOfAccess builds the table row for a user from the access service's view.
+func summaryOfAccess(u access.UserSummary) UserSummaryBody {
+	b := UserSummaryBody{
+		ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email,
+		InstanceAdmin: u.InstanceAdmin, Status: u.Status, Teams: []TeamRefBody{}, TeamCount: u.TeamCount,
+	}
+	if u.LockedUntil != nil {
+		b.LockedUntil = u.LockedUntil.UTC().Format(time.RFC3339)
+	}
+	if u.LastLoginAt != nil {
+		b.LastLoginAt = u.LastLoginAt.UTC().Format(time.RFC3339)
+	}
+	return b
+}
+
 func registerUsers(r *httpx.Router, d AccessDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "listUsers",
+		Method:      http.MethodGet,
+		Path:        "/api/users",
+		Summary:     "List users",
+		Description: "Every user who is not deleted, sorted by username, with the status the users table shows: " +
+			"locked, disabled, invite expired, invite pending or active, in that order of precedence.",
+		Tags: []string{"users"},
+	}, rbac.Requirement{Perm: rbac.PermUsersManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*ListUsersOutput, error) {
+		users, err := d.Access.ListUsers(ctx)
+		if err != nil {
+			d.Log.Error("list users failed", "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		out := &ListUsersOutput{CacheControl: "no-store", Body: make([]UserSummaryBody, 0, len(users))}
+		for _, u := range users {
+			out.Body = append(out.Body, summaryOfAccess(u))
+		}
+		return out, nil
+	})
 	httpx.Register(r, huma.Operation{
 		OperationID:   "createUser",
 		Method:        http.MethodPost,

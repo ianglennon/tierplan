@@ -1,0 +1,92 @@
+{
+  "users": {
+    "tabTitle": "Users",
+    "access": {
+      "title": "Access",
+      "tabsLabel": "Access sections",
+      "tabs": {
+        "users": "Users"
+      }
+    },
+    "toolbar": {
+      "searchLabel": "Search users",
+      "searchPlaceholder": "Search by username or name",
+      "create": "Create user"
+    },
+    "caption_one": "{{count}} user",
+    "caption_other": "{{count}} users",
+    "tableLabel": "Users",
+    "columns": {
+      "user": "User",
+      "status": "Status",
+      "teams": "Teams",
+      "lastSignIn": "Last sign-in",
+      "actions": "Actions"
+    },
+    "actionsFor": "Actions for {{username}}",
+    "neverSignedIn": "Never",
+    "teamCount": "{{count}}",
+    "noMatch": "No users match “{{query}}”.",
+    "loadFailed": "Couldn't load users.",
+    "loadFailedBody": "Check the connection and try again.",
+    "retry": "Retry",
+    "status": {
+      "active": "Active",
+      "disabled": "Disabled",
+      "locked": "Locked until {{time}}",
+      "invite_pending": "Invite pending",
+      "invite_expired": "Invite expired"
+    },
+    "instanceAdmin": "Instance admin",
+    "actions": {
+      "regenerate": "Regenerate invite link"
+    },
+    "create": {
+      "title": "Create user",
+      "body": "They get a one-time link to choose their own password. Bayplan doesn't send email.",
+      "username": {
+        "label": "Username",
+        "helper": "3 to 32 characters: letters, numbers, dot, dash or underscore. Not case-sensitive. It can't be changed later."
+      },
+      "displayName": {
+        "label": "Display name (optional)"
+      },
+      "email": {
+        "label": "Email (optional)",
+        "helper": "Nothing uses it yet. Bayplan sends no email."
+      },
+      "submit": "Create user",
+      "pending": "Creating…",
+      "cancel": "Cancel",
+      "errors": {
+        "usernameTaken": "That username is already taken.",
+        "usernameReserved": "That username belonged to a deleted account and can't be used again.",
+        "username": "Use 3 to 32 characters: letters, numbers, dot, dash or underscore.",
+        "email": "Enter a valid email address.",
+        "displayName": "Use 64 characters or fewer.",
+        "server": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening."
+      }
+    },
+    "link": {
+      "readyTitle": "{{username}} is ready",
+      "inviteTitle": "Invite link for {{username}}",
+      "resetTitle": "Password reset link for {{username}}",
+      "label": "link",
+      "show": "Show link",
+      "hide": "Hide link",
+      "expires_one": "Works once. Expires {{when}} ({{count}} hour from now).",
+      "expires_other": "Works once. Expires {{when}} ({{count}} hours from now).",
+      "notice": "Send this link to {{username}} yourself. Anyone who has it can set the password, so share it privately. You can't see it again after you close this dialog. If you lose it, generate a new one.",
+      "close": "Close",
+      "failed": "Couldn't create the link. Try again, and check the Bayplan logs if it keeps happening."
+    },
+    "regenerate": {
+      "title": "Generate a new invite link?",
+      "body": "This replaces the previous link. The old one stops working.",
+      "cancel": "Cancel",
+      "confirm": "Generate new link",
+      "pending": "Generating…",
+      "notInvited": "{{username}} has already set a password, so there is no invite to replace."
+    }
+  }
+}

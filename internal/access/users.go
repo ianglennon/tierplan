@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/mail"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -129,4 +130,79 @@ func cleanEmail(raw string) (string, error) {
 		return "", ErrInvalidEmail
 	}
 	return email, nil
+}
+
+// User statuses, in the order that decides which one wins when several apply
+// (UI-SPEC: users table statuses).
+const (
+	StatusDeleted       = "deleted"
+	StatusLocked        = "locked"
+	StatusDisabled      = "disabled"
+	StatusInviteExpired = "invite_expired"
+	StatusInvitePending = "invite_pending"
+	StatusActive        = "active"
+)
+
+// Status is a user's one-word state. When several apply the first of deleted,
+// locked, disabled, invite expired, invite pending wins. An invited user is one
+// who has not yet set a password; linkLive says whether they still hold an
+// unexpired link.
+func Status(u sqlc.User, now time.Time, linkLive bool) string {
+	switch {
+	case u.DeletedAt.Valid:
+		return StatusDeleted
+	case u.LockedUntil.Valid && u.LockedUntil.Int64 > now.UTC().UnixNano():
+		return StatusLocked
+	case u.Disabled != 0:
+		return StatusDisabled
+	case u.PasswordHash == "" && !linkLive:
+		return StatusInviteExpired
+	case u.PasswordHash == "":
+		return StatusInvitePending
+	}
+	return StatusActive
+}
+
+// UserSummary is a user as the admin's users table shows them.
+type UserSummary struct {
+	ID            string
+	Username      string
+	DisplayName   string
+	Email         string
+	InstanceAdmin bool
+	Status        string
+	// LockedUntil is set only while the account is locked.
+	LockedUntil *time.Time
+	// LastLoginAt is nil for a user who has never signed in.
+	LastLoginAt *time.Time
+	TeamCount   int
+}
+
+// ListUsers returns every user who is not deleted, sorted by username, with the
+// status computed at the service's clock. The caller has checked users.manage.
+func (s *Service) ListUsers(ctx context.Context) ([]UserSummary, error) {
+	rows, err := s.Store.RQ.ListUsersForAdmin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("access: list users: %w", err)
+	}
+	now := s.now()
+	out := make([]UserSummary, 0, len(rows))
+	for _, r := range rows {
+		u := sqlc.User{PasswordHash: r.PasswordHash, Disabled: r.Disabled, LockedUntil: r.LockedUntil}
+		sum := UserSummary{
+			ID: r.ID, Username: r.Username, DisplayName: r.DisplayName, Email: r.Email,
+			InstanceAdmin: r.InstanceAdmin != 0, TeamCount: int(r.TeamCount),
+			Status: Status(u, now, r.LinkExpiresAt.Valid && r.LinkExpiresAt.Int64 > now.UnixNano()),
+		}
+		if u.LockedUntil.Valid && u.LockedUntil.Int64 > now.UnixNano() {
+			t := time.Unix(0, u.LockedUntil.Int64).UTC()
+			sum.LockedUntil = &t
+		}
+		if r.LastLoginAt.Valid {
+			t := time.Unix(0, r.LastLoginAt.Int64).UTC()
+			sum.LastLoginAt = &t
+		}
+		out = append(out, sum)
+	}
+	return out, nil
 }
