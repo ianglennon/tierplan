@@ -192,3 +192,216 @@ func TestAddingMembersAnswers404ForAnUnknownTeamOrUserAndAddsNothing(t *testing.
 		t.Fatalf("an empty list: %d %s, want 422", rec.Code, rec.Body)
 	}
 }
+
+// --- rename, delete, remove and the impact preview (plan 03-17 task 2) ---
+
+type impactResp struct {
+	Impact []struct {
+		UserID          string `json:"userId"`
+		Username        string `json:"username"`
+		EnvironmentID   string `json:"environmentId"`
+		EnvironmentName string `json:"environmentName"`
+		Before          string `json:"before"`
+		After           string `json:"after"`
+	} `json:"impact"`
+}
+
+func decodeImpact(t *testing.T, rec *httptest.ResponseRecorder) impactResp {
+	t.Helper()
+	var out impactResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("not an impact: %v: %s", err, rec.Body)
+	}
+	return out
+}
+
+func (f *authFixture) preview(t *testing.T, cookie, csrf, teamID, op, userID string) *httptest.ResponseRecorder {
+	t.Helper()
+	b, _ := json.Marshal(map[string]string{"op": op, "userId": userID})
+	return f.teamCall(t, cookie, csrf, http.MethodPost, "/api/teams/"+teamID+"/impact", string(b))
+}
+
+func TestThePreviewEqualsWhatTheRemovalProducesAndTheUsersAccessMatchesItsAfterValue(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.addUser(t, "alice", false)
+	f.addUser(t, "bob", false)
+	f.addEnvRole(t, "alice", "env-a", "viewer")
+	team := f.addTeam(t, "ops", "alice", "bob")
+	f.addTeamRole(t, team, "env-a", "operator")
+
+	rec := f.preview(t, cookie, csrf, team, "remove_member", "id-alice")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body)
+	}
+	got := decodeImpact(t, rec)
+	if len(got.Impact) != 1 || got.Impact[0].Username != "alice" || got.Impact[0].EnvironmentID != "env-a" ||
+		got.Impact[0].Before != "operator" || got.Impact[0].After != "viewer" {
+		t.Fatalf("preview = %+v", got)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM team_members WHERE team_id = ?`, team); n != 2 {
+		t.Fatalf("members after the preview = %d, want 2: a preview changes nothing", n)
+	}
+	if n := len(f.audits(t, "team.member_removed")); n != 0 {
+		t.Fatalf("the preview wrote %d audit entries", n)
+	}
+
+	rec = f.teamCall(t, cookie, csrf, http.MethodDelete, "/api/teams/"+team+"/members/id-alice", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("remove: %d %s", rec.Code, rec.Body)
+	}
+	if applied := decodeImpact(t, rec); len(applied.Impact) != 1 || applied.Impact[0] != got.Impact[0] {
+		t.Fatalf("the applied impact %+v differs from the preview %+v", applied, got)
+	}
+	me, _ := f.getMe(t, "alice")
+	a := me.Access["env-a"]
+	if a.Role != got.Impact[0].After || len(a.Sources) != 1 || a.Sources[0].Kind != "direct" {
+		t.Fatalf("alice's access = %+v, want %s from the direct grant only", a, got.Impact[0].After)
+	}
+	if bob, _ := f.getMe(t, "bob"); bob.Access["env-a"].Role != "operator" {
+		t.Fatalf("bob lost access he keeps: %+v", bob.Access)
+	}
+	entries := f.audits(t, "team.member_removed")
+	if len(entries) != 1 || entries[0].ActorID != "id-admin" {
+		t.Fatalf("audit = %+v", entries)
+	}
+	var details string
+	if err := f.st.Read.QueryRow(`SELECT details FROM audit_log WHERE action = 'team.member_removed'`).Scan(&details); err != nil ||
+		!strings.Contains(details, `"impact_count":"1"`) || !strings.Contains(details, `"impact":"alice: env-a operator→viewer"`) {
+		t.Fatalf("details = %s (%v)", details, err)
+	}
+}
+
+func TestDeletingATeamRemovesItsAccessAtOnceAndAuditsOnce(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.addUser(t, "alice", false)
+	team := f.addTeam(t, "ops", "alice")
+	f.addTeamRole(t, team, "env-a", "operator")
+	if me, _ := f.getMe(t, "alice"); me.Access["env-a"].Role != "operator" {
+		t.Fatalf("alice before = %+v", me.Access)
+	}
+	aliceCookie, _ := f.signIn(t, "alice", false)
+
+	rec := f.preview(t, cookie, csrf, team, "delete", "")
+	if got := decodeImpact(t, rec); rec.Code != http.StatusOK || len(got.Impact) != 1 || got.Impact[0].After != "none" {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body)
+	}
+	rec = f.teamCall(t, cookie, csrf, http.MethodDelete, "/api/teams/"+team, "")
+	if rec.Code != http.StatusOK || len(decodeImpact(t, rec).Impact) != 1 {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
+	}
+	// On her very next request alice no longer has the team's access.
+	rec = f.call(t, authReq{method: http.MethodGet, path: "/api/me", cookie: aliceCookie})
+	var me meResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil || rec.Code != http.StatusOK || len(me.Access) != 0 {
+		t.Fatalf("alice after the delete: %d %s", rec.Code, rec.Body)
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM role_assignments WHERE principal_id = ?`, team); n != 0 {
+		t.Fatalf("%d assignments refer to the deleted team", n)
+	}
+	if n := len(f.audits(t, "team.deleted")); n != 1 {
+		t.Fatalf("team.deleted entries = %d, want 1", n)
+	}
+	rec = f.teamCall(t, cookie, csrf, http.MethodDelete, "/api/teams/"+team, "")
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "team_not_found" {
+		t.Fatalf("delete again: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestRemovingANonMemberAnswers404MemberNotFoundAndTheEmptyPreviewIsAnEmptyList(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.addUser(t, "alice", false)
+	team := f.createTeamAPI(t, cookie, csrf, "ops")
+
+	rec := f.teamCall(t, cookie, csrf, http.MethodDelete, "/api/teams/"+team.ID+"/members/id-alice", "")
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "member_not_found" {
+		t.Fatalf("remove a non-member: %d %s", rec.Code, rec.Body)
+	}
+	if n := len(f.audits(t, "team.member_removed")); n != 0 {
+		t.Fatalf("a refused removal wrote %d entries", n)
+	}
+	rec = f.preview(t, cookie, csrf, team.ID, "delete", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"impact":[]`) {
+		t.Fatalf("an empty preview: %d %s, want an empty list and not null", rec.Code, rec.Body)
+	}
+	rec = f.preview(t, cookie, csrf, team.ID, "remove_member", "id-alice")
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "member_not_found" {
+		t.Fatalf("preview of a non-member: %d %s", rec.Code, rec.Body)
+	}
+	rec = f.preview(t, cookie, csrf, team.ID, "remove_member", "")
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("remove_member with no user: %d %s, want 422", rec.Code, rec.Body)
+	}
+	rec = f.preview(t, cookie, csrf, team.ID, "explode", "")
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("an unknown op: %d %s, want 422", rec.Code, rec.Body)
+	}
+	rec = f.preview(t, cookie, csrf, "no-team", "delete", "")
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "team_not_found" {
+		t.Fatalf("preview of an unknown team: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestRenamingATeamIsCheckedForStaleVersionsAndClashesAndAuditsTheOldName(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	team := f.createTeamAPI(t, cookie, csrf, "ops")
+	f.createTeamAPI(t, cookie, csrf, "Dev")
+	patch := func(id, name, updatedAt string) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(map[string]string{"name": name, "updatedAt": updatedAt})
+		return f.teamCall(t, cookie, csrf, http.MethodPatch, "/api/teams/"+id, string(b))
+	}
+
+	rec := patch(team.ID, "dEV", team.UpdatedAt)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "team_name_taken" {
+		t.Fatalf("clash: %d %s", rec.Code, rec.Body)
+	}
+	rec = patch(team.ID, "", team.UpdatedAt)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "invalid_team_name") {
+		t.Fatalf("empty: %d %s", rec.Code, rec.Body)
+	}
+	rec = patch("no-team", "x", team.UpdatedAt)
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "team_not_found" {
+		t.Fatalf("unknown team: %d %s", rec.Code, rec.Body)
+	}
+	rec = patch(team.ID, "Ops", team.UpdatedAt)
+	var renamed teamResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &renamed); err != nil || rec.Code != http.StatusOK || renamed.Name != "Ops" || renamed.UpdatedAt == team.UpdatedAt {
+		t.Fatalf("rename: %d %s", rec.Code, rec.Body)
+	}
+	rec = patch(team.ID, "Other", team.UpdatedAt)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "stale_change" {
+		t.Fatalf("stale: %d %s", rec.Code, rec.Body)
+	}
+	var details string
+	if err := f.st.Read.QueryRow(`SELECT details FROM audit_log WHERE action = 'team.renamed'`).Scan(&details); err != nil ||
+		!strings.Contains(details, `"old_name":"ops"`) {
+		t.Fatalf("details = %s (%v)", details, err)
+	}
+	if n := len(f.audits(t, "team.renamed")); n != 1 {
+		t.Fatalf("team.renamed entries = %d, want 1", n)
+	}
+}
+
+func TestEnvAdminsCannotRenameDeleteOrPreviewTeams(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addAllEnvAdmin(t, "envadmin")
+	team := f.addTeam(t, "ops", "envadmin")
+	f.addTeamRole(t, team, "env-a", "admin")
+	cookie, csrf := f.signIn(t, "envadmin", false)
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPatch, "/api/teams/" + team, `{"name":"mine","updatedAt":"2026-01-01T00:00:00Z"}`},
+		{http.MethodDelete, "/api/teams/" + team, ""},
+		{http.MethodDelete, "/api/teams/" + team + "/members/id-envadmin", ""},
+		{http.MethodPost, "/api/teams/" + team + "/impact", `{"op":"delete"}`},
+	} {
+		if rec := f.teamCall(t, cookie, csrf, c.method, c.path, c.body); rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s: %d %s, want 403", c.method, c.path, rec.Code, rec.Body)
+		}
+	}
+	if n := f.count(t, `SELECT COUNT(*) FROM teams`); n != 1 {
+		t.Fatalf("teams = %d: the team went", n)
+	}
+}
