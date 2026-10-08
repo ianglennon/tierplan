@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/backup"
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/server"
 	"github.com/ianglennon/bayplan/internal/store"
@@ -352,5 +353,61 @@ func TestRestoreOfAWrongPassphraseOrANonBackupChangesNothingAndSaysWhy(t *testin
 	}
 	if matches, _ := filepath.Glob(filepath.Join(dir, "backups", "prerestore-*")); len(matches) != 0 {
 		t.Fatalf("a refused restore wrote a snapshot: %v", matches)
+	}
+}
+
+func TestRestoreWhileTheDataDirectoryIsLockedSaysToStopBayplanAndChangesNothing(t *testing.T) {
+	a, dir := liveInstallOn(t)
+	keyBefore := fileSum(t, filepath.Join(dir, vault.KeyFile))
+
+	srv := buildServer(t, dir) // a running server holds the lock
+	_, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "restore", "--yes", a.file)
+	if err == nil {
+		t.Fatal("restore ran while a server holds the data directory")
+	}
+	for _, want := range []string{
+		"Bayplan is running",
+		"stop it, then run: docker run --rm -i -v <volume>:/data ghcr.io/ianglennon/bayplan restore --yes <file>",
+	} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, errOut)
+		}
+	}
+	// The server stops; its own writes are not the restore's.
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if fileSum(t, filepath.Join(dir, vault.KeyFile)) != keyBefore {
+		t.Fatal("the key file changed")
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "backups", "prerestore-*")); len(matches) != 0 {
+		t.Fatalf("a refused restore wrote a snapshot: %v", matches)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "restore-staging")); err == nil {
+		t.Fatal("a refused restore staged a database")
+	}
+}
+
+func TestRestoreWhileAnotherHolderHasTheLockLeavesEverythingAsItWas(t *testing.T) {
+	a := newInstanceA(t)
+	dir := t.TempDir() // a fresh volume, not yet a database
+	release, err := datadir.Lock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = release() }()
+
+	_, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "restore", a.file)
+	if err == nil || !strings.Contains(errOut, "Bayplan is running") {
+		t.Fatalf("restore = %v, stderr %q", err, errOut)
+	}
+	entries, rerr := os.ReadDir(dir)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	for _, e := range entries {
+		if e.Name() != datadir.LockFile {
+			t.Errorf("a refused restore left %s in the data directory", e.Name())
+		}
 	}
 }
