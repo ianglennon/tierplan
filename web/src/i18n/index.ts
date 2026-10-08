@@ -16,6 +16,7 @@ import envsettings from "./en/envsettings.json";
 import fullpage from "./en/fullpage.json";
 import install from "./en/install.json";
 import invite from "./en/invite.json";
+import needs from "./en/needs.json";
 import overview from "./en/overview.json";
 import reason from "./en/reason.json";
 import settings from "./en/settings.json";
@@ -28,7 +29,7 @@ import users from "./en/users.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, users, userpage) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage) and registers it
 // here, so parallel work never edits the same JSON. Keys are shaped
 // area.screen.element. Plural keys use the i18next _one and _other suffixes.
 export const resources = {
@@ -45,6 +46,7 @@ export const resources = {
     fullpage,
     install,
     invite,
+    needs,
     overview,
     reason,
     settings,
