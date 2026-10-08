@@ -30,6 +30,7 @@ import { useInstanceAdmin } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatAbsolute, formatAbsoluteUtc } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { ActorName } from "./actor-name";
 import { FilterBar } from "./filter-bar";
 import { actionLabel, DEFAULT_RANGE } from "./filters";
 
@@ -77,7 +78,7 @@ function Actor({ entry }: { entry: AuditEntry }) {
   if (entry.actorType === "system") {
     return <TruncatedText mono>{entry.actor}</TruncatedText>;
   }
-  return <TruncatedText>{entry.actor}</TruncatedText>;
+  return <ActorName name={entry.actor} deleted={entry.actorDeleted} />;
 }
 
 interface DetailProps {

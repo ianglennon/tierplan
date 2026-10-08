@@ -52,8 +52,53 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "environment.auto_update_changed",
   "warning.acknowledged",
   "audit.pruned",
+  "audit.reanchored",
   "permission.denied",
+  "user.created",
+  "user.updated",
+  "user.disabled",
+  "user.enabled",
+  "user.deleted",
+  "user.invite_created",
+  "user.invite_regenerated",
+  "user.invite_accepted",
+  "user.password_reset_issued",
+  "user.password_reset_completed",
+  "user.admin_granted",
+  "user.admin_revoked",
+  "session.revoked",
+  "user.sessions_revoked",
+  "team.created",
+  "team.renamed",
+  "team.deleted",
+  "team.member_added",
+  "team.member_removed",
+  "access.granted",
+  "access.updated",
+  "access.revoked",
+  "owner.transferred",
+  "automation.paused",
+  "automation.resumed",
+  "backup.exported",
+  "backup.scheduled_run",
+  "backup.failed",
+  "backup.checked",
+  "backup.restored",
+  "backup.schedule_updated",
+  "key.rotated",
 ];
+
+// The actions that can carry an environment, which is all an env Admin's scoped
+// view can hold (D-09): refusals, access changes, environment and agent events,
+// automations and ownership transfers. Instance-level events (sign-ins, users,
+// teams, settings, backups, keys, the log itself) have no environment, so the
+// server never returns them to an env Admin and offering them would only build
+// a filter that matches nothing. An action in the address that is not here still
+// shows in the filter, so a linked view can be cleared.
+const ENV_SCOPED_PREFIXES = ["access.", "environment.", "agent.", "automation.", "owner."];
+export const ENV_SCOPED_ACTIONS: readonly string[] = KNOWN_ACTIONS.filter(
+  (key) => key === "permission.denied" || ENV_SCOPED_PREFIXES.some((p) => key.startsWith(p)),
+);
 
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 

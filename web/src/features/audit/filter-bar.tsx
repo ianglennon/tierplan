@@ -27,11 +27,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useInstanceAdmin } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
+import { ActorName } from "./actor-name";
 import {
   type AuditSearch,
   actionLabel,
   DEFAULT_RANGE,
+  ENV_SCOPED_ACTIONS,
   exportUrl,
   formatDay,
   KNOWN_ACTIONS,
@@ -79,6 +82,9 @@ function UserFilter({
     actor.name.toLowerCase().includes(typed.toLowerCase()),
   );
   const isNew = typed !== "" && !(actors.data ?? []).some((actor) => actor.name === typed);
+  const selectedDeleted = (actors.data ?? []).some(
+    (actor) => actor.name === value && actor.deleted,
+  );
 
   function choose(user: string | undefined) {
     onChange(user);
@@ -106,8 +112,12 @@ function UserFilter({
             variant="outline"
             className="w-44 justify-between font-normal max-md:h-11"
           >
-            <span id={`${id}-value`} className="truncate">
-              {value ?? t("audit.filters.userPlaceholder")}
+            <span id={`${id}-value`} className="min-w-0 truncate">
+              {value === undefined ? (
+                t("audit.filters.userPlaceholder")
+              ) : (
+                <ActorName name={value} deleted={selectedDeleted} bare />
+              )}
             </span>
             <Users aria-hidden="true" className="text-muted-foreground" />
           </Button>
@@ -162,7 +172,7 @@ function UserFilter({
                   className="w-full justify-start font-normal aria-pressed:bg-muted"
                   onClick={() => choose(actor.name)}
                 >
-                  <span className="truncate">{actor.name}</span>
+                  <ActorName name={actor.name} deleted={actor.deleted} bare />
                 </Button>
               </li>
             ))}
@@ -189,9 +199,12 @@ function ActionFilter({
 }) {
   const t = useT();
   const id = useId();
-  // A key in the URL that this build has no label for stays visible and can be
-  // unticked, so a linked view with a newer action is not stuck.
-  const keys = [...KNOWN_ACTIONS, ...value.filter((a) => !KNOWN_ACTIONS.includes(a))];
+  // An env Admin reads a scoped log (D-09), so only the actions that can carry
+  // an environment are offered. A key in the URL that is not offered, or that
+  // this build has no label for, stays visible and can be unticked, so a linked
+  // view is not stuck.
+  const offered = useInstanceAdmin() ? KNOWN_ACTIONS : ENV_SCOPED_ACTIONS;
+  const keys = [...offered, ...value.filter((a) => !offered.includes(a))];
 
   function toggle(key: string, on: boolean) {
     const next = on ? [...value, key] : value.filter((a) => a !== key);

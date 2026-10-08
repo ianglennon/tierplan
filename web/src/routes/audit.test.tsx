@@ -702,12 +702,15 @@ describe("the new actions and deleted users", () => {
         retentionDays: 90,
       });
     renderAt("/audit");
-    const row = (await screen.findByText("alice")).closest("tr") as HTMLElement;
-    const marker = within(row).getByText("(deleted)");
+    const marker = await screen.findByText("(deleted)");
     expect(marker.className).toContain("text-muted-foreground");
+    const row = marker.closest("tr") as HTMLElement;
     expect(row.textContent).toContain("alice (deleted)");
-    const other = screen.getByText("bob").closest("tr") as HTMLElement;
-    expect(within(other).queryByText("(deleted)")).toBeNull();
+    // Only the deleted user's row carries it.
+    expect(screen.getAllByText("(deleted)")).toHaveLength(1);
+    expect(screen.getAllByRole("row").filter((r) => r.textContent?.includes("bob"))).toHaveLength(
+      1,
+    );
   });
 
   it("lists a deleted user the same way in the User filter", async () => {
