@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
+import { userOwnedQuery } from "@/api/owned";
 import { disableUser, type UserDetail } from "@/api/users";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -38,6 +40,9 @@ interface DisableUserDialogProps {
 // disabled, and the screen is read again.
 export function DisableUserDialog({ user, onClose, onDone, onStale }: DisableUserDialogProps) {
   const t = useT();
+  // What they own pauses with them, so the admin is told how much before pressing the button.
+  const owned = useQuery({ ...userOwnedQuery(user?.id ?? ""), enabled: user !== null });
+  const ownedCount = owned.data?.length ?? 0;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A second click can land before the pending state has rendered.
@@ -88,6 +93,13 @@ export function DisableUserDialog({ user, onClose, onDone, onStale }: DisableUse
             {t("userpage.disable.body", { username })}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {ownedCount > 0 ? (
+          <Alert role="status">
+            <AlertDescription className="break-words">
+              {t("owned.disable.alert", { count: ownedCount, username })}
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {error ? (
           <Alert variant="destructive" role="alert">
             <AlertDescription>{error}</AlertDescription>

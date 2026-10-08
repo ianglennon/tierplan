@@ -4,7 +4,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import type { OwnedItem } from "@/api/owned";
@@ -32,9 +32,9 @@ let eligibleStatus: number;
 let transfer: (body: Record<string, unknown>) => Response | Promise<Response>;
 let sent: Array<{ method: string; path: string; body?: Record<string, unknown> }>;
 const defaultQueryOptions = queryClient.getDefaultOptions();
-let onClose: ReturnType<typeof vi.fn>;
-let onDone: ReturnType<typeof vi.fn>;
-let onStale: ReturnType<typeof vi.fn>;
+let onClose: Mock<() => void>;
+let onDone: Mock<(item: OwnedItem) => void>;
+let onStale: Mock<() => void>;
 
 beforeEach(() => {
   // A failed read is retried after a second in the app; a test of the error state should not wait.
@@ -46,9 +46,9 @@ beforeEach(() => {
   ];
   eligibleStatus = 200;
   transfer = () => Response.json({ ...ITEM, state: "active" });
-  onClose = vi.fn();
-  onDone = vi.fn();
-  onStale = vi.fn();
+  onClose = vi.fn<() => void>();
+  onDone = vi.fn<(item: OwnedItem) => void>();
+  onStale = vi.fn<() => void>();
   setCsrfToken("csrf");
   vi.stubGlobal(
     "fetch",
@@ -132,7 +132,7 @@ describe("TransferOwnershipDialog", () => {
       { method: "POST", path: "/api/owned/git.sync/r1/transfer", body: { ownerId: "u2" } },
     ]);
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
-    expect(onDone.mock.calls[0][0]).toMatchObject({ resourceId: "r1", state: "active" });
+    expect(onDone.mock.calls[0]?.[0]).toMatchObject({ resourceId: "r1", state: "active" });
   });
 
   it("shows the no-eligible-user alert in place of the select and keeps the confirm unavailable", async () => {

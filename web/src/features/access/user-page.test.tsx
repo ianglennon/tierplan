@@ -4,6 +4,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -143,7 +144,7 @@ beforeEach(() => {
           : Response.json({ title: "boom" }, { status: ownedStatus });
       }
       const eligibleFor = /^\/api\/owned\/[^/]+\/([^/]+)\/eligible-owners$/.exec(path);
-      if (eligibleFor) return Response.json(eligibleById[eligibleFor[1]] ?? eligible);
+      if (eligibleFor) return Response.json(eligibleById[eligibleFor[1] ?? ""] ?? eligible);
       if (/^\/api\/owned\/[^/]+\/[^/]+\/transfer$/.test(path)) {
         sent[`${req.method} ${path}`] = await req.clone().json();
         if (transferStatus !== 200) {
@@ -180,6 +181,8 @@ beforeEach(() => {
 
 afterEach(() => {
   queryClient.setDefaultOptions(defaultQueryOptions);
+  // A toast outlives its test, and several tests here end in "alice was deleted."
+  toast.dismiss();
   cleanup();
   vi.unstubAllGlobals();
   queryClient.clear();
@@ -870,12 +873,13 @@ describe("the owned automations in the Disable and Delete dialogs (D-22)", () =>
 
     expect(await within(dialog).findByText("Automations alice owns")).toBeTruthy();
     const list = within(dialog).getByRole("list", { name: "Automations alice owns" });
-    const rows = within(list).getAllByRole("listitem");
-    expect(rows).toHaveLength(2);
-    expect(within(rows[0]).getByText("Sync r1")).toBeTruthy();
-    expect(within(rows[0]).getByText(/Test sync/)).toBeTruthy();
-    expect(within(rows[0]).getByText(/Alpha/)).toBeTruthy();
-    expect(within(rows[1]).getByText(/Webhook/)).toBeTruthy();
+    const [first, second, ...rest] = within(list).getAllByRole("listitem");
+    expect(rest).toHaveLength(0);
+    if (!first || !second) throw new Error("expected one row per automation");
+    expect(within(first).getByText("Sync r1")).toBeTruthy();
+    expect(within(first).getByText(/Test sync/)).toBeTruthy();
+    expect(within(first).getByText(/Alpha/)).toBeTruthy();
+    expect(within(second).getByText(/Webhook/)).toBeTruthy();
     expect(
       within(dialog).getByText(
         "Only users with enough access to run it are listed. Paused items show “Owner deleted” until someone takes them over.",

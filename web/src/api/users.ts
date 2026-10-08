@@ -176,14 +176,39 @@ export type DeleteResult =
   | { kind: "ok" }
   | { kind: "last_instance_admin" }
   | { kind: "not_found" }
+  // A chosen new owner could not run their automation (422 owner_not_eligible), or
+  // an automation chosen is no longer theirs (404 automation_not_found). Nothing
+  // was deleted.
+  | { kind: "not_eligible" }
+  | { kind: "automation_gone" }
   | { kind: "error" };
 
-export async function deleteUser(userId: string): Promise<DeleteResult> {
+// Reassignment hands one automation of a user who is being deleted to another
+// user. Whatever is not listed is paused as owner deleted.
+export interface Reassignment {
+  kind: string;
+  resourceId: string;
+  ownerId: string;
+}
+
+export async function deleteUser(
+  userId: string,
+  reassign: readonly Reassignment[] = [],
+): Promise<DeleteResult> {
   try {
     const { error, response } = await api.DELETE("/api/users/{userId}", {
       params: { path: { userId } },
+      // No body at all when nothing is handed over, as before.
+      body: reassign.length > 0 ? { reassign: [...reassign] } : undefined,
     });
     if (response.ok) return { kind: "ok" };
+    const problem = readProblem(error, response);
+    if (problem.status === 422 && problem.type === "owner_not_eligible") {
+      return { kind: "not_eligible" };
+    }
+    if (problem.status === 404 && problem.type === "automation_not_found") {
+      return { kind: "automation_gone" };
+    }
     const failure = lifecycleFailure(error, response);
     if (failure.kind === "last_instance_admin" || failure.kind === "not_found") {
       return { kind: failure.kind };

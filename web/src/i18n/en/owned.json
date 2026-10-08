@@ -53,9 +53,17 @@
       "owner": "Owner",
       "leavePaused": "Leave paused",
       "helper": "Only users with enough access to run it are listed. Paused items show “Owner deleted” until someone takes them over.",
-      "loadFailed": "Couldn't load who could take over {{automation}}. It will be left paused.",
       "ownerLabel": "Owner of {{automation}}",
-      "reassignFailed": "{{automation}} could not be handed to {{username}} because they no longer have enough access. Choose someone else, or leave it paused."
+      "reassignFailed": "An automation couldn't be handed over: its new owner no longer has enough access. Choose again, or leave it paused.",
+      "gone": "An automation {{username}} owned doesn't exist any more. The list is up to date; try again.",
+      "loading": "Loading the automations {{username}} owns",
+      "eligibleFailed": "Couldn't load who could take over {{automation}}. It will be left paused."
+    },
+    "mask": {
+      "hidden": "Hidden. Showing values needs the secrets.reveal permission on this environment.",
+      "hiddenReveal": "Hidden until you choose Show value.",
+      "show": "Show value",
+      "showNamed": "Show value of {{name}}"
     }
   }
 }
