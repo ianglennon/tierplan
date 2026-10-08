@@ -623,7 +623,8 @@
           "frequency": {
             "description": "How often",
             "enum": [
-              "daily"
+              "daily",
+              "weekly"
             ],
             "type": "string"
           },
@@ -3190,7 +3191,8 @@
           "frequency": {
             "description": "How often",
             "enum": [
-              "daily"
+              "daily",
+              "weekly"
             ],
             "type": "string"
           },
@@ -4630,7 +4632,8 @@
               "proxy_untrusted_forwarded",
               "proxy_url_mismatch",
               "proxy_websocket_failing",
-              "refusal_burst"
+              "refusal_burst",
+              "backup_failed"
             ],
             "type": "string"
           },
@@ -4650,8 +4653,13 @@
             "description": "For proxy_url_mismatch: the scheme the newest request effectively used, http or https",
             "type": "string"
           },
+          "since": {
+            "description": "For backup_failed: when the last good scheduled backup finished; absent when there has not been one",
+            "format": "date-time",
+            "type": "string"
+          },
           "subject": {
-            "description": "For refusal_burst: the username that was refused",
+            "description": "For refusal_burst: the username that was refused. For backup_failed: why the last scheduled backup failed",
             "type": "string"
           },
           "url": {
@@ -9583,7 +9591,7 @@
     },
     "/api/warnings": {
       "get": {
-        "description": "Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). The plain-HTTP warning is the browser's to compute and is not listed.",
+        "description": "Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). The plain-HTTP warning is the browser's to compute and is not listed.",
         "operationId": "listWarnings",
         "responses": {
           "200": {

@@ -1617,7 +1617,7 @@ export interface paths {
         };
         /**
          * List the instance warnings that need an admin's attention
-         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). The plain-HTTP warning is the browser's to compute and is not listed.
+         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). The plain-HTTP warning is the browser's to compute and is not listed.
          */
         get: operations["listWarnings"];
         put?: never;
@@ -1903,7 +1903,7 @@ export interface components {
              * @description How often
              * @enum {string}
              */
-            frequency: "daily";
+            frequency: "daily" | "weekly";
             /**
              * Format: int64
              * @description How many scheduled backups are kept; older ones are deleted
@@ -2884,7 +2884,7 @@ export interface components {
              * @description How often
              * @enum {string}
              */
-            frequency: "daily";
+            frequency: "daily" | "weekly";
             /**
              * Format: int64
              * @description How many scheduled backups to keep
@@ -3512,7 +3512,7 @@ export interface components {
              * @description Which warning this is
              * @enum {string}
              */
-            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing" | "refusal_burst";
+            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing" | "refusal_burst" | "backup_failed";
             /** @description For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from */
             ip?: string;
             /** @description For key_backup: where the generated encryption key is stored */
@@ -3521,7 +3521,12 @@ export interface components {
             reason?: string;
             /** @description For proxy_url_mismatch: the scheme the newest request effectively used, http or https */
             scheme?: string;
-            /** @description For refusal_burst: the username that was refused */
+            /**
+             * Format: date-time
+             * @description For backup_failed: when the last good scheduled backup finished; absent when there has not been one
+             */
+            since?: string;
+            /** @description For refusal_burst: the username that was refused. For backup_failed: why the last scheduled backup failed */
             subject?: string;
             /** @description For proxy_url_mismatch: the public URL the request should have matched */
             url?: string;

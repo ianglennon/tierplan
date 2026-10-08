@@ -21,7 +21,8 @@ import (
 
 // The frequencies a schedule has.
 const (
-	FrequencyDaily = "daily"
+	FrequencyDaily  = "daily"
+	FrequencyWeekly = "weekly"
 )
 
 // Defaults of a schedule that was never saved (D-32).
@@ -49,7 +50,7 @@ const targetSchedule = "backup_schedule"
 // whether one is saved.
 type Schedule struct {
 	Enabled bool
-	// Frequency is "daily" (or, later, "weekly" on Weekday).
+	// Frequency is "daily", or "weekly" on Weekday.
 	Frequency string
 	// Weekday is 0 (Sunday) to 6, used by a weekly schedule only.
 	Weekday int
@@ -119,8 +120,11 @@ func parseClock(s string) (hour, minute int, ok bool) {
 }
 
 func (in ScheduleInput) validate() error {
-	if in.Frequency != FrequencyDaily {
-		return fmt.Errorf("%w: frequency %q is not daily", ErrInvalidSchedule, in.Frequency)
+	if in.Frequency != FrequencyDaily && in.Frequency != FrequencyWeekly {
+		return fmt.Errorf("%w: frequency %q is not daily or weekly", ErrInvalidSchedule, in.Frequency)
+	}
+	if in.Weekday < 0 || in.Weekday > 6 {
+		return fmt.Errorf("%w: weekday %d is not between 0 (Sunday) and 6", ErrInvalidSchedule, in.Weekday)
 	}
 	if _, _, ok := parseClock(in.TimeUTC); !ok {
 		return fmt.Errorf("%w: time %q is not HH:MM between 00:00 and 23:59", ErrInvalidSchedule, in.TimeUTC)

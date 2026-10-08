@@ -33,7 +33,7 @@ type ScheduleRunBody struct {
 // BackupScheduleBody is the backup schedule. The passphrase is never in it.
 type BackupScheduleBody struct {
 	Enabled         bool             `json:"enabled" doc:"Whether Bayplan makes a backup by itself"`
-	Frequency       string           `json:"frequency" enum:"daily" doc:"How often"`
+	Frequency       string           `json:"frequency" enum:"daily,weekly" doc:"How often"`
 	Weekday         int              `json:"weekday" minimum:"0" maximum:"6" doc:"For a weekly schedule: the day, 0 for Sunday to 6 for Saturday"`
 	TimeUTC         string           `json:"timeUtc" pattern:"^([01][0-9]|2[0-3]):[0-5][0-9]$" doc:"The time of day in UTC, as 24-hour HH:MM"`
 	Keep            int              `json:"keep" minimum:"1" maximum:"365" doc:"How many scheduled backups are kept; older ones are deleted"`
@@ -56,7 +56,7 @@ type PutBackupScheduleInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      struct {
 		Enabled    bool   `json:"enabled" doc:"Turn scheduled backups on or off"`
-		Frequency  string `json:"frequency" enum:"daily" doc:"How often"`
+		Frequency  string `json:"frequency" enum:"daily,weekly" doc:"How often"`
 		Weekday    int    `json:"weekday,omitempty" minimum:"0" maximum:"6" doc:"For a weekly schedule: the day, 0 for Sunday to 6 for Saturday"`
 		TimeUTC    string `json:"timeUtc" pattern:"^([01][0-9]|2[0-3]):[0-5][0-9]$" doc:"The time of day in UTC, as 24-hour HH:MM"`
 		Keep       int    `json:"keep" minimum:"1" maximum:"365" doc:"How many scheduled backups to keep"`

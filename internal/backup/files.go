@@ -9,8 +9,10 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -130,6 +132,83 @@ func isEscape(err error) bool {
 	return errors.As(err, &pe) && pe.Err != nil && pe.Err.Error() == "path escapes from parent"
 }
 
-// SweepWorkFiles removes what a killed export left behind. Skeleton: the sweep
-// itself follows the test that describes it.
-func SweepWorkFiles(dataDir, backupDir string, now time.Time, log *slog.Logger) {}
+// pruneScheduled keeps the newest keep scheduled backups in dir and removes the
+// rest. It looks only at the files ListBackupFiles lists, regular files named
+// exactly like a scheduled backup, so it never removes a pre-migration snapshot
+// (bayplan-<time>.db), a pre-restore snapshot (prerestore-<time>.db) or anything
+// else someone keeps in the folder (T-03-113, RESEARCH Pitfall 9). A folder that
+// does not exist holds nothing to remove.
+func pruneScheduled(dir string, keep int) error {
+	files, err := ListBackupFiles(dir)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, f := range files[min(max(keep, 0), len(files)):] { // newest first
+		if err := os.Remove(filepath.Join(dir, f.Name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// staleWorkAge is how old a leftover work file must be before the startup sweep
+// removes it. An export takes seconds; the margin keeps the sweep from deleting
+// the work of a backup another process (the bayplan backup command) is making
+// right now.
+const staleWorkAge = time.Hour
+
+// The names an export gives its private files. internal/api names the download's
+// temporary file and Export names its work directory; the scheduler names its own
+// (tempPrefix, tempSuffix).
+const (
+	workDirPrefix   = ".bayplan-backup-"
+	exportTmpPrefix = ".bayplan-export-"
+	exportTmpSuffix = ".tmp"
+)
+
+// SweepWorkFiles removes what a killed backup left behind: an export's private
+// work directory and temporary file in dataDir, and the scheduler's temporary
+// file in backupDir. They hold a copy of the database that was never encrypted.
+// Only entries untouched for an hour go, and only the three names above; the
+// database, the key, saved backups and snapshots are never looked at. Failures are
+// logged, not returned: a start must not depend on a sweep.
+func SweepWorkFiles(dataDir, backupDir string, now time.Time, log *slog.Logger) {
+	sweep := func(dir string, match func(e fs.DirEntry) bool) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				log.Warn("backup sweep: cannot read the folder", "dir", dir, "error", err)
+			}
+			return
+		}
+		for _, e := range entries {
+			if !match(e) {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil || now.Sub(info.ModTime()) < staleWorkAge {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			if err := os.RemoveAll(path); err != nil {
+				log.Warn("backup sweep: cannot remove a leftover of a killed backup", "path", path, "error", err)
+				continue
+			}
+			log.Info("backup sweep: removed a leftover of a killed backup", "path", path)
+		}
+	}
+	sweep(dataDir, func(e fs.DirEntry) bool {
+		name := e.Name()
+		switch {
+		case e.Type().IsDir():
+			return strings.HasPrefix(name, workDirPrefix)
+		case e.Type().IsRegular():
+			return strings.HasPrefix(name, exportTmpPrefix) && strings.HasSuffix(name, exportTmpSuffix)
+		}
+		return false
+	})
+	sweep(backupDir, func(e fs.DirEntry) bool {
+		return e.Type().IsRegular() && strings.HasPrefix(e.Name(), tempPrefix) && strings.HasSuffix(e.Name(), tempSuffix)
+	})
+}

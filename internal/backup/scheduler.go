@@ -6,11 +6,13 @@ package backup
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,8 +43,13 @@ func NextRun(s Schedule, now time.Time) (time.Time, bool) {
 	}
 	now = now.UTC()
 	next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, time.UTC)
+	step := 1
+	if s.Frequency == FrequencyWeekly {
+		step = 7
+		next = next.AddDate(0, 0, (s.Weekday-int(next.Weekday())+7)%7)
+	}
 	if !next.After(now) {
-		next = next.AddDate(0, 0, 1)
+		next = next.AddDate(0, 0, step)
 	}
 	return next, true
 }
@@ -102,13 +109,24 @@ func (s *Scheduler) Notify() {
 	}
 }
 
+// busyRetryDelay is how long a run waits to try again when another backup holds
+// the export slot (the bayplan backup command, or someone pressing Download).
+const busyRetryDelay = time.Minute
+
+// run is one scheduled backup, from the instant it was due to its end.
+type run struct {
+	id  string
+	due time.Time
+}
+
 // Run blocks until ctx is done, making a backup at each instant the saved schedule
 // names. Start it in a goroutine.
 func (s *Scheduler) Run(ctx context.Context) {
 	s.init()
 	var last time.Time // the newest instant a backup was made for
+	var again *run     // a run that found the export slot busy and tries once more
 	for {
-		wait, stop, due := s.arm(ctx, last)
+		wait, stop, due := s.arm(ctx, last, again)
 		select {
 		case <-ctx.Done():
 			stop()
@@ -117,20 +135,34 @@ func (s *Scheduler) Run(ctx context.Context) {
 			stop()
 		case <-wait:
 			stop()
-			if due.IsZero() {
-				continue // the schedule could not be read; look again
+			switch {
+			case again != nil:
+				r := again
+				again = nil
+				s.execute(ctx, r, false)
+			case due.IsZero():
+				// The schedule could not be read a minute ago; look again.
+			default:
+				last = due
+				if r := s.begin(ctx, due); r != nil && s.execute(ctx, r, true) {
+					again = r
+				}
 			}
-			last = due
-			s.runDue(ctx, due)
 		}
 	}
 }
 
-// arm loads the schedule and starts the timer for its next run. due is the instant
-// the timer is for, or zero when the timer is only a pause before the schedule is
-// read again; a schedule that is off has no timer at all.
-func (s *Scheduler) arm(ctx context.Context, last time.Time) (wait <-chan time.Time, stop func() bool, due time.Time) {
+// arm loads the schedule and starts the timer for the next thing to do: the
+// retry of a run that found the export slot busy, or the next run the saved
+// schedule names. due is the instant a run is for, or zero when the timer is
+// only a pause before the schedule is read again. A schedule that is off, and a
+// retry, need no read of it.
+func (s *Scheduler) arm(ctx context.Context, last time.Time, again *run) (wait <-chan time.Time, stop func() bool, due time.Time) {
 	idle := func() bool { return true }
+	if again != nil {
+		wait, stop = s.NewTimer(busyRetryDelay)
+		return wait, stop, again.due
+	}
 	sched, err := LoadSchedule(ctx, s.Store)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -162,6 +194,9 @@ const (
 	stageWrite      = "write"
 )
 
+// maxReason caps the reason a failed run records, which the bell shows.
+const maxReason = 300
+
 // stageError says which step of a scheduled backup failed.
 type stageError struct {
 	stage string
@@ -178,29 +213,72 @@ func fail(stage string, err error) error {
 	return &stageError{stage: stage, err: err}
 }
 
-// runDue makes the backup for the instant due.
-func (s *Scheduler) runDue(ctx context.Context, due time.Time) {
-	started := s.Now().UTC()
+// reasonOf is the text a failed run records and the bell shows: the error without
+// its stage, one line, capped.
+func reasonOf(err error) string {
+	var se *stageError
+	if errors.As(err, &se) {
+		err = se.err
+	}
+	r := strings.Join(strings.Fields(err.Error()), " ")
+	if runes := []rune(r); len(runes) > maxReason {
+		r = string(runes[:maxReason]) + "…"
+	}
+	return r
+}
+
+// begin records that a run started. A run that cannot be recorded is not made:
+// a backup nobody can see in the history is worse than none.
+func (s *Scheduler) begin(ctx context.Context, due time.Time) *run {
 	id, err := uuid.NewV7()
 	if err != nil {
 		s.Log.Error("scheduled backup: cannot make a run ID", "error", err)
-		return
+		return nil
 	}
-	if err := s.Store.Q.InsertBackupRun(ctx, sqlc.InsertBackupRunParams{ID: id.String(), Source: runSourceSchedule, StartedAt: started.UnixNano()}); err != nil {
+	if err := s.Store.Q.InsertBackupRun(ctx, sqlc.InsertBackupRunParams{
+		ID: id.String(), Source: runSourceSchedule, StartedAt: s.Now().UTC().UnixNano(),
+	}); err != nil {
 		s.Log.Error("scheduled backup: cannot record the run", "error", err)
-		return
+		return nil
 	}
-	name, size, err := s.backupTo(ctx, due)
-	if err != nil {
-		s.Log.Error("scheduled backup failed", "error", err)
-		return
+	return &run{id: id.String(), due: due}
+}
+
+// execute makes the backup of r and records how it went. With mayRetry, finding
+// the export slot busy records nothing and reports that the run should be tried
+// again; the second time it is a failure like any other.
+func (s *Scheduler) execute(ctx context.Context, r *run, mayRetry bool) (retry bool) {
+	name, size, err := s.backupTo(ctx, r.due)
+	switch {
+	case ctx.Err() != nil:
+		return false // shutting down: the run stays open, as a killed one would
+	case errors.Is(err, ErrBusy) && mayRetry:
+		s.Log.Warn("scheduled backup: another backup is being prepared, trying again in a minute")
+		return true
+	case err != nil:
+		s.failed(ctx, r, err)
+		return false
 	}
-	finish := sqlc.FinishBackupRunParams{
-		FinishedAt: sql.NullInt64{Int64: s.Now().UTC().UnixNano(), Valid: true}, Ok: 1, FileName: name, SizeBytes: size, ID: id.String(),
+	s.succeeded(ctx, r, name, size)
+	return false
+}
+
+func (s *Scheduler) finish(ctx context.Context, r *run, ok bool, name string, size int64, reason string) {
+	okInt := int64(0)
+	if ok {
+		okInt = 1
 	}
-	if err := s.Store.Q.FinishBackupRun(ctx, finish); err != nil {
+	if err := s.Store.Q.FinishBackupRun(ctx, sqlc.FinishBackupRunParams{
+		FinishedAt: sql.NullInt64{Int64: s.Now().UTC().UnixNano(), Valid: true},
+		Ok:         okInt, FileName: name, SizeBytes: size, Error: reason, ID: r.id,
+	}); err != nil {
 		s.Log.Error("scheduled backup: cannot record the run's end", "error", err)
 	}
+}
+
+// succeeded audits the run, applies retention and only then marks the run
+// finished, so a finished run is one whose audit entry and retention are done.
+func (s *Scheduler) succeeded(ctx context.Context, r *run, name string, size int64) {
 	if err := s.Audit.Record(ctx, audit.Entry{
 		Actor:      audit.SystemBackup,
 		Action:     audit.ActionBackupScheduledRun,
@@ -211,6 +289,38 @@ func (s *Scheduler) runDue(ctx context.Context, due time.Time) {
 	}); err != nil {
 		s.Log.Error("scheduled backup: cannot audit the run", "error", err)
 	}
+	// Retention runs only once there is a new backup to count, so a string of
+	// failures can never leave the folder with fewer than it had.
+	sched, err := LoadSchedule(ctx, s.Store)
+	if err == nil {
+		err = pruneScheduled(s.Dir, sched.Keep)
+	}
+	if err != nil {
+		s.Log.Error("scheduled backup: cannot remove the oldest backups", "error", err)
+	}
+	s.finish(ctx, r, true, name, size, "")
+}
+
+func (s *Scheduler) failed(ctx context.Context, r *run, err error) {
+	reason := reasonOf(err)
+	stage := stageExport
+	var se *stageError
+	if errors.As(err, &se) {
+		stage = se.stage
+	}
+	s.Log.Error("scheduled backup failed", "stage", stage, "error", reason)
+	if aerr := s.Audit.Record(ctx, audit.Entry{
+		Actor:      audit.SystemBackup,
+		Action:     audit.ActionBackupFailed,
+		TargetType: targetBackup,
+		TargetID:   ScheduledName(r.due),
+		Result:     audit.ResultFailure,
+		Reason:     reason,
+		Details:    map[string]string{"stage": stage, "error": reason},
+	}); aerr != nil {
+		s.Log.Error("scheduled backup: cannot audit the failure", "error", aerr)
+	}
+	s.finish(ctx, r, false, "", 0, reason)
 }
 
 // targetBackup is the audit target of a backup.

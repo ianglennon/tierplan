@@ -17,6 +17,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/auth"
+	"github.com/ianglennon/bayplan/internal/backup"
 	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
@@ -40,6 +41,7 @@ const (
 	warningDataNotPersisted = "data_not_persisted"
 	warningKeyBackup        = "key_backup"
 	warningRefusalBurst     = "refusal_burst"
+	warningBackupFailed     = "backup_failed"
 	// warningProxyPrefix turns an observer signal kind into a warning ID: the
 	// reverse proxy warnings are proxy_untrusted_forwarded, proxy_url_mismatch and
 	// the third kind with the same prefix (D-53).
@@ -114,15 +116,17 @@ type ChangePasswordOutput struct {
 
 // WarningBody is one instance warning that needs an admin's attention.
 type WarningBody struct {
-	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst" doc:"Which warning this is"`
+	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst,backup_failed" doc:"Which warning this is"`
 	Reason  string `json:"reason,omitempty" doc:"For data_not_persisted: why the data directory is not persisted"`
 	KeyPath string `json:"keyPath,omitempty" doc:"For key_backup: where the generated encryption key is stored"`
 	IP      string `json:"ip,omitempty" doc:"For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from"`
 	Host    string `json:"host,omitempty" doc:"For proxy_url_mismatch: the host the newest request was for"`
 	Scheme  string `json:"scheme,omitempty" doc:"For proxy_url_mismatch: the scheme the newest request effectively used, http or https"`
 	URL     string `json:"url,omitempty" doc:"For proxy_url_mismatch: the public URL the request should have matched"`
-	Subject string `json:"subject,omitempty" doc:"For refusal_burst: the username that was refused"`
+	Subject string `json:"subject,omitempty" doc:"For refusal_burst: the username that was refused. For backup_failed: why the last scheduled backup failed"`
 	Count   int    `json:"count,omitempty" doc:"For refusal_burst: how many times that user was refused inside one minute"`
+	// Since is a pointer so that "no good backup yet" leaves it out.
+	Since *time.Time `json:"since,omitempty" doc:"For backup_failed: when the last good scheduled backup finished; absent when there has not been one"`
 }
 
 // WarningsBody lists the warnings that apply right now.
@@ -300,6 +304,7 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			"The reverse proxy warnings (the proxy_ ones) are listed while " +
 			"Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). " +
 			"refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). " +
+			"backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). " +
 			"The plain-HTTP warning is the browser's to compute and is not listed.",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*WarningsOutput, error) {
@@ -322,6 +327,11 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			return nil, internal("read refusal bursts", err)
 		}
 		items = append(items, burstItems...)
+		failed, err := backupFailedItems(ctx, d)
+		if err != nil {
+			return nil, internal("read the scheduled backup runs", err)
+		}
+		items = append(items, failed...)
 		return &WarningsOutput{CacheControl: "no-store", Body: WarningsBody{Items: items}}, nil
 	})
 
@@ -425,4 +435,45 @@ func refusalItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
 		out = append(out, WarningBody{ID: warningRefusalBurst, Subject: b.ActorName, Count: b.Count})
 	}
 	return out, nil
+}
+
+// backupFailedItems is the backup_failed warning: while scheduled backups are on
+// and the newest finished run did not write a backup, naming why and when the
+// last good one finished. A later successful run ends it, and so does turning the
+// schedule off, since nothing is then going to run. It is for an active instance
+// admin only: the reason can name paths on the host (T-03-114).
+func backupFailedItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
+	if d.Checker == nil {
+		return nil, nil
+	}
+	a, err := d.Checker.Access(ctx, httpx.PrincipalFrom(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if !a.Active || !a.InstanceAdmin {
+		return nil, nil
+	}
+	sched, err := backup.LoadSchedule(ctx, d.Store)
+	if err != nil {
+		return nil, err
+	}
+	if !sched.Enabled {
+		return nil, nil
+	}
+	last, err := d.Store.RQ.LastScheduleRun(ctx)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && last.Ok != 0) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	item := WarningBody{ID: warningBackupFailed, Subject: last.Error}
+	switch good, err := d.Store.RQ.LastSuccessfulScheduleRun(ctx); {
+	case err == nil && good.FinishedAt.Valid:
+		since := time.Unix(0, good.FinishedAt.Int64).UTC()
+		item.Since = &since
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return nil, err
+	}
+	return []WarningBody{item}, nil
 }

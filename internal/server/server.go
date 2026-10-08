@@ -601,6 +601,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if backupDir == "" {
 		backupDir = filepath.Join(info.Path, "backups")
 	}
+	// A process killed in the middle of a backup leaves the unencrypted copy of the
+	// database it was working on; the start removes the old ones.
+	backup.SweepWorkFiles(info.Path, backupDir, time.Now(), log)
 	backups := &backup.Scheduler{
 		Store: st, Vault: vlt, Audit: aud, Dir: backupDir, DataDir: info.Path, Log: log,
 		AppVersion:   func() string { return buildinfo.Get().Version },

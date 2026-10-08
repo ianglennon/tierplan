@@ -8,6 +8,8 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -277,6 +279,9 @@ func (f *schedFixture) runOnce(t *testing.T) {
 func (f *schedFixture) names(t *testing.T) []string {
 	t.Helper()
 	entries, err := os.ReadDir(f.dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil // nothing was ever written
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
