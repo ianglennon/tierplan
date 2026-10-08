@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -214,8 +213,13 @@ func vacuumInto(ctx context.Context, st *store.Store, path string) error {
 // page; the journal is returned to DELETE so the file is a single self-contained
 // database.
 func scrub(ctx context.Context, path string, live, export *vault.Vault) (Counts, error) {
-	u := url.URL{Scheme: "file", Path: path, RawQuery: "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"}
-	db, err := sql.Open("sqlite", u.String())
+	// path is inside the work directory, which is the data directory as
+	// configured and so may be relative; FileURI makes it absolute (G-03-4).
+	dsn, err := store.FileURI(path, "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate")
+	if err != nil {
+		return Counts{}, fmt.Errorf("open the database copy: %w", err)
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return Counts{}, fmt.Errorf("open the database copy: %w", err)
 	}

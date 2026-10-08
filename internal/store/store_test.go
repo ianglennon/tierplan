@@ -5,8 +5,10 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -406,4 +408,69 @@ func TestSchemaVersionOfAnUnmigratedDatabaseIsAnError(t *testing.T) {
 	if v, err := s.SchemaVersion(context.Background()); err == nil {
 		t.Fatalf("SchemaVersion of an empty database = %d, nil; want an error", v)
 	}
+}
+
+func TestFileURIMakesARelativePathAbsolute(t *testing.T) {
+	wd := t.TempDir()
+	t.Chdir(wd)
+	wdReal, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("a relative path gets no host and an absolute path", func(t *testing.T) {
+		got, err := store.FileURI(".devdata/bayplan.db", "_pragma=foreign_keys(1)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := url.Parse(got)
+		if err != nil {
+			t.Fatalf("parse %q: %v", got, err)
+		}
+		if u.Host != "" {
+			t.Errorf("host = %q, want empty (%s)", u.Host, got)
+		}
+		if want := filepath.Join(wdReal, ".devdata", "bayplan.db"); u.Path != want {
+			t.Errorf("path = %q, want %q", u.Path, want)
+		}
+		if u.RawQuery != "_pragma=foreign_keys(1)" {
+			t.Errorf("query = %q", u.RawQuery)
+		}
+	})
+
+	t.Run("?, # and % in a directory name are escaped", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "a?b#c%d", "bayplan.db")
+		got, err := store.FileURI(p, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := url.Parse(got)
+		if err != nil {
+			t.Fatalf("parse %q: %v", got, err)
+		}
+		if u.Path != p {
+			t.Errorf("path = %q, want %q", u.Path, p)
+		}
+	})
+
+	t.Run("SQLite opens the URI of a relative path", func(t *testing.T) {
+		if err := os.Mkdir("dd", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		dsn, err := store.FileURI("./dd/x.db", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		db, err := sql.Open("sqlite", dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = db.Close() }()
+		if _, err := db.Exec("CREATE TABLE t (id INTEGER)"); err != nil {
+			t.Fatalf("create table through %s: %v", dsn, err)
+		}
+		if _, err := os.Stat(filepath.Join(wdReal, "dd", "x.db")); err != nil {
+			t.Errorf("the database is not at the absolute path: %v", err)
+		}
+	})
 }
