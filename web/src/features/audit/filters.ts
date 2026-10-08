@@ -85,6 +85,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "backup.checked",
   "backup.restored",
   "backup.schedule_updated",
+  "backup.upload_discarded",
   "key.rotated",
 ];
 

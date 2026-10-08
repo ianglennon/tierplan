@@ -5398,6 +5398,31 @@
         ]
       }
     },
+    "/api/backup/restore/upload": {
+      "delete": {
+        "description": "Removes the backup file that was uploaded and is waiting to be checked or restored, so a file sent by mistake does not hold the single upload slot until it expires. Answers 204 whether or not a file was waiting. 409 restore_busy while a check or restore runs or another file is still arriving. Audited as backup.upload_discarded when a file was removed. Needs backup.manage.",
+        "operationId": "discardRestoreUpload",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Discard the uploaded backup",
+        "tags": [
+          "backup"
+        ]
+      }
+    },
     "/api/backup/schedule": {
       "get": {
         "description": "Whether Bayplan makes a backup by itself, when, how many it keeps, where it writes them, when the next one is due and how the last runs went. Whether a passphrase is saved is reported; the passphrase never is. Needs backup.manage.",

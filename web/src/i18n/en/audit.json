@@ -156,7 +156,8 @@
         "failed": "Backup failed",
         "checked": "Checked backup file",
         "restored": "Restored backup",
-        "schedule_updated": "Changed backup schedule"
+        "schedule_updated": "Changed backup schedule",
+        "upload_discarded": "Discarded uploaded backup"
       },
       "key": {
         "rotated": "Rotated master key"

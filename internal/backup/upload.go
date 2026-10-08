@@ -63,6 +63,10 @@ type Uploads struct {
 	Now func() time.Time
 
 	mu sync.Mutex
+	// receiving is the ID of the upload whose body is still arriving, or "". It
+	// holds the one slot while Save streams without holding mu, so Open, Remove
+	// and a second Save are never blocked behind a slow upload.
+	receiving string
 }
 
 // NewUploads returns the uploads of a data directory.
@@ -109,6 +113,10 @@ func (u *Uploads) sweepLocked() (live bool, err error) {
 		if !strings.HasPrefix(e.Name(), uploadPrefix) {
 			continue
 		}
+		if e.Name() == u.receiving {
+			live = true
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue
@@ -123,39 +131,29 @@ func (u *Uploads) sweepLocked() (live bool, err error) {
 }
 
 // Save streams r into a new upload and returns its ID. It refuses (ErrRestoreBusy)
-// while an unexpired upload exists. contentLength is the announced length, or a
-// negative number when it is not known; a body that ends before it is
-// ErrIncomplete and one above the cap is ErrTooLarge. A failed Save leaves
-// nothing behind.
+// while an unexpired upload exists or another body is still arriving.
+// contentLength is the announced length, or a negative number when it is not
+// known; a body that ends before it is ErrIncomplete and one above the cap is
+// ErrTooLarge. A failed Save leaves nothing behind.
+//
+// The lock is held only to take the slot and to finish with it, not while the
+// body streams, and the upload's lifetime is counted from the moment the last
+// byte is stored, so a slow upload does not use up the time to check and apply
+// it.
 func (u *Uploads) Save(r io.Reader, contentLength int64) (id string, err error) {
 	limit := u.Max()
 	if contentLength > limit {
 		return "", ErrTooLarge
 	}
 
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if err := os.MkdirAll(u.Dir, 0o700); err != nil {
-		return "", fmt.Errorf("create the restore staging directory: %w", err)
-	}
-	live, err := u.sweepLocked()
+	dir, id, err := u.reserve()
 	if err != nil {
-		return "", fmt.Errorf("sweep the restore staging directory: %w", err)
-	}
-	if live {
-		return "", ErrRestoreBusy
-	}
-
-	raw := make([]byte, 16)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("generate an upload ID: %w", err)
-	}
-	id = uploadPrefix + hex.EncodeToString(raw)
-	dir := filepath.Join(u.Dir, id)
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create the upload directory: %w", err)
+		return "", err
 	}
 	defer func() {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		u.receiving = ""
 		if err != nil {
 			_ = os.RemoveAll(dir)
 			id = ""
@@ -187,13 +185,94 @@ func (u *Uploads) Save(r io.Reader, contentLength int64) (id string, err error) 
 	case contentLength >= 0 && n < contentLength:
 		return "", ErrIncomplete
 	}
+	// The directory's change time is the upload's clock: it starts now, with the
+	// file complete.
+	done := u.now()
+	if err := os.Chtimes(dir, done, done); err != nil {
+		return "", fmt.Errorf("stamp the upload: %w", err)
+	}
 	return id, nil
+}
+
+// reserve takes the one slot: it sweeps expired uploads, refuses while a live
+// one or one still arriving holds it, and creates the upload directory.
+func (u *Uploads) reserve() (dir, id string, err error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if err := os.MkdirAll(u.Dir, 0o700); err != nil {
+		return "", "", fmt.Errorf("create the restore staging directory: %w", err)
+	}
+	live, err := u.sweepLocked()
+	if err != nil {
+		return "", "", fmt.Errorf("sweep the restore staging directory: %w", err)
+	}
+	if live {
+		return "", "", ErrRestoreBusy
+	}
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", "", fmt.Errorf("generate an upload ID: %w", err)
+	}
+	id = uploadPrefix + hex.EncodeToString(raw)
+	dir = filepath.Join(u.Dir, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return "", "", fmt.Errorf("create the upload directory: %w", err)
+	}
+	u.receiving = id
+	return dir, id, nil
+}
+
+// Expires is when the upload with this ID stops being available: its lifetime
+// counted from the moment its body was complete.
+func (u *Uploads) Expires(id string) (time.Time, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	dir, err := u.dir(id)
+	if err != nil {
+		return time.Time{}, err
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return time.Time{}, ErrUploadNotFound
+	}
+	return info.ModTime().Add(u.ttl()), nil
+}
+
+// Discard removes the completed upload that waits, if any, and reports whether
+// there was one. An upload whose body is still arriving is not touched and is
+// reported as ErrRestoreBusy.
+func (u *Uploads) Discard() (bool, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	entries, err := os.ReadDir(u.Dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	removed := false
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), uploadPrefix) {
+			continue
+		}
+		if e.Name() == u.receiving {
+			return removed, ErrRestoreBusy
+		}
+		if err := os.RemoveAll(filepath.Join(u.Dir, e.Name())); err != nil {
+			return removed, fmt.Errorf("remove the upload: %w", err)
+		}
+		removed = true
+	}
+	// The staging directory goes too when nothing else is in it.
+	_ = os.Remove(u.Dir)
+	return removed, nil
 }
 
 // dir is the directory of a live upload, or ErrUploadNotFound for an ID that is
 // malformed, unknown or expired (an expired one is removed on the way).
 func (u *Uploads) dir(id string) (string, error) {
-	if !uploadID.MatchString(id) {
+	if !uploadID.MatchString(id) || id == u.receiving {
 		return "", ErrUploadNotFound
 	}
 	dir := filepath.Join(u.Dir, id)
@@ -233,6 +312,9 @@ func (u *Uploads) Remove(id string) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if id == u.receiving {
+		return
+	}
 	_ = os.RemoveAll(filepath.Join(u.Dir, id))
 	// The staging directory goes too when nothing else is in it.
 	_ = os.Remove(u.Dir)

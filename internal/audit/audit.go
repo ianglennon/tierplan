@@ -130,6 +130,7 @@ const (
 	ActionBackupChecked              = "backup.checked"
 	ActionBackupRestored             = "backup.restored"
 	ActionBackupScheduleUpdated      = "backup.schedule_updated"
+	ActionBackupUploadDiscarded      = "backup.upload_discarded"
 	ActionKeyRotated                 = "key.rotated"
 )
 

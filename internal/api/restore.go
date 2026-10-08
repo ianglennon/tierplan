@@ -128,6 +128,12 @@ type SetupRestoreApplyInput struct {
 	}
 }
 
+// DiscardRestoreUploadInput is the request of the Settings discard.
+type DiscardRestoreUploadInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
 // RestoreCountsBody are the headline numbers of a backup.
 type RestoreCountsBody struct {
 	Users        int64 `json:"users" doc:"Users in the backup"`
@@ -203,6 +209,25 @@ func RegisterRestore(r *httpx.Router, d RestoreDeps) {
 	}))
 
 	httpx.Register(r, huma.Operation{
+		OperationID:   "discardRestoreUpload",
+		Method:        http.MethodDelete,
+		Path:          "/api/backup/restore/upload",
+		DefaultStatus: http.StatusNoContent,
+		Summary:       "Discard the uploaded backup",
+		Description: "Removes the backup file that was uploaded and is waiting to be checked or restored, so a file sent by mistake " +
+			"does not hold the single upload slot until it expires. Answers 204 whether or not a file was waiting. " +
+			"409 " + problemRestoreBusy + " while a check or restore runs or another file is still arriving. " +
+			"Audited as backup.upload_discarded when a file was removed. Needs backup.manage.",
+		Tags: []string{"backup"},
+	}, need, func(ctx context.Context, in *DiscardRestoreUploadInput) (*struct{}, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		return nil, a.discard(ctx, restoreSourceUI, p.AuditActor(), in.UserAgent)
+	})
+
+	httpx.Register(r, huma.Operation{
 		OperationID: "checkRestore",
 		Method:      http.MethodPost,
 		Path:        "/api/backup/restore/check",
@@ -248,6 +273,19 @@ func RegisterRestore(r *httpx.Router, d RestoreDeps) {
 		a.serveUpload(w, req, func(ctx context.Context) error {
 			return a.Setup.checkAccess(ctx, req.UserAgent(), req.Header.Get(SetupTokenHeader))
 		})
+	}))
+	// Discarding a file sent by mistake takes the same token as sending it.
+	r.Guarded(http.MethodDelete, "/api/setup/restore/upload", rbac.Public, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if err := a.Setup.checkAccess(req.Context(), req.UserAgent(), req.Header.Get(SetupTokenHeader)); err != nil {
+			writeProblemError(w, err)
+			return
+		}
+		if err := a.discard(req.Context(), restoreSourceWizard, audit.Actor{Type: audit.ActorAnonymous}, req.UserAgent()); err != nil {
+			writeProblemError(w, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
 	}))
 
 	httpx.Register(r, huma.Operation{
@@ -375,7 +413,13 @@ func (a *restoreAPI) serveUpload(w http.ResponseWriter, req *http.Request, gate 
 		}
 		_ = f.Close()
 	}
-	body, _ := json.Marshal(restoreUploadBody{UploadID: id, Size: size, ExpiresAt: a.Now().Add(a.Uploads.Lifetime()).UTC()})
+	// The lifetime runs from the moment the file was complete, not from when the
+	// request began, so a slow upload still has its whole time to check and apply.
+	expires, eerr := a.Uploads.Expires(id)
+	if eerr != nil {
+		expires = a.Now().Add(a.Uploads.Lifetime())
+	}
+	body, _ := json.Marshal(restoreUploadBody{UploadID: id, Size: size, ExpiresAt: expires.UTC()})
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusCreated)
@@ -391,6 +435,38 @@ func writeProblemError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeJSONProblem(w, http.StatusInternalServerError, "", "internal error")
+}
+
+// discard removes the waiting upload, if any, and records it. It does not run
+// beside a check or a restore, which have the file open.
+func (a *restoreAPI) discard(ctx context.Context, source string, actor audit.Actor, userAgent string) error {
+	if a.Uploads == nil {
+		return httpx.Problem(http.StatusInternalServerError, "", "internal error")
+	}
+	if !a.busy.TryLock() {
+		return a.restoreProblem("discard", backup.ErrRestoreBusy)
+	}
+	defer a.busy.Unlock()
+
+	removed, err := a.Uploads.Discard()
+	if err != nil {
+		return a.restoreProblem("discard", err)
+	}
+	if !removed {
+		return nil
+	}
+	if err := a.Audit.Record(ctx, audit.Entry{
+		Actor:      actor,
+		Action:     audit.ActionBackupUploadDiscarded,
+		TargetType: targetBackup,
+		Result:     audit.ResultSuccess,
+		IP:         httpx.ClientIP(ctx),
+		UserAgent:  userAgent,
+		Details:    map[string]string{"source": source},
+	}); err != nil {
+		return a.restoreProblem("audit the discard", err)
+	}
+	return nil
 }
 
 // check opens the upload and answers what it holds.

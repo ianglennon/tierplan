@@ -224,6 +224,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/backup/restore/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Discard the uploaded backup
+         * @description Removes the backup file that was uploaded and is waiting to be checked or restored, so a file sent by mistake does not hold the single upload slot until it expires. Answers 204 whether or not a file was waiting. 409 restore_busy while a check or restore runs or another file is still arriving. Audited as backup.upload_discarded when a file was removed. Needs backup.manage.
+         */
+        delete: operations["discardRestoreUpload"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/backup/schedule": {
         parameters: {
             query?: never;
@@ -3945,6 +3965,33 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RestoreSummaryBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    discardRestoreUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

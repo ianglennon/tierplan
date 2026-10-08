@@ -55,13 +55,14 @@ var phase3DetailKeys = map[string][]string{
 	audit.ActionBackupChecked:              {"format", "schema", "app_version"},
 	audit.ActionBackupRestored:             {"source_instance", "backup_created", "app_version", "schema", "source"},
 	audit.ActionBackupScheduleUpdated:      {"enabled", "frequency", "time_utc", "keep"},
+	audit.ActionBackupUploadDiscarded:      {"source"},
 	audit.ActionAuditReanchored:            {"source_instance", "backup_created", "old_kid", "old_head", "entries", "chain_verified"},
 	audit.ActionKeyRotated:                 {"old_kid", "new_kid", "old_head", "entries", "attestation"},
 }
 
 func TestEveryPhase3ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
-	if got := len(phase3DetailKeys); got != 33 {
-		t.Fatalf("the table covers %d actions, want the 33 of the Phase 3 vocabulary", got)
+	if got := len(phase3DetailKeys); got != 34 {
+		t.Fatalf("the table covers %d actions, want the 34 of the Phase 3 vocabulary", got)
 	}
 	f := newFixture(t)
 	for action, keys := range phase3DetailKeys {
@@ -79,7 +80,7 @@ func TestEveryPhase3ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 			}
 		}
 	}
-	if got := f.verify(t); got.Broken != nil || got.Entries != 33 {
+	if got := f.verify(t); got.Broken != nil || got.Entries != 34 {
 		t.Fatalf("verify = %+v", got)
 	}
 }

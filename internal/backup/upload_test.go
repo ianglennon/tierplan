@@ -208,3 +208,121 @@ func TestClearStagingRemovesEverythingUnderTheStagingDirectory(t *testing.T) {
 		t.Fatalf("ClearStaging with nothing there: %v", err)
 	}
 }
+
+// slowReader hands out its body in two halves and runs onMid between them, the way
+// a slow link holds a request open.
+type slowReader struct {
+	first, second []byte
+	onMid         func()
+	stage         int
+}
+
+func (r *slowReader) Read(p []byte) (int, error) {
+	switch r.stage {
+	case 0:
+		r.stage = 1
+		return copy(p, r.first), nil
+	case 1:
+		r.stage = 2
+		if r.onMid != nil {
+			r.onMid()
+		}
+		return copy(p, r.second), nil
+	}
+	return 0, io.EOF
+}
+
+// WR-B-02: the upload's lifetime is counted from the last byte, not the first.
+func TestUploadsLifetimeIsCountedFromTheCompleteFile(t *testing.T) {
+	u, _ := newUploads(t, 1<<20)
+	start := time.Now()
+	now := start
+	u.Now = func() time.Time { return now }
+
+	r := &slowReader{first: []byte("abc"), second: []byte("def"), onMid: func() { now = now.Add(12 * time.Minute) }}
+	id, err := u.Save(r, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires, err := u.Expires(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := start.Add(12*time.Minute + u.Lifetime())
+	if d := expires.Sub(want); d < -time.Second || d > time.Second {
+		t.Fatalf("expires = %v, want %v (15 minutes after the file was complete)", expires, want)
+	}
+	// 14 minutes after completion the file is still there, though it is 26 minutes
+	// since the request began.
+	now = now.Add(14 * time.Minute)
+	f, err := u.Open(id)
+	if err != nil {
+		t.Fatalf("Open 14 minutes after completion: %v", err)
+	}
+	_ = f.Close()
+	now = now.Add(2 * time.Minute)
+	if _, err := u.Open(id); !errors.Is(err, backup.ErrUploadNotFound) {
+		t.Fatalf("Open 16 minutes after completion = %v, want ErrUploadNotFound", err)
+	}
+}
+
+// WR-B-02: a slow body does not hold the lock, so the other calls answer at once.
+func TestUploadsAnArrivingBodyDoesNotBlockOtherCalls(t *testing.T) {
+	u, _ := newUploads(t, 1<<20)
+	pr, pw := io.Pipe()
+	saved := make(chan error, 1)
+	go func() {
+		_, err := u.Save(pr, -1)
+		saved <- err
+	}()
+	if _, err := pw.Write([]byte("partial")); err != nil {
+		t.Fatal(err)
+	}
+
+	answered := make(chan error, 3)
+	go func() { _, err := u.Open("u-00000000000000000000000000000000"); answered <- err }()
+	go func() { _, err := u.Save(strings.NewReader("two"), 3); answered <- err }()
+	go func() { _, err := u.Discard(); answered <- err }()
+	want := []error{backup.ErrUploadNotFound, backup.ErrRestoreBusy, backup.ErrRestoreBusy}
+	for range want {
+		select {
+		case err := <-answered:
+			ok := false
+			for _, w := range want {
+				ok = ok || errors.Is(err, w)
+			}
+			if !ok {
+				t.Errorf("a call beside the arriving upload answered %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a call beside the arriving upload blocked behind it")
+		}
+	}
+	_ = pw.Close()
+	if err := <-saved; err != nil {
+		t.Fatalf("the arriving upload failed: %v", err)
+	}
+}
+
+func TestUploadsDiscardRemovesTheWaitingUploadAndSaysWhetherThereWasOne(t *testing.T) {
+	u, dir := newUploads(t, 1<<20)
+	if removed, err := u.Discard(); err != nil || removed {
+		t.Fatalf("Discard with nothing waiting = %v, %v, want false, nil", removed, err)
+	}
+	id, err := u.Save(strings.NewReader("one"), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := u.Discard(); err != nil || !removed {
+		t.Fatalf("Discard = %v, %v, want true, nil", removed, err)
+	}
+	if _, err := u.Open(id); !errors.Is(err, backup.ErrUploadNotFound) {
+		t.Fatalf("Open after Discard = %v, want ErrUploadNotFound", err)
+	}
+	if left := entries(t, dir); len(left) != 0 {
+		t.Fatalf("Discard left %v", left)
+	}
+	if _, err := u.Save(strings.NewReader("two"), 3); err != nil {
+		t.Fatalf("Save after Discard: %v", err)
+	}
+}

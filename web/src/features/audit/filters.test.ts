@@ -189,6 +189,7 @@ const PHASE3_LABELS: Record<string, string> = {
   "backup.checked": "Checked backup file",
   "backup.restored": "Restored backup",
   "backup.schedule_updated": "Changed backup schedule",
+  "backup.upload_discarded": "Discarded uploaded backup",
   "audit.reanchored": "Re-anchored audit log",
   "key.rotated": "Rotated master key",
 };

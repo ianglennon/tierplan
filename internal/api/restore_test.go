@@ -779,3 +779,115 @@ func TestWizardRestoreRefusesABadFileWithTheSameProblemsAsSettings(t *testing.T)
 		t.Fatal("a restart was requested")
 	}
 }
+
+// WR-B-02: the upload's lifetime runs from the moment the file was complete, the
+// answer says so, and a file sent by mistake can be discarded.
+func TestRestoreUploadReportsAnExpiryCountedFromTheCompletedFile(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	done := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	f.restoreDeps(slog.New(slog.DiscardHandler)) // creates the hook
+	f.restore.uploads.Now = func() time.Time { return done }
+
+	rec := f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", ""))
+	uploadedID(t, rec)
+	var got struct {
+		ExpiresAt time.Time `json:"expiresAt"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := done.Add(f.restore.uploads.Lifetime()); !got.ExpiresAt.Equal(want) {
+		t.Fatalf("expiresAt = %v, want %v (the lifetime counted from the finished file)", got.ExpiresAt, want)
+	}
+}
+
+func (f *authFixture) discardUpload(t *testing.T, cookie, csrf string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(t, authReq{method: http.MethodDelete, path: "/api/backup/restore/upload", cookie: cookie, csrf: csrf})
+}
+
+func TestRestoreDiscardRemovesTheWaitingUploadFreesTheSlotAndIsAudited(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	file := makeBackup(t, "Old lab", "oldadmin", "")
+	id := uploadedID(t, f.upload(t, cookie, csrf, file))
+
+	if rec := f.discardUpload(t, cookie, csrf); rec.Code != http.StatusNoContent {
+		t.Fatalf("discard = %d, want 204: %s", rec.Code, rec.Body)
+	}
+	rec := f.restoreCall(t, cookie, csrf, "check", map[string]string{"uploadId": id, "passphrase": restorePass})
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "upload_not_found" {
+		t.Fatalf("check of the discarded upload = %d %s, want 404 upload_not_found", rec.Code, rec.Body)
+	}
+	uploadedID(t, f.upload(t, cookie, csrf, file)) // the slot is free again
+	if e := f.audits(t, "backup.upload_discarded"); len(e) != 1 || e[0].ActorID != "id-admin" || e[0].Result != "success" {
+		t.Fatalf("discard audit = %+v, want one success by the admin", e)
+	}
+	if d := f.auditDetails(t, "backup.upload_discarded"); len(d) != 1 || d[0]["source"] != "ui" {
+		t.Fatalf("discard details = %v", d)
+	}
+}
+
+func TestRestoreDiscardWithNothingWaitingIs204AndWritesNoEntry(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	if rec := f.discardUpload(t, cookie, csrf); rec.Code != http.StatusNoContent {
+		t.Fatalf("discard = %d, want 204: %s", rec.Code, rec.Body)
+	}
+	if len(f.audits(t, "backup.upload_discarded")) != 0 {
+		t.Fatal("a discard that removed nothing was audited")
+	}
+}
+
+func TestRestoreDiscardIsRefusedForAnyoneButAnInstanceAdmin(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	id := uploadedID(t, f.upload(t, cookie, csrf, makeBackup(t, "Old lab", "oldadmin", "")))
+	f.addUser(t, "viewer", false)
+	vCookie, vCSRF := f.signIn(t, "viewer", false)
+
+	if rec := f.discardUpload(t, vCookie, vCSRF); rec.Code != http.StatusForbidden {
+		t.Fatalf("discard by a viewer = %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if rec := f.discardUpload(t, "", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous discard = %d, want 401: %s", rec.Code, rec.Body)
+	}
+	rec := f.restoreCall(t, cookie, csrf, "check", map[string]string{"uploadId": id, "passphrase": restorePass})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the upload did not survive the refused discards: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func (w *wizardFixture) discard(t *testing.T, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, "/api/setup/restore/upload", nil)
+	req.Header.Set("X-Setup-Token", token)
+	req.RemoteAddr = testClientAddr
+	rec := httptest.NewRecorder()
+	w.h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestWizardRestoreDiscardNeedsTheSetupTokenAndRemovesTheUpload(t *testing.T) {
+	w := newWizardFixture(t)
+	id := uploadedID(t, w.upload(t, w.token, makeBackup(t, "Old lab", "oldadmin", "")))
+
+	if rec := w.discard(t, "wrong"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("discard with a wrong token = %d, want 401: %s", rec.Code, rec.Body)
+	}
+	if rec := w.call(t, "check", map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": restorePass}); rec.Code != http.StatusOK {
+		t.Fatalf("the upload did not survive a refused discard: %d %s", rec.Code, rec.Body)
+	}
+	if rec := w.discard(t, w.token); rec.Code != http.StatusNoContent {
+		t.Fatalf("discard = %d, want 204: %s", rec.Code, rec.Body)
+	}
+	rec := w.call(t, "check", map[string]string{"setupToken": w.token, "uploadId": id, "passphrase": restorePass})
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "upload_not_found" {
+		t.Fatalf("check of the discarded upload = %d %s, want 404 upload_not_found", rec.Code, rec.Body)
+	}
+	var n int
+	if err := w.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'backup.upload_discarded' AND actor_type = 'anonymous'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("anonymous discard entries = %d, %v, want 1", n, err)
+	}
+}
