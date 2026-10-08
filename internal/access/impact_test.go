@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ianglennon/bayplan/internal/access"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -132,10 +133,10 @@ func TestImpactPreviewRefusesAnUnknownTeamAMissingMemberAndAnUnknownKind(t *test
 func TestImpactOfFifteenUsersRecordsTheCountAndTenItemsWithinTheAuditLimit(t *testing.T) {
 	f := newOwnedFixture(t)
 	team := f.createTeam(t, "big")
-	f.assignTeam(t, team.ID, "operator", "env-with-a-rather-long-identifier-a")
+	f.assignTeam(t, team.ID, "operator", "env-a")
 	var ids []string
 	for i := 0; i < 15; i++ {
-		id := fmt.Sprintf("a-user-with-a-long-name-%02d", i)
+		id := fmt.Sprintf("user-%02d", i)
 		f.addUser(t, id)
 		ids = append(ids, id)
 	}
@@ -149,7 +150,31 @@ func TestImpactOfFifteenUsersRecordsTheCountAndTenItemsWithinTheAuditLimit(t *te
 	if err := json.Unmarshal([]byte(f.auditDetails(t, "team.deleted")), &d); err != nil {
 		t.Fatal(err)
 	}
-	if d["impact_count"] != "15" || len(d["impact"]) > 512 || strings.Count(d["impact"], "; ") != 9 {
-		t.Fatalf("impact_count %q, impact %d bytes with %d separators, want 15, at most 512 and ten items", d["impact_count"], len(d["impact"]), strings.Count(d["impact"], "; "))
+	if d["impact_count"] != "15" || len(d["impact"]) > 512 || strings.Count(d["impact"], "; ") != 9 ||
+		!strings.HasPrefix(d["impact"], "user-00: env-a operator→none; user-01:") || strings.Contains(d["impact"], "user-10") {
+		t.Fatalf("impact_count %q, impact %q, want 15 and the first ten items", d["impact_count"], d["impact"])
+	}
+}
+
+func TestAnImpactWithLongNamesIsCutToTheAuditLimitWithoutSplittingACharacter(t *testing.T) {
+	f := newOwnedFixture(t)
+	team := f.createTeam(t, "big")
+	f.assignTeam(t, team.ID, "operator", strings.Repeat("é", 60))
+	var ids []string
+	for i := 0; i < 12; i++ {
+		id := fmt.Sprintf("a-user-with-a-rather-long-name-%02d", i)
+		f.addUser(t, id)
+		ids = append(ids, id)
+	}
+	f.join(t, team.ID, ids...)
+	if _, err := f.svc.DeleteTeam(f.ctx, testAdmin, team.ID); err != nil {
+		t.Fatal(err)
+	}
+	var d map[string]string
+	if err := json.Unmarshal([]byte(f.auditDetails(t, "team.deleted")), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d["impact_count"] != "12" || len(d["impact"]) > 512 || !utf8.ValidString(d["impact"]) || strings.Contains(d["impact"], "\uFFFD") {
+		t.Fatalf("impact_count %q, impact %d bytes valid=%v, want 12 and at most 512 bytes of whole characters", d["impact_count"], len(d["impact"]), utf8.ValidString(d["impact"]))
 	}
 }

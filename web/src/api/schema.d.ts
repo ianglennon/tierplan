@@ -873,6 +873,34 @@ export interface paths {
         get: operations["getTeam"];
         put?: never;
         post?: never;
+        /**
+         * Delete a team
+         * @description Removes the team, its grants and its memberships in one step, so no assignment or membership is left pointing at it. Its members lose the access it gave them on their next request, and the automations they own that no longer qualify pause. The answer lists who lost which access, worked out inside the same step. Audited as one team.deleted entry carrying members, impact_count and impact: the first ten items "username: environment before→after" joined by "; " and cut to 512 bytes. An unknown team answers 404 team_not_found.
+         */
+        delete: operations["deleteTeam"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename a team
+         * @description Send the name with the updatedAt you read. If the team changed since, nothing is saved and the answer is 409 stale_change. A name another team holds, ignoring case, answers 409 team_name_taken; an empty or too long one answers 422 on body.name. Saving the name it already has changes nothing. Audited as team.renamed with the old name.
+         */
+        patch: operations["renameTeam"];
+        trace?: never;
+    };
+    "/api/teams/{teamId}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview who loses access if a team changes
+         * @description Works out, with the same evaluator that enforces access, who would lose which environment access if the team were deleted (op delete) or a member removed (op remove_member, with userId). The change is applied inside a transaction that is rolled back, so nothing is written and nothing is audited. Confirming recomputes the impact when it commits. A remove_member for a user who is not in the team answers 404 member_not_found.
+         */
+        post: operations["previewTeamImpact"];
         delete?: never;
         options?: never;
         head?: never;
@@ -894,6 +922,26 @@ export interface paths {
          */
         post: operations["addTeamMembers"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{teamId}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a user from a team
+         * @description The user loses the access the team gave them on their next request and keeps every other grant. The automations they own that no longer qualify pause. The answer lists what they lost, worked out inside the same step. Audited as one team.member_removed entry carrying impact_count and impact (first ten items "username: environment before→after" joined by "; ", cut to 512 bytes). A user who is not in the team answers 404 member_not_found and nothing is written.
+         */
+        delete: operations["removeTeamMember"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1858,6 +1906,30 @@ export interface components {
             /** @description True when total is more than the rows returned */
             truncated: boolean;
         };
+        ImpactBody: {
+            /** @description Who loses which environment access, sorted by username then environment. Empty when no one does */
+            impact: components["schemas"]["ImpactRowBody"][] | null;
+        };
+        ImpactRowBody: {
+            /**
+             * @description The role the user would hold there once the change is applied; none when the access ends
+             * @enum {string}
+             */
+            after: "none" | "viewer" | "operator" | "admin";
+            /**
+             * @description The role the user holds there now
+             * @enum {string}
+             */
+            before: "viewer" | "operator" | "admin";
+            /** @description The environment's ID, or * for an assignment that applies to every environment */
+            environmentId: string;
+            /** @description The environment's name, or All environments for * */
+            environmentName: string;
+            /** @description The user who loses access */
+            userId: string;
+            /** @description The user's username */
+            username: string;
+        };
         InstallBody: {
             /** @description The address the agent dials, for example wss://bayplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
             agentUrl: string;
@@ -2034,6 +2106,15 @@ export interface components {
             /** @description Installation-wide permissions */
             global: string[] | null;
         };
+        PreviewTeamImpactInputBody: {
+            /**
+             * @description The change to preview
+             * @enum {string}
+             */
+            op: "delete" | "remove_member";
+            /** @description The member to remove, for remove_member */
+            userId?: string;
+        };
         ProbeResult: {
             apiVersion?: string;
             arch?: string;
@@ -2077,6 +2158,15 @@ export interface components {
         RecentEnvironmentsBody: {
             /** @description Up to 3 environment IDs, most recently used first */
             environmentIds: string[] | null;
+        };
+        RenameTeamInputBody: {
+            /** @description 1 to 64 characters; not case-sensitive for uniqueness */
+            name: string;
+            /**
+             * Format: date-time
+             * @description The updatedAt of the team this rename is based on. If the team changed since, the answer is 409 stale_change
+             */
+            updatedAt: string;
         };
         RequirementBody: {
             /**
@@ -4277,6 +4367,113 @@ export interface operations {
             };
         };
     };
+    deleteTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    renameTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameTeamInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewTeamImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewTeamImpactInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     addTeamMembers: {
         parameters: {
             query?: never;
@@ -4301,6 +4498,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AddedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeTeamMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+                /** @description The member's user ID */
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
                 };
             };
             /** @description Error */

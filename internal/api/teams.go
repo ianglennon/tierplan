@@ -50,6 +50,21 @@ type TeamDetailBody struct {
 	Members []TeamMemberBody `json:"members" doc:"The members, sorted by username"`
 }
 
+// ImpactRowBody is one place a change takes access away.
+type ImpactRowBody struct {
+	UserID          string `json:"userId" doc:"The user who loses access"`
+	Username        string `json:"username" doc:"The user's username"`
+	EnvironmentID   string `json:"environmentId" doc:"The environment's ID, or * for an assignment that applies to every environment"`
+	EnvironmentName string `json:"environmentName" doc:"The environment's name, or All environments for *"`
+	Before          string `json:"before" enum:"viewer,operator,admin" doc:"The role the user holds there now"`
+	After           string `json:"after" enum:"none,viewer,operator,admin" doc:"The role the user would hold there once the change is applied; none when the access ends"`
+}
+
+// ImpactBody is the list of access a change takes away.
+type ImpactBody struct {
+	Impact []ImpactRowBody `json:"impact" doc:"Who loses which environment access, sorted by username then environment. Empty when no one does"`
+}
+
 // TeamOutput wraps TeamBody for huma.
 type TeamOutput struct {
 	CacheControl string `header:"Cache-Control"`
@@ -66,6 +81,12 @@ type TeamDetailOutput struct {
 type ListTeamsOutput struct {
 	CacheControl string `header:"Cache-Control"`
 	Body         []TeamBody
+}
+
+// ImpactOutput wraps ImpactBody for huma.
+type ImpactOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ImpactBody
 }
 
 // AddedBody says how many members an add put in the team.
@@ -95,6 +116,17 @@ type CreateTeamInput struct {
 	}
 }
 
+// RenameTeamInput is a rename.
+type RenameTeamInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	TeamID    string `path:"teamId" doc:"The team's ID"`
+	Body      struct {
+		Name      string    `json:"name" maxLength:"256" doc:"1 to 64 characters; not case-sensitive for uniqueness"`
+		UpdatedAt time.Time `json:"updatedAt" format:"date-time" doc:"The updatedAt of the team this rename is based on. If the team changed since, the answer is 409 stale_change"`
+	}
+}
+
 // AddTeamMembersInput is an add.
 type AddTeamMembersInput struct {
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
@@ -102,6 +134,23 @@ type AddTeamMembersInput struct {
 	TeamID    string `path:"teamId" doc:"The team's ID"`
 	Body      struct {
 		UserIDs []string `json:"userIds" minItems:"1" maxItems:"100" doc:"The users to add"`
+	}
+}
+
+// RemoveTeamMemberInput names a member to remove.
+type RemoveTeamMemberInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	TeamID    string `path:"teamId" doc:"The team's ID"`
+	UserID    string `path:"userId" doc:"The member's user ID"`
+}
+
+// PreviewTeamImpactInput is a change to preview.
+type PreviewTeamImpactInput struct {
+	TeamID string `path:"teamId" doc:"The team's ID"`
+	Body   struct {
+		Op     string `json:"op" enum:"delete,remove_member" doc:"The change to preview"`
+		UserID string `json:"userId,omitempty" doc:"The member to remove, for remove_member"`
 	}
 }
 
@@ -118,6 +167,17 @@ func teamDetailOf(d access.TeamDetail) TeamDetailBody {
 		b.Members = append(b.Members, TeamMemberBody{
 			UserID: m.UserID, Username: m.Username, DisplayName: m.DisplayName, InstanceAdmin: m.InstanceAdmin,
 			Status: m.Status, AddedAt: m.AddedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return b
+}
+
+func impactBodyOf(rows []access.ImpactRow) ImpactBody {
+	b := ImpactBody{Impact: make([]ImpactRowBody, 0, len(rows))}
+	for _, r := range rows {
+		b.Impact = append(b.Impact, ImpactRowBody{
+			UserID: r.UserID, Username: r.Username, EnvironmentID: r.EnvID, EnvironmentName: r.EnvName,
+			Before: r.Before.String(), After: r.After.String(),
 		})
 	}
 	return b
@@ -233,5 +293,101 @@ func registerTeams(r *httpx.Router, d AccessDeps) {
 			return nil, teamError(d, "add team members", err)
 		}
 		return &AddedOutput{CacheControl: "no-store", Body: AddedBody{Added: n}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "renameTeam",
+		Method:      http.MethodPatch,
+		Path:        "/api/teams/{teamId}",
+		Summary:     "Rename a team",
+		Description: "Send the name with the updatedAt you read. If the team changed since, nothing is saved and the " +
+			"answer is 409 stale_change. A name another team holds, ignoring case, answers 409 team_name_taken; an " +
+			"empty or too long one answers 422 on body.name. Saving the name it already has changes nothing. " +
+			"Audited as team.renamed with the old name.",
+		Tags: []string{"teams"},
+	}, manage, func(ctx context.Context, in *RenameTeamInput) (*TeamOutput, error) {
+		p, err := signedIn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		t, err := d.Access.RenameTeam(ctx, p.AuditActor(), in.TeamID, in.Body.Name, in.Body.UpdatedAt,
+			access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent))
+		if err != nil {
+			return nil, teamError(d, "rename team", err)
+		}
+		return &TeamOutput{CacheControl: "no-store", Body: teamBodyOf(t)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "deleteTeam",
+		Method:      http.MethodDelete,
+		Path:        "/api/teams/{teamId}",
+		Summary:     "Delete a team",
+		Description: "Removes the team, its grants and its memberships in one step, so no assignment or membership is " +
+			"left pointing at it. Its members lose the access it gave them on their next request, and the automations " +
+			"they own that no longer qualify pause. The answer lists who lost which access, worked out inside the same " +
+			"step. Audited as one team.deleted entry carrying members, impact_count and impact: the first ten items " +
+			"\"username: environment before→after\" joined by \"; \" and cut to 512 bytes. An unknown team answers " +
+			"404 team_not_found.",
+		Tags: []string{"teams"},
+	}, manage, func(ctx context.Context, in *TeamIDInput) (*ImpactOutput, error) {
+		p, err := signedIn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := d.Access.DeleteTeam(ctx, p.AuditActor(), in.TeamID, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent))
+		if err != nil {
+			return nil, teamError(d, "delete team", err)
+		}
+		return &ImpactOutput{CacheControl: "no-store", Body: impactBodyOf(rows)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "removeTeamMember",
+		Method:      http.MethodDelete,
+		Path:        "/api/teams/{teamId}/members/{userId}",
+		Summary:     "Remove a user from a team",
+		Description: "The user loses the access the team gave them on their next request and keeps every other grant. " +
+			"The automations they own that no longer qualify pause. The answer lists what they lost, worked out inside " +
+			"the same step. Audited as one team.member_removed entry carrying impact_count and impact (first ten items " +
+			"\"username: environment before→after\" joined by \"; \", cut to 512 bytes). A user who is not in the team " +
+			"answers 404 member_not_found and nothing is written.",
+		Tags: []string{"teams"},
+	}, manage, func(ctx context.Context, in *RemoveTeamMemberInput) (*ImpactOutput, error) {
+		p, err := signedIn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := d.Access.RemoveMember(ctx, p.AuditActor(), in.TeamID, in.UserID, access.WithOrigin(httpx.ClientIP(ctx), in.UserAgent))
+		if err != nil {
+			return nil, teamError(d, "remove team member", err)
+		}
+		return &ImpactOutput{CacheControl: "no-store", Body: impactBodyOf(rows)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewTeamImpact",
+		Method:      http.MethodPost,
+		Path:        "/api/teams/{teamId}/impact",
+		Summary:     "Preview who loses access if a team changes",
+		Description: "Works out, with the same evaluator that enforces access, who would lose which environment access " +
+			"if the team were deleted (op delete) or a member removed (op remove_member, with userId). The change is " +
+			"applied inside a transaction that is rolled back, so nothing is written and nothing is audited. " +
+			"Confirming recomputes the impact when it commits. A remove_member for a user who is not in the team " +
+			"answers 404 member_not_found.",
+		Tags: []string{"teams"},
+	}, manage, func(ctx context.Context, in *PreviewTeamImpactInput) (*ImpactOutput, error) {
+		if in.Body.Op == access.OpRemoveMember && in.Body.UserID == "" {
+			return nil, &huma.ErrorModel{
+				Type: problemValidationFailed, Title: http.StatusText(http.StatusUnprocessableEntity),
+				Status: http.StatusUnprocessableEntity, Detail: "validation failed",
+				Errors: []*huma.ErrorDetail{{Location: "body.userId", Message: "required for remove_member"}},
+			}
+		}
+		rows, err := d.Access.TeamImpact(ctx, in.TeamID, access.TeamOp{Kind: in.Body.Op, UserID: in.Body.UserID})
+		if err != nil {
+			return nil, teamError(d, "preview team impact", err)
+		}
+		return &ImpactOutput{CacheControl: "no-store", Body: impactBodyOf(rows)}, nil
 	})
 }
