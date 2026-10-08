@@ -4,9 +4,10 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
-import type { PutGrantResult } from "@/api/grants";
+import type { GrantChange, PutGrantResult, RemoveGrantResult } from "@/api/grants";
 import { readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
+import type { ImpactLoad } from "@/api/teams";
 
 export type EnvAccessList = components["schemas"]["EnvAccessListBody"];
 export type EnvAccessTeam = components["schemas"]["EnvAccessTeamBody"];
@@ -65,6 +66,46 @@ export async function putEnvAccess(envId: string, input: EnvGrantInput): Promise
     if (problem.status === 409 && problem.type === "stale_change") return { kind: "stale_change" };
     if (problem.status === 404) return { kind: "not_found" };
     return { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+// previewEnvAccessImpact asks who would lose which environment access if one of
+// the environment's grants were removed, or saved with a lower role, through the
+// route an env Admin may use. Nothing is changed by asking. Any failure is one
+// "error", so the confirm that waits on the preview fails closed.
+export async function previewEnvAccessImpact(
+  envId: string,
+  grantId: string,
+  change: GrantChange,
+): Promise<ImpactLoad> {
+  const body =
+    change.op === "delete"
+      ? { op: "delete" as const }
+      : { op: "update" as const, role: change.role, extras: [...change.extras] };
+  try {
+    const result = await api.POST("/api/env/{envId}/access/{grantId}/impact", {
+      params: { path: { envId, grantId } },
+      body,
+    });
+    return result.data ? { kind: "ok", rows: result.data.impact ?? [] } : { kind: "error" };
+  } catch {
+    return { kind: "error" };
+  }
+}
+
+// removeEnvAccess takes one of the environment's grants away. A grant that is
+// already gone is not_found; anything else that fails is an error.
+export async function removeEnvAccess(envId: string, grantId: string): Promise<RemoveGrantResult> {
+  try {
+    const result = await api.DELETE("/api/env/{envId}/access/{grantId}", {
+      params: { path: { envId, grantId } },
+    });
+    if (result.response.ok) return { kind: "ok" };
+    return readProblem(result.error, result.response).status === 404
+      ? { kind: "not_found" }
+      : { kind: "error" };
   } catch {
     return { kind: "error" };
   }

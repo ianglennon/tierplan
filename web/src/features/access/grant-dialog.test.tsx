@@ -438,7 +438,7 @@ describe("the dialog on an environment's Access tab", () => {
     expect(within(dialog).getByText("On Alpha")).toBeTruthy();
     expect(within(dialog).queryByRole("combobox", { name: "Environment" })).toBeNull();
     expect(within(dialog).queryByText("All environments")).toBeNull();
-    expect(within(dialog).getByRole("combobox", { name: "Who" })).toBeTruthy();
+    expect(await within(dialog).findByRole("combobox", { name: "Who" })).toBeTruthy();
   });
 
   it("edits through the environment route with Who and the environment as read-only text and no Who field", async () => {
@@ -470,10 +470,12 @@ describe("the dialog on an environment's Access tab", () => {
     const dialog = await screen.findByRole("dialog", { name: "Add access" });
     const add = within(dialog).getByRole("button", { name: "Add access" }) as HTMLButtonElement;
     expect(add.disabled).toBe(true);
-    fireEvent.click(within(dialog).getByRole("combobox", { name: "Who" }));
+    fireEvent.click(await within(dialog).findByRole("combobox", { name: "Who" }));
     fireEvent.click(await screen.findByRole("option", { name: /bob/ }));
     await waitFor(() => expect(add.disabled).toBe(false));
-    expect(within(dialog).getByRole("combobox", { name: "Who" }).textContent).toContain("bob");
+    expect((await within(dialog).findByRole("combobox", { name: "Who" })).textContent).toContain(
+      "bob",
+    );
   });
 
   it("shows Everyone already has access here. when the list is empty", async () => {

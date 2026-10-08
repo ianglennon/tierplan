@@ -292,7 +292,7 @@ describe("the Access tab", () => {
     expect(within(dialog).queryByText("All environments")).toBeNull();
 
     // Who: Teams then Users, never an email.
-    fireEvent.click(within(dialog).getByRole("combobox", { name: "Who" }));
+    fireEvent.click(await within(dialog).findByRole("combobox", { name: "Who" }));
     const list = await screen.findByRole("listbox");
     const groups = within(list)
       .getAllByRole("group")
@@ -336,7 +336,7 @@ describe("the Access tab", () => {
     const c = await tab();
     fireEvent.click(await within(c).findByRole("button", { name: "Add access" }));
     const dialog = await screen.findByRole("dialog", { name: "Add access" });
-    fireEvent.click(within(dialog).getByRole("combobox", { name: "Who" }));
+    fireEvent.click(await within(dialog).findByRole("combobox", { name: "Who" }));
     fireEvent.click(await screen.findByRole("option", { name: /erin/ }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Add access" }));
     expect(await within(dialog).findByText("You can't give that access.")).toBeTruthy();
@@ -736,9 +736,7 @@ describe("the Who list when there is nobody left or it has not loaded", () => {
     const c = await tab();
     fireEvent.click(await within(c).findByRole("button", { name: "Add access" }));
     const dialog = await screen.findByRole("dialog", { name: "Add access" });
-    expect(
-      await within(dialog).findByRole("status", { name: "Loading users and teams" }),
-    ).toBeTruthy();
+    expect(await within(dialog).findByText("Loading users and teams")).toBeTruthy();
     expect(within(dialog).queryByRole("combobox", { name: "Who" })).toBeNull();
     expect(
       (within(dialog).getByRole("button", { name: "Add access" }) as HTMLButtonElement).disabled,
@@ -763,5 +761,38 @@ describe("who sees Add access", () => {
     renderAt(ACCESS);
     await screen.findByText("You don't have permission to view this page");
     expect(screen.queryByRole("button", { name: "Add access" })).toBeNull();
+  });
+});
+
+describe("many people", () => {
+  it("scrolls both tables inside their card and keeps the header in view", async () => {
+    list = {
+      teams: [OPS],
+      people: [
+        person(),
+        ADMIN_ROW,
+        ...Array.from({ length: 100 }, (_, i) =>
+          person({
+            userId: `u-${i}`,
+            username: `user${String(i).padStart(3, "0")}`,
+            role: "viewer",
+            self: false,
+            grant: undefined,
+            sources: [{ kind: "all" }],
+          }),
+        ),
+      ],
+    };
+    renderAt(ACCESS);
+    const c = await tab();
+    for (const name of ["Teams with access to prod", "People with access to prod"]) {
+      const table = await within(c).findByRole("table", { name });
+      const box = table.closest("div[class*='overflow-auto']") as HTMLElement;
+      expect(box.className).toContain("max-h-96");
+      expect(within(table).getAllByRole("columnheader")[0]?.closest("thead")?.className).toContain(
+        "sticky",
+      );
+    }
+    expect(within(c).getAllByRole("row")).toHaveLength(1 + 1 + 102 + 1);
   });
 });

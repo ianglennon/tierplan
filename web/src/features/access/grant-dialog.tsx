@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { envAccessCandidatesQuery, putEnvAccess } from "@/api/envaccess";
+import { envAccessCandidatesQuery, previewEnvAccessImpact, putEnvAccess } from "@/api/envaccess";
 import { environmentsQuery } from "@/api/environments";
 import { type Grant, previewGrantImpact, putGrant, type SubjectType } from "@/api/grants";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -115,12 +115,11 @@ function GrantForm({
   const t = useT();
   const instanceAdmin = useInstanceAdmin();
   const envMode = mode === "env" && environment !== undefined;
-  // The Access tab adds access; editing a row comes with it later.
-  const editing = Boolean(grant) && !envMode;
+  const editing = Boolean(grant);
   const envs = useQuery({ ...environmentsQuery, enabled: !editing && !envMode });
   const candidates = useQuery({
     ...envAccessCandidatesQuery(environment?.id ?? ""),
-    enabled: envMode,
+    enabled: envMode && !grant,
   });
   // The subject: known on a user's or a team's page, chosen in the Who list on
   // an environment's Access tab.
@@ -139,7 +138,7 @@ function GrantForm({
 
   // The grant a save would replace: the one being edited, or the subject's
   // existing grant on the chosen environment.
-  const existing = envMode ? undefined : (grant ?? grants.find((g) => scopeOf(g) === env));
+  const existing = grant ?? (envMode ? undefined : grants.find((g) => scopeOf(g) === env));
   const replacing = !editing && existing !== undefined;
   const envName = envMode
     ? (environment?.name ?? "")
@@ -147,7 +146,16 @@ function GrantForm({
       ? t("grants.scope.all")
       : (grant?.envName ?? envs.data?.items?.find((e) => e.id === env)?.name ?? "");
   const sorted = [...(envs.data?.items ?? [])].sort((a, b) => a.name.localeCompare(b.name));
-  const loading = !editing && envs.isPending;
+  const loading = !editing && !envMode && envs.isPending;
+  // On the Access tab the Who list loads with the dialog; nothing can be saved
+  // before someone is chosen in it.
+  const whoLoading = envMode && !editing && candidates.isPending;
+  const noOneLeft =
+    envMode &&
+    !editing &&
+    candidates.data !== undefined &&
+    (candidates.data.users ?? []).length === 0 &&
+    (candidates.data.teams ?? []).length === 0;
   // What would be saved for the role: only an Operator carries extras.
   const sentExtras = role === "operator" ? extras : [];
   // Lowering a grant shows what it takes away first, and Save waits for that to
@@ -238,19 +246,47 @@ function GrantForm({
         <fieldset disabled={pending} className="flex min-w-0 flex-col gap-4">
           {envMode && environment ? (
             <>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="grant-who">{t("grants.dialog.who")}</Label>
-                <WhoCombobox
-                  id="grant-who"
-                  candidates={candidates.data ?? { users: null, teams: null }}
-                  value={who}
-                  onChange={setWho}
-                  disabled={pending}
-                />
-              </div>
-              <p className="text-sm font-medium break-words">
-                {t("envaccess.dialog.onEnvironment", { environment: environment.name })}
-              </p>
+              {editing && subject ? (
+                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
+                  <dt className="text-muted-foreground">{t("grants.dialog.who")}</dt>
+                  <dd className="font-medium break-words">{subject.name}</dd>
+                  <dt className="text-muted-foreground">{t("grants.dialog.environment")}</dt>
+                  <dd className="font-medium break-words">{environment.name}</dd>
+                </dl>
+              ) : (
+                <>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="grant-who">{t("grants.dialog.who")}</Label>
+                    {whoLoading ? (
+                      <div aria-busy="true">
+                        <span role="status" className="sr-only">
+                          {t("envaccess.dialog.whoLoading")}
+                        </span>
+                        <Skeleton className="h-11 w-full md:h-8" aria-hidden="true" />
+                      </div>
+                    ) : candidates.isError ? (
+                      <p role="alert" className="text-sm text-destructive">
+                        {t("envaccess.dialog.whoFailed")}
+                      </p>
+                    ) : noOneLeft ? (
+                      <p className="text-sm text-muted-foreground">
+                        {t("envaccess.dialog.everyone")}
+                      </p>
+                    ) : (
+                      <WhoCombobox
+                        id="grant-who"
+                        candidates={candidates.data ?? { users: null, teams: null }}
+                        value={who}
+                        onChange={setWho}
+                        disabled={pending}
+                      />
+                    )}
+                  </div>
+                  <p className="text-sm font-medium break-words">
+                    {t("envaccess.dialog.onEnvironment", { environment: environment.name })}
+                  </p>
+                </>
+              )}
               {instanceAdmin ? null : (
                 <Alert role="status">
                   <AlertDescription>
@@ -318,13 +354,12 @@ function GrantForm({
           <ImpactPreview
             // A different role or set of extras is a different question.
             key={`${role}:${sentExtras.join(",")}`}
-            load={() =>
-              previewGrantImpact(subject.type, subject.id, grant.id, {
-                op: "update",
-                role,
-                extras: sentExtras,
-              })
-            }
+            load={() => {
+              const change = { op: "update" as const, role, extras: sentExtras };
+              return envMode && environment
+                ? previewEnvAccessImpact(environment.id, grant.id, change)
+                : previewGrantImpact(subject.type, subject.id, grant.id, change);
+            }}
             onReadyChange={setReady}
           />
         ) : null}

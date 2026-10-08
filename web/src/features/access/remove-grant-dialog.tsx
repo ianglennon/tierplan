@@ -3,6 +3,7 @@
 
 import { useRef, useState } from "react";
 
+import { previewEnvAccessImpact, removeEnvAccess } from "@/api/envaccess";
 import { type Grant, previewGrantImpact, removeGrant } from "@/api/grants";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -16,7 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import type { GrantSubject } from "@/features/access/grant-dialog";
+import type { GrantEnvironment, GrantSubject } from "@/features/access/grant-dialog";
 import { ImpactPreview } from "@/features/access/impact-preview";
 import { useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -27,6 +28,10 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 
 interface RemoveGrantDialogProps {
   subject: GrantSubject;
+  // Set when the dialog is opened from an environment's Access tab: the removal
+  // and its preview then go through that environment's routes, which an env
+  // Admin may use and which cannot reach any other environment.
+  environment?: GrantEnvironment;
   // The grant to remove, or null while the dialog is closed.
   grant: Grant | null;
   onClose: () => void;
@@ -44,6 +49,7 @@ interface RemoveGrantDialogProps {
 // failure stays inside the dialog.
 export function RemoveGrantDialog({
   subject,
+  environment: tab,
   grant,
   onClose,
   onDone,
@@ -73,7 +79,9 @@ export function RemoveGrantDialog({
     setPending(true);
     setError(null);
     try {
-      const result = await removeGrant(subject.type, subject.id, grant.id);
+      const result = tab
+        ? await removeEnvAccess(tab.id, grant.id)
+        : await removeGrant(subject.type, subject.id, grant.id);
       if (result.kind === "ok") {
         toastSuccess(t("grants.remove.done"));
         onDone();
@@ -116,7 +124,11 @@ export function RemoveGrantDialog({
         ) : null}
         {grant ? (
           <ImpactPreview
-            load={() => previewGrantImpact(subject.type, subject.id, grant.id, { op: "delete" })}
+            load={() =>
+              tab
+                ? previewEnvAccessImpact(tab.id, grant.id, { op: "delete" })
+                : previewGrantImpact(subject.type, subject.id, grant.id, { op: "delete" })
+            }
             onReadyChange={setReady}
           />
         ) : null}
