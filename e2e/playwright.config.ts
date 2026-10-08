@@ -14,7 +14,8 @@ const chromium = { ...devices["Desktop Chrome"], baseURL };
 // The agent project adds a second environment and revokes it, so the specs before
 // it assume the one environment they started with. The access project follows it
 // because it needs that second, revoked environment as the one a new user must not
-// see.
+// see. The backup project runs last: its restore replaces the state of the shared
+// server, which signs everyone out and drops everything made after the backup.
 const order = [
   "setup-and-login",
   "dashboard",
@@ -23,6 +24,8 @@ const order = [
   "settings",
   "agent",
   "access",
+  "responsive",
+  "backup",
 ] as const;
 
 export default defineConfig({
