@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke upgrade-smoke
+.PHONY: web build gen gen-check tidy-check test test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -334,6 +334,16 @@ upgrade-smoke: e2e-image agent-image
 	(cd $(UPGRADE_BASE_DIR) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o $(CURDIR)/$(UPGRADE_BASE_CTX)/linux/amd64/bayplan ./cmd/bayplan); \
 	docker buildx build --platform linux/amd64 -f $(UPGRADE_BASE_DIR)/Dockerfile -t bayplan:base --load $(UPGRADE_BASE_CTX); \
 	BASE_IMAGE=bayplan:base HEAD_IMAGE=bayplan:e2e AGENT_IMAGE=bayplan-agent:dev scripts/upgrade-smoke.sh
+
+# The restore-over-a-running-container proof (D-30, PLAT-03, RESEARCH A3/A5): in the
+# shipped image with no restart policy, restore a backup through the web UI's API and
+# check that Bayplan re-executed itself with PID 1 intact (same State.Pid, StartedAt and
+# RestartCount), the restored accounts sign in, an account made after the backup does not,
+# and the audit chain verifies. RESTART_MODE=exit proves the fallback (the process
+# exits and a restart policy starts it) with the same checks. One PASS or FAIL line per
+# check; the last line is RESTORE SMOKE PASS. Needs Docker, curl, jq and tar.
+restore-smoke: e2e-image
+	scripts/restore-smoke.sh
 
 # The clipboard fallback in a real Chromium on an insecure origin (http://bayplan.test
 # mapped to 127.0.0.1, so there is no navigator.clipboard), against the real

@@ -280,6 +280,18 @@ expect pass "upgrade-smoke-target" mk upgrade-smoke UPGRADE_BASE_REF=0123abc
 expect_out "upgrade-smoke-target builds the base from a worktree" "git worktree add --detach .devdata/upgrade-base '0123abc'"
 expect_out "upgrade-smoke-target runs the script" "scripts/upgrade-smoke.sh"
 
+# --- Restore smoke (D-30, RESEARCH A3/A5): the script parses, refuses to run without
+# its image or with an unknown restart mode, and the make target builds the image first.
+# The Docker run itself is proved by `make restore-smoke`, not here.
+expect pass "restore-smoke-syntax" bash -n scripts/restore-smoke.sh
+expect fail "restore-smoke-missing-image" env IMAGE=bayplan-no-such-image:none scripts/restore-smoke.sh
+expect_out "restore-smoke-missing-image says so" "RESTORE SMOKE FAIL"
+expect fail "restore-smoke-bad-mode" env RESTART_MODE=reboot scripts/restore-smoke.sh
+expect_out "restore-smoke-bad-mode names the setting" "RESTART_MODE must be exec or exit"
+expect pass "restore-smoke-target" mk restore-smoke
+expect_out "restore-smoke-target builds the image" "bayplan:e2e"
+expect_out "restore-smoke-target runs the script" "scripts/restore-smoke.sh"
+
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"
   exit 1

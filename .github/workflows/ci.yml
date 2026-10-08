@@ -11,7 +11,8 @@
 # runs it behind Caddy at a subpath with a real agent and adds proxy-smoke). The swarm
 # job (Phase 2) runs the multi-node suite on Engines 24 and 29. Plan 02-34 adds
 # make e2e-copy (the clipboard fallback on an insecure origin) to the e2e job.
-# Plan 03-21 adds the upgrade job (an image swap on one volume, D-34), which edge waits for.
+# Plan 03-21 adds the upgrade job (an image swap on one volume, D-34), which edge waits for;
+# plan 03-25 adds a restore over a running container to it (D-30).
 name: CI
 
 on:
@@ -380,6 +381,15 @@ jobs:
             exit 0
           fi
           make upgrade-smoke UPGRADE_BASE_REF="${base}"
+      # Plan 03-25 (D-30, RESEARCH A3/A5): restore a backup over a running container
+      # of this commit's image, with no restart policy, and check that PID 1 survived
+      # the re-exec (about 1 minute; builds the image if it is not already there).
+      - name: Restore over a running container
+        run: make restore-smoke
+      # The fallback for an image where exec does not work: the process exits 0 and a
+      # restart policy starts it. Same checks, the image from the step above.
+      - name: Restore over a running container, exit mode
+        run: RESTART_MODE=exit scripts/restore-smoke.sh
 
   # D-75: every push to main publishes ghcr.io/ianglennon/bayplan:edge for amd64
   # and arm64, signed with keyless cosign. It is the only tag a push can move;
