@@ -1733,6 +1733,43 @@
         ],
         "type": "object"
       },
+      "GrantChangeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "extras": {
+            "description": "The extra permissions the grant would be saved with, for update",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "op": {
+            "description": "The change to preview: delete the grant, or save it with a new role and extras",
+            "enum": [
+              "delete",
+              "update"
+            ],
+            "type": "string"
+          },
+          "role": {
+            "description": "The role the grant would be saved with, for update",
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "type": "object"
+      },
       "GrantInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -6517,6 +6554,138 @@
         ]
       }
     },
+    "/api/teams/{teamId}/grants/{grantId}": {
+      "delete": {
+        "description": "As deleteUserGrant, for a grant made to a team: every member loses what it gave them.",
+        "operationId": "deleteTeamGrant",
+        "parameters": [
+          {
+            "description": "The team's ID",
+            "in": "path",
+            "name": "teamId",
+            "required": true,
+            "schema": {
+              "description": "The team's ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The grant's ID",
+            "in": "path",
+            "name": "grantId",
+            "required": true,
+            "schema": {
+              "description": "The grant's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Remove a team's grant",
+        "tags": [
+          "grants"
+        ]
+      }
+    },
+    "/api/teams/{teamId}/grants/{grantId}/impact": {
+      "post": {
+        "description": "As previewUserGrantImpact, for a grant made to a team: the impact is on every member.",
+        "operationId": "previewTeamGrantImpact",
+        "parameters": [
+          {
+            "description": "The team's ID",
+            "in": "path",
+            "name": "teamId",
+            "required": true,
+            "schema": {
+              "description": "The team's ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The grant's ID",
+            "in": "path",
+            "name": "grantId",
+            "required": true,
+            "schema": {
+              "description": "The grant's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantChangeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview what removing or changing a team's grant takes away",
+        "tags": [
+          "grants"
+        ]
+      }
+    },
     "/api/teams/{teamId}/impact": {
       "post": {
         "description": "Works out, with the same evaluator that enforces access, who would lose which environment access if the team were deleted (op delete) or a member removed (op remove_member, with userId). The change is applied inside a transaction that is rolled back, so nothing is written and nothing is audited. Confirming recomputes the impact when it commits. A remove_member for a user who is not in the team answers 404 member_not_found.",
@@ -7146,6 +7315,138 @@
           }
         },
         "summary": "Give a user a role on an environment",
+        "tags": [
+          "grants"
+        ]
+      }
+    },
+    "/api/users/{userId}/grants/{grantId}": {
+      "delete": {
+        "description": "Removes the grant. The user loses the access it gave on their next request and keeps every other grant, and the automations they own that no longer qualify pause. The answer lists who lost which access, worked out inside the same step. Audited as one access.revoked entry carrying the subject, role, scope, impact_count and impact. A grant that is not the user's answers 404 grant_not_found.",
+        "operationId": "deleteUserGrant",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The grant's ID",
+            "in": "path",
+            "name": "grantId",
+            "required": true,
+            "schema": {
+              "description": "The grant's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Remove a user's grant",
+        "tags": [
+          "grants"
+        ]
+      }
+    },
+    "/api/users/{userId}/grants/{grantId}/impact": {
+      "post": {
+        "description": "Works out, with the same evaluator that enforces access, who would lose which environment access if the grant were deleted (op delete) or saved with a lower role (op update, with role and extras). The change is applied inside a transaction that is rolled back, so nothing is written and nothing is audited. A grant that is not the user's answers 404 grant_not_found.",
+        "operationId": "previewUserGrantImpact",
+        "parameters": [
+          {
+            "description": "The user's ID",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "description": "The user's ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The grant's ID",
+            "in": "path",
+            "name": "grantId",
+            "required": true,
+            "schema": {
+              "description": "The grant's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantChangeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview what removing or changing a user's grant takes away",
         "tags": [
           "grants"
         ]

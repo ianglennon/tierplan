@@ -911,6 +911,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/teams/{teamId}/grants/{grantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a team's grant
+         * @description As deleteUserGrant, for a grant made to a team: every member loses what it gave them.
+         */
+        delete: operations["deleteTeamGrant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{teamId}/grants/{grantId}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview what removing or changing a team's grant takes away
+         * @description As previewUserGrantImpact, for a grant made to a team: the impact is on every member.
+         */
+        post: operations["previewTeamGrantImpact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/teams/{teamId}/impact": {
         parameters: {
             query?: never;
@@ -1097,6 +1137,46 @@ export interface paths {
          */
         put: operations["putUserGrant"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/grants/{grantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a user's grant
+         * @description Removes the grant. The user loses the access it gave on their next request and keeps every other grant, and the automations they own that no longer qualify pause. The answer lists who lost which access, worked out inside the same step. Audited as one access.revoked entry carrying the subject, role, scope, impact_count and impact. A grant that is not the user's answers 404 grant_not_found.
+         */
+        delete: operations["deleteUserGrant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{userId}/grants/{grantId}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview what removing or changing a user's grant takes away
+         * @description Works out, with the same evaluator that enforces access, who would lose which environment access if the grant were deleted (op delete) or saved with a lower role (op update, with role and extras). The change is applied inside a transaction that is rolled back, so nothing is written and nothing is audited. A grant that is not the user's answers 404 grant_not_found.
+         */
+        post: operations["previewUserGrantImpact"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1986,6 +2066,20 @@ export interface components {
              * @enum {string}
              */
             subjectType: "user" | "team";
+        };
+        GrantChangeBody: {
+            /** @description The extra permissions the grant would be saved with, for update */
+            extras?: string[] | null;
+            /**
+             * @description The change to preview: delete the grant, or save it with a new role and extras
+             * @enum {string}
+             */
+            op: "delete" | "update";
+            /**
+             * @description The role the grant would be saved with, for update
+             * @enum {string}
+             */
+            role?: "viewer" | "operator" | "admin";
         };
         GrantInputBody: {
             /** @description The environment, for scope env */
@@ -4655,6 +4749,80 @@ export interface operations {
             };
         };
     };
+    deleteTeamGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewTeamGrantImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The team's ID */
+                teamId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantChangeBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     previewTeamImpact: {
         parameters: {
             query?: never;
@@ -5051,6 +5219,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GrantBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteUserGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewUserGrantImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's ID */
+                userId: string;
+                /** @description The grant's ID */
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantChangeBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImpactBody"];
                 };
             };
             /** @description Error */

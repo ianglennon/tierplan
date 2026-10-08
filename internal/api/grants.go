@@ -105,6 +105,43 @@ type PutTeamGrantInput struct {
 	Body      GrantInputBody
 }
 
+// GrantChangeBody is a change to a grant to preview.
+type GrantChangeBody struct {
+	Op     string   `json:"op" enum:"delete,update" doc:"The change to preview: delete the grant, or save it with a new role and extras"`
+	Role   string   `json:"role,omitempty" enum:"viewer,operator,admin" doc:"The role the grant would be saved with, for update"`
+	Extras []string `json:"extras,omitempty" maxItems:"8" doc:"The extra permissions the grant would be saved with, for update"`
+}
+
+// PreviewUserGrantInput is a change to one of a user's grants to preview.
+type PreviewUserGrantInput struct {
+	UserID  string `path:"userId" doc:"The user's ID"`
+	GrantID string `path:"grantId" doc:"The grant's ID"`
+	Body    GrantChangeBody
+}
+
+// PreviewTeamGrantInput is a change to one of a team's grants to preview.
+type PreviewTeamGrantInput struct {
+	TeamID  string `path:"teamId" doc:"The team's ID"`
+	GrantID string `path:"grantId" doc:"The grant's ID"`
+	Body    GrantChangeBody
+}
+
+// DeleteUserGrantInput names one of a user's grants to remove.
+type DeleteUserGrantInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	UserID    string `path:"userId" doc:"The user's ID"`
+	GrantID   string `path:"grantId" doc:"The grant's ID"`
+}
+
+// DeleteTeamGrantInput names one of a team's grants to remove.
+type DeleteTeamGrantInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	TeamID    string `path:"teamId" doc:"The team's ID"`
+	GrantID   string `path:"grantId" doc:"The grant's ID"`
+}
+
 func grantBodyOf(g access.Grant) GrantBody {
 	b := GrantBody{
 		ID: g.ID, SubjectType: g.SubjectType, SubjectID: g.SubjectID, Scope: access.ScopeAll,
@@ -175,6 +212,8 @@ func grantError(d AccessDeps, subjectType, op string, err error) error {
 		return validationProblem("body.role", "invalid_role")
 	case errors.Is(err, access.ErrInvalidScope):
 		return validationProblem("body.scope", "invalid_scope")
+	case errors.Is(err, access.ErrInvalidGrantOp):
+		return validationProblem("body.op", "invalid_op")
 	case errors.Is(err, access.ErrEnvironmentNotFound):
 		return httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
 	case errors.Is(err, access.ErrGrantNotFound):
@@ -218,6 +257,29 @@ func registerGrants(r *httpx.Router, d AccessDeps) {
 			status = http.StatusCreated
 		}
 		return &PutGrantOutput{CacheControl: "no-store", Status: status, Body: grantBodyOf(g)}, nil
+	}
+	preview := func(ctx context.Context, subjectType, subjectID, grantID string, f GrantChangeBody) (*ImpactOutput, error) {
+		change := access.GrantChange{Op: f.Op, Role: f.Role, Extras: f.Extras}
+		if f.Op == access.OpUpdateGrant && f.Role == "" {
+			return nil, validationProblem("body.role", "required for update")
+		}
+		rows, err := d.Access.GrantImpact(ctx, subjectType, subjectID, grantID, change)
+		if err != nil {
+			return nil, grantError(d, subjectType, "preview grant impact", err)
+		}
+		return &ImpactOutput{CacheControl: "no-store", Body: impactBodyOf(rows)}, nil
+	}
+	remove := func(ctx context.Context, subjectType, subjectID, grantID, ua string) (*ImpactOutput, error) {
+		p, err := signedIn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := d.Access.DeleteGrant(ctx, p.AuditActor(), subjectType, subjectID, grantID,
+			access.WithOrigin(httpx.ClientIP(ctx), ua))
+		if err != nil {
+			return nil, grantError(d, subjectType, "delete grant", err)
+		}
+		return &ImpactOutput{CacheControl: "no-store", Body: impactBodyOf(rows)}, nil
 	}
 
 	httpx.Register(r, huma.Operation{
@@ -264,6 +326,34 @@ func registerGrants(r *httpx.Router, d AccessDeps) {
 	})
 
 	httpx.Register(r, huma.Operation{
+		OperationID: "previewUserGrantImpact",
+		Method:      http.MethodPost,
+		Path:        "/api/users/{userId}/grants/{grantId}/impact",
+		Summary:     "Preview what removing or changing a user's grant takes away",
+		Description: "Works out, with the same evaluator that enforces access, who would lose which environment access if " +
+			"the grant were deleted (op delete) or saved with a lower role (op update, with role and extras). The change is " +
+			"applied inside a transaction that is rolled back, so nothing is written and nothing is audited. A grant " +
+			"that is not the user's answers 404 grant_not_found.",
+		Tags: []string{"grants"},
+	}, usersManage, func(ctx context.Context, in *PreviewUserGrantInput) (*ImpactOutput, error) {
+		return preview(ctx, access.SubjectUser, in.UserID, in.GrantID, in.Body)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "deleteUserGrant",
+		Method:      http.MethodDelete,
+		Path:        "/api/users/{userId}/grants/{grantId}",
+		Summary:     "Remove a user's grant",
+		Description: "Removes the grant. The user loses the access it gave on their next request and keeps every other grant, " +
+			"and the automations they own that no longer qualify pause. The answer lists who lost which access, worked out " +
+			"inside the same step. Audited as one access.revoked entry carrying the subject, role, scope, impact_count and " +
+			"impact. A grant that is not the user's answers 404 grant_not_found.",
+		Tags: []string{"grants"},
+	}, usersManage, func(ctx context.Context, in *DeleteUserGrantInput) (*ImpactOutput, error) {
+		return remove(ctx, access.SubjectUser, in.UserID, in.GrantID, in.UserAgent)
+	})
+
+	httpx.Register(r, huma.Operation{
 		OperationID: "listTeamGrants",
 		Method:      http.MethodGet,
 		Path:        "/api/teams/{teamId}/grants",
@@ -289,5 +379,27 @@ func registerGrants(r *httpx.Router, d AccessDeps) {
 		Tags: []string{"grants"},
 	}, teamsManage, func(ctx context.Context, in *PutTeamGrantInput) (*PutGrantOutput, error) {
 		return put(ctx, access.SubjectTeam, in.TeamID, in.Body, in.UserAgent)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewTeamGrantImpact",
+		Method:      http.MethodPost,
+		Path:        "/api/teams/{teamId}/grants/{grantId}/impact",
+		Summary:     "Preview what removing or changing a team's grant takes away",
+		Description: "As previewUserGrantImpact, for a grant made to a team: the impact is on every member.",
+		Tags:        []string{"grants"},
+	}, teamsManage, func(ctx context.Context, in *PreviewTeamGrantInput) (*ImpactOutput, error) {
+		return preview(ctx, access.SubjectTeam, in.TeamID, in.GrantID, in.Body)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "deleteTeamGrant",
+		Method:      http.MethodDelete,
+		Path:        "/api/teams/{teamId}/grants/{grantId}",
+		Summary:     "Remove a team's grant",
+		Description: "As deleteUserGrant, for a grant made to a team: every member loses what it gave them.",
+		Tags:        []string{"grants"},
+	}, teamsManage, func(ctx context.Context, in *DeleteTeamGrantInput) (*ImpactOutput, error) {
+		return remove(ctx, access.SubjectTeam, in.TeamID, in.GrantID, in.UserAgent)
 	})
 }

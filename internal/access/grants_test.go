@@ -412,11 +412,12 @@ func TestGrantImpactEqualsWhatTheChangeProducesAndTheDatabaseIsUnchangedByAsking
 		}
 		return strings.Join(out, "; ")
 	}
-	// alice falls to her own Viewer, bob to nothing; a downgrade to Viewer takes bob to Viewer, alice nowhere.
+	// Removing the team's Operator leaves alice her own Viewer and bob nothing; lowering it
+	// to Viewer takes both of them from Operator to Viewer.
 	if got, want := describe(del), "alice env-a operator>viewer; bob env-a operator>none"; got != want {
 		t.Fatalf("delete impact = %q, want %q", got, want)
 	}
-	if got, want := describe(down), "bob env-a operator>viewer"; got != want {
+	if got, want := describe(down), "alice env-a operator>viewer; bob env-a operator>viewer"; got != want {
 		t.Fatalf("downgrade impact = %q, want %q", got, want)
 	}
 

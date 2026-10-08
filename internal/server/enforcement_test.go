@@ -80,6 +80,7 @@ func newEnforcement(t *testing.T) *enforcement {
 func (e *enforcement) send(a servertest.Archetype, method, path string, allowed bool) *httptest.ResponseRecorder {
 	e.t.Helper()
 	servertest.EnsureEnvironments(e.t, e.srv.Store(), envA, envB)
+	servertest.EnsureGrants(e.t, e.srv.Store(), envA, envB)
 	timeout := 10 * time.Second
 	if allowed {
 		timeout = 400 * time.Millisecond

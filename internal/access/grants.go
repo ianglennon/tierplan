@@ -93,6 +93,24 @@ type Grant struct {
 	CreatedAt time.Time
 }
 
+// GrantChange is a change to a grant that can reduce access and so is previewed
+// before it is confirmed (D-27): Op is OpDeleteGrant, or OpUpdateGrant with the
+// Role and Extras it would be saved with.
+type GrantChange struct {
+	Op     string
+	Role   string
+	Extras []string
+}
+
+// The kinds of GrantChange.
+const (
+	OpDeleteGrant = "delete"
+	OpUpdateGrant = "update"
+)
+
+// ErrInvalidGrantOp is a GrantChange that is not one of the kinds above.
+var ErrInvalidGrantOp = errors.New("access: that is not a grant change that can be previewed")
+
 // cleanExtras checks a grant's extras against the registry and the role and
 // returns them sorted and without repeats. Every extra must be a permission the
 // registry marks Extra at environment scope; an Admin may carry none (it holds
@@ -210,6 +228,19 @@ func applyGrantEdit(ctx context.Context, q *sqlc.Queries, id, role string, extra
 		if err := q.InsertAssignmentExtra(ctx, sqlc.InsertAssignmentExtraParams{AssignmentID: id, Permission: x}); err != nil {
 			return fmt.Errorf("access: add extra: %w", err)
 		}
+	}
+	return nil
+}
+
+// applyGrantDelete is the change a removal makes, shared by the preview and the
+// real thing. A grant that is gone is ErrGrantNotFound.
+func applyGrantDelete(ctx context.Context, q *sqlc.Queries, id string) error {
+	n, err := q.DeleteAssignment(ctx, id)
+	if err != nil {
+		return fmt.Errorf("access: delete grant: %w", err)
+	}
+	if n == 0 {
+		return ErrGrantNotFound
 	}
 	return nil
 }
@@ -387,4 +418,103 @@ func (s *Service) ListGrants(ctx context.Context, subjectType, subjectID string)
 		})
 	}
 	return out, nil
+}
+
+// grantOfSubjectTx reads a grant and checks it belongs to the subject: a grant
+// that is gone, or is another subject's, is ErrGrantNotFound.
+func grantOfSubjectTx(ctx context.Context, q *sqlc.Queries, subjectType, subjectID, grantID string) (sqlc.RoleAssignment, error) {
+	a, err := q.GetAssignment(ctx, grantID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (a.PrincipalType != subjectType || a.PrincipalID != subjectID)) {
+		return sqlc.RoleAssignment{}, ErrGrantNotFound
+	}
+	if err != nil {
+		return sqlc.RoleAssignment{}, fmt.Errorf("access: read grant: %w", err)
+	}
+	return a, nil
+}
+
+// GrantImpact previews a change to one of a subject's grants: who would lose which
+// environment access if it were removed (OpDeleteGrant) or saved with a new role
+// and extras (OpUpdateGrant). It applies the change in a write transaction with
+// the same function the real change uses, reads the access of everyone it
+// reaches through the real evaluator and rolls back, so nothing is written. A
+// grant that is not the subject's is ErrGrantNotFound.
+func (s *Service) GrantImpact(ctx context.Context, subjectType, subjectID, grantID string, change GrantChange) ([]ImpactRow, error) {
+	var role rbac.Role
+	var extras []string
+	switch change.Op {
+	case OpDeleteGrant:
+	case OpUpdateGrant:
+		var ok bool
+		if role, ok = rbac.ParseRole(change.Role); !ok {
+			return nil, ErrInvalidRole
+		}
+		var err error
+		if extras, err = cleanExtras(role, change.Extras); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, ErrInvalidGrantOp
+	}
+	return s.impact(ctx, func(q *sqlc.Queries) ([]string, func(*sql.Tx, *sqlc.Queries) error, error) {
+		target, err := subjectTx(ctx, q, subjectType, subjectID)
+		if err != nil {
+			return nil, nil, err
+		}
+		a, err := grantOfSubjectTx(ctx, q, subjectType, subjectID, grantID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if change.Op == OpDeleteGrant {
+			return target.users, func(_ *sql.Tx, q *sqlc.Queries) error { return applyGrantDelete(ctx, q, a.ID) }, nil
+		}
+		return target.users, func(_ *sql.Tx, q *sqlc.Queries) error { return applyGrantEdit(ctx, q, a.ID, role.ID(), extras) }, nil
+	})
+}
+
+// DeleteGrant removes one of a subject's grants, with one audit entry
+// (access.revoked) that carries the role and scope it had and who lost which
+// access, computed inside the same transaction (so it is what this removal does,
+// not what an earlier preview saw). The automations of every user the grant
+// reached are rechecked in the same transaction. It returns the impact. A grant
+// that is not the subject's is ErrGrantNotFound and nothing is written.
+func (s *Service) DeleteGrant(ctx context.Context, actor audit.Actor, subjectType, subjectID, grantID string, opts ...Option) ([]ImpactRow, error) {
+	o := optionsOf(opts)
+	tx, err := s.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("access: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.Store.Q.WithTx(tx)
+
+	target, err := subjectTx(ctx, q, subjectType, subjectID)
+	if err != nil {
+		return nil, err
+	}
+	a, err := grantOfSubjectTx(ctx, q, subjectType, subjectID, grantID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.impactTx(ctx, tx, q, target.users, func(_ *sql.Tx, q *sqlc.Queries) error {
+		return applyGrantDelete(ctx, q, a.ID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.RecheckOwnedTx(ctx, tx, q, target.users, actor); err != nil {
+		return nil, err
+	}
+	details := impactDetails(rows)
+	details["subject_type"], details["subject"] = subjectType, target.name
+	details["role"], details["scope"] = a.RoleID, scopeLabel(a.EnvID.String)
+	if err := s.Audit.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: audit.ActionAccessRevoked, TargetType: subjectType, TargetID: subjectID, EnvID: a.EnvID.String,
+		Result: audit.ResultSuccess, IP: o.ip, UserAgent: o.userAgent, Details: details,
+	}); err != nil {
+		return nil, fmt.Errorf("access: audit access revoked: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("access: commit: %w", err)
+	}
+	return rows, nil
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -761,10 +762,16 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 	if _, err := q.DeleteEnvironment(ctx, id); err != nil {
 		return fmt.Errorf("delete environment: %w", err)
 	}
+	// No grant outlives its environment: the assignments on it (and their extras)
+	// and the automations registered on it go in the same transaction.
+	grants, err := deleteEnvironmentGrants(ctx, q, id)
+	if err != nil {
+		return err
+	}
 	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
 		Actor: actor, Action: audit.ActionEnvironmentRemoved, TargetType: targetEnvironment, TargetID: id,
 		EnvID: id, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
-		Details: map[string]string{"name": row.Name, "kind": row.Kind},
+		Details: map[string]string{"name": row.Name, "kind": row.Kind, "grants": strconv.FormatInt(grants, 10)},
 	}); err != nil {
 		return fmt.Errorf("audit environment removed: %w", err)
 	}
@@ -793,6 +800,21 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 		s.clusters.Forget(id)
 	}
 	return nil
+}
+
+// deleteEnvironmentGrants removes the grants and the owned-automation rows that
+// belong to an environment which is going away (removed, or retired by a fold),
+// and returns how many assignments went. The assignments have no foreign key to
+// the environment, so this must run in every transaction that deletes one.
+func deleteEnvironmentGrants(ctx context.Context, q *sqlc.Queries, envID string) (int64, error) {
+	grants, err := q.DeleteEnvironmentAssignments(ctx, sql.NullString{String: envID, Valid: true})
+	if err != nil {
+		return 0, fmt.Errorf("delete the environment's grants: %w", err)
+	}
+	if _, err := q.DeleteEnvironmentOwnedResources(ctx, envID); err != nil {
+		return 0, fmt.Errorf("delete the environment's owned automations: %w", err)
+	}
+	return grants, nil
 }
 
 // revokeAgentsOf disables an environment's join token and audits agent.revoked for

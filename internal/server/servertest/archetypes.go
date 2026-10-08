@@ -142,20 +142,6 @@ func SeedArchetypes(t testing.TB, st *store.Store, envA, envB string) map[Archet
 			t.Fatalf("servertest: %s: %v", q, err)
 		}
 	}
-	assign := func(userID string, role rbac.Role, envID string, extras ...rbac.Perm) {
-		t.Helper()
-		var env any
-		if envID != "" {
-			env = envID
-		}
-		id := "ra-" + userID + "-" + envID
-		exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
-VALUES (?, 'user', ?, ?, ?, 1) ON CONFLICT DO NOTHING`, id, userID, role.ID(), env)
-		for _, x := range extras {
-			exec(`INSERT INTO assignment_extras (assignment_id, permission) VALUES (?, ?) ON CONFLICT DO NOTHING`, id, string(x))
-		}
-	}
-
 	ids := map[Archetype]string{}
 	for _, a := range Archetypes() {
 		ids[a] = UserID(a)
@@ -171,6 +157,42 @@ VALUES (?, ?, ?, 1, 1, 1) ON CONFLICT DO NOTHING`, id, id, hash)
 		if g.Disabled {
 			exec(`UPDATE users SET disabled = 1 WHERE id = ?`, id)
 		}
+	}
+	EnsureGrants(t, st, envA, envB)
+	return ids
+}
+
+// EnsureGrants gives every archetype its grants on environments A and B (and on
+// all of them) when they are missing. Removing an environment, or folding it away,
+// deletes the grants on it, so the enforcement test calls this between requests
+// like EnsureEnvironments: one allowed call that removes environment A cannot
+// change what the next is expected to see. It is harmless to run twice.
+func EnsureGrants(t testing.TB, st *store.Store, envA, envB string) {
+	t.Helper()
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := st.Write.Exec(q, args...); err != nil {
+			t.Fatalf("servertest: %s: %v", q, err)
+		}
+	}
+	assign := func(userID string, role rbac.Role, envID string, extras ...rbac.Perm) {
+		t.Helper()
+		var env any
+		if envID != "" {
+			env = envID
+		}
+		id := "ra-" + userID + "-" + envID
+		exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)
+VALUES (?, 'user', ?, ?, ?, 1) ON CONFLICT DO NOTHING`, id, userID, role.ID(), env)
+		for _, x := range extras {
+			exec(`INSERT INTO assignment_extras (assignment_id, permission) VALUES (?, ?) ON CONFLICT DO NOTHING`, id, string(x))
+		}
+	}
+	for _, a := range Archetypes() {
+		if a == ArchetypeAnonymous {
+			continue
+		}
+		g, id := GrantsOf(a), UserID(a)
 		if g.OnA != rbac.RoleNone {
 			assign(id, g.OnA, envA, g.Extras...)
 		}
@@ -181,7 +203,6 @@ VALUES (?, ?, ?, 1, 1, 1) ON CONFLICT DO NOTHING`, id, id, hash)
 			assign(id, g.OnAll, "")
 		}
 	}
-	return ids
 }
 
 // SessionFor opens a fresh session for the user straight in the store and returns
