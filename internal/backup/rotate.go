@@ -64,7 +64,8 @@ const (
 // (app_meta active_key_id), or "" when it has never been rotated.
 func ActiveKeyID(ctx context.Context, st *store.Store) (string, error) {
 	id, err := st.RQ.GetMeta(ctx, vault.MetaActiveKeyID)
-	if errors.Is(err, sql.ErrNoRows) {
+	// A database that is not migrated yet has no app_meta table, and so no rotation.
+	if errors.Is(err, sql.ErrNoRows) || (err != nil && strings.Contains(err.Error(), "no such table")) {
 		return "", nil
 	}
 	if err != nil {
@@ -87,11 +88,7 @@ func StoredActiveKeyID(ctx context.Context, dataDir string) (string, error) {
 		return "", err
 	}
 	defer func() { _ = st.Close() }()
-	id, err := ActiveKeyID(ctx, st)
-	if err != nil && strings.Contains(err.Error(), "no such table") {
-		return "", nil
-	}
-	return id, err
+	return ActiveKeyID(ctx, st)
 }
 
 // RotateKey replaces the master key (D-33). Bayplan must be stopped: the caller

@@ -194,6 +194,33 @@ func WithSelfContainerID(id string) Option {
 	return func(o *buildOptions) { o.selfContainerID = id }
 }
 
+// checkActiveKey refuses to start on a master key other than the one the
+// database was last rotated to (app_meta active_key_id). A database that was
+// never rotated names none and is not checked. When the key comes from
+// BAYPLAN_ENCRYPTION_KEY the usual cause is a variable that still holds the old
+// key, and bayplan.key.new holds the one to use.
+func checkActiveKey(ctx context.Context, st *store.Store, vlt *vault.Vault, dataDir string) error {
+	active, err := backup.ActiveKeyID(ctx, st)
+	if err != nil {
+		return fmt.Errorf("read the active key: %w", err)
+	}
+	if active == "" || active == vlt.KeyID() {
+		return nil
+	}
+	if vlt.KeySource() == "env" {
+		newFile := filepath.Join(dataDir, vault.NewKeyFile)
+		if key, rerr := vault.ReadKeyFile(dataDir, vault.NewKeyFile); rerr == nil && vault.KeyIDOf(key) == active {
+			return fmt.Errorf("the master key was rotated and BAYPLAN_ENCRYPTION_KEY still holds the old one (%s). "+
+				"Set BAYPLAN_ENCRYPTION_KEY to the contents of %s, restart Bayplan, then delete the file", vlt.KeyID(), newFile)
+		}
+		return fmt.Errorf("the master key was rotated to %s but BAYPLAN_ENCRYPTION_KEY holds %s: set it to the key that "+
+			"`bayplan key rotate` wrote to %s", active, vlt.KeyID(), newFile)
+	}
+	return fmt.Errorf("the database was rotated to the master key %s but %s holds %s: restore the key file that "+
+		"matches the database (the previous one is kept as %s after a rotation)",
+		active, filepath.Join(dataDir, vault.KeyFile), vlt.KeyID(), vault.OldKeyFile)
+}
+
 // Build prepares the data directory, loads (or on first start generates) the
 // master key, opens and migrates the database and assembles the server. It logs the effective configuration with secrets
 // redacted. A migration failure (or a database newer than this binary) is
@@ -265,6 +292,12 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	st, err := store.Open(ctx, info.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
+	}
+	// A database rotated to another key cannot be opened with this one, so say
+	// so before anything is migrated or written (D-33).
+	if err := checkActiveKey(ctx, st, vlt, info.Path); err != nil {
+		_ = st.Close()
+		return nil, err
 	}
 	res, err := store.Migrate(ctx, st, store.MigrateOptions{
 		AppVersion: buildinfo.Get().Version,
