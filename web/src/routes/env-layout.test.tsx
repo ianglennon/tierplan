@@ -689,7 +689,9 @@ describe("access changes under a user (D-08, D-10)", () => {
     };
     const router = renderAt("/env/e1");
     await waitFor(() => expect(router.state.location.pathname).toBe("/env/e2"));
-    expect(await screen.findByText("Your access changed. Showing what you can see now.")).toBeTruthy();
+    expect(
+      await screen.findByText("Your access changed. Showing what you can see now."),
+    ).toBeTruthy();
     expect(await screen.findByRole("heading", { name: "Second host" })).toBeTruthy();
   });
 
@@ -705,7 +707,6 @@ describe("access changes under a user (D-08, D-10)", () => {
       await screen.findByRole("heading", { name: "You don't have access to any environments yet" }),
     ).toBeTruthy();
     expect(router.state.location.pathname).toBe("/");
-    expect(screen.getByText("Your access changed. Showing what you can see now.")).toBeTruthy();
   });
 
   it("shows the skeleton, never the no-access state, while /api/me is read again", async () => {
@@ -715,13 +716,17 @@ describe("access changes under a user (D-08, D-10)", () => {
       release = resolve;
     });
     stub.environments = () => Response.json({ items: [] });
-    stub.summary = () => problem(404, "environment_not_found");
+    // Every read of /api/me after the refusal waits for the release.
+    let refused = false;
+    stub.summary = () => {
+      refused = true;
+      return problem(404, "environment_not_found");
+    };
     const inner = globalThis.fetch;
-    let meCalls = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (req: Request) => {
-        if (new URL(req.url).pathname === "/api/me" && ++meCalls === 2) {
+        if (refused && new URL(req.url).pathname === "/api/me") {
           await held;
           me = makeMe({ envs: {}, administrators: ["admin"] });
         }

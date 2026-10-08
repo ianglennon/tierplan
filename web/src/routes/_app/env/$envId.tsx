@@ -28,12 +28,14 @@ import {
 import { FullPageState, NoPermission } from "@/components/full-page-state";
 import { useNow } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { EnvEventsProvider } from "@/features/dashboard/events";
 import { AdoptClusterDialog } from "@/features/environments/adopt-cluster-dialog";
 import { EnvDegradedBanner } from "@/features/environments/degraded-banner";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import { isKnownReason, ReasonText } from "@/features/environments/reason-text";
+import { useAccessRefetching } from "@/hooks/use-access-refetch";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatClock, formatRelative } from "@/lib/format";
@@ -258,6 +260,7 @@ function EnvironmentLayout() {
   const summary = useQuery(summaryQuery(envId));
   const environments = useQuery(environmentsQuery);
   useRecordRecent(envId);
+  const accessRefetching = useAccessRefetching();
   const [attempted, setAttempted] = useState<{ envId: string; at: number } | undefined>();
 
   const item = environments.data?.items?.find((e) => e.id === envId);
@@ -309,6 +312,21 @@ function EnvironmentLayout() {
     const stale = shown ? live !== shown : isProblemState(live);
     if (stale) void refetch();
   }, [live, shown, settled, failure, refetch]);
+
+  // The server just refused this environment and the app is reading who the user
+  // is now (D-10). Until it knows, the content is a skeleton: neither "Page not
+  // found" nor the no-access state may flash before the move.
+  if ((failure === "forbidden" || failure === "not_found") && accessRefetching) {
+    return (
+      <output
+        aria-label={t("noaccess.checking")}
+        className="mx-auto flex w-full max-w-7xl flex-col gap-4"
+      >
+        <Skeleton className="h-8 w-48" aria-hidden="true" />
+        <Skeleton className="h-48 w-full" aria-hidden="true" />
+      </output>
+    );
+  }
 
   // A failing environment never breaks the shell or other routes (D-26): only
   // this environment's own pages are replaced by a full-page state.

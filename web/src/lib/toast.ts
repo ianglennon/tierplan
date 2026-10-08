@@ -31,7 +31,8 @@ export function toastSuccessWithAction(message: string, label: string, onClick: 
 }
 
 // toastInfo is a neutral message the person needs time to read, such as why an
-// action is unavailable (D-19). It stays as long as an error does.
-export function toastInfo(message: string): void {
-  toast.info(createElement("span", { role: "status" }, message), { duration: ERROR_TOAST_MS });
+// action is unavailable (D-19). It stays as long as an error does unless the
+// caller gives a shorter time, as a notice that needs no decision does.
+export function toastInfo(message: string, durationMs: number = ERROR_TOAST_MS): void {
+  toast.info(createElement("span", { role: "status" }, message), { duration: durationMs });
 }

@@ -21,6 +21,23 @@ export const api = createClient<paths>({
 // from /api/me (D-36, T-01-56).
 let csrfToken: string | null = null;
 let onUnauthorized: ((path: string) => void) | null = null;
+let onAccessChange: ((kind: AccessChangeKind, path: string) => void) | null = null;
+
+// What a refusal says about the caller's access (D-10): "unseen" is an
+// environment the caller can no longer see (a 404 that looks like a missing
+// one, or a 403 on a read), and "refused" is a change they tried to make that
+// the server would not allow.
+export type AccessChangeKind = "unseen" | "refused";
+
+// The signed-in layout registers the one handler that reacts to a change of
+// access while it is mounted; nothing else does, so nothing outside the signed-in
+// app reacts. The handler is told the path with its query string removed and
+// without the base path.
+export function setAccessChangeHandler(
+  fn: ((kind: AccessChangeKind, path: string) => void) | null,
+): void {
+  onAccessChange = fn;
+}
 
 export function setCsrfToken(token: string | null): void {
   csrfToken = token;
@@ -52,6 +69,53 @@ function isExemptFrom401(requestPath: string): boolean {
   );
 }
 
+// The 403s the server answers for reasons that are not about what the caller may
+// do: a request from the wrong origin, or without a valid CSRF token.
+const NOT_ABOUT_ACCESS: ReadonlySet<string> = new Set(["csrf_failed", "origin_mismatch"]);
+
+// The pages whose 401, 403 and 404 answers are their own business, not a change
+// of access: sign-in, setup, the instance lookup and /api/me itself.
+function isExemptFromAccessChange(pathname: string): boolean {
+  return (
+    pathname === "/api/me" ||
+    pathname === "/api/instance" ||
+    pathname.startsWith("/api/auth/") ||
+    pathname.startsWith("/api/setup/")
+  );
+}
+
+// problemType reads the `type` of a problem+json answer from a copy, so the
+// caller still gets an unread body.
+async function problemType(response: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await response.clone().json();
+    if (typeof body === "object" && body !== null && "type" in body) {
+      return typeof body.type === "string" ? body.type : undefined;
+    }
+  } catch {
+    // Not JSON: it says nothing about access.
+  }
+  return undefined;
+}
+
+// accessChangeKind says whether a 403 or 404 means the caller's access changed
+// (D-10). A 404 counts only when it says the environment is not found; one about
+// a container or a stack is just that. A 403 on a change is a refusal; a 403 on
+// a read under an environment means they can no longer see it.
+async function accessChangeKind(
+  request: Request,
+  response: Response,
+): Promise<AccessChangeKind | undefined> {
+  const pathname = stripBase(new URL(request.url).pathname);
+  if (isExemptFromAccessChange(pathname)) return undefined;
+  const type = await problemType(response);
+  if (type !== undefined && NOT_ABOUT_ACCESS.has(type)) return undefined;
+  const mutating = MUTATING.has(request.method.toUpperCase());
+  if (response.status === 404) return type === "environment_not_found" ? "unseen" : undefined;
+  if (mutating) return "refused";
+  return pathname.startsWith("/api/env/") ? "unseen" : undefined;
+}
+
 const session: Middleware = {
   onRequest({ request }) {
     if (csrfToken && MUTATING.has(request.method.toUpperCase())) {
@@ -59,13 +123,17 @@ const session: Middleware = {
     }
     return request;
   },
-  onResponse({ request, response }) {
+  async onResponse({ request, response }) {
     if (
       response.status === 401 &&
       onUnauthorized &&
       !isExemptFrom401(new URL(request.url).pathname)
     ) {
       onUnauthorized(stripBase(window.location.pathname) + window.location.search);
+    }
+    if ((response.status === 403 || response.status === 404) && onAccessChange) {
+      const kind = await accessChangeKind(request, response);
+      if (kind) onAccessChange(kind, stripBase(new URL(request.url).pathname));
     }
     return response;
   },

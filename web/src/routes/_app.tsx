@@ -15,6 +15,7 @@ import { VersionFooter } from "@/components/version-footer";
 import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
 import { EnvPalette } from "@/features/environments/env-palette";
 import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
+import { useAccessRefetch } from "@/hooks/use-access-refetch";
 import {
   meQueryOptions,
   UnauthenticatedError,
@@ -67,6 +68,11 @@ function AppLayout() {
   const t = useT();
   const router = useRouter();
   const [open, setOpen] = useState(getSidebarOpen);
+
+  // A 403 or 404 on a later request can mean the user's access changed: read
+  // /api/me again, at most every 5 seconds, and move them somewhere they can
+  // still see (D-10).
+  useAccessRefetch();
 
   // A 401 on any later signed-in request means the session ended (expired,
   // revoked or signed out elsewhere): go to sign-in, which brings the browser

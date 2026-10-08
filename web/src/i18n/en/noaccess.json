@@ -5,6 +5,7 @@
     "administrators": "Administrators: {{names}}",
     "administratorsMore_one": "Administrators: {{names}} and {{count}} more",
     "administratorsMore_other": "Administrators: {{names}} and {{count}} more",
+    "checking": "Checking what you can see",
     "changed": "Your access changed. Showing what you can see now.",
     "refused": "You no longer have permission to do that. Your access may have changed."
   }

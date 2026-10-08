@@ -118,7 +118,8 @@ describe("401 handling", () => {
 // 403. The signed-in layout registers the handler that reacts.
 describe("access changes (D-10)", () => {
   const read = () => api.GET("/api/env/{envId}/summary", { params: { path: { envId: "e1" } } });
-  const mutate = () => api.POST("/api/env/{envId}/reconnect", { params: { path: { envId: "e1" } } });
+  const mutate = () =>
+    api.POST("/api/env/{envId}/reconnect", { params: { path: { envId: "e1" } } });
 
   it("tells the handler about a 404 environment_not_found on an environment request", async () => {
     stubFetch(404, { status: 404, type: "environment_not_found" });
