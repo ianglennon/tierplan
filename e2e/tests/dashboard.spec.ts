@@ -35,6 +35,10 @@ const envIdOf = openFirstEnvironment;
 test("the tiles equal the engine's counts and a new network appears live", async ({ page }) => {
   // Something in every list, with no registry to reach: an image imported from
   // an empty archive, a container created from it, a named volume.
+  // A retry runs against the same engine, so first clear what an earlier attempt
+  // left behind; the counts below are taken after this.
+  dind("docker rm -f e2e-box >/dev/null 2>&1 || true");
+  dind("docker network rm e2e-net >/dev/null 2>&1 || true");
   dind("tar -cf - -T /dev/null 2>/dev/null | docker import - e2e/empty:1");
   dind("docker create --name e2e-box e2e/empty:1 /nothing");
   dind("docker volume create e2e-vol");
