@@ -116,6 +116,10 @@ type FakeConfig struct {
 	// unpause, remove) takes to answer, so a test can make concurrent writes overlap
 	// and read the high-water mark with MaxConcurrentWrites.
 	WriteDelay time.Duration
+	// DropWrites makes every container write close its connection without answering,
+	// as the engine does when the container it is stopping is the one that serves the
+	// caller (Bayplan's own server or an agent). The write is still recorded.
+	DropWrites bool
 	// PolicyDeny makes the four list endpoints and every write answer 403 with the
 	// message an agent gives for a request its policy refuses: agent_policy_denied:
 	// followed by the method and path.

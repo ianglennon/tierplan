@@ -194,7 +194,7 @@ func TestContainerActionAnUnknownNodeIsNodeUnreachableAndNothingIsSent(t *testin
 	}
 }
 
-func TestContainerActionBayplansOwnContainersAreRefusedFromAFreshInspect(t *testing.T) {
+func TestContainerActionBayplansOwnContainersAreSkippedInABulkFromAFreshInspect(t *testing.T) {
 	f, e := dashEnv(t, actionEngine())
 	// The server's own container, named by a short prefix of its ID, and an agent
 	// container, found by its label: neither the list nor the client is trusted.
@@ -203,8 +203,8 @@ func TestContainerActionBayplansOwnContainersAreRefusedFromAFreshInspect(t *test
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
 	for i, res := range decode[actionBody](t, rec).Results {
-		if res.Result != "failed" || res.Code != "own_container" {
-			t.Errorf("target %d: %+v, want failed own_container", i, res)
+		if res.Result != "skipped" || res.Code != "own_container" {
+			t.Errorf("target %d: %+v, want skipped own_container", i, res)
 		}
 	}
 	for _, w := range f.fake.Writes() {
@@ -236,7 +236,7 @@ func TestContainerActionEachTargetIsAnsweredInOrderAndOneFailureDoesNotStopTheRe
 	if len(got) != 3 || got[0].ID != "ghost" || got[1].ID != webID || got[2].ID != "bayplan-agent" {
 		t.Fatalf("results are not in request order: %+v", got)
 	}
-	want := []string{"failed/not_found", "done/", "failed/own_container"}
+	want := []string{"failed/not_found", "done/", "skipped/own_container"}
 	for i, r := range got {
 		if r.Result+"/"+r.Code != want[i] {
 			t.Errorf("target %d = %s/%s, want %s", i, r.Result, r.Code, want[i])
@@ -809,5 +809,180 @@ func TestContainerActionsOnTwoNodesWithSameNamedContainersActOnExactlyTheNodeNam
 	}
 	if w := alpha.fake.Writes(); !slices.Equal(w, []string{"DELETE /containers/" + alphaWeb + "?force=1"}) {
 		t.Fatalf("alpha saw %v", w)
+	}
+}
+
+// Bayplan's own containers (plan 04-05, D-11, D-12, RESEARCH Pitfall 10): stopping the
+// server or an agent cuts Bayplan off from a host, so one at a time it needs the name
+// typed, in a bulk it is never reached, and the attempt is recorded before the call.
+
+func withConfirm(body, confirm string) string {
+	return strings.Replace(body, `{"`, `{"confirm":`+fmt.Sprintf("%q", confirm)+`,"`, 1)
+}
+
+func TestOwnContainerSingleTargetNeedsItsNameTypedAndNothingIsSentWithout(t *testing.T) {
+	for _, tc := range []struct{ name, ref, container string }{
+		{"the server", selfID, "bayplan"},
+		{"an agent", "bayplan-agent", "bayplan-agent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, e := dashEnv(t, actionEngine())
+			one := actionJSON("stop", [2]string{e.ID, tc.ref})
+			for label, body := range map[string]string{"no confirm": one, "a wrong name": withConfirm(one, "yes"), "the id": withConfirm(one, selfCtr)} {
+				rec := f.act(t, e, body)
+				if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
+					t.Errorf("%s: %d %q, want 422 confirmation_required: %s", label, rec.code, rec.ptyp, rec.body)
+				}
+			}
+			if w := f.fake.Writes(); len(w) != 0 {
+				t.Fatalf("an unconfirmed request sent %v", w)
+			}
+			if rows := f.actionAudits(t); len(rows) != 0 {
+				t.Fatalf("a refused request was audited: %+v", rows)
+			}
+
+			rec := f.act(t, e, withConfirm(one, tc.container))
+			if rec.code != http.StatusOK {
+				t.Fatalf("confirmed: status = %d: %s", rec.code, rec.body)
+			}
+			if res := decode[actionBody](t, rec).Results[0]; res.Result != "done" || res.Name != tc.container {
+				t.Fatalf("confirmed result = %+v", res)
+			}
+			if w := f.fake.Writes(); len(w) != 1 {
+				t.Fatalf("the daemon saw %v, want exactly the confirmed stop", w)
+			}
+		})
+	}
+}
+
+func TestOwnContainerEveryDisruptiveVerbNeedsTheNameAndStartAndUnpauseDoNot(t *testing.T) {
+	for _, verb := range []string{"stop", "kill", "restart", "pause"} {
+		f, e := dashEnv(t, actionEngine())
+		rec := f.act(t, e, actionJSON(verb, [2]string{e.ID, "bayplan-agent"}))
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
+			t.Errorf("%s: %d %q, want 422 confirmation_required", verb, rec.code, rec.ptyp)
+		}
+		if w := f.fake.Writes(); len(w) != 0 {
+			t.Errorf("%s sent %v", verb, w)
+		}
+	}
+	rec := func() *envRec {
+		f, e := dashEnv(t, actionEngine())
+		r := f.remove(t, e, removeJSON(true, false, [2]string{e.ID, "bayplan-agent"}))
+		if w := f.fake.Writes(); len(w) != 0 {
+			t.Errorf("remove sent %v", w)
+		}
+		return r
+	}()
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
+		t.Errorf("remove: %d %q, want 422 confirmation_required", rec.code, rec.ptyp)
+	}
+
+	for _, verb := range []string{"start", "unpause"} {
+		f, e := dashEnv(t, actionEngine())
+		rec := f.act(t, e, actionJSON(verb, [2]string{e.ID, "bayplan-agent"}))
+		if rec.code != http.StatusOK {
+			t.Fatalf("%s: status = %d: %s", verb, rec.code, rec.body)
+		}
+		if res := decode[actionBody](t, rec).Results[0]; res.Result != "done" {
+			t.Errorf("%s of an own container = %+v, want done with no confirmation", verb, res)
+		}
+	}
+}
+
+func TestOwnContainerInAMultiTargetRequestIsSkippedNeverActedOnAndTheOthersRun(t *testing.T) {
+	f, e := dashEnv(t, actionEngine())
+	for _, tc := range []struct {
+		name string
+		rec  func() *envRec
+	}{
+		{"stop", func() *envRec {
+			return f.act(t, e, actionJSON("stop", [2]string{e.ID, "web"}, [2]string{e.ID, selfID}, [2]string{e.ID, "bayplan-agent"}))
+		}},
+		{"remove", func() *envRec {
+			return f.remove(t, e, removeJSON(true, false, [2]string{e.ID, selfID}, [2]string{e.ID, "db"}, [2]string{e.ID, "bayplan-agent"}))
+		}},
+	} {
+		got := decode[actionBody](t, tc.rec()).Results
+		var skipped, done int
+		for _, r := range got {
+			switch {
+			case r.Result == "skipped" && r.Code == "own_container":
+				skipped++
+			case r.Result == "done":
+				done++
+			default:
+				t.Errorf("%s: unexpected result %+v", tc.name, r)
+			}
+		}
+		if skipped != 2 || done != 1 {
+			t.Errorf("%s: %d skipped and %d done, want 2 and 1: %+v", tc.name, skipped, done, got)
+		}
+	}
+	for _, w := range f.fake.Writes() {
+		if strings.Contains(w, selfCtr) || strings.Contains(w, agentID) {
+			t.Errorf("a bulk reached an own container: %s", w)
+		}
+	}
+	// A skipped target is audited once, as a refusal with its code, and a confirm cannot make
+	// a bulk act on it.
+	rows := f.actionAudits(t)
+	if len(rows) != 6 {
+		t.Fatalf("%d audit rows for 6 targets: %+v", len(rows), rows)
+	}
+	rec := f.act(t, e, withConfirm(actionJSON("stop", [2]string{e.ID, "web"}, [2]string{e.ID, selfID}), "bayplan"))
+	if rec.code != http.StatusUnprocessableEntity {
+		t.Fatalf("confirm with two targets: status = %d, want 422: %s", rec.code, rec.body)
+	}
+}
+
+func TestOwnContainerAnAttemptIsRecordedAsInitiatedBeforeTheCallAndCompletedAfter(t *testing.T) {
+	f, e := dashEnv(t, actionEngine())
+	rec := f.act(t, e, withConfirm(actionJSON("restart", [2]string{e.ID, "bayplan-agent"}), "bayplan-agent"))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	rows := f.actionAudits(t)
+	if len(rows) != 2 {
+		t.Fatalf("%d audit rows, want an initiated row and a completed row: %+v", len(rows), rows)
+	}
+	if rows[0].Details["stage"] != "initiated" || rows[0].Details["own"] != "agent" || rows[0].Action != audit.ActionContainerRestarted {
+		t.Errorf("first row = %+v", rows[0])
+	}
+	if rows[1].Details["stage"] != "completed" || rows[1].Details["own"] != "agent" || rows[1].Result != "success" || rows[1].Details["code"] != "done" {
+		t.Errorf("second row = %+v", rows[1])
+	}
+	// The ordinary target has one row, and no stage.
+	f2, e2 := dashEnv(t, actionEngine())
+	f2.act(t, e2, actionJSON("stop", [2]string{e2.ID, "web"}))
+	if rows := f2.actionAudits(t); len(rows) != 1 || rows[0].Details["stage"] != "" {
+		t.Fatalf("an ordinary target: %+v", rows)
+	}
+}
+
+func TestOwnContainerADroppedConnectionIsRecordedAsConnectionLostWithResultSuccess(t *testing.T) {
+	cfg := actionEngine()
+	cfg.DropWrites = true
+	f, e := dashEnv(t, cfg)
+	rec := f.act(t, e, withConfirm(actionJSON("stop", [2]string{e.ID, "bayplan-agent"}), "bayplan-agent"))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	if res := decode[actionBody](t, rec).Results[0]; res.Result != "done" || res.Code != "connection_lost" {
+		t.Fatalf("result = %+v, want done with connection_lost", res)
+	}
+	if w := f.fake.Writes(); len(w) != 1 {
+		t.Fatalf("the daemon saw %v, want the one call, never repeated", w)
+	}
+	rows := f.actionAudits(t)
+	if len(rows) != 2 || rows[0].Details["stage"] != "initiated" || rows[1].Details["stage"] != "connection_lost" || rows[1].Result != "success" {
+		t.Fatalf("audit = %+v, want initiated then connection_lost with result success", rows)
+	}
+
+	// The same dropped connection on a container that is not Bayplan's is a failure: the
+	// action may not have happened and the caller must see that.
+	rec = f.act(t, e, actionJSON("stop", [2]string{e.ID, "web"}))
+	if res := decode[actionBody](t, rec).Results[0]; res.Result != "failed" {
+		t.Fatalf("an ordinary container with a dropped connection = %+v, want failed", res)
 	}
 }

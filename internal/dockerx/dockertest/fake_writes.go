@@ -65,6 +65,9 @@ func (f *Fake) serveWrite(w http.ResponseWriter, r *http.Request, p string, cfg 
 	id, verb := m[1], m[2]
 	f.recordWrite(r)
 	defer f.beginWrite(cfg.WriteDelay)()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
 	if cfg.PolicyDeny {
 		// The refusal an agent gives for a write its policy does not allow, in the
 		// words the server maps to agent_policy_denied.
@@ -86,6 +89,21 @@ func (f *Fake) serveWrite(w http.ResponseWriter, r *http.Request, p string, cfg 
 	f.states[id] = verbState[verb]
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
+	return true
+}
+
+// dropConnection closes the connection under w without writing an answer. It reports
+// false when the connection cannot be taken over, and the caller answers as usual.
+func dropConnection(w http.ResponseWriter) bool {
+	h, ok := w.(http.Hijacker)
+	if !ok {
+		return false
+	}
+	conn, _, err := h.Hijack()
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
 	return true
 }
 
@@ -135,6 +153,9 @@ func (f *Fake) serveRemove(w http.ResponseWriter, r *http.Request, p string, cfg
 	}
 	f.recordWrite(r)
 	defer f.beginWrite(cfg.WriteDelay)()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
 	if cfg.PolicyDeny {
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
 		return true
