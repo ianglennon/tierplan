@@ -85,6 +85,44 @@ func TestEveryPhase3ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	}
 }
 
+// phase4DetailKeys maps every Phase 4 action to the detail keys the plans that
+// record it must use, for the same reason as phase3DetailKeys. The union of keys
+// is shared by the container actions: container, node and code always; bulk, stage,
+// own, timeout and signal when the request carried them.
+var phase4DetailKeys = map[string][]string{
+	audit.ActionContainerStarted: {"container", "node", "code", "bulk", "stage", "own", "timeout", "signal"},
+	audit.ActionContainerStopped: {"container", "node", "code", "bulk", "stage", "own", "timeout", "signal"},
+}
+
+func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase4DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase4DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"container.started": audit.ActionContainerStarted, "container.stopped": audit.ActionContainerStopped,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 func TestPhase3ActionKeysHaveTheirDocumentedValues(t *testing.T) {
 	for key, constant := range map[string]string{
 		"user.created": audit.ActionUserCreated, "user.invite_regenerated": audit.ActionUserInviteRegenerated,

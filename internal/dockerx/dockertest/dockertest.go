@@ -287,6 +287,10 @@ type Fake struct {
 	cfg      FakeConfig
 	requests []string
 	srv      *httptest.Server // nil while the daemon is stopped
+	// states is the state a write left each container in, by container ID, and
+	// writes is every write served, in order (fake_writes.go).
+	states map[string]fakeState
+	writes []string
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
@@ -315,7 +319,7 @@ func NewFake(t testing.TB, cfg FakeConfig) *Fake {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults(), evSubs: map[*eventSub]struct{}{}}
+	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults(), evSubs: map[*eventSub]struct{}{}, states: map[string]fakeState{}}
 	f.evHistory = append(f.evHistory, cfg.Events...)
 	if err := f.listen(); err != nil {
 		t.Fatalf("listen on the fake daemon socket: %v", err)
@@ -409,7 +413,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg
+	return f.cfg.withStates(f.states)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -457,6 +461,14 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p = m[3]
+	}
+
+	// A write is answered by the first handler that claims it (fake_writes.go and
+	// the files later plans add), before any read route is tried.
+	for _, h := range fakeHandlers {
+		if h(f, w, r, p, cfg) {
+			return
+		}
 	}
 
 	if cfg.PolicyDeny {
@@ -573,9 +585,9 @@ func inspectID(p string) (string, bool) {
 // serveInspect answers GET /containers/{id}/json with the restart policy and, to
 // prove it is never read, an environment variable that holds a secret.
 func (f *Fake) serveInspect(w http.ResponseWriter, id string, cfg FakeConfig) {
-	known := false
-	for _, c := range cfg.Containers {
-		known = known || c.ID == id
+	found, known := cfg.resolveContainer(id)
+	if known {
+		id = found.ID
 	}
 	policy, hasPolicy := cfg.RestartPolicies[id]
 	if !known && !hasPolicy {
@@ -584,7 +596,7 @@ func (f *Fake) serveInspect(w http.ResponseWriter, id string, cfg FakeConfig) {
 	}
 	name, retries, _ := strings.Cut(policy, ":")
 	max, _ := strconv.Atoi(retries)
-	writeJSON(w, http.StatusOK, container.InspectResponse{
+	resp := container.InspectResponse{
 		ID:   id,
 		Name: "/" + id,
 		Config: &container.Config{
@@ -593,7 +605,44 @@ func (f *Fake) serveInspect(w http.ResponseWriter, id string, cfg FakeConfig) {
 		HostConfig: &container.HostConfig{
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(name), MaximumRetryCount: max},
 		},
-	})
+		State: &container.State{},
+	}
+	if known {
+		resp.Config.Labels = found.Labels
+		resp.State.Running = found.State == "running"
+		resp.State.Status = container.ContainerState(found.State)
+		if len(found.Names) > 0 {
+			resp.Name = found.Names[0]
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// resolveContainer finds a container the way a real daemon does: by its full ID,
+// by its name (with or without the leading slash), or by an ID prefix that only one
+// container has.
+func (c FakeConfig) resolveContainer(ref string) (FakeContainer, bool) {
+	for _, fc := range c.Containers {
+		if fc.ID == ref {
+			return fc, true
+		}
+	}
+	for _, fc := range c.Containers {
+		for _, n := range fc.Names {
+			if strings.TrimPrefix(n, "/") == strings.TrimPrefix(ref, "/") {
+				return fc, true
+			}
+		}
+	}
+	var hit FakeContainer
+	n := 0
+	for _, fc := range c.Containers {
+		if ref != "" && strings.HasPrefix(fc.ID, ref) {
+			hit = fc
+			n++
+		}
+	}
+	return hit, n == 1
 }
 
 // swarmInfo is Info.Swarm: the state, the node ID and the cluster ID when one is set.

@@ -87,6 +87,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "backup.schedule_updated",
   "backup.upload_discarded",
   "key.rotated",
+  "container.started",
+  "container.stopped",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -96,7 +98,14 @@ export const KNOWN_ACTIONS: readonly string[] = [
 // server never returns them to an env Admin and offering them would only build
 // a filter that matches nothing. An action in the address that is not here still
 // shows in the filter, so a linked view can be cleared.
-const ENV_SCOPED_PREFIXES = ["access.", "environment.", "agent.", "automation.", "owner."];
+const ENV_SCOPED_PREFIXES = [
+  "access.",
+  "environment.",
+  "agent.",
+  "automation.",
+  "owner.",
+  "container.",
+];
 export const ENV_SCOPED_ACTIONS: readonly string[] = KNOWN_ACTIONS.filter(
   (key) => key === "permission.denied" || ENV_SCOPED_PREFIXES.some((p) => key.startsWith(p)),
 );

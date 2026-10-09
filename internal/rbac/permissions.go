@@ -40,6 +40,7 @@ const (
 	PermImagesRead            Perm = "images.read"
 	PermVolumesRead           Perm = "volumes.read"
 	PermNetworksRead          Perm = "networks.read"
+	PermContainersControl     Perm = "containers.control"
 	PermAuditRead             Perm = "audit.read"
 	PermSettingsRead          Perm = "settings.read"
 	PermSettingsWrite         Perm = "settings.write"
@@ -76,6 +77,7 @@ var defaultRegistry = Registry{
 	{Name: PermImagesRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View images"},
 	{Name: PermVolumesRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View volumes"},
 	{Name: PermNetworksRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View networks"},
+	{Name: PermContainersControl, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Start, stop, restart, kill, pause and unpause containers"},
 	{Name: PermAuditRead, Scope: ScopeGlobal, Description: "Read the audit log"},
 	{Name: PermSettingsRead, Scope: ScopeGlobal, Description: "View settings"},
 	{Name: PermSettingsWrite, Scope: ScopeGlobal, Description: "Change settings"},

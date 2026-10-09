@@ -1,0 +1,120 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+package dockertest
+
+import (
+	"net/http"
+	"regexp"
+	"slices"
+)
+
+// fakeHandler answers one family of requests for the fake daemon. p is the path
+// with any /vX.Y prefix removed. It reports true when it answered; false lets the
+// next handler, and then the read routes, try. A handler that changes what the
+// daemon reports does it through the Fake, so the next list or inspect shows it.
+//
+// The registry exists so each plan that adds a write (networks, volumes, exec) puts
+// its fake routes in its own file and registers them with registerFakeHandler,
+// without editing dockertest.go or another plan's file.
+type fakeHandler func(f *Fake, w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool
+
+// fakeHandlers are consulted, in registration order, before the read routes.
+var fakeHandlers []fakeHandler
+
+// registerFakeHandler adds h to the registry. It returns true so a file can call
+// it at package level: var _ = registerFakeHandler(...).
+func registerFakeHandler(h fakeHandler) bool {
+	fakeHandlers = append(fakeHandlers, h)
+	return true
+}
+
+var _ = registerFakeHandler((*Fake).serveWrite)
+
+// containerVerb matches the six container verbs that take no body.
+var containerVerb = regexp.MustCompile(`^/containers/([^/]+)/(start|stop|restart|kill|pause|unpause)$`)
+
+// verbState is the state each verb leaves a container in, and the Status text a
+// list then shows.
+var verbState = map[string]fakeState{
+	"start":   {"running", "Up 1 second"},
+	"restart": {"running", "Up 1 second"},
+	"unpause": {"running", "Up 1 second"},
+	"stop":    {"exited", "Exited (0) 1 second ago"},
+	"kill":    {"exited", "Exited (137) 1 second ago"},
+	"pause":   {"paused", "Up 1 second (Paused)"},
+}
+
+// fakeState is the State and Status text a write left a container with.
+type fakeState struct{ state, status string }
+
+// serveWrite answers POST /containers/{id}/{start|stop|restart|kill|pause|unpause}.
+// An ID the daemon does not know is the 404 a real one gives. Starting a container
+// that runs and stopping one that does not are the 304 a real one gives, which the
+// client takes as success. Every write is recorded for Writes, whatever the answer.
+func (f *Fake) serveWrite(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	m := containerVerb.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	id, verb := m[1], m[2]
+	f.recordWrite(r)
+
+	c, known := cfg.resolveContainer(id)
+	if !known {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + id})
+		return true
+	}
+	id, current := c.ID, c.State
+	if (verb == "start" && current == "running") || (verb == "stop" && current != "running" && current != "paused" && current != "restarting") {
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+	f.mu.Lock()
+	f.states[id] = verbState[verb]
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+	return true
+}
+
+// recordWrite notes a write as "METHOD path?query", the path as the daemon saw it
+// without the version prefix.
+func (f *Fake) recordWrite(r *http.Request) {
+	p := r.URL.Path
+	if m := versionPrefix.FindStringSubmatch(p); m != nil {
+		p = m[3]
+	}
+	if q := r.URL.RawQuery; q != "" {
+		p += "?" + q
+	}
+	f.mu.Lock()
+	f.writes = append(f.writes, r.Method+" "+p)
+	f.mu.Unlock()
+}
+
+// Writes returns every write the daemon served so far, in order, as
+// "METHOD path?query" without any version prefix. Reads are not listed.
+func (f *Fake) Writes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.writes)
+}
+
+// withStates returns c with each container the writes changed in the state they
+// left it. The slice is copied, so the Fake's own configuration is not touched.
+func (c FakeConfig) withStates(states map[string]fakeState) FakeConfig {
+	if len(states) == 0 || len(c.Containers) == 0 {
+		return c
+	}
+	cs := slices.Clone(c.Containers)
+	for i := range cs {
+		if s, ok := states[cs[i].ID]; ok {
+			cs[i].State, cs[i].Status = s.state, s.status
+		}
+	}
+	c.Containers = cs
+	return c
+}

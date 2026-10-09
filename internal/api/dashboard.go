@@ -141,6 +141,7 @@ type EnvironmentSummaryOutput struct {
 // labels or mounts (T-01-77).
 type ContainerItem struct {
 	Node    string   `json:"node" doc:"The node the container runs on"`
+	NodeID  string   `json:"nodeId" doc:"The ID of that node: what a write is routed by, since two hosts can share a display name"`
 	ID      string   `json:"id" doc:"The full container ID"`
 	Name    string   `json:"name" doc:"The container name without the leading slash"`
 	State   string   `json:"state" enum:"created,running,paused,restarting,removing,exited,dead" doc:"The container state"`
@@ -164,6 +165,7 @@ type ImageItem struct {
 // VolumeItem is one row of the volumes list.
 type VolumeItem struct {
 	Node    string `json:"node" doc:"The node that holds the volume"`
+	NodeID  string `json:"nodeId" doc:"The ID of that node: what a write is routed by, since two hosts can share a display name"`
 	Name    string `json:"name"`
 	Driver  string `json:"driver"`
 	Created string `json:"created,omitempty" format:"date-time"`
@@ -172,6 +174,7 @@ type VolumeItem struct {
 // NetworkItem is one row of the networks list.
 type NetworkItem struct {
 	Node    string   `json:"node" doc:"The node the network is local to, or Cluster for a swarm-wide network"`
+	NodeID  string   `json:"nodeId" doc:"The ID of the node the network was read from; for a swarm-wide network, the manager in use"`
 	ID      string   `json:"id"`
 	Name    string   `json:"name"`
 	Driver  string   `json:"driver"`
@@ -422,7 +425,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			rows := filterNode(agg.Containers, in.Node, func(c envs.ContainerRow) string { return c.Node })
 			items, total, truncated := capRows(rows, func(c envs.ContainerRow) ContainerItem {
 				return ContainerItem{
-					Node: c.Node, ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
+					Node: c.Node, NodeID: c.NodeID, ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
 					Created: rfc3339(c.Created), Ports: c.Ports, IsSelf: isSelf(c.ID),
 				}
 			})
@@ -460,7 +463,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			}
 			rows := filterNode(agg.Volumes, in.Node, func(v envs.VolumeRow) string { return v.Node })
 			items, total, truncated := capRows(rows, func(v envs.VolumeRow) VolumeItem {
-				return VolumeItem{Node: v.Node, Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created)}
+				return VolumeItem{Node: v.Node, NodeID: v.NodeID, Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created)}
 			})
 			return &VolumeListOutput{CacheControl: "no-store", Body: VolumeListBody{
 				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
@@ -478,7 +481,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			}
 			rows := filterNode(agg.Networks, in.Node, func(n envs.NetworkRow) string { return n.Node })
 			items, total, truncated := capRows(rows, func(n envs.NetworkRow) NetworkItem {
-				return NetworkItem{Node: n.Node, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created)}
+				return NetworkItem{Node: n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created)}
 			})
 			return &NetworkListOutput{CacheControl: "no-store", Body: NetworkListBody{
 				Items: items, Total: total, Truncated: truncated,

@@ -419,8 +419,10 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 }
 
 // allowedMethods is the exported method set of *dockerx.Client. Later plans add
-// their read-only methods here, deliberately and one at a time (D-52).
-var allowedMethods = []string{"Close", "Cluster", "Events", "Probe", "RestartPolicies", "Snapshot"}
+// their methods here, deliberately and one at a time (D-52). ContainerAction (Phase
+// 4) is the first typed write: it takes a closed set of verbs, never a path, and the
+// forbidden-name pattern below still refuses any raw or passthrough shape.
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerOwnership", "Events", "Probe", "RestartPolicies", "Snapshot"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 

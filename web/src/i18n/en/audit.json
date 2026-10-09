@@ -161,6 +161,10 @@
       },
       "key": {
         "rotated": "Rotated master key"
+      },
+      "container": {
+        "started": "Container started",
+        "stopped": "Container stopped"
       }
     },
     "coalesced": {

@@ -132,6 +132,8 @@ const (
 	ActionBackupScheduleUpdated      = "backup.schedule_updated"
 	ActionBackupUploadDiscarded      = "backup.upload_discarded"
 	ActionKeyRotated                 = "key.rotated"
+	ActionContainerStarted           = "container.started"
+	ActionContainerStopped           = "container.stopped"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

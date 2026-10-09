@@ -492,6 +492,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/containers/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start or stop containers
+         * @description Starts or stops up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. Bayplan's own server container and any agent container are refused with own_container. Each target is audited as container.started or container.stopped, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
+         */
+        post: operations["actOnContainers"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/events": {
         parameters: {
             query?: never;
@@ -2016,6 +2036,45 @@ export interface components {
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
         };
+        ContainerActionRequest: {
+            /**
+             * @description What to do. A stop uses the container's own stop timeout and signal
+             * @enum {string}
+             */
+            action: "start" | "stop";
+            /** @description The containers to act on, at most 25. Each is acted on and answered separately; one that fails never stops the others */
+            targets: components["schemas"]["ContainerActionTarget"][] | null;
+        };
+        ContainerActionResponse: {
+            /** @description One entry per requested target, in request order */
+            results: components["schemas"]["ContainerActionResult"][] | null;
+        };
+        ContainerActionResult: {
+            /**
+             * @description Why a target failed. own_container: Bayplan's own server or an agent, refused until it is confirmed by typing its name. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @enum {string}
+             */
+            code?: "own_container" | "node_unreachable" | "not_found" | "agent_policy_denied" | "action_failed";
+            /** @description The engine's message for action_failed, at most 300 characters; for the other codes a plain sentence */
+            detail?: string;
+            /** @description The container ID or name the request named */
+            id: string;
+            /** @description The container name when the engine could be asked; otherwise the ID or name the request named */
+            name: string;
+            /** @description The node ID the request named */
+            nodeId: string;
+            /**
+             * @description done: the engine accepted the action. failed: it was refused or could not be sent; code says why
+             * @enum {string}
+             */
+            result: "done" | "failed" | "skipped";
+        };
+        ContainerActionTarget: {
+            /** @description The container ID or name */
+            id: string;
+            /** @description The node the container is on: the nodeId of its row in the containers list. Never the display name */
+            nodeId: string;
+        };
         ContainerItem: {
             /** Format: date-time */
             created?: string;
@@ -2029,6 +2088,8 @@ export interface components {
             name: string;
             /** @description The node the container runs on */
             node: string;
+            /** @description The ID of that node: what a write is routed by, since two hosts can share a display name */
+            nodeId: string;
             /** @description Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published */
             ports: string[] | null;
             /**
@@ -2801,6 +2862,8 @@ export interface components {
             name: string;
             /** @description The node the network is local to, or Cluster for a swarm-wide network */
             node: string;
+            /** @description The ID of the node the network was read from; for a swarm-wide network, the manager in use */
+            nodeId: string;
             /** @description local, or swarm for a cluster-wide network */
             scope: string;
             /** @description The IPAM subnets in CIDR notation; empty when the network has none */
@@ -3543,6 +3606,8 @@ export interface components {
             name: string;
             /** @description The node that holds the volume */
             node: string;
+            /** @description The ID of that node: what a write is routed by, since two hosts can share a display name */
+            nodeId: string;
         };
         VolumeListBody: {
             /** @description At most 500 rows */
@@ -4498,6 +4563,43 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    actOnContainers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContainerActionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerActionResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
                 };
             };
         };

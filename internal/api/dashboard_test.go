@@ -73,6 +73,7 @@ type listBody[T any] struct {
 }
 
 type containerItem struct {
+	NodeID  string   `json:"nodeId"`
 	ID      string   `json:"id"`
 	Name    string   `json:"name"`
 	State   string   `json:"state"`

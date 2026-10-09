@@ -820,6 +820,125 @@
         ],
         "type": "object"
       },
+      "ContainerActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "What to do. A stop uses the container's own stop timeout and signal",
+            "enum": [
+              "start",
+              "stop"
+            ],
+            "type": "string"
+          },
+          "targets": {
+            "description": "The containers to act on, at most 25. Each is acted on and answered separately; one that fails never stops the others",
+            "items": {
+              "$ref": "#/components/schemas/ContainerActionTarget"
+            },
+            "maxItems": 25,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "targets"
+        ],
+        "type": "object"
+      },
+      "ContainerActionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "results": {
+            "description": "One entry per requested target, in request order",
+            "items": {
+              "$ref": "#/components/schemas/ContainerActionResult"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "type": "object"
+      },
+      "ContainerActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Why a target failed. own_container: Bayplan's own server or an agent, refused until it is confirmed by typing its name. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message",
+            "enum": [
+              "own_container",
+              "node_unreachable",
+              "not_found",
+              "agent_policy_denied",
+              "action_failed"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "description": "The engine's message for action_failed, at most 300 characters; for the other codes a plain sentence",
+            "type": "string"
+          },
+          "id": {
+            "description": "The container ID or name the request named",
+            "type": "string"
+          },
+          "name": {
+            "description": "The container name when the engine could be asked; otherwise the ID or name the request named",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node ID the request named",
+            "type": "string"
+          },
+          "result": {
+            "description": "done: the engine accepted the action. failed: it was refused or could not be sent; code says why",
+            "enum": [
+              "done",
+              "failed",
+              "skipped"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "id",
+          "name",
+          "result"
+        ],
+        "type": "object"
+      },
+      "ContainerActionTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The container ID or name",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node the container is on: the nodeId of its row in the containers list. Never the display name",
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "id"
+        ],
+        "type": "object"
+      },
       "ContainerItem": {
         "additionalProperties": false,
         "properties": {
@@ -845,6 +964,10 @@
           },
           "node": {
             "description": "The node the container runs on",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of that node: what a write is routed by, since two hosts can share a display name",
             "type": "string"
           },
           "ports": {
@@ -877,6 +1000,7 @@
         },
         "required": [
           "node",
+          "nodeId",
           "id",
           "name",
           "state",
@@ -2852,6 +2976,10 @@
             "description": "The node the network is local to, or Cluster for a swarm-wide network",
             "type": "string"
           },
+          "nodeId": {
+            "description": "The ID of the node the network was read from; for a swarm-wide network, the manager in use",
+            "type": "string"
+          },
           "scope": {
             "description": "local, or swarm for a cluster-wide network",
             "type": "string"
@@ -2869,6 +2997,7 @@
         },
         "required": [
           "node",
+          "nodeId",
           "id",
           "name",
           "driver",
@@ -4604,10 +4733,15 @@
           "node": {
             "description": "The node that holds the volume",
             "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of that node: what a write is routed by, since two hosts can share a display name",
+            "type": "string"
           }
         },
         "required": [
           "node",
+          "nodeId",
           "name",
           "driver"
         ],
@@ -6192,6 +6326,67 @@
           }
         },
         "summary": "List the containers of an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/containers/actions": {
+      "post": {
+        "description": "Starts or stops up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. Bayplan's own server container and any agent container are refused with own_container. Each target is audited as container.started or container.stopped, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.",
+        "operationId": "actOnContainers",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContainerActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerActionResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Start or stop containers",
         "tags": [
           "environments"
         ]

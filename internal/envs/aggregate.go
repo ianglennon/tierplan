@@ -38,29 +38,39 @@ const NodeCluster = "Cluster"
 // The row types of an aggregate are Docker's, plus the node the row was read from.
 // The node lives here and not in dockerx, which stays unaware of nodes.
 
+// Every row carries the node's display name (Node) and its ID (NodeID). The name is
+// for people and can be shared by two hosts (T-02-73); a write is routed by the ID,
+// which is the agent's ID, or the environment's own ID for the local socket, or
+// socket:<envId> for the folded host (Aggregator.OnNode).
+
 // ContainerRow is a container and the node it runs on.
 type ContainerRow struct {
 	dockerx.ContainerRow
-	Node string
+	Node   string
+	NodeID string
 }
 
 // ImageRow is an image and the node that holds it.
 type ImageRow struct {
 	dockerx.ImageRow
-	Node string
+	Node   string
+	NodeID string
 }
 
 // VolumeRow is a volume and the node that holds it.
 type VolumeRow struct {
 	dockerx.VolumeRow
-	Node string
+	Node   string
+	NodeID string
 }
 
 // NetworkRow is a network and the node it was read from: the node's own for a local
-// network, NodeCluster for a swarm-scoped one.
+// network, NodeCluster for a swarm-scoped one. NodeID is the node that was read in
+// both cases, so for a swarm-scoped network it is the manager in use.
 type NetworkRow struct {
 	dockerx.NetworkRow
-	Node string
+	Node   string
+	NodeID string
 }
 
 // Aggregate is what an environment's Docker read answers with: the rows of every
@@ -242,21 +252,22 @@ func oneNode(snap dockerx.Snapshot, st Status, ref NodeRef, manager bool) Aggreg
 	if manager {
 		nets = netsOfCluster
 	}
-	agg.addRows(snap, ref.Name, nets)
+	agg.addRows(snap, ref, nets)
 	agg.ByNode = map[string]dockerx.Counts{ref.Name: snap.Counts}
 	return agg
 }
 
-// addRows appends a node's rows, each with its node.
-func (a *Aggregate) addRows(snap dockerx.Snapshot, node string, nets swarmNets) {
+// addRows appends a node's rows, each with its node name and ID.
+func (a *Aggregate) addRows(snap dockerx.Snapshot, ref NodeRef, nets swarmNets) {
+	node := ref.Name
 	for _, c := range snap.Containers {
-		a.Containers = append(a.Containers, ContainerRow{c, node})
+		a.Containers = append(a.Containers, ContainerRow{ContainerRow: c, Node: node, NodeID: ref.ID})
 	}
 	for _, i := range snap.Images {
-		a.Images = append(a.Images, ImageRow{i, node})
+		a.Images = append(a.Images, ImageRow{ImageRow: i, Node: node, NodeID: ref.ID})
 	}
 	for _, v := range snap.Volumes {
-		a.Volumes = append(a.Volumes, VolumeRow{v, node})
+		a.Volumes = append(a.Volumes, VolumeRow{VolumeRow: v, Node: node, NodeID: ref.ID})
 	}
 	for _, n := range snap.Networks {
 		label := node
@@ -268,7 +279,7 @@ func (a *Aggregate) addRows(snap dockerx.Snapshot, node string, nets swarmNets) 
 				label = NodeCluster
 			}
 		}
-		a.Networks = append(a.Networks, NetworkRow{n, label})
+		a.Networks = append(a.Networks, NetworkRow{NetworkRow: n, Node: label, NodeID: ref.ID})
 	}
 }
 
@@ -350,8 +361,9 @@ func (a *Aggregator) swarm(ctx context.Context, in RollupInput, h Health) (Aggre
 			agg.Counts.Nodes, agg.Counts.Services = r.snap.Counts.Nodes, r.snap.Counts.Services
 		}
 		before := len(agg.Networks)
-		agg.addRows(r.snap, node, nets)
-		agg.Nodes = append(agg.Nodes, NodeRef{ID: r.agent.ID, Name: node, Role: r.agent.Role})
+		ref := NodeRef{ID: r.agent.ID, Name: node, Role: r.agent.Role}
+		agg.addRows(r.snap, ref, nets)
+		agg.Nodes = append(agg.Nodes, ref)
 		agg.ByNode[node] = nodeCounts(r.snap, agg.Networks[before:])
 		if agg.FetchedAt.IsZero() || r.snap.FetchedAt.Before(agg.FetchedAt) {
 			agg.FetchedAt = r.snap.FetchedAt
