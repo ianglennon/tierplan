@@ -13,6 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ContainerRowActions } from "@/features/containers/row-actions";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
@@ -88,10 +89,12 @@ const posts = () => sent.filter((s) => s.method === "POST");
 function mount(r: ContainerRow = row()) {
   return render(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <ContainerRowActions envId={ENV} row={r} />
-        <Toaster />
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <ContainerRowActions envId={ENV} row={r} />
+          <Toaster />
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>,
   );
 }
@@ -157,6 +160,24 @@ describe("ContainerRowActions menu", () => {
     expect(start.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(start);
     expect(posts()).toEqual([]);
+  });
+});
+
+describe("Open", () => {
+  it("is the first item of the menu and goes to the container's page on its node", async () => {
+    mount();
+    await openMenu();
+    const items = await screen.findAllByRole("menuitem");
+    expect(items[0]?.textContent).toBe("Open");
+    expect(items[0]?.getAttribute("href")).toBe("/env/e1/containers/web-id?node=n1");
+  });
+
+  it("is there for a Viewer too, who can read the container", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    mount();
+    await openMenu();
+    const open = await screen.findByRole("menuitem", { name: "Open" });
+    expect(open.getAttribute("aria-disabled")).toBeNull();
   });
 });
 

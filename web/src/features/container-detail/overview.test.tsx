@@ -175,3 +175,179 @@ describe("Overview: the tracer cards", () => {
     await waitFor(() => expect(card("State")).toBeTruthy());
   });
 });
+
+describe("Overview: the other cards", () => {
+  const rows = (card: HTMLElement) =>
+    within(card)
+      .getAllByRole("row")
+      .map((r) => Array.from(r.querySelectorAll("th,td")).map((c) => c.textContent));
+
+  it("shows the image and command rows, with a dash for what is not set", async () => {
+    answer = () =>
+      Response.json(
+        detail({
+          command: ["nginx", "-g", "daemon off;"],
+          entrypoint: ["/docker-entrypoint.sh"],
+          workingDir: "/app",
+        }),
+      );
+    mount();
+    const card = await screen.findByRole("region", { name: "Image and command" });
+    expect(rows(card)).toEqual([
+      ["Image", "nginx:1.27"],
+      ["Command", "nginx -g daemon off;"],
+      ["Entrypoint", "/docker-entrypoint.sh"],
+      ["Working directory", "/app"],
+      ["User", "\u2014"],
+    ]);
+  });
+
+  it("lists the published ports, or says there are none", async () => {
+    answer = () =>
+      Response.json(
+        detail({
+          ports: [
+            { containerPort: 80, protocol: "tcp", hostIp: "0.0.0.0", hostPort: "8080" },
+            { containerPort: 53, protocol: "udp", hostPort: "5353" },
+          ],
+        }),
+      );
+    mount();
+    const card = await screen.findByRole("region", { name: "Ports" });
+    expect(rows(card)).toEqual([
+      ["Container port", "Host", "Protocol"],
+      ["80", "0.0.0.0:8080", "tcp"],
+      ["53", "5353", "udp"],
+    ]);
+    cleanup();
+    client.clear();
+    answer = () => Response.json(detail());
+    mount();
+    expect(await screen.findByText("No published ports.")).toBeTruthy();
+  });
+
+  it("lists the mounts with their mode, or says there are none", async () => {
+    answer = () =>
+      Response.json(
+        detail({
+          mounts: [
+            {
+              type: "volume",
+              name: "data",
+              source: "/var/lib/docker/volumes/data/_data",
+              destination: "/data",
+              rw: true,
+            },
+            {
+              type: "bind",
+              source: "/srv/site",
+              destination: "/usr/share/nginx/html",
+              mode: "z",
+              rw: false,
+            },
+          ],
+        }),
+      );
+    mount();
+    const card = await screen.findByRole("region", { name: "Mounts" });
+    expect(rows(card)).toEqual([
+      ["Type", "Source", "Destination", "Mode"],
+      ["volume", "data", "/data", "Read-write"],
+      ["bind", "/srv/site", "/usr/share/nginx/html", "Read-only, z"],
+    ]);
+    cleanup();
+    client.clear();
+    answer = () => Response.json(detail());
+    mount();
+    expect(await screen.findByText("No mounts.")).toBeTruthy();
+  });
+
+  it("lists the networks with their addresses and aliases, or says there are none", async () => {
+    answer = () =>
+      Response.json(
+        detail({
+          networks: [
+            {
+              networkId: "n1",
+              name: "front",
+              ipv4: "10.0.0.2",
+              mac: "02:42:0a:00:00:02",
+              aliases: ["web", "site"],
+            },
+            { networkId: "n2", name: "back", aliases: [] },
+          ],
+        }),
+      );
+    mount();
+    const card = await screen.findByRole("region", { name: "Networks" });
+    expect(rows(card)).toEqual([
+      ["Network", "IPv4", "IPv6", "MAC", "Aliases"],
+      ["front", "10.0.0.2", "\u2014", "02:42:0a:00:00:02", "web, site"],
+      ["back", "\u2014", "\u2014", "\u2014", "\u2014"],
+    ]);
+    cleanup();
+    client.clear();
+    answer = () => Response.json(detail());
+    mount();
+    expect(await screen.findByText("Not connected to any network.")).toBeTruthy();
+  });
+
+  it("words the restart policy, and shows the maximum only when it is set", async () => {
+    mount();
+    let card = await screen.findByRole("region", { name: "Restart policy" });
+    expect(card.textContent).toContain("Never restart");
+    expect(card.textContent).not.toContain("Maximum");
+    cleanup();
+    client.clear();
+    answer = () => Response.json(detail({ restartPolicy: "on-failure", restartMaxRetries: 3 }));
+    mount();
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "Restart policy" }).textContent).toContain(
+        "Maximum 3 retries",
+      ),
+    );
+    card = screen.getByRole("region", { name: "Restart policy" });
+    expect(card.textContent).toContain("Restart on failure");
+    cleanup();
+    client.clear();
+    answer = () => Response.json(detail({ restartPolicy: "always" }));
+    mount();
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "Restart policy" }).textContent).toContain(
+        "Always restart",
+      ),
+    );
+    expect(screen.getByRole("region", { name: "Restart policy" }).textContent).not.toContain(
+      "Maximum",
+    );
+  });
+
+  it("lists the labels by key, or says there are none", async () => {
+    answer = () => Response.json(detail({ labels: { "b.label": "two", "a.label": "one" } }));
+    mount();
+    const card = await screen.findByRole("region", { name: "Labels" });
+    expect(rows(card)).toEqual([
+      ["a.label", "one"],
+      ["b.label", "two"],
+    ]);
+    cleanup();
+    client.clear();
+    answer = () => Response.json(detail());
+    mount();
+    expect(await screen.findByText("No labels.")).toBeTruthy();
+  });
+
+  it("puts State, Image and command, Restart policy, Ports and Mounts in the first column", async () => {
+    mount();
+    await screen.findByRole("region", { name: "State" });
+    const column = (title: string) => screen.getByRole("region", { name: title }).parentElement;
+    const first = column("State");
+    for (const t of ["Image and command", "Restart policy", "Ports", "Mounts"]) {
+      expect(column(t)).toBe(first);
+    }
+    const second = column("Networks");
+    expect(second).not.toBe(first);
+    expect(column("Labels")).toBe(second);
+    expect(column("Environment variables")).toBe(second);
+  });
+});
