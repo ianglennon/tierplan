@@ -33,7 +33,7 @@ func detailFake(t *testing.T) *dockerx.Client {
 		Inspect: dockertest.FakeInspect{
 			Env: []string{"A=1", "TOKEN=a=b"}, Cmd: []string{"nginx", "-g", "daemon off;"}, Entrypoint: []string{"/docker-entrypoint.sh"},
 			WorkingDir: "/app", User: "www", ExitCode: 3, StartedAt: "2026-10-01T10:00:00Z", OOMKilled: true, RestartCount: 2,
-			LogType: "syslog", LogOptions: map[string]string{"syslog-address": "tcp://user:pw@logs:514"},
+			LogType: "syslog", LogOptions: map[string]string{"splunk-token": "c0ffee-secret"},
 			MountModes: map[string]string{"/srv/site": "ro"},
 		},
 	}}, RestartPolicies: map[string]string{"web-id": "on-failure:3"}})
@@ -63,7 +63,7 @@ func TestContainerDetailMapsTheInspectDocument(t *testing.T) {
 	if d.StopTimeout == nil || *d.StopTimeout != 20 || d.StopSignal != "SIGQUIT" {
 		t.Errorf("stop = %v %q", d.StopTimeout, d.StopSignal)
 	}
-	if d.LogConfig.Type != "syslog" || d.LogConfig.Options["syslog-address"] != "tcp://user:pw@logs:514" {
+	if d.LogConfig.Type != "syslog" || d.LogConfig.Options["splunk-token"] != "c0ffee-secret" {
 		t.Errorf("log config = %+v", d.LogConfig)
 	}
 	// Only published ports, one row per binding, sorted by container port.

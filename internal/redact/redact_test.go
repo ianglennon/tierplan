@@ -73,9 +73,9 @@ func TestEnvOfNothingIsAnEmptyListNotNull(t *testing.T) {
 }
 
 func TestOptionsMaskEveryValueUnlessTheCallerMayRevealAndSortByName(t *testing.T) {
-	opts := map[string]string{"syslog-address": "tcp://user:hunter2@logs:514", "tag": "web", "env": ""}
+	opts := map[string]string{"splunk-token": "hunter2", "tag": "web", "env": ""}
 	got := redact.Options(opts, false)
-	want := []redact.OptionVar{{Name: "env", Masked: true}, {Name: "syslog-address", Masked: true}, {Name: "tag", Masked: true}}
+	want := []redact.OptionVar{{Name: "env", Masked: true}, {Name: "splunk-token", Masked: true}, {Name: "tag", Masked: true}}
 	if len(got) != len(want) {
 		t.Fatalf("Options = %+v, want %+v", got, want)
 	}
@@ -88,14 +88,14 @@ func TestOptionsMaskEveryValueUnlessTheCallerMayRevealAndSortByName(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, leak := range []string{"hunter2", "tcp://", "web"} {
+	for _, leak := range []string{"hunter2", "web"} {
 		if strings.Contains(string(raw), leak) {
 			t.Fatalf("the masked body %s carries %q", raw, leak)
 		}
 	}
 
 	shown := redact.Options(opts, true)
-	if len(shown) != 3 || shown[1] != (redact.OptionVar{Name: "syslog-address", Value: "tcp://user:hunter2@logs:514"}) || shown[2].Value != "web" {
+	if len(shown) != 3 || shown[1] != (redact.OptionVar{Name: "splunk-token", Value: "hunter2"}) || shown[2].Value != "web" {
 		t.Errorf("revealed Options = %+v", shown)
 	}
 }

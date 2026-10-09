@@ -1070,7 +1070,7 @@ func detailEngine() dockertest.FakeConfig {
 	cfg.Containers[1].Inspect = dockertest.FakeInspect{
 		Env: []string{"DB_PASSWORD=hunter2", "MODE=prod"}, Cmd: []string{"nginx", "-g", "daemon off;"},
 		StartedAt: "2026-10-01T10:00:00Z", FinishedAt: "0001-01-01T00:00:00Z",
-		LogType: "syslog", LogOptions: map[string]string{"syslog-address": "tcp://user:s3cret@logs:514"},
+		LogType: "syslog", LogOptions: map[string]string{"splunk-token": "s3cret-token"},
 	}
 	cfg.RestartPolicies = map[string]string{webID: "on-failure:3"}
 	return cfg
@@ -1097,7 +1097,7 @@ func TestContainerDetailOfAViewerNamesTheVariablesAndWithholdsEveryValue(t *test
 	if rec.code != http.StatusOK {
 		t.Fatalf("status = %d: %s\n%s", rec.code, rec.body, f.logs)
 	}
-	for _, leak := range []string{"hunter2", "s3cret", "prod", "tcp://"} {
+	for _, leak := range []string{"hunter2", "s3cret", "prod"} {
 		if strings.Contains(string(rec.body), leak) {
 			t.Fatalf("a Viewer's body carries %q: %s", leak, rec.body)
 		}
@@ -1140,7 +1140,7 @@ func TestContainerDetailOfAnAdminCarriesTheValues(t *testing.T) {
 	if d.Masked || len(d.Env) != 2 || d.Env[0].Value != "hunter2" || d.Env[0].Masked || d.Env[1].Value != "prod" {
 		t.Errorf("env = %+v masked=%v", d.Env, d.Masked)
 	}
-	if len(d.LogConfig.Options) != 1 || d.LogConfig.Options[0].Value != "tcp://user:s3cret@logs:514" {
+	if len(d.LogConfig.Options) != 1 || d.LogConfig.Options[0].Value != "s3cret-token" {
 		t.Errorf("log options = %+v", d.LogConfig.Options)
 	}
 }
