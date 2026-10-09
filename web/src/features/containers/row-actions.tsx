@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { Link } from "@tanstack/react-router";
 import { Ellipsis } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -30,7 +31,7 @@ import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
 
 // The actions that need no confirmation, with the words of their toast.
-type ImmediateAction = "start" | "restart" | "pause" | "unpause";
+export type ImmediateAction = "start" | "restart" | "pause" | "unpause";
 
 const DONE_TOAST: Record<ImmediateAction, string> = {
   start: "started",
@@ -38,6 +39,44 @@ const DONE_TOAST: Record<ImmediateAction, string> = {
   pause: "paused",
   unpause: "unpaused",
 };
+
+// useImmediateAction runs the actions that need no confirmation on one container:
+// Start, Restart, Pause and Unpause. Each is reversible, and none loses data, so
+// none asks first (D-06, D-07). The row is marked as waiting until the change is
+// seen, a refusal toasts its reason, and busy is true while a request is out. The
+// list's row menu and the container page's header share it.
+export function useImmediateAction(envId: string, row: ContainerRow) {
+  const t = useT();
+  const mutation = useContainerAction(envId);
+  const pend = usePendingApi();
+
+  async function run(action: ImmediateAction) {
+    const verb = t(`actions.verb.${action}`);
+    const key = pendingKey(row);
+    pend.mark([{ key, name: row.name, fingerprint: pendingFingerprint(row) }], action);
+    try {
+      const results = await mutation.mutateAsync({
+        action,
+        targets: [{ nodeId: row.nodeId, id: row.id }],
+      });
+      const result = results[0];
+      if (result?.result === "done") {
+        toastSuccess(t(`actions.toast.${DONE_TOAST[action]}`, { name: row.name }));
+        return;
+      }
+      pend.release([key]);
+      const reason = result ? reasonOf(t, row, result) : t("actions.refusal.generic");
+      toastError(t("actions.toast.failed", { verb, name: row.name, reason }));
+    } catch (err) {
+      pend.release([key]);
+      toastError(
+        t("actions.toast.failed", { verb, name: row.name, reason: requestReasonOf(t, err) }),
+      );
+    }
+  }
+
+  return { run, busy: mutation.isPending };
+}
 
 interface ContainerRowActionsProps {
   envId: string;
@@ -67,8 +106,7 @@ export function ContainerRowActions({
   const t = useT();
   const needs = useNeeds("containers.control", envId);
   const removeNeeds = useNeeds("containers.remove", envId);
-  const mutation = useContainerAction(envId);
-  const pend = usePendingApi();
+  const { run, busy } = useImmediateAction(envId, row);
   // The dialog of the action chosen. The verb stays after it closes so the
   // dialog does not change its words while it fades.
   const [dialogVerb, setDialogVerb] = useState<DialogVerb>("stop");
@@ -111,34 +149,6 @@ export function ContainerRowActions({
   const reason = needs.reason ?? (row.readOnly ? t("actions.readOnlyHost") : undefined);
   const removeUnavailable = !removeNeeds.allowed || row.readOnly;
   const removeReason = removeNeeds.reason ?? (row.readOnly ? t("actions.readOnlyHost") : undefined);
-  const busy = mutation.isPending;
-
-  // Start, restart, pause and unpause run at once: each is reversible, and
-  // none loses data, so none asks first (D-06, D-07).
-  async function run(action: ImmediateAction) {
-    const verb = t(`actions.verb.${action}`);
-    const key = pendingKey(row);
-    pend.mark([{ key, name: row.name, fingerprint: pendingFingerprint(row) }], action);
-    try {
-      const results = await mutation.mutateAsync({
-        action,
-        targets: [{ nodeId: row.nodeId, id: row.id }],
-      });
-      const result = results[0];
-      if (result?.result === "done") {
-        toastSuccess(t(`actions.toast.${DONE_TOAST[action]}`, { name: row.name }));
-        return;
-      }
-      pend.release([key]);
-      const reason = result ? reasonOf(t, row, result) : t("actions.refusal.generic");
-      toastError(t("actions.toast.failed", { verb, name: row.name, reason }));
-    } catch (err) {
-      pend.release([key]);
-      toastError(
-        t("actions.toast.failed", { verb, name: row.name, reason: requestReasonOf(t, err) }),
-      );
-    }
-  }
 
   function ask(verb: DialogVerb) {
     setDialogVerb(verb);
@@ -188,6 +198,16 @@ export function ContainerRowActions({
             event.preventDefault();
           }}
         >
+          <DropdownMenuItem asChild className="max-md:min-h-11">
+            <Link
+              to="/env/$envId/containers/$containerId"
+              params={{ envId, containerId: row.id }}
+              search={{ node: row.nodeId }}
+            >
+              {t("actions.menu.open")}
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           {canStart ? (
             <NeedsTooltip reason={reason}>
               {item(t("actions.menu.start"), () => void run("start"))}

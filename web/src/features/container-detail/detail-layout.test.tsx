@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
-import type { ContainerDetail } from "@/api/container-detail";
+import { type ContainerDetail, detailRetry } from "@/api/container-detail";
 import { queryClient } from "@/api/query-client";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
@@ -83,6 +83,7 @@ beforeEach(() => {
     Response.json({ results: [{ nodeId: "n1", id: "web-id", name: "web", result: "done" }] });
   envType = "standalone";
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
+  detailRetry.attempts = 0;
   setCsrfToken(null);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -165,6 +166,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   queryClient.clear();
   queryClient.setDefaultOptions(defaults);
+  detailRetry.attempts = 1;
   document.title = "";
 });
 

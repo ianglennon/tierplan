@@ -353,7 +353,12 @@ describe("After an answer", () => {
 });
 
 describe("Restart, Pause and Unpause", () => {
-  const itemNames = () => screen.getAllByRole("menuitem").map((i) => i.textContent);
+  // Open (plan 04-10) is in every menu; the rest follow the state.
+  const itemNames = () =>
+    screen
+      .getAllByRole("menuitem")
+      .map((i) => i.textContent)
+      .filter((name) => name !== "Open");
 
   it("offers Stop, Restart and Pause on a running row", async () => {
     mount(row({ state: "running" }));
@@ -440,9 +445,11 @@ describe("ContainerRowActions open state", () => {
     const seen: boolean[] = [];
     const view = render(
       <QueryClientProvider client={client}>
-        <TooltipProvider>
-          <ContainerRowActions envId={ENV} row={r} onOpenChange={(o) => seen.push(o)} />
-        </TooltipProvider>
+        <TestRouter>
+          <TooltipProvider>
+            <ContainerRowActions envId={ENV} row={r} onOpenChange={(o) => seen.push(o)} />
+          </TooltipProvider>
+        </TestRouter>
       </QueryClientProvider>,
     );
     return { seen, view };
@@ -546,9 +553,11 @@ describe("Kill and Remove", () => {
     const seen: boolean[] = [];
     render(
       <QueryClientProvider client={client}>
-        <TooltipProvider>
-          <ContainerRowActions envId={ENV} row={row()} onOpenChange={(o) => seen.push(o)} />
-        </TooltipProvider>
+        <TestRouter>
+          <TooltipProvider>
+            <ContainerRowActions envId={ENV} row={row()} onOpenChange={(o) => seen.push(o)} />
+          </TooltipProvider>
+        </TestRouter>
       </QueryClientProvider>,
     );
     await openMenu();

@@ -14,6 +14,10 @@ export type ContainerDetail = components["schemas"]["ContainerDetailBody"];
 // has told it to: the same fallback the lists use.
 export const DETAIL_REFETCH_MS = 30_000;
 
+// How many times a failed read is tried again. A container that does not exist is
+// never tried again. Exported so tests can set it to none.
+export const detailRetry = { attempts: 1 };
+
 // DetailLoadError is a detail read the server refused or could not answer. The
 // status and the problem type tell a container that no longer exists (404
 // container_not_found) from every other failure.
@@ -57,7 +61,7 @@ export function containerDetailQuery(envId: string, id: string, nodeId?: string)
       return res.data;
     },
     // A container that does not exist will not exist on a second try.
-    retry: (count, error) => !isGone(error) && count < 1,
+    retry: (count, error) => !isGone(error) && count < detailRetry.attempts,
     refetchInterval: DETAIL_REFETCH_MS,
   });
 }

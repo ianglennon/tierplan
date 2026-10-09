@@ -3,12 +3,24 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
+import { Box, Info } from "lucide-react";
 
-import { containerDetailQuery } from "@/api/container-detail";
+import { type ContainerDetail, containerDetailQuery, isGone } from "@/api/container-detail";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HeaderActions } from "@/features/container-detail/header-actions";
 import { CONTAINER_TABS } from "@/features/container-detail/tabs";
 import { ContainerStateCell } from "@/features/containers/container-state-cell";
 import { SelfContainerBadge } from "@/features/containers/self-container-badge";
@@ -50,42 +62,133 @@ function Breadcrumb({ envId, name }: { envId: string; name: string | undefined }
   );
 }
 
+// The line under the name says what the container belongs to, as plain text: the
+// stack and project pages come with Phases 6 and 7. A stack wins over a project,
+// and either wins over a bare service.
+function belongsTo(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  d: ContainerDetail,
+) {
+  if (d.stack) return t("containerdetail.header.stack", { name: d.stack });
+  if (d.project) return t("containerdetail.header.project", { name: d.project });
+  if (d.service) return t("containerdetail.header.task", { service: d.service });
+  return "";
+}
+
+// Gone is what a container's page becomes when the container no longer exists: it
+// was removed, or recreated under a new ID. It replaces the page, tabs included,
+// since there is nothing left for any of them to show.
+function Gone({ envId, name }: { envId: string; name: string | undefined }) {
+  const t = useT();
+  return (
+    <div className="flex flex-col gap-6">
+      <header>
+        <Breadcrumb envId={envId} name={name} />
+      </header>
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Box aria-hidden="true" />
+          </EmptyMedia>
+          <EmptyTitle role="heading" aria-level={2}>
+            {t("containerdetail.gone.heading")}
+          </EmptyTitle>
+          <EmptyDescription>{t("containerdetail.gone.body")}</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button asChild variant="outline" className="max-md:h-11">
+            <Link to="/env/$envId/containers" params={{ envId }}>
+              {t("containerdetail.gone.back")}
+            </Link>
+          </Button>
+        </EmptyContent>
+      </Empty>
+    </div>
+  );
+}
+
 // DetailLayout is the frame of a container's page: the breadcrumb, the header with
-// the name and the state, the tab bar (Link triggers, the active tab follows the
-// URL) and the tab under it. The tabs render at once, before the container has
-// loaded (UI-SPEC "Loading").
+// the name, the state, the badges and the actions, the swarm-task banner, the tab
+// bar (Link triggers, the active tab follows the URL) and the tab under it. The
+// tabs render at once, before the container has loaded (UI-SPEC "Loading").
 export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
   const t = useT();
   const isSwarm = useEnvIsSwarm(envId);
-  const { data } = useQuery(containerDetailQuery(envId, containerId, node));
-  useDocumentTitle(data?.name);
+  const query = useQuery(containerDetailQuery(envId, containerId, node));
+  const { data } = query;
+  const gone = isGone(query.error);
+  useDocumentTitle(gone ? t("containerdetail.gone.heading") : data?.name);
 
+  if (gone) return <Gone envId={envId} name={data?.name} />;
+
+  if (query.isError && !data) {
+    return (
+      <div className="flex flex-col gap-6">
+        <header>
+          <Breadcrumb envId={envId} name={containerId} />
+        </header>
+        <Alert variant="destructive">
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{t("containerdetail.error.loadFailed", { name: containerId })}</span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="max-md:h-11"
+              disabled={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              {t("containerdetail.error.retry")}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  const line = data ? belongsTo(t, data) : "";
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-2">
         <Breadcrumb envId={envId} name={data?.name} />
         {data ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <h2 className="min-w-0 max-w-full truncate text-2xl font-semibold">{data.name}</h2>
-              </TooltipTrigger>
-              <TooltipContent className="break-all">{data.name}</TooltipContent>
-            </Tooltip>
-            <ContainerStateCell state={data.state} health={data.health} />
-            {isSwarm && data.node ? (
-              <Badge variant="outline" className="shrink-0">
-                {data.node}
-              </Badge>
-            ) : null}
-            {data.selfKind === "server" || data.selfKind === "agent" ? (
-              <SelfContainerBadge kind={data.selfKind} />
-            ) : null}
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <h2 className="max-w-full min-w-0 truncate text-2xl font-semibold">
+                      {data.name}
+                    </h2>
+                  </TooltipTrigger>
+                  <TooltipContent className="break-all">{data.name}</TooltipContent>
+                </Tooltip>
+                <ContainerStateCell state={data.state} health={data.health} />
+                {isSwarm && data.node ? (
+                  <Badge variant="outline" className="shrink-0">
+                    {data.node}
+                  </Badge>
+                ) : null}
+                {data.selfKind === "server" || data.selfKind === "agent" ? (
+                  <SelfContainerBadge kind={data.selfKind} />
+                ) : null}
+              </div>
+              {line ? <p className="text-sm break-words text-muted-foreground">{line}</p> : null}
+            </div>
+            <HeaderActions envId={envId} detail={data} />
           </div>
         ) : (
           <Skeleton className="h-8 w-64" />
         )}
       </header>
+      {data?.service ? (
+        <Alert>
+          <Info aria-hidden="true" />
+          <AlertDescription>
+            {t("containerdetail.banner.task", { service: data.service })}
+          </AlertDescription>
+        </Alert>
+      ) : null}
       <Tabs value="" className="gap-4">
         <TabsList
           variant="line"

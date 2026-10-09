@@ -3,6 +3,7 @@
     "column": "Actions",
     "menu": {
       "label": "Actions for {{name}}",
+      "open": "Open",
       "start": "Start",
       "stop": "Stop",
       "restart": "Restart",
