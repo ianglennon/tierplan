@@ -4,24 +4,113 @@
 package proxy
 
 import (
+	"encoding/json"
+	"net/netip"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/volume"
 )
 
-// oracle is the allowlist written out a second time, on purpose: it is what
-// "allowed" is allowed to mean. If the production expression ever grows a path
-// this one does not name, the fuzz target finds it and fails, so widening the
-// allowlist is a decision made in two places and not an accident of a regexp.
-var oracle = regexp.MustCompile(
-	`^/(v[0-9]+\.[0-9]+/)?(_ping|version|info|containers/json|images/json|volumes|networks|events|nodes|services|tasks)$`)
+// The oracle is the route table written out a second time, on purpose, with its
+// own expressions and its own query-key sets. It does not read the production
+// table and does not call its lookup. If the production table ever grows a route
+// this one does not name, the fuzz target finds it and fails, so widening what the
+// agent forwards is a decision made in two places and not an accident of a table.
 
-// FuzzAllowed drives the allowlist decision with arbitrary input. Whatever it is
-// given, an allowed request has a method that reads, a path that is exactly one
-// of the allowlisted shapes and already clean, no control character anywhere, a
-// query within the cap, no body and no upgrade; and a read-only agent allows
-// nothing that changes anything.
+const (
+	oVer = `^/(v[0-9]+\.[0-9]+/)?`
+	oID  = `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`
+	oVol = `[A-Za-z0-9][A-Za-z0-9_.-]{0,254}`
+)
+
+// oracleEntry is one thing the agent may forward.
+type oracleEntry struct {
+	method string
+	path   *regexp.Regexp
+	// keys are the query keys the route takes, each with the value it accepts. A
+	// read entry takes any query.
+	keys map[string]*regexp.Regexp
+	read bool
+	// body is true when the route takes a JSON body, upgrade when it may upgrade.
+	body, upgrade bool
+}
+
+func rx(s string) *regexp.Regexp { return regexp.MustCompile(s) }
+
+var (
+	oBool   = rx(`^(0|1|true|false)$`)
+	oSecs   = rx(`^(-1|[0-9]{1,4}|[0-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$`)
+	oSignal = rx(`^[A-Za-z0-9+]{1,16}$`)
+	// oExecStart is the one path an upgrade may be on.
+	oExecStart = rx(oVer + `exec/` + oID + `/start$`)
+)
+
+func oRead(tail string) oracleEntry {
+	return oracleEntry{method: "GET", path: rx(oVer + tail + `$`), read: true}
+}
+
+func oEntry(method, tail string, keys map[string]*regexp.Regexp) oracleEntry {
+	return oracleEntry{method: method, path: rx(oVer + tail + `$`), keys: keys}
+}
+
+var oracle = []oracleEntry{
+	oRead(`(_ping|version|info|containers/json|images/json|volumes|networks|events|nodes|services|tasks)`),
+	oRead(`containers/` + oID + `/json`),
+
+	oEntry("POST", `containers/`+oID+`/(start|pause|unpause)`, nil),
+	oEntry("POST", `containers/`+oID+`/(stop|restart)`, map[string]*regexp.Regexp{"t": oSecs, "signal": oSignal}),
+	oEntry("POST", `containers/`+oID+`/kill`, map[string]*regexp.Regexp{"signal": oSignal}),
+	oEntry("DELETE", `containers/`+oID, map[string]*regexp.Regexp{"force": oBool, "v": oBool}),
+
+	oEntry("GET", `containers/`+oID+`/logs`, map[string]*regexp.Regexp{
+		"stdout": oBool, "stderr": oBool, "timestamps": oBool, "follow": oBool, "details": oBool,
+		"since": rx(`^[0-9TZ:.+-]{1,40}$`), "until": rx(`^[0-9TZ:.+-]{1,40}$`), "tail": rx(`^(all|[0-9]{1,6})$`),
+	}),
+
+	{method: "POST", path: rx(oVer + `containers/` + oID + `/exec$`), body: true},
+	{method: "POST", path: oExecStart, body: true, upgrade: true},
+	oEntry("POST", `exec/`+oID+`/resize`, map[string]*regexp.Regexp{"h": rx(`^[0-9]{1,4}$`), "w": rx(`^[0-9]{1,4}$`)}),
+	oEntry("GET", `exec/`+oID+`/json`, nil),
+
+	oEntry("GET", `networks/`+oID, map[string]*regexp.Regexp{"verbose": oBool, "scope": rx(`^(local|swarm|global)$`)}),
+	{method: "POST", path: rx(oVer + `networks/create$`), body: true},
+	oEntry("DELETE", `networks/`+oID, nil),
+	{method: "POST", path: rx(oVer + `networks/` + oID + `/(connect|disconnect)$`), body: true},
+
+	oEntry("GET", `volumes/`+oVol, nil),
+	{method: "POST", path: rx(oVer + `volumes/create$`), body: true},
+	oEntry("DELETE", `volumes/`+oVol, nil),
+
+	oEntry("GET", `system/df`, map[string]*regexp.Regexp{"type": rx(`^volume$`), "verbose": oBool}),
+}
+
+// oracleFor returns every oracle entry a method and path fall under. HEAD stands
+// for GET.
+func oracleFor(method, rawPath string) []oracleEntry {
+	if method == "HEAD" {
+		method = "GET"
+	}
+	var out []oracleEntry
+	for _, e := range oracle {
+		if e.method == method && e.path.MatchString(rawPath) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// FuzzAllowed drives the decision with arbitrary input. Whatever it is given, an
+// allowed request falls under exactly one oracle entry, has that entry's method,
+// carries only that entry's query keys with values the entry accepts, has a path
+// that is already clean, no control character, a query within the cap, a body only
+// where the entry takes one and an upgrade only where it may upgrade; and a
+// read-only agent allows nothing that changes anything.
 func FuzzAllowed(f *testing.F) {
 	for _, s := range []struct {
 		method, path, query string
@@ -30,36 +119,75 @@ func FuzzAllowed(f *testing.F) {
 		{"GET", "/info", "", false, false, false},
 		{"HEAD", "/_ping", "", false, false, true},
 		{"GET", "/v1.47/containers/json", "all=1", false, false, false},
+		{"GET", "/containers/abc/json", "", false, false, false},
+		{"POST", "/containers/abc/start", "", false, false, false},
+		{"POST", "/containers/abc/stop", "t=10&signal=SIGTERM", false, false, false},
+		{"POST", "/containers/abc/restart", "t=-1", false, false, false},
+		{"POST", "/containers/abc/kill", "signal=9", false, false, false},
+		{"POST", "/containers/abc/pause", "", false, false, false},
+		{"POST", "/containers/abc/unpause", "", false, false, false},
+		{"DELETE", "/containers/abc", "force=1&v=1", false, false, false},
+		{"DELETE", "/containers/abc", "link=1", false, false, false},
+		{"GET", "/containers/abc/logs", "follow=1&stdout=1&stderr=1&tail=500&since=1700000000.5", false, false, false},
+		{"POST", "/containers/abc/exec", "", true, false, false},
+		{"POST", "/exec/x/start", "", true, true, false},
+		{"POST", "/exec/x/resize", "h=24&w=80", false, false, false},
+		{"GET", "/exec/x/json", "", false, false, false},
+		{"GET", "/networks/n1", "verbose=1&scope=swarm", false, false, false},
+		{"POST", "/networks/create", "", true, false, false},
+		{"DELETE", "/networks/n1", "", false, false, false},
+		{"POST", "/networks/n1/connect", "", true, false, false},
+		{"POST", "/networks/n1/disconnect", "", true, false, false},
+		{"GET", "/volumes/v1", "", false, false, false},
+		{"POST", "/volumes/create", "", true, false, false},
+		{"DELETE", "/volumes/v1", "", false, false, false},
+		{"DELETE", "/volumes/v1", "force=1", false, false, false},
+		{"GET", "/system/df", "type=volume&verbose=1", false, false, false},
 		{"POST", "/containers/create", "", true, false, false},
+		{"POST", "/containers/abc/attach", "", false, true, false},
+		{"GET", "/containers/abc/archive", "", false, false, false},
 		{"GET", "//info", "", false, false, false},
 		{"GET", "/./info", "", false, false, false},
 		{"GET", "/%2e%2e/info", "", false, false, false},
+		{"GET", "/containers%2Fjson", "", false, false, false},
+		{"GET", "/containers/../info", "", false, false, false},
 		{"GET", "/v1.47//info", "", false, false, false},
 		{"GET", "/info%00", "", false, false, false},
 		{"GET", "/info\x00", "", false, false, false},
 		{"GET", "/info", "a=\n", false, false, false},
+		{"POST", "/containers/abc/stop", "t=10", false, true, false},
+		{"POST", "/containers/abc/start", "", true, false, false},
 		{"GET", "/containers/json", strings.Repeat("a", 5<<10), false, false, false},
 		{"GET", "/info", "", false, true, false},
 		{"POST", "/info", "", false, false, true},
+		{"POST", "/containers/abc/stop", "t=1", false, false, true},
 	} {
 		f.Add(s.method, s.path, s.query, s.body, s.upgrade, s.ro)
 	}
 	f.Fuzz(func(t *testing.T, method, rawPath, rawQuery string, hasBody, hasUpgrade, readOnly bool) {
-		ok, reason, _ := Allowed(method, rawPath, rawQuery, hasBody, hasUpgrade, Policy{ReadOnly: readOnly})
+		ok, reason, kind := Allowed(method, rawPath, rawQuery, hasBody, hasUpgrade, Policy{ReadOnly: readOnly})
 		if !ok {
 			if reason != "allowlist" && reason != "read_only_flag" {
 				t.Fatalf("a refusal with the reason %q", reason)
+			}
+			if kind != BodyNone {
+				t.Fatalf("a refusal came with the body kind %d", kind)
 			}
 			return
 		}
 		if reason != "" {
 			t.Fatalf("an allowed request came with the reason %q", reason)
 		}
-		if method != "GET" && method != "HEAD" {
-			t.Fatalf("method %q was allowed", method)
+		if readOnly && method != "GET" && method != "HEAD" {
+			t.Fatalf("method %q was allowed on a read-only agent", method)
 		}
-		if !oracle.MatchString(rawPath) {
-			t.Fatalf("path %q was allowed but is not one of the allowlisted shapes", rawPath)
+		entries := oracleFor(method, rawPath)
+		if len(entries) != 1 {
+			t.Fatalf("%s %q was allowed but falls under %d oracle entries", method, rawPath, len(entries))
+		}
+		e := entries[0]
+		if method != e.method && (method != "HEAD" || e.method != "GET") {
+			t.Fatalf("method %q was allowed on a %s entry", method, e.method)
 		}
 		if rawPath != path.Clean(rawPath) {
 			t.Fatalf("path %q was allowed but is not clean", rawPath)
@@ -70,8 +198,31 @@ func FuzzAllowed(f *testing.F) {
 		if len(rawQuery) > maxQuery {
 			t.Fatalf("a query of %d bytes was allowed", len(rawQuery))
 		}
-		if hasBody || hasUpgrade {
-			t.Fatalf("a request with a body (%v) or an upgrade (%v) was allowed", hasBody, hasUpgrade)
+		if !e.read {
+			q, err := url.ParseQuery(rawQuery)
+			if err != nil {
+				t.Fatalf("%q?%q was allowed with a query that does not parse", rawPath, rawQuery)
+			}
+			for k, vs := range q {
+				pattern, known := e.keys[k]
+				if !known {
+					t.Fatalf("%s %q was allowed with the query key %q", method, rawPath, k)
+				}
+				for _, v := range vs {
+					if !pattern.MatchString(v) {
+						t.Fatalf("%s %q was allowed with %s=%q", method, rawPath, k, v)
+					}
+				}
+			}
+		}
+		if hasBody != e.body {
+			t.Fatalf("%s %q was allowed with a body (%v) where the entry takes one (%v)", method, rawPath, hasBody, e.body)
+		}
+		if (kind != BodyNone) != e.body {
+			t.Fatalf("%s %q was allowed with the body kind %d where the entry takes a body (%v)", method, rawPath, kind, e.body)
+		}
+		if hasUpgrade && (!e.upgrade || !oExecStart.MatchString(rawPath)) {
+			t.Fatalf("an upgrade was allowed on %s %q, which is not an exec start", method, rawPath)
 		}
 	})
 }
@@ -83,4 +234,192 @@ func hasControlBytes(s string) bool {
 		}
 	}
 	return false
+}
+
+// bodyShape is what a rebuilt body of one kind may contain. A key maps to the
+// shape of the object (or of each element of the list) under it, or to nil for a
+// scalar or a free map. zero lists the dotted keys the engine's type always
+// encodes but the allowlist does not name: they must be empty.
+type bodyShape struct {
+	keys map[string]*bodyShape
+	zero []string
+}
+
+var bodyShapes = map[BodyKind]bodyShape{
+	BodyExecCreate: {
+		keys: map[string]*bodyShape{
+			"User": nil, "Tty": nil, "ConsoleSize": nil, "AttachStdin": nil, "AttachStderr": nil,
+			"AttachStdout": nil, "WorkingDir": nil, "Cmd": nil,
+			"Privileged": nil, "DetachKeys": nil, "Env": nil,
+		},
+		zero: []string{"Privileged", "DetachKeys", "Env"},
+	},
+	BodyExecStart: {
+		keys: map[string]*bodyShape{"Tty": nil, "ConsoleSize": nil, "Detach": nil},
+		zero: []string{"Detach"},
+	},
+	BodyNetworkCreate: {
+		keys: map[string]*bodyShape{
+			"Name": nil, "Driver": nil, "Scope": nil, "EnableIPv4": nil, "EnableIPv6": nil,
+			"Internal": nil, "Attachable": nil, "Options": nil, "Labels": nil,
+			"IPAM": {keys: map[string]*bodyShape{
+				"Driver": nil, "Options": nil,
+				"Config": {keys: map[string]*bodyShape{"Subnet": nil, "IPRange": nil, "Gateway": nil}},
+			}},
+			"Ingress": nil, "ConfigOnly": nil, "ConfigFrom": nil,
+		},
+		zero: []string{"Ingress", "ConfigOnly", "ConfigFrom", "IPAM.Options"},
+	},
+	BodyNetworkConnect: {
+		keys: map[string]*bodyShape{
+			"Container": nil,
+			"EndpointConfig": {keys: map[string]*bodyShape{
+				"IPAMConfig": {keys: map[string]*bodyShape{"IPv4Address": nil, "IPv6Address": nil, "LinkLocalIPs": nil}},
+				"Aliases":    nil,
+				"Links":      nil, "DriverOpts": nil, "GwPriority": nil, "NetworkID": nil, "EndpointID": nil,
+				"Gateway": nil, "IPAddress": nil, "MacAddress": nil, "IPPrefixLen": nil, "IPv6Gateway": nil,
+				"GlobalIPv6Address": nil, "GlobalIPv6PrefixLen": nil, "DNSNames": nil,
+			}},
+		},
+		zero: []string{
+			"EndpointConfig.Links", "EndpointConfig.DriverOpts", "EndpointConfig.GwPriority", "EndpointConfig.NetworkID",
+			"EndpointConfig.EndpointID", "EndpointConfig.Gateway", "EndpointConfig.IPAddress", "EndpointConfig.MacAddress",
+			"EndpointConfig.IPPrefixLen", "EndpointConfig.IPv6Gateway", "EndpointConfig.GlobalIPv6Address",
+			"EndpointConfig.GlobalIPv6PrefixLen", "EndpointConfig.DNSNames", "EndpointConfig.IPAMConfig.LinkLocalIPs",
+		},
+	},
+	BodyNetworkDisconnect: {
+		keys: map[string]*bodyShape{"Container": nil, "Force": nil},
+		zero: []string{"Force"},
+	},
+	BodyVolumeCreate: {
+		keys: map[string]*bodyShape{"Name": nil, "Driver": nil, "DriverOpts": nil, "Labels": nil},
+	},
+}
+
+// checkShape returns the first key under v that the shape does not name, or "".
+func checkShape(v map[string]any, s *bodyShape, prefix string) string {
+	for k, child := range v {
+		sub, known := s.keys[k]
+		if !known {
+			return prefix + k
+		}
+		if sub == nil {
+			continue
+		}
+		switch c := child.(type) {
+		case map[string]any:
+			if bad := checkShape(c, sub, prefix+k+"."); bad != "" {
+				return bad
+			}
+		case []any:
+			for _, el := range c {
+				if m, ok := el.(map[string]any); ok {
+					if bad := checkShape(m, sub, prefix+k+"."); bad != "" {
+						return bad
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// emptyAt reports whether the dotted key is absent or holds a zero value.
+func emptyAt(v map[string]any, dotted string) bool {
+	var cur any = v
+	for part := range strings.SplitSeq(dotted, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return true
+		}
+		cur, ok = m[part]
+		if !ok {
+			return true
+		}
+	}
+	switch c := cur.(type) {
+	case nil:
+		return true
+	case bool:
+		return !c
+	case float64:
+		return c == 0
+	case string:
+		return c == ""
+	case []any:
+		return len(c) == 0
+	case map[string]any:
+		return len(c) == 0
+	}
+	return false
+}
+
+// FuzzBody drives every validator with arbitrary bytes. Whatever it is given,
+// when it accepts, the body it forwards decodes into an object whose keys, at
+// every depth, are the ones that kind allowlists plus the zero-valued keys the
+// engine's type always encodes, and nothing that escalates (a privileged exec, a
+// detached start, a forced disconnect, an ingress or config-only network, an
+// environment, detach keys, endpoint links) is set.
+func FuzzBody(f *testing.F) {
+	enc := func(v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			f.Fatal(err)
+		}
+		return string(b)
+	}
+	seeds := []struct {
+		kind uint8
+		body string
+	}{
+		{uint8(BodyExecCreate), enc(container.ExecCreateRequest{AttachStdin: true, AttachStdout: true, AttachStderr: true, Tty: true, Cmd: []string{"/bin/sh"}, User: "root", WorkingDir: "/app", ConsoleSize: &[2]uint{24, 80}})},
+		{uint8(BodyExecCreate), enc(container.ExecCreateRequest{Tty: true, Privileged: true, Cmd: []string{"sh"}})},
+		{uint8(BodyExecCreate), enc(container.ExecCreateRequest{Tty: true, Env: []string{"A=1"}, DetachKeys: "ctrl-p", Cmd: []string{"sh"}})},
+		{uint8(BodyExecStart), enc(container.ExecStartRequest{Tty: true, ConsoleSize: &[2]uint{24, 80}})},
+		{uint8(BodyExecStart), enc(container.ExecStartRequest{Detach: true, Tty: true})},
+		{uint8(BodyNetworkCreate), enc(network.CreateRequest{
+			Name: "app", Driver: "overlay", Attachable: true, Labels: map[string]string{"a": "b"},
+			IPAM: &network.IPAM{Driver: "default", Config: []network.IPAMConfig{{Subnet: netip.MustParsePrefix("10.1.0.0/24"), Gateway: netip.MustParseAddr("10.1.0.1")}}},
+		})},
+		{uint8(BodyNetworkCreate), enc(network.CreateRequest{Name: "app", Driver: "overlay", Ingress: true, ConfigOnly: true})},
+		{uint8(BodyNetworkConnect), enc(network.ConnectRequest{Container: "c", EndpointConfig: &network.EndpointSettings{
+			IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: netip.MustParseAddr("10.1.0.5")}, Aliases: []string{"web"},
+		}})},
+		{uint8(BodyNetworkConnect), enc(network.ConnectRequest{Container: "c", EndpointConfig: &network.EndpointSettings{Links: []string{"x:y"}, GwPriority: 3}})},
+		{uint8(BodyNetworkDisconnect), enc(network.DisconnectRequest{Container: "c"})},
+		{uint8(BodyNetworkDisconnect), enc(network.DisconnectRequest{Container: "c", Force: true})},
+		{uint8(BodyVolumeCreate), enc(volume.CreateRequest{Name: "v", Driver: "local", DriverOpts: map[string]string{"type": "tmpfs"}, Labels: map[string]string{"a": "b"}})},
+		{uint8(BodyVolumeCreate), enc(volume.CreateRequest{Name: "v", ClusterVolumeSpec: &volume.ClusterVolumeSpec{Group: "g"}})},
+		{uint8(BodyNone), `{}`},
+	}
+	for _, s := range seeds {
+		f.Add(s.kind, s.body)
+	}
+	f.Fuzz(func(t *testing.T, kind uint8, body string) {
+		k := BodyKind(kind % 8)
+		out, err := validateBody(k, strings.NewReader(body))
+		if err != nil {
+			return
+		}
+		shape, known := bodyShapes[k]
+		if !known {
+			t.Fatalf("kind %d accepted a body but has no shape", k)
+		}
+		if len(out) > maxBody*2 {
+			t.Fatalf("the forwarded body is %d bytes", len(out))
+		}
+		var m map[string]any
+		if err := json.Unmarshal(out, &m); err != nil {
+			t.Fatalf("the forwarded body is not an object: %v: %s", err, out)
+		}
+		if bad := checkShape(m, &shape, ""); bad != "" {
+			t.Fatalf("kind %d forwarded the key %q: %s", k, bad, out)
+		}
+		for _, z := range shape.zero {
+			if !emptyAt(m, z) {
+				t.Fatalf("kind %d forwarded %s set: %s", k, z, out)
+			}
+		}
+	})
 }
