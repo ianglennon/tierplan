@@ -227,6 +227,9 @@ type FakeContainer struct {
 	Ports   []FakePort
 	Labels  map[string]string
 	Mounts  []string
+	// StopTimeout and StopSignal are the container's own, as inspect reports them.
+	StopTimeout *int
+	StopSignal  string
 }
 
 // FakePort is one published or exposed container port. IP is empty for a port
@@ -622,6 +625,8 @@ func (f *Fake) serveInspect(w http.ResponseWriter, id string, cfg FakeConfig) {
 	}
 	if known {
 		resp.Config.Labels = found.Labels
+		resp.Config.StopTimeout = found.StopTimeout
+		resp.Config.StopSignal = found.StopSignal
 		resp.State.Running = found.State == "running"
 		resp.State.Status = container.ContainerState(found.State)
 		if len(found.Names) > 0 {

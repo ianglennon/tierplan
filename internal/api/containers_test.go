@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -82,7 +83,7 @@ type auditRowFull struct {
 func (f *envFix) actionAudits(t *testing.T) []auditRowFull {
 	t.Helper()
 	rows, err := f.st.Read.Query(`SELECT action, target_type, target_id, COALESCE(env_id, ''), result, COALESCE(reason, ''), COALESCE(details, '{}')
-		FROM audit_log WHERE action IN ('container.started', 'container.stopped') ORDER BY seq`)
+		FROM audit_log WHERE action LIKE 'container.%' ORDER BY seq`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,12 +257,15 @@ func TestContainerActionTheSchemaRefusesBadBodies(t *testing.T) {
 		many[i] = [2]string{e.ID, "web"}
 	}
 	for name, body := range map[string]string{
-		"no targets":       `{"action":"stop","targets":[]}`,
-		"26 targets":       actionJSON("stop", many...),
-		"restart":          actionJSON("restart", [2]string{e.ID, "web"}),
-		"an unknown field": `{"action":"stop","targets":[{"nodeId":"x","id":"web"}],"force":true}`,
-		"a path in an id":  actionJSON("stop", [2]string{e.ID, "../../etc"}),
-		"an empty node":    actionJSON("stop", [2]string{"", "web"}),
+		"no targets":          `{"action":"stop","targets":[]}`,
+		"26 targets":          actionJSON("stop", many...),
+		"an unknown verb":     actionJSON("exec", [2]string{e.ID, "web"}),
+		"a lower-case signal": strings.Replace(actionJSON("kill", [2]string{e.ID, "web"}), `{"action"`, `{"signal":"sigterm","action"`, 1),
+		"a negative timeout":  strings.Replace(actionJSON("stop", [2]string{e.ID, "web"}), `{"action"`, `{"timeout":-1,"action"`, 1),
+		"a day and a second":  strings.Replace(actionJSON("stop", [2]string{e.ID, "web"}), `{"action"`, `{"timeout":86401,"action"`, 1),
+		"an unknown field":    `{"action":"stop","targets":[{"nodeId":"x","id":"web"}],"force":true}`,
+		"a path in an id":     actionJSON("stop", [2]string{e.ID, "../../etc"}),
+		"an empty node":       actionJSON("stop", [2]string{"", "web"}),
 	} {
 		rec := f.act(t, e, body)
 		if rec.code != http.StatusUnprocessableEntity {
@@ -515,5 +519,295 @@ func TestBulkATargetOnANodeThatIsNotConnectedIsNodeUnreachableAndTheOthersStillR
 	}
 	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /containers/" + cacheID + "/stop"}) {
 		t.Fatalf("the daemon saw %v, want only the connected node's target", w)
+	}
+}
+
+// All six verbs, the single-target options, and container remove (plan 04-05, D-06 to
+// D-09, D-60, RES-01).
+
+func (f *envFix) remove(t *testing.T, e envBody, body string) *envRec {
+	t.Helper()
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/containers/remove", body)
+}
+
+func removeJSON(force, volumes bool, targets ...[2]string) string {
+	parts := make([]string, 0, len(targets))
+	for _, t := range targets {
+		parts = append(parts, fmt.Sprintf(`{"nodeId":%q,"id":%q}`, t[0], t[1]))
+	}
+	return fmt.Sprintf(`{"force":%t,"removeVolumes":%t,"targets":[%s]}`, force, volumes, strings.Join(parts, ","))
+}
+
+// withOptions adds timeout and signal to an actions body.
+func withOptions(body string, timeout int, signal string) string {
+	extra := ""
+	if timeout >= 0 {
+		extra += fmt.Sprintf(`"timeout":%d,`, timeout)
+	}
+	if signal != "" {
+		extra += fmt.Sprintf(`"signal":%q,`, signal)
+	}
+	return strings.Replace(body, `{"action"`, `{`+extra+`"action"`, 1)
+}
+
+func TestContainerActionRestartKillPauseAndUnpauseReachTheEngineAsTheirOwnCalls(t *testing.T) {
+	for _, tc := range []struct {
+		verb, container, id, want string
+		wantAudit                 string
+	}{
+		{"restart", "web", webID, "POST /containers/" + webID + "/restart", audit.ActionContainerRestarted},
+		{"kill", "web", webID, "POST /containers/" + webID + "/kill", audit.ActionContainerKilled},
+		{"pause", "web", webID, "POST /containers/" + webID + "/pause", audit.ActionContainerPaused},
+		{"unpause", "web", webID, "POST /containers/" + webID + "/unpause", audit.ActionContainerUnpaused},
+	} {
+		t.Run(tc.verb, func(t *testing.T) {
+			f, e := dashEnv(t, actionEngine())
+			rec := f.act(t, e, actionJSON(tc.verb, [2]string{e.ID, tc.container}))
+			if rec.code != http.StatusOK {
+				t.Fatalf("status = %d: %s", rec.code, rec.body)
+			}
+			if res := decode[actionBody](t, rec).Results[0]; res.Result != "done" {
+				t.Fatalf("result = %+v", res)
+			}
+			if w := f.fake.Writes(); !slices.Equal(w, []string{tc.want}) {
+				t.Fatalf("the daemon saw %v, want [%s]", w, tc.want)
+			}
+			rows := f.actionAudits(t)
+			if len(rows) != 1 || rows[0].Action != tc.wantAudit || rows[0].Result != "success" {
+				t.Fatalf("audit = %+v, want one %s", rows, tc.wantAudit)
+			}
+		})
+	}
+}
+
+func TestContainerActionAStopOrKillWithOptionsSendsThemAndWithoutSendsNeither(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"stop with no option", actionJSON("stop", [2]string{"", "web"}), "POST /containers/" + webID + "/stop"},
+		{"stop with a timeout", withOptions(actionJSON("stop", [2]string{"", "web"}), 5, ""), "POST /containers/" + webID + "/stop?t=5"},
+		{"stop with a zero timeout", withOptions(actionJSON("stop", [2]string{"", "web"}), 0, ""), "POST /containers/" + webID + "/stop?t=0"},
+		{"kill with a signal", withOptions(actionJSON("kill", [2]string{"", "web"}), -1, "SIGTERM"), "POST /containers/" + webID + "/kill?signal=SIGTERM"},
+		{"kill with no option", actionJSON("kill", [2]string{"", "web"}), "POST /containers/" + webID + "/kill"},
+		{"restart with both", withOptions(actionJSON("restart", [2]string{"", "web"}), 3, "SIGINT"), "POST /containers/" + webID + "/restart?signal=SIGINT&t=3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, e := dashEnv(t, actionEngine())
+			rec := f.act(t, e, strings.Replace(tc.body, `"nodeId":""`, `"nodeId":"`+e.ID+`"`, 1))
+			if rec.code != http.StatusOK {
+				t.Fatalf("status = %d: %s", rec.code, rec.body)
+			}
+			if w := f.fake.Writes(); !slices.Equal(w, []string{tc.want}) {
+				t.Fatalf("the daemon saw %v, want [%s]", w, tc.want)
+			}
+		})
+	}
+}
+
+func TestContainerActionOptionsWithMoreThanOneTargetAreRefusedAsSingleOnly(t *testing.T) {
+	f, e := dashEnv(t, actionEngine())
+	two := actionJSON("stop", [2]string{e.ID, "web"}, [2]string{e.ID, "db"})
+	for name, body := range map[string]string{
+		"a timeout": withOptions(two, 5, ""),
+		"a signal":  withOptions(two, -1, "SIGTERM"),
+	} {
+		rec := f.act(t, e, body)
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "options_single_only" {
+			t.Errorf("%s: %d %q, want 422 options_single_only: %s", name, rec.code, rec.ptyp, rec.body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a refused body sent %v", w)
+	}
+	if rows := f.actionAudits(t); len(rows) != 0 {
+		t.Fatalf("a refused body was audited: %+v", rows)
+	}
+}
+
+func TestContainerActionOptionsAreRecordedInTheAuditRowOfTheVerbsThatUseThem(t *testing.T) {
+	f, e := dashEnv(t, actionEngine())
+	if rec := f.act(t, e, withOptions(actionJSON("stop", [2]string{e.ID, "web"}), 7, "SIGQUIT")); rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	rows := f.actionAudits(t)
+	if len(rows) != 1 || rows[0].Details["timeout"] != "7" || rows[0].Details["signal"] != "SIGQUIT" {
+		t.Fatalf("audit = %+v", rows)
+	}
+}
+
+func TestContainerActionRepeatingAnActionIsAnsweredDoneAndARemovedContainerIsNotFound(t *testing.T) {
+	f, e := dashEnv(t, actionEngine())
+	// Start of a running container and stop of a stopped one are Docker's 304.
+	for _, tc := range []struct{ action, id string }{{"start", "web"}, {"stop", "db"}} {
+		res := decode[actionBody](t, f.act(t, e, actionJSON(tc.action, [2]string{e.ID, tc.id}))).Results[0]
+		if res.Result != "done" {
+			t.Errorf("%s %s = %+v, want done", tc.action, tc.id, res)
+		}
+	}
+	// A container removed meanwhile is not_found, for an action and for a second remove.
+	if res := decode[actionBody](t, f.remove(t, e, removeJSON(false, false, [2]string{e.ID, "db"}))).Results[0]; res.Result != "done" {
+		t.Fatalf("first remove = %+v", res)
+	}
+	if res := decode[actionBody](t, f.remove(t, e, removeJSON(false, false, [2]string{e.ID, "db"}))).Results[0]; res.Code != "not_found" {
+		t.Fatalf("second remove = %+v, want not_found", res)
+	}
+	if res := decode[actionBody](t, f.act(t, e, actionJSON("start", [2]string{e.ID, "db"}))).Results[0]; res.Code != "not_found" {
+		t.Fatalf("start after remove = %+v, want not_found", res)
+	}
+}
+
+func TestContainerRemoveSendsNeitherForceNorVolumesByDefaultAndEachWhenAsked(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		force, volume bool
+		id, want      string
+	}{
+		{"neither", false, false, "db", "DELETE /containers/" + dbID},
+		{"force", true, false, "web", "DELETE /containers/" + webID + "?force=1"},
+		{"volumes", false, true, "db", "DELETE /containers/" + dbID + "?v=1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, e := dashEnv(t, actionEngine())
+			rec := f.remove(t, e, removeJSON(tc.force, tc.volume, [2]string{e.ID, tc.id}))
+			if rec.code != http.StatusOK {
+				t.Fatalf("status = %d: %s\n%s", rec.code, rec.body, f.logs)
+			}
+			if res := decode[actionBody](t, rec).Results[0]; res.Result != "done" {
+				t.Fatalf("result = %+v", res)
+			}
+			if w := f.fake.Writes(); !slices.Equal(w, []string{tc.want}) {
+				t.Fatalf("the daemon saw %v, want [%s]", w, tc.want)
+			}
+			rows := f.actionAudits(t)
+			if len(rows) != 1 || rows[0].Action != audit.ActionContainerRemoved ||
+				rows[0].Details["force"] != fmt.Sprint(tc.force) || rows[0].Details["volumes"] != fmt.Sprint(tc.volume) {
+				t.Fatalf("audit = %+v", rows)
+			}
+		})
+	}
+}
+
+func TestContainerRemoveOfARunningContainerWithoutForceIsContainerRunningAndSendsNothing(t *testing.T) {
+	f, e := dashEnv(t, actionEngine())
+	rec := f.remove(t, e, removeJSON(false, false, [2]string{e.ID, "web"}, [2]string{e.ID, "db"}))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	got := decode[actionBody](t, rec).Results
+	if got[0].Result != "failed" || got[0].Code != "container_running" || got[1].Result != "done" {
+		t.Fatalf("results = %+v", got)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"DELETE /containers/" + dbID}) {
+		t.Fatalf("the daemon saw %v, want only the exited container's remove", w)
+	}
+	rows := f.actionAudits(t)
+	if len(rows) != 2 || rows[0].Result != "failure" || rows[0].Reason != "container_running" {
+		t.Fatalf("audit = %+v", rows)
+	}
+}
+
+func TestContainerRemoveAskingForVolumesNeedsTheDeleteVolumesExtra(t *testing.T) {
+	f, e := dashEnv(t, actionEngine())
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	f.addUser(t, "plain", false)
+	f.addEnvRole(t, "plain", e.ID, "operator")
+	f.addUser(t, "trusted", false)
+	f.addEnvRole(t, "trusted", e.ID, "operator")
+	if _, err := f.st.Write.Exec(`INSERT INTO assignment_extras (assignment_id, permission) VALUES (?, 'volumes.delete')`, "ra-trusted-"+e.ID); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/env/" + e.ID + "/containers/remove"
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	as := func(user, body string) *httptest.ResponseRecorder {
+		cookie, csrf := f.signIn(t, user, false)
+		return f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf})
+	}
+
+	// A Viewer is refused by the route policy, whatever the body.
+	if rec := as("viewer", removeJSON(false, false, [2]string{e.ID, "db"})); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer: status = %d, want 403: %s", rec.Code, rec.Body)
+	}
+
+	// An Operator without the extra may remove, but not with volumes.
+	if rec := as("plain", removeJSON(false, false, [2]string{e.ID, "db"})); rec.Code != http.StatusOK {
+		t.Fatalf("operator, no volumes: status = %d: %s", rec.Code, rec.Body)
+	}
+	before := len(f.fake.Writes())
+	rec := as("plain", removeJSON(false, true, [2]string{e.ID, "web"}))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator, volumes: status = %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "Removing anonymous volumes needs the delete volumes permission") {
+		t.Errorf("body = %s", rec.Body)
+	}
+	if after := len(f.fake.Writes()); after != before {
+		t.Fatalf("a refused request sent %d writes", after-before)
+	}
+	denied := f.audits(t, audit.ActionPermissionDenied)
+	last := denied[len(denied)-1]
+	if last.Reason != "forbidden" || last.TargetID != "POST /api/env/{envId}/containers/remove" {
+		t.Fatalf("the refusal = %+v", last)
+	}
+	var details string
+	if err := f.st.Read.QueryRow(`SELECT COALESCE(details, '{}') FROM audit_log WHERE action = ? ORDER BY seq DESC LIMIT 1`, audit.ActionPermissionDenied).Scan(&details); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(details, `"permission":"volumes.delete"`) {
+		t.Errorf("details = %s, want permission volumes.delete", details)
+	}
+	for _, r := range f.actionAudits(t) {
+		if r.Details["volumes"] == "true" {
+			t.Errorf("a refused request left a container.removed row: %+v", r)
+		}
+	}
+
+	// With the extra it goes through.
+	if rec := as("trusted", removeJSON(true, true, [2]string{e.ID, "web"})); rec.Code != http.StatusOK {
+		t.Fatalf("operator with the extra: status = %d: %s", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); !slices.Contains(w, "DELETE /containers/"+webID+"?force=1&v=1") {
+		t.Fatalf("the daemon saw %v", w)
+	}
+}
+
+func TestContainerActionsOnTwoNodesWithSameNamedContainersActOnExactlyTheNodeNamed(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Swarm")
+	const alphaWeb = "1111111111111111111111111111111111111111111111111111111111111111"
+	const bravoWeb = "2222222222222222222222222222222222222222222222222222222222222222"
+	box := func(name, id string) dockertest.FakeConfig {
+		return dockertest.FakeConfig{Hostname: name, SwarmState: "active", SwarmControl: true, Containers: []dockertest.FakeContainer{
+			{ID: id, Names: []string{"/web"}, Image: "nginx:1.27", State: "running", Status: "Up 2 hours"},
+		}}
+	}
+	alpha := f.connect(t, env, box("alpha", alphaWeb), swarmNode("alpha", true))
+	bravo := f.connect(t, env, box("bravo", bravoWeb), swarmNode("bravo", true))
+	f.whenState(t, env.ID, "online")
+
+	rec := f.actOn(t, env.ID, actionJSON("stop", [2]string{bravo.id, "web"}))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	if res := decode[actionBody](t, rec).Results[0]; res.Result != "done" || res.NodeID != bravo.id {
+		t.Fatalf("result = %+v", res)
+	}
+	if w := bravo.fake.Writes(); !slices.Equal(w, []string{"POST /containers/" + bravoWeb + "/stop"}) {
+		t.Fatalf("bravo saw %v", w)
+	}
+	if w := alpha.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a container of the same name on another node received %v", w)
+	}
+
+	// Both at once: each node receives exactly its own call, and the results keep the order sent.
+	rec = f.req(t, http.MethodPost, "/api/env/"+env.ID+"/containers/remove",
+		removeJSON(true, false, [2]string{alpha.id, "web"}, [2]string{bravo.id, "web"}))
+	got := decode[actionBody](t, rec).Results
+	if len(got) != 2 || got[0].NodeID != alpha.id || got[1].NodeID != bravo.id || got[0].Result != "done" || got[1].Result != "done" {
+		t.Fatalf("results = %+v", got)
+	}
+	if w := alpha.fake.Writes(); !slices.Equal(w, []string{"DELETE /containers/" + alphaWeb + "?force=1"}) {
+		t.Fatalf("alpha saw %v", w)
 	}
 }

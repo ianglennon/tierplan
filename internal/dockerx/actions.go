@@ -69,6 +69,26 @@ func (c *Client) ContainerAction(ctx context.Context, id string, verb ContainerV
 	return nil
 }
 
+// RemoveOptions are the two choices of a container remove. The engine's third,
+// removing links, is never set.
+type RemoveOptions struct {
+	// Force removes a running container (the engine kills it first).
+	Force bool
+	// Volumes also removes the container's anonymous volumes. Named volumes stay:
+	// the engine only removes volumes the container created without a name.
+	Volumes bool
+}
+
+// ContainerRemove removes the container id once and never retries. A container that
+// runs is a conflict unless o.Force is set.
+func (c *Client) ContainerRemove(ctx context.Context, id string, o RemoveOptions) error {
+	_, err := c.cur().ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: o.Force, RemoveVolumes: o.Volumes})
+	if err != nil {
+		return fmt.Errorf("remove container on %s: %w", c.t.Describe(), err)
+	}
+	return nil
+}
+
 // ContainerOwnership is what the server needs to know about a container before it
 // acts on it: whose it is, and what it is doing now. It is read fresh from the
 // engine, never from a cached list, because the list can be seconds old and the
@@ -81,6 +101,11 @@ type ContainerOwnership struct {
 	Labels  map[string]string
 	Running bool
 	Tty     bool
+	// StopTimeout is the container's own stop timeout in seconds, nil when it sets
+	// none (the engine then waits 10 s); StopSignal is its own stop signal, empty for
+	// SIGTERM. A stop deadline is derived from them (D-09).
+	StopTimeout *int
+	StopSignal  string
 }
 
 // ContainerOwnership inspects one container and returns the facts above.
@@ -96,6 +121,8 @@ func (c *Client) ContainerOwnership(ctx context.Context, id string) (ContainerOw
 			out.Labels[k] = v
 		}
 		out.Tty = insp.Config.Tty
+		out.StopTimeout = insp.Config.StopTimeout
+		out.StopSignal = insp.Config.StopSignal
 	}
 	if insp.State != nil {
 		out.Running = insp.State.Running

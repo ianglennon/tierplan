@@ -134,6 +134,11 @@ const (
 	ActionKeyRotated                 = "key.rotated"
 	ActionContainerStarted           = "container.started"
 	ActionContainerStopped           = "container.stopped"
+	ActionContainerRestarted         = "container.restarted"
+	ActionContainerKilled            = "container.killed"
+	ActionContainerPaused            = "container.paused"
+	ActionContainerUnpaused          = "container.unpaused"
+	ActionContainerRemoved           = "container.removed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

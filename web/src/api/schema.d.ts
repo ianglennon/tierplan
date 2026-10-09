@@ -502,10 +502,30 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Start or stop containers
-         * @description Starts or stops up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. At most 4 calls run at once on one node and 16 targets at once overall. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Bayplan's own server container and any agent container are refused with own_container. A node whose agent runs read-only (BAYPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. Each target is audited as container.started or container.stopped, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
+         * Start, stop, restart, kill, pause or unpause containers
+         * @description Does one action to up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. The actions are start, stop, restart, kill, pause and unpause. A stop or restart uses the container's own stop timeout and signal and a kill sends SIGKILL; a request with exactly one target may set timeout or signal, and a request with more is refused 422 options_single_only. Starting a running container or stopping a stopped one is answered done, and a container removed meanwhile is not_found, so repeating an action is safe. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. At most 4 calls run at once on one node and 16 targets at once overall. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Bayplan's own server container and any agent container are refused with own_container. A node whose agent runs read-only (BAYPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. Each target is audited as container.started, container.stopped, container.restarted, container.killed, container.paused or container.unpaused, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
          */
         post: operations["actOnContainers"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/containers/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove containers
+         * @description Removes up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order, as the actions route does. A running container is refused with container_running unless force is true, and nothing is sent for it. Named volumes are never removed. removeVolumes also removes the container's anonymous volumes, and needs the delete volumes permission on top of containers.remove: a caller without it is refused 403 before any call and the refusal is audited as permission.denied. Bayplan's own server container and any agent container are refused with own_container. Each target is audited as container.removed with its force and volumes choices. Needs containers.remove (Operator) on the environment.
+         */
+        post: operations["removeContainers"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2038,17 +2058,24 @@ export interface components {
         };
         ContainerActionRequest: {
             /**
-             * @description What to do. A stop uses the container's own stop timeout and signal
+             * @description What to do. A stop or restart uses the container's own stop timeout and signal, and a kill sends SIGKILL, unless this is a single-target request that sets timeout or signal
              * @enum {string}
              */
-            action: "start" | "stop";
+            action: "start" | "stop" | "restart" | "kill" | "pause" | "unpause";
             /**
              * Format: uuid
              * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
              */
             bulkId?: string;
+            /** @description The signal a stop, restart or kill sends, for example SIGTERM. Only with exactly one target (else 422 options_single_only); ignored by the other actions */
+            signal?: string;
             /** @description The containers to act on, at most 25. Each is acted on and answered separately; one that fails never stops the others */
             targets: components["schemas"]["ContainerActionTarget"][] | null;
+            /**
+             * Format: int64
+             * @description Seconds a stop or restart waits before it kills the container. Only with exactly one target (else 422 options_single_only); ignored by the other actions
+             */
+            timeout?: number;
         };
         ContainerActionResponse: {
             /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent */
@@ -2058,10 +2085,10 @@ export interface components {
         };
         ContainerActionResult: {
             /**
-             * @description Why a target failed. own_container: Bayplan's own server or an agent, refused until it is confirmed by typing its name. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent, so Bayplan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed. own_container: Bayplan's own server or an agent, refused until it is confirmed by typing its name. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent, so Bayplan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
-            code?: "own_container" | "node_unreachable" | "not_found" | "host_read_only" | "agent_policy_denied" | "action_failed";
+            code?: "own_container" | "node_unreachable" | "not_found" | "host_read_only" | "agent_policy_denied" | "container_running" | "action_failed";
             /** @description The engine's message for action_failed, at most 300 characters; for the other codes a plain sentence */
             detail?: string;
             /** @description The container ID or name the request named */
@@ -2121,6 +2148,19 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        ContainerRemoveRequest: {
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one bulk request, as for the actions route
+             */
+            bulkId?: string;
+            /** @description Remove a running container too. Without it a running container is refused with container_running */
+            force: boolean;
+            /** @description Also remove the container's anonymous volumes; named volumes are never removed. Needs the delete volumes permission on top of containers.remove */
+            removeVolumes: boolean;
+            /** @description The containers to remove, at most 25. Each is answered separately; one that fails never stops the others */
+            targets: components["schemas"]["ContainerActionTarget"][] | null;
         };
         CreateTeamInputBody: {
             /** @description 1 to 64 characters; not case-sensitive for uniqueness */
@@ -4587,6 +4627,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ContainerActionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerActionResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeContainers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContainerRemoveRequest"];
             };
         };
         responses: {

@@ -424,11 +424,13 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // forbidden-name pattern below still refuses any raw or passthrough shape.
 // StartExec (Phase 4, OBS-03) is the typed interactive shell: it takes a container
 // ID and an argv and sets only the TTY, size, user, working directory and command.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerOwnership", "Events", "Probe", "RestartPolicies", "Snapshot", "StartExec"}
+// ContainerRemove (Phase 4) removes one container by ID with two booleans, force and
+// anonymous volumes; it never sets links and takes no path.
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerOwnership", "ContainerRemove", "Events", "Probe", "RestartPolicies", "Snapshot", "StartExec"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
-var typedMethodsWithForbiddenWords = []string{"StartExec"}
+var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 

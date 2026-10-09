@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -114,6 +115,48 @@ func (f *Fake) MaxConcurrentWrites() int {
 	return f.maxInflight
 }
 
+// containerRemove matches DELETE /containers/{id}.
+var containerRemove = regexp.MustCompile(`^/containers/([^/]+)$`)
+
+// removedState is the state a removed container is given; withStates then leaves it
+// out of every list and inspect, as a real daemon does.
+var removedState = fakeState{state: "removed"}
+
+// serveRemove answers DELETE /containers/{id}. A container that runs is the 409 a real
+// daemon gives unless force=1. The write is recorded whatever the answer, with its
+// query, so a test sees whether force and v were sent.
+func (f *Fake) serveRemove(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodDelete {
+		return false
+	}
+	m := containerRemove.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	c, known := cfg.resolveContainer(m[1])
+	if !known {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + m[1]})
+		return true
+	}
+	if c.State == "running" && r.URL.Query().Get("force") != "1" && r.URL.Query().Get("force") != "true" {
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "cannot remove container \"" + strings.TrimPrefix(c.Names[0], "/") + "\": container is running: stop the container before removing it or force remove"})
+		return true
+	}
+	f.mu.Lock()
+	f.states[c.ID] = removedState
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+	return true
+}
+
+var _ = registerFakeHandler((*Fake).serveRemove)
+
 // recordWrite notes a write as "METHOD path?query", the path as the daemon saw it
 // without the version prefix.
 func (f *Fake) recordWrite(r *http.Request) {
@@ -143,11 +186,15 @@ func (c FakeConfig) withStates(states map[string]fakeState) FakeConfig {
 	if len(states) == 0 || len(c.Containers) == 0 {
 		return c
 	}
-	cs := slices.Clone(c.Containers)
-	for i := range cs {
-		if s, ok := states[cs[i].ID]; ok {
-			cs[i].State, cs[i].Status = s.state, s.status
+	cs := make([]FakeContainer, 0, len(c.Containers))
+	for _, fc := range c.Containers {
+		if s, ok := states[fc.ID]; ok {
+			if s == removedState {
+				continue
+			}
+			fc.State, fc.Status = s.state, s.status
 		}
+		cs = append(cs, fc)
 	}
 	c.Containers = cs
 	return c

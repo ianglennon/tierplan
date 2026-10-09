@@ -25,6 +25,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `containers.control` | environment | no | yes | yes | yes | no | Start, stop, restart, kill, pause and unpause containers |
 | `containers.exec` | environment | no | extra | yes | yes | yes | Open a shell in a container |
 | `containers.read` | environment | yes | yes | yes | yes | no | View containers |
+| `containers.remove` | environment | no | yes | yes | yes | no | Remove containers |
 | `environments.access` | environment | no | no | yes | yes | no | See and change who has access to an environment |
 | `environments.audit` | environment | no | no | yes | yes | no | Read the audit log for an environment |
 | `environments.configure` | environment | no | no | yes | yes | no | Rename an environment, manage its agents and auto-update, adopt a changed cluster |

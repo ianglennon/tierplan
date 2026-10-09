@@ -6,6 +6,7 @@ package dockerx_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -99,5 +100,73 @@ func TestContainerOwnershipReadsLabelsAndStateFromAFreshInspect(t *testing.T) {
 	}
 	if _, err := c.ContainerOwnership(context.Background(), "nope"); !dockerx.IsNotFound(err) {
 		t.Fatalf("err = %v, want not found", err)
+	}
+}
+
+func TestContainerRemoveSendsNeitherForceNorVolumesByDefault(t *testing.T) {
+	c, fake := actionFake(t)
+	if err := c.ContainerRemove(context.Background(), "db-id", dockerx.RemoveOptions{}); err != nil {
+		t.Fatalf("ContainerRemove: %v", err)
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"DELETE /containers/db-id"}) {
+		t.Fatalf("writes = %v", got)
+	}
+	// The daemon no longer knows it.
+	if _, err := c.ContainerOwnership(context.Background(), "db-id"); !dockerx.IsNotFound(err) {
+		t.Fatalf("after a remove: err = %v, want not found", err)
+	}
+}
+
+func TestContainerRemoveSendsForceAndVolumesOnlyWhenAsked(t *testing.T) {
+	cases := []struct {
+		name string
+		opts dockerx.RemoveOptions
+		want string
+	}{
+		{"force", dockerx.RemoveOptions{Force: true}, "DELETE /containers/web-id?force=1"},
+		{"volumes", dockerx.RemoveOptions{Volumes: true}, "DELETE /containers/db-id?v=1"},
+		{"both", dockerx.RemoveOptions{Force: true, Volumes: true}, "DELETE /containers/web-id?force=1&v=1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, fake := actionFake(t)
+			id, _, _ := strings.Cut(strings.TrimPrefix(tc.want, "DELETE /containers/"), "?")
+			if err := c.ContainerRemove(context.Background(), id, tc.opts); err != nil {
+				t.Fatalf("ContainerRemove: %v", err)
+			}
+			if got := fake.Writes(); !slices.Equal(got, []string{tc.want}) {
+				t.Fatalf("writes = %v, want [%s]", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestContainerRemoveOfARunningContainerWithoutForceIsAConflict(t *testing.T) {
+	c, _ := actionFake(t)
+	err := c.ContainerRemove(context.Background(), "web-id", dockerx.RemoveOptions{})
+	if err == nil || !dockerx.IsConflict(err) {
+		t.Fatalf("err = %v, want a conflict", err)
+	}
+	if err := c.ContainerRemove(context.Background(), "nope", dockerx.RemoveOptions{}); !dockerx.IsNotFound(err) {
+		t.Fatalf("err = %v, want not found", err)
+	}
+}
+
+func TestContainerOwnershipReadsTheContainersOwnStopSettings(t *testing.T) {
+	ten := 25
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Containers: []dockertest.FakeContainer{
+		{ID: "slow-id", Names: []string{"/slow"}, Image: "x", State: "running", Status: "Up", StopTimeout: &ten, StopSignal: "SIGQUIT"},
+		{ID: "plain-id", Names: []string{"/plain"}, Image: "x", State: "running", Status: "Up"},
+	}})
+	c := newClient(t, fake)
+	got, err := c.ContainerOwnership(context.Background(), "slow-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StopTimeout == nil || *got.StopTimeout != 25 || got.StopSignal != "SIGQUIT" {
+		t.Fatalf("ownership = %+v", got)
+	}
+	if plain, _ := c.ContainerOwnership(context.Background(), "plain-id"); plain.StopTimeout != nil || plain.StopSignal != "" {
+		t.Fatalf("a container with no settings reported %+v", plain)
 	}
 }

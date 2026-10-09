@@ -92,6 +92,13 @@ func TestEveryPhase3ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 var phase4DetailKeys = map[string][]string{
 	audit.ActionContainerStarted: {"container", "node", "code", "bulk", "stage", "own", "timeout", "signal"},
 	audit.ActionContainerStopped: {"container", "node", "code", "bulk", "stage", "own", "timeout", "signal"},
+	// restart and kill take the same timeout and signal as a stop; remove takes
+	// force and volumes (plan 04-05).
+	audit.ActionContainerRestarted: {"container", "node", "code", "bulk", "stage", "own", "timeout", "signal"},
+	audit.ActionContainerKilled:    {"container", "node", "code", "bulk", "stage", "own", "signal"},
+	audit.ActionContainerPaused:    {"container", "node", "code", "bulk", "stage", "own"},
+	audit.ActionContainerUnpaused:  {"container", "node", "code", "bulk", "stage", "own"},
+	audit.ActionContainerRemoved:   {"container", "node", "code", "bulk", "stage", "own", "force", "volumes"},
 }
 
 func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -116,6 +123,9 @@ func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	}
 	for key, constant := range map[string]string{
 		"container.started": audit.ActionContainerStarted, "container.stopped": audit.ActionContainerStopped,
+		"container.restarted": audit.ActionContainerRestarted, "container.killed": audit.ActionContainerKilled,
+		"container.paused": audit.ActionContainerPaused, "container.unpaused": audit.ActionContainerUnpaused,
+		"container.removed": audit.ActionContainerRemoved,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

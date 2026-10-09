@@ -89,6 +89,11 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "key.rotated",
   "container.started",
   "container.stopped",
+  "container.restarted",
+  "container.killed",
+  "container.paused",
+  "container.unpaused",
+  "container.removed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
