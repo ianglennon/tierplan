@@ -625,7 +625,11 @@ export interface paths {
          */
         get: operations["listNetworks"];
         put?: never;
-        post?: never;
+        /**
+         * Create a network
+         * @description Creates a bridge, overlay, macvlan or ipvlan network. A network is made on one node, named by nodeId (the nodeId of a row of a list), which may be left out on an environment of one node (else 422 node_required). Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.
+         */
+        post: operations["createNetwork"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3121,6 +3125,43 @@ export interface components {
             /** @description The signed-in user */
             user: components["schemas"]["UserBody"];
         };
+        NetworkCreateBody: {
+            /** @description The ID of the network the engine made */
+            id: string;
+            /** @description The network name */
+            name: string;
+        };
+        NetworkCreateRequest: {
+            /** @description Let standalone containers join it. Only for an overlay network on a swarm */
+            attachable?: boolean;
+            /**
+             * @description The network driver. Ingress, config-only and config-from networks cannot be created
+             * @enum {string}
+             */
+            driver: "bridge" | "overlay" | "macvlan" | "ipvlan";
+            /** @description The gateway address, inside the subnet */
+            gateway?: string;
+            /** @description No access to outside networks */
+            internal?: boolean;
+            /** @description The range containers are given addresses from, in CIDR form, inside the subnet */
+            ipRange?: string;
+            /** @description Enable IPv6 */
+            ipv6?: boolean;
+            /** @description Labels, at most 64 */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description The network name */
+            name: string;
+            /** @description The node to create a local-scope network on: the nodeId of a row of a list. Left out on an environment of one node */
+            nodeId?: string;
+            /** @description Driver options, at most 64 */
+            options?: {
+                [key: string]: string;
+            };
+            /** @description The subnet in CIDR form, for example 10.20.0.0/24. Left out, the engine picks one */
+            subnet?: string;
+        };
         NetworkItem: {
             /** Format: date-time */
             created?: string;
@@ -5164,6 +5205,43 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    createNetwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
                 };
             };
         };

@@ -99,6 +99,10 @@ var phase4DetailKeys = map[string][]string{
 	audit.ActionContainerPaused:    {"container", "node", "code", "bulk", "stage", "own"},
 	audit.ActionContainerUnpaused:  {"container", "node", "code", "bulk", "stage", "own"},
 	audit.ActionContainerRemoved:   {"container", "node", "code", "bulk", "stage", "own", "force", "volumes"},
+	// A network create records what was asked and where it landed; the remove of plan
+	// 04-13 records the name, node and scope, and the code of a refusal.
+	audit.ActionNetworkCreated: {"name", "node", "driver", "scope", "subnet", "gateway", "internal", "attachable", "code"},
+	audit.ActionNetworkRemoved: {"name", "node", "driver", "scope", "code"},
 }
 
 func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -126,6 +130,7 @@ func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"container.restarted": audit.ActionContainerRestarted, "container.killed": audit.ActionContainerKilled,
 		"container.paused": audit.ActionContainerPaused, "container.unpaused": audit.ActionContainerUnpaused,
 		"container.removed": audit.ActionContainerRemoved,
+		"network.created":   audit.ActionNetworkCreated, "network.removed": audit.ActionNetworkRemoved,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

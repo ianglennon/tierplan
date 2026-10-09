@@ -427,11 +427,13 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // ContainerRemove (Phase 4) removes one container by ID with two booleans, force and
 // anonymous volumes; it never sets links and takes no path.
 // ContainerDetail (Phase 4, RES-01) is a read: one inspect by ID, typed.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "Probe", "RestartPolicies", "Snapshot", "StartExec"}
+// NetworkCreate (Phase 4, RES-06) takes a typed spec of a name, one of four drivers and
+// its addressing; it cannot express an ingress, config-only or config-from network.
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkCreate", "Probe", "RestartPolicies", "Snapshot", "StartExec"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
-var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove"}
+var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove", "NetworkCreate"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 

@@ -172,6 +172,10 @@
         "paused": "Container paused",
         "unpaused": "Container unpaused",
         "removed": "Container removed"
+      },
+      "network": {
+        "created": "Network created",
+        "removed": "Network removed"
       }
     },
     "coalesced": {

@@ -42,6 +42,7 @@ const (
 	PermNetworksRead          Perm = "networks.read"
 	PermContainersControl     Perm = "containers.control"
 	PermContainersRemove      Perm = "containers.remove"
+	PermNetworksManage        Perm = "networks.manage"
 	PermAuditRead             Perm = "audit.read"
 	PermSettingsRead          Perm = "settings.read"
 	PermSettingsWrite         Perm = "settings.write"
@@ -80,6 +81,7 @@ var defaultRegistry = Registry{
 	{Name: PermNetworksRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View networks"},
 	{Name: PermContainersControl, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Start, stop, restart, kill, pause and unpause containers"},
 	{Name: PermContainersRemove, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Remove containers"},
+	{Name: PermNetworksManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create and delete networks"},
 	{Name: PermAuditRead, Scope: ScopeGlobal, Description: "Read the audit log"},
 	{Name: PermSettingsRead, Scope: ScopeGlobal, Description: "View settings"},
 	{Name: PermSettingsWrite, Scope: ScopeGlobal, Description: "Change settings"},

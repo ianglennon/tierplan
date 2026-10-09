@@ -1,0 +1,45 @@
+{
+  "networks": {
+    "create": {
+      "button": "Create network",
+      "title": "Create network",
+      "body": "A network lets containers reach each other by name.",
+      "cancel": "Cancel",
+      "submit": "Create network",
+      "pending": "Creating…",
+      "success": "Created network {{name}}.",
+      "name": {
+        "label": "Name"
+      },
+      "driver": {
+        "label": "Driver"
+      },
+      "attachable": {
+        "label": "Attachable",
+        "helper": "Lets standalone containers join an overlay network. Only for overlay networks on a swarm."
+      },
+      "internal": {
+        "label": "Internal",
+        "helper": "No access to outside networks."
+      },
+      "labels": {
+        "label": "Labels",
+        "add": "Add label",
+        "key": "Label name",
+        "value": "Label value",
+        "remove": "Remove label {{name}}",
+        "removeEmpty": "Remove label"
+      }
+    },
+    "errors": {
+      "nameRequired": "Enter a name.",
+      "nameInvalid": "Use letters, numbers, dot, dash or underscore.",
+      "nameTaken": "A network named {{name}} already exists.",
+      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "nodeUnreachable": "That node isn't reachable right now. Try again when it's back.",
+      "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
+      "nodeRequired": "Choose a node."
+    }
+  }
+}

@@ -37,6 +37,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `environments.token` | global | no | no | no | yes | yes | Show or rotate an environment's join token |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |
+| `networks.manage` | environment | no | no | yes | yes | no | Create and delete networks |
 | `networks.read` | environment | yes | yes | yes | yes | no | View networks |
 | `secrets.reveal` | environment | no | extra | yes | yes | yes | Reveal secret values |
 | `settings.read` | global | no | no | no | yes | no | View settings |

@@ -3488,6 +3488,98 @@
         ],
         "type": "object"
       },
+      "NetworkCreateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The ID of the network the engine made",
+            "type": "string"
+          },
+          "name": {
+            "description": "The network name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "NetworkCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "attachable": {
+            "description": "Let standalone containers join it. Only for an overlay network on a swarm",
+            "type": "boolean"
+          },
+          "driver": {
+            "description": "The network driver. Ingress, config-only and config-from networks cannot be created",
+            "enum": [
+              "bridge",
+              "overlay",
+              "macvlan",
+              "ipvlan"
+            ],
+            "type": "string"
+          },
+          "gateway": {
+            "description": "The gateway address, inside the subnet",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "internal": {
+            "description": "No access to outside networks",
+            "type": "boolean"
+          },
+          "ipRange": {
+            "description": "The range containers are given addresses from, in CIDR form, inside the subnet",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "ipv6": {
+            "description": "Enable IPv6",
+            "type": "boolean"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels, at most 64",
+            "maxProperties": 64,
+            "type": "object"
+          },
+          "name": {
+            "description": "The network name",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node to create a local-scope network on: the nodeId of a row of a list. Left out on an environment of one node",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Driver options, at most 64",
+            "maxProperties": 64,
+            "type": "object"
+          },
+          "subnet": {
+            "description": "The subnet in CIDR form, for example 10.20.0.0/24. Left out, the engine picks one",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "driver"
+        ],
+        "type": "object"
+      },
       "NetworkItem": {
         "additionalProperties": false,
         "properties": {
@@ -7447,6 +7539,65 @@
           }
         },
         "summary": "List the networks of an environment",
+        "tags": [
+          "environments"
+        ]
+      },
+      "post": {
+        "description": "Creates a bridge, overlay, macvlan or ipvlan network. A network is made on one node, named by nodeId (the nodeId of a row of a list), which may be left out on an environment of one node (else 422 node_required). Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.",
+        "operationId": "createNetwork",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetworkCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkCreateBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a network",
         "tags": [
           "environments"
         ]

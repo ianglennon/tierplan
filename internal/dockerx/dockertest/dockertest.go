@@ -330,6 +330,10 @@ type Fake struct {
 	inflight, maxInflight int
 	// execs is the exec state (fake_exec.go).
 	execs fakeExecs
+	// nets are the networks created through the fake, and netCreates the bodies of
+	// those requests (fake_networks.go).
+	nets       []FakeNetwork
+	netCreates []network.CreateRequest
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
@@ -452,7 +456,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states)
+	return f.cfg.withStates(f.states).withNetworks(f.nets)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

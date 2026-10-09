@@ -237,6 +237,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	if f.envSvc != nil && f.agg != nil {
 		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Audit: f.aud, Log: log})
 	}
 	if f.envSvc != nil && f.agg != nil && f.hub != nil {
 		api.RegisterEvents(r, api.EventsDeps{Aggregator: f.agg, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, MaxLifetime: f.eventsMaxLifetime, Log: log})

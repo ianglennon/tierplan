@@ -516,6 +516,11 @@ func TestAViewerReadsTheSummaryAndEveryListAndAUserWithoutAGrantGetsNotFound(t *
 func TestListRoutesAreReadOnly(t *testing.T) {
 	f, e := dashEnv(t, richEngine())
 	for _, what := range dataPaths {
+		if what == "networks" {
+			// The networks path is also where a network is created (plan 04-12); that
+			// route is tested on its own, with its permission.
+			continue
+		}
 		rec := f.req(t, http.MethodPost, "/api/env/"+e.ID+"/"+what, `{}`)
 		if rec.code != http.StatusMethodNotAllowed {
 			t.Errorf("POST %s = %d, want 405", what, rec.code)
