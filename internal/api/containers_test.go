@@ -1232,6 +1232,12 @@ type inspectBody struct {
 		Config struct {
 			Env []string `json:"Env"`
 		} `json:"Config"`
+		HostConfig struct {
+			LogConfig struct {
+				Type   string            `json:"Type"`
+				Config map[string]string `json:"Config"`
+			} `json:"LogConfig"`
+		} `json:"HostConfig"`
 	} `json:"inspect"`
 }
 
@@ -1287,5 +1293,30 @@ func TestContainerInspectSharesTheDetailRoutesNodeRulesAndProblems(t *testing.T)
 	rec = f.detail(t, nobody, e, "web/inspect", "?nodeId="+e.ID)
 	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
 		t.Fatalf("no grant = %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+}
+
+func TestContainerInspectShowsThePlaceholderForALogDriverTokenToAViewerAndTheTokenToAnAdmin(t *testing.T) {
+	f, e := dashEnv(t, detailEngine())
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	cookie, _ := f.signIn(t, "viewer", false)
+
+	rec := f.detail(t, cookie, e, "web/inspect", "?nodeId="+e.ID)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	if strings.Contains(string(rec.body), "s3cret-token") {
+		t.Fatalf("a Viewer's inspect carries the log driver token: %s", rec.body)
+	}
+	v := decode[inspectBody](t, rec)
+	lc := v.Inspect.HostConfig.LogConfig
+	if !v.Masked || lc.Type != "syslog" || lc.Config["splunk-token"] != "<hidden>" {
+		t.Errorf("log config = %+v masked=%v", lc, v.Masked)
+	}
+
+	rec = f.detail(t, f.cookie, e, "web/inspect", "?nodeId="+e.ID)
+	if rec.code != http.StatusOK || !strings.Contains(string(rec.body), "s3cret-token") {
+		t.Fatalf("an admin should get the token: %d %s", rec.code, rec.body)
 	}
 }

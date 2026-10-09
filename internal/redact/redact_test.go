@@ -245,3 +245,55 @@ func TestMaskContainerInspectOfADocumentWithNoVariablesIsNotMasked(t *testing.T)
 		t.Fatalf("out=%q masked=%v err=%v", out, masked, err)
 	}
 }
+
+func TestMaskContainerInspectHidesEveryLogDriverOptionValueAndKeepsTheNames(t *testing.T) {
+	raw := `{"Id":"abc","Config":{"Env":[]},"HostConfig":{"LogConfig":{"Type":"splunk","Config":{"splunk-token":"s3cret-token","splunk-url":"https://splunk.example:8088"}}}}`
+	out, masked, err := redact.MaskContainerInspect([]byte(raw), false)
+	if err != nil {
+		t.Fatalf("MaskContainerInspect: %v", err)
+	}
+	if !masked {
+		t.Error("masked = false, want true")
+	}
+	for _, leak := range []string{"s3cret-token", "splunk.example"} {
+		if strings.Contains(string(out), leak) {
+			t.Errorf("output carries %q: %s", leak, out)
+		}
+	}
+	var got struct {
+		HostConfig struct {
+			LogConfig struct {
+				Type   string
+				Config map[string]string
+			}
+		}
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	lc := got.HostConfig.LogConfig
+	if lc.Type != "splunk" || len(lc.Config) != 2 || lc.Config["splunk-token"] != redact.Placeholder || lc.Config["splunk-url"] != redact.Placeholder {
+		t.Errorf("log config = %+v", lc)
+	}
+	// With reveal the options are as the engine sent them.
+	out, masked, err = redact.MaskContainerInspect([]byte(raw), true)
+	if err != nil || masked || string(out) != raw {
+		t.Errorf("reveal = %q masked=%v err=%v", out, masked, err)
+	}
+}
+
+func TestMaskContainerInspectOfAnythingThatIsNotAJSONObjectIsAnErrorNeverAPassthrough(t *testing.T) {
+	for _, raw := range []string{``, `{"Config":{"Env":["A=secret"]}`, `not json`, `null`, `[]`, `"A=secret"`, `{"a":1} {"Config":{"Env":["A=secret"]}}`} {
+		out, masked, err := redact.MaskContainerInspect([]byte(raw), false)
+		if err == nil || out != nil || masked {
+			t.Errorf("MaskContainerInspect(%q) = %q, %v, %v; want an error and no output", raw, out, masked, err)
+		}
+	}
+}
+
+func TestMaskContainerInspectMasksAnEnvEntryThatIsNotAStringRatherThanKeepingIt(t *testing.T) {
+	out, masked, err := redact.MaskContainerInspect([]byte(`{"Config":{"Env":[{"v":"secret"},"A=b"]}}`), false)
+	if err != nil || !masked || strings.Contains(string(out), "secret") || strings.Contains(string(out), "=b") {
+		t.Fatalf("out=%q masked=%v err=%v", out, masked, err)
+	}
+}
