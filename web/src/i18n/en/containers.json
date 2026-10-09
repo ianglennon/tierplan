@@ -1,0 +1,22 @@
+{
+  "containers": {
+    "list": {
+      "search": {
+        "label": "Search containers",
+        "placeholder": "Search by name, image, label or project",
+        "clear": "Clear search"
+      },
+      "group": {
+        "ungrouped": "Ungrouped",
+        "collapse": "Collapse {{name}}",
+        "expand": "Expand {{name}}",
+        "running_one": "{{running}} of {{count}} running",
+        "running_other": "{{running}} of {{count}} running",
+        "kind": {
+          "stack": "Stack",
+          "project": "Project"
+        }
+      }
+    }
+  }
+}

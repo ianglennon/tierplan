@@ -235,7 +235,7 @@ afterEach(() => {
 
 describe("containers list", () => {
   it("shows Name, State, Image, Created, Status and Ports, then the actions column, in the server's order", async () => {
-    renderAt("/env/e1/containers");
+    renderAt("/env/e1/containers?group=none");
     await screen.findByRole("heading", { name: "Containers" });
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
     // The last column is the row menu; its header is for assistive technology only.
@@ -257,7 +257,7 @@ describe("containers list", () => {
   });
 
   it("badges Bayplan's own container row and no other (D-27)", async () => {
-    renderAt("/env/e1/containers");
+    renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const rows = screen.getAllByRole("row").slice(1);
     expect(cellsOf(rows[0] as HTMLElement)[0]).toContain("Bayplan (this instance)");
@@ -265,7 +265,7 @@ describe("containers list", () => {
   });
 
   it("pairs every state dot with its text and renders a dash for a missing created time and no ports", async () => {
-    renderAt("/env/e1/containers");
+    renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const rows = screen.getAllByRole("row").slice(1);
     expect(cellsOf(rows[1] as HTMLElement)[1]).toBe("Restarting");
@@ -277,13 +277,16 @@ describe("containers list", () => {
   });
 
   it("has no checkboxes or links in the table, and its only buttons are the closed row action menus (D-56, plan 04-01)", async () => {
-    renderAt("/env/e1/containers");
+    renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const table = screen.getByRole("table");
     expect(within(table).queryByRole("checkbox")).toBeNull();
     expect(within(table).queryByRole("link")).toBeNull();
     expect(within(table).queryByRole("menu")).toBeNull();
-    const buttons = within(table).getAllByRole("button");
+    // The sortable headers are buttons too (plan 04-07); the rows hold only menus.
+    const buttons = within(table)
+      .getAllByRole("button")
+      .filter((b) => b.closest("td"));
     expect(buttons.length).toBeGreaterThan(0);
     for (const b of buttons) expect(b.getAttribute("aria-label")).toMatch(/^Actions for /);
   });
@@ -331,6 +334,36 @@ describe("containers list", () => {
     ok = true;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("old-job");
+  });
+
+  it("puts the search in the URL 250 ms after typing, replacing the history entry, and asks the server for it", async () => {
+    const router = renderAt("/env/e1/containers?group=none");
+    await screen.findByText("old-job");
+    const length = window.history.length;
+    answers["/api/env/e1/containers"] = (url) =>
+      Response.json({
+        items: CONTAINERS.items.filter((c) => c.name.includes(url.searchParams.get("q") ?? "")),
+        total: 1,
+        truncated: false,
+      });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search containers" }), {
+      target: { value: "old" },
+    });
+    expect(router.state.location.search).toEqual({ group: "none" });
+    await waitFor(() => expect(router.state.location.search).toEqual({ group: "none", q: "old" }), {
+      timeout: 2000,
+    });
+    await waitFor(() => expect(sentUrls).toContain("/api/env/e1/containers?q=old"));
+    expect(window.history.length).toBe(length);
+    await waitFor(() => expect(screen.queryByText("bayplan")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ group: "none" }));
+  });
+
+  it("drops an invalid ?group= and groups by stack or project", async () => {
+    renderAt("/env/e1/containers?group=foo");
+    await screen.findByText("old-job");
+    expect(screen.getByRole("button", { name: "Collapse Ungrouped" })).toBeTruthy();
   });
 
   it("says how many it left out when the server capped the list", async () => {
@@ -515,7 +548,7 @@ describe("swarm lists", () => {
   }
 
   it("shows Node after Name, the caption across the nodes and the banner for a node that did not report", async () => {
-    renderAt("/env/e1/containers");
+    renderAt("/env/e1/containers?group=none");
     await screen.findByText("web.1");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
     expect(headers).toEqual([
@@ -529,8 +562,9 @@ describe("swarm lists", () => {
       "Actions",
     ]);
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[0] as HTMLElement).slice(0, 2)).toEqual(["web.1", "n1"]);
-    expect(cellsOf(rows[2] as HTMLElement).slice(0, 2)).toEqual(["db", "n3"]);
+    // The page sorts by name, whatever order the server sent.
+    expect(cellsOf(rows[0] as HTMLElement).slice(0, 2)).toEqual(["db", "n3"]);
+    expect(cellsOf(rows[2] as HTMLElement).slice(0, 2)).toEqual(["web.2", "n2"]);
     expect(screen.getByText("3 containers across 3 nodes")).toBeTruthy();
     expect(
       screen.getByText("1 node isn't reporting: n4. The totals below leave it out."),
@@ -543,7 +577,7 @@ describe("swarm lists", () => {
   });
 
   it("gives the Node column one width, so the table does not reflow as nodes report", async () => {
-    renderAt("/env/e1/containers");
+    renderAt("/env/e1/containers?group=none");
     await screen.findByText("web.1");
     const header = screen.getByRole("columnheader", { name: "Node" });
     expect(header.className).toContain("w-56");
@@ -808,7 +842,7 @@ describe("swarm lists", () => {
       let rows = screen.getAllByRole("row").slice(1);
       expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
       cleanup();
-      renderAt("/env/e1/containers");
+      renderAt("/env/e1/containers?group=none");
       await screen.findAllByText("web");
       rows = screen.getAllByRole("row").slice(1);
       expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);

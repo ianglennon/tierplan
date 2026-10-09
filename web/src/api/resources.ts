@@ -42,12 +42,34 @@ function keepForSameEnv(envId: string) {
     previousQuery?.queryKey[1] === envId ? previous : undefined;
 }
 
-export function containersQuery(envId: string, node?: string) {
+// What narrows the containers list on the server, before its 500-row cap: the
+// node, the search text and the comma list of statuses (UI-SPEC "Shared list
+// behaviour"). Each is left out when it is not set.
+export interface ContainerFilters {
+  node?: string;
+  q?: string;
+  status?: string;
+}
+
+// The part of a key that names the filters, or none when nothing is set, so the
+// unfiltered list keeps the bare listKey and every filtered read extends it.
+function filterPart(filters: ContainerFilters) {
+  const set: ContainerFilters = {};
+  if (filters.node) set.node = filters.node;
+  if (filters.q) set.q = filters.q;
+  if (filters.status) set.status = filters.status;
+  return Object.keys(set).length > 0 ? set : undefined;
+}
+
+export function containersQuery(envId: string, filters: ContainerFilters = {}) {
+  const set = filterPart(filters);
   return queryOptions({
-    queryKey: nodeKey(envId, "containers", node),
+    queryKey: set
+      ? ([...listKey(envId, "containers"), set] as const)
+      : listKey(envId, "containers"),
     queryFn: async () => {
       const { data } = await api.GET("/api/env/{envId}/containers", {
-        params: { path: { envId }, query: node ? { node } : undefined },
+        params: { path: { envId }, query: set },
       });
       if (!data) throw new Error("GET containers failed");
       return data;
