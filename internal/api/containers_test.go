@@ -13,6 +13,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/proto/wire"
 )
 
@@ -63,6 +64,9 @@ func actionJSON(action string, targets ...[2]string) string {
 
 func (f *envFix) act(t *testing.T, e envBody, body string) *envRec {
 	t.Helper()
+	// A write goes only to a node the monitor has seen online, so wait for its
+	// first probe: without it a fast run reads the node as offline.
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/containers/actions", body)
 }
 
