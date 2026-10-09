@@ -56,7 +56,7 @@ tidy-check:
 test:
 	@set -e; for m in $(GO_MODULES); do \
 	  echo "test: $$m"; \
-	  go -C $$m test ./... -race -count=1; \
+	  go -C $$m test ./... -race -count=1 -timeout 20m; \
 	done
 	pnpm -C web exec vitest run
 
@@ -67,7 +67,7 @@ test:
 # dind (they need a network the in-process Bayplan is reachable on) and load the
 # agent image into it, so the image is built first.
 test-int: agent-image
-	go test -tags=integration -race -count=1 ./internal/...
+	go test -tags=integration -race -count=1 -timeout 30m ./internal/...
 
 # The multi-node suite (D-57, D-58), build tag `swarm`: real agents in a dind swarm
 # of 3 managers and 1 worker, for the engine BAYPLAN_TEST_ENGINE names (default

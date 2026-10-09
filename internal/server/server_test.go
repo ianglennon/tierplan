@@ -118,8 +118,19 @@ func TestReadyzTurns503WhenTheDataDirDisappears(t *testing.T) {
 	if code, body := httpGet(t, ts.URL+"/readyz"); code != 200 || body != "ready" {
 		t.Fatalf("/readyz = %d %q, want 200 ready", code, body)
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatal(err)
+	// Background work started by Build (the work-file sweep, SQLite's WAL) can
+	// write into the directory while it is being removed; keep removing until it
+	// is gone.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := os.RemoveAll(dir)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if code, body := httpGet(t, ts.URL+"/readyz"); code != 503 || body != "not ready" {
 		t.Fatalf("/readyz after removing the data dir = %d %q, want 503 not ready", code, body)

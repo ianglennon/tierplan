@@ -153,7 +153,11 @@ export { expect };
 // Docker host Bayplan manages through its socket.
 export async function openFirstEnvironment(page: Page): Promise<string> {
   await page.goto(at("/environments"));
-  await expect(page.getByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
+  // The first page a test opens can be slow on a busy runner (a cold browser and
+  // a full SPA load behind the proxy), so allow more than the 10 s default here.
+  await expect(page.getByRole("heading", { name: "Environments", level: 1 })).toBeVisible({
+    timeout: 30_000,
+  });
   // The name link carries the whole name as its title, in the table and in the
   // stacked rows under 768px alike.
   await page.getByRole("main").locator("a[title]").first().click();
