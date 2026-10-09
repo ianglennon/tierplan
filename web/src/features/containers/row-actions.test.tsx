@@ -69,7 +69,7 @@ beforeEach(() => {
           : undefined;
       sent.push({ method: req.method, path, body });
       if (path === "/api/me") return Response.json(me);
-      if (path === `/api/env/${ENV}/containers/actions` && req.method === "POST") return answer();
+      if (path.startsWith(`/api/env/${ENV}/containers/`) && req.method === "POST") return answer();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -217,7 +217,6 @@ describe("Stop", () => {
       "node-1 isn't reachable right now. Try again when it's back.",
     ],
     ["not_found", { code: "not_found" }, "web no longer exists. The list has been refreshed."],
-    ["agent_policy_denied", { code: "agent_policy_denied" }, "This host's agent needs an update"],
     [
       "an engine refusal",
       { code: "action_failed", detail: "cannot stop container: permission denied" },
@@ -245,6 +244,16 @@ describe("Stop", () => {
       expect(screen.queryByText(/^Couldn't stop/)).toBeNull();
     });
   }
+
+  it("shows the agent update notice, not a bare code, when the agent refuses by its own policy", async () => {
+    answer = resultOf({ code: "agent_policy_denied" });
+    const dialog = await openStop();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop container" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("This host's agent needs an update");
+    expect(alert.textContent).not.toContain("agent_policy_denied");
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+  });
 
   it("says the permission was withdrawn when the whole request is refused with 403", async () => {
     answer = () => Response.json({ title: "Forbidden", status: 403 }, { status: 403 });
@@ -329,33 +338,33 @@ describe("Restart, Pause and Unpause", () => {
     mount(row({ state: "running" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Restart" });
-    expect(itemNames()).toEqual(["Stop", "Restart", "Pause"]);
+    expect(itemNames()).toEqual(["Stop", "Restart", "Pause", "Kill…", "Remove…"]);
   });
 
   it("offers Start and Restart on an exited row", async () => {
     mount(row({ state: "exited" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Restart" });
-    expect(itemNames()).toEqual(["Start", "Restart"]);
+    expect(itemNames()).toEqual(["Start", "Restart", "Remove…"]);
   });
 
   it("offers Stop, Restart and Unpause on a paused row", async () => {
     mount(row({ state: "paused" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Unpause" });
-    expect(itemNames()).toEqual(["Stop", "Restart", "Unpause"]);
+    expect(itemNames()).toEqual(["Stop", "Restart", "Unpause", "Kill…", "Remove…"]);
   });
 
   it("offers Stop and Restart on a restarting row, and only Start on a created one", async () => {
     mount(row({ state: "restarting" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Restart" });
-    expect(itemNames()).toEqual(["Stop", "Restart"]);
+    expect(itemNames()).toEqual(["Stop", "Restart", "Kill…", "Remove…"]);
     cleanup();
     mount(row({ state: "created" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Start" });
-    expect(itemNames()).toEqual(["Start"]);
+    expect(itemNames()).toEqual(["Start", "Remove…"]);
   });
 
   it.each([
@@ -457,5 +466,109 @@ describe("ContainerRowActions open state", () => {
     expect(
       (screen.getByRole("button", { name: "Actions for web" }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+});
+
+describe("Kill and Remove", () => {
+  async function choose(label: string, r: ContainerRow = row()) {
+    mount(r);
+    await openMenu(r.name);
+    fireEvent.click(await screen.findByRole("menuitem", { name: label }));
+  }
+
+  it("puts Kill… and Remove… after a separator, in destructive text", async () => {
+    mount();
+    await openMenu();
+    const kill = await screen.findByRole("menuitem", { name: "Kill…" });
+    const remove = screen.getByRole("menuitem", { name: "Remove…" });
+    expect(kill.getAttribute("data-variant")).toBe("destructive");
+    expect(remove.getAttribute("data-variant")).toBe("destructive");
+    expect(screen.getAllByRole("separator").length).toBeGreaterThan(0);
+  });
+
+  it("opens the kill dialog and posts the kill", async () => {
+    await choose("Kill…");
+    const dialog = await screen.findByRole("alertdialog", { name: "Kill web?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kill container" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.path).toBe("/api/env/e1/containers/actions");
+    expect(posts()[0]?.body).toEqual({ action: "kill", targets: [{ nodeId: "n1", id: "web-id" }] });
+    expect(await screen.findByText("Killed web.")).toBeTruthy();
+  });
+
+  it("opens the remove dialog and posts the remove with Force", async () => {
+    answer = () =>
+      Response.json({ results: [{ nodeId: "n1", id: "web-id", name: "web", result: "done" }] });
+    await choose("Remove…");
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove web?" });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Force (stop if running)" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove container" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.path).toBe("/api/env/e1/containers/remove");
+    expect(await screen.findByText("Removed web.")).toBeTruthy();
+  });
+
+  it("shows both disabled with Needs Operator for a viewer", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    mount();
+    await openMenu();
+    for (const name of ["Kill…", "Remove…"]) {
+      const item = await screen.findByRole("menuitem", { name });
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(item);
+    }
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(posts()).toEqual([]);
+  });
+
+  it("reports open while the Kill dialog is up", async () => {
+    const seen: boolean[] = [];
+    render(
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <ContainerRowActions envId={ENV} row={row()} onOpenChange={(o) => seen.push(o)} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    await openMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Kill…" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Kill web?" });
+    expect(seen[seen.length - 1]).toBe(true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(seen[seen.length - 1]).toBe(false));
+  });
+});
+
+describe("Bayplan's own containers", () => {
+  const own = (extra: Partial<ContainerRow> = {}) =>
+    row({ name: "bayplan", id: "bp-id", selfKind: "server", isSelf: true, ...extra });
+
+  it.each([
+    ["Stop", "Stop bayplan?"],
+    ["Restart", "Restart bayplan?"],
+    ["Pause", "Pause bayplan?"],
+    ["Kill…", "Kill bayplan?"],
+    ["Remove…", "Remove bayplan?"],
+  ])(
+    "%s opens the own-container dialog with the name to type, and sends nothing",
+    async (label, title) => {
+      mount(own());
+      await openMenu("bayplan");
+      fireEvent.click(await screen.findByRole("menuitem", { name: label }));
+      const dialog = await screen.findByRole("alertdialog", { name: title });
+      expect(within(dialog).getByLabelText("Type bayplan to confirm")).toBeTruthy();
+      expect(dialog.textContent).toContain("cuts Bayplan off from this host");
+      expect(posts()).toEqual([]);
+    },
+  );
+
+  it("starts an own container that is stopped at once, as for any other", async () => {
+    answer = () =>
+      Response.json({ results: [{ nodeId: "n1", id: "bp-id", name: "bayplan", result: "done" }] });
+    mount(own({ state: "exited" }));
+    await openMenu("bayplan");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Start" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

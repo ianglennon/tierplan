@@ -3,6 +3,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,8 +12,10 @@ import type { ContainerRow } from "@/api/resources";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActionDialog } from "@/features/containers/action-dialog";
+import { type BulkReport, BulkResultDialog } from "@/features/containers/bulk-result-dialog";
 import { type PendingApi, PendingContext } from "@/features/containers/pending";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
 const ENV = "e1";
 
@@ -48,6 +51,7 @@ let answer: (req: Sent) => Response | Promise<Response>;
 let client: QueryClient;
 let marks: { keys: string[]; verb: string }[];
 let released: string[][];
+let me: ReturnType<typeof makeMe>;
 
 const api: PendingApi = {
   mark: (rows, verb) => marks.push({ keys: rows.map((r) => r.key), verb }),
@@ -69,6 +73,7 @@ beforeEach(() => {
   sent = [];
   marks = [];
   released = [];
+  me = makeMe({ envs: { [ENV]: "operator" } });
   answer = allDone;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
@@ -80,7 +85,9 @@ beforeEach(() => {
         body: req.method === "POST" ? await req.clone().json() : undefined,
       };
       sent.push(entry);
-      if (entry.path === `/api/env/${ENV}/containers/actions`) return answer(entry);
+      if (entry.path === "/api/me") return Response.json(me);
+      if (entry.path.startsWith(`/api/env/${ENV}/containers/`) && req.method === "POST")
+        return answer(entry);
       return Response.json({}, { status: 404 });
     }),
   );
@@ -94,24 +101,34 @@ afterEach(() => {
   client.clear();
 });
 
-const posts = () => sent.filter((s) => s.path.endsWith("/containers/actions"));
+const posts = () => sent.filter((s) => s.path.includes("/containers/") && s.body !== undefined);
 
 function mount(rows: ContainerRow[], props: Partial<Parameters<typeof ActionDialog>[0]> = {}) {
   const onClose = vi.fn();
   const onDone = vi.fn();
+  function Host() {
+    const [report, setReport] = useState<BulkReport | null>(null);
+    return (
+      <>
+        <ActionDialog
+          envId={ENV}
+          verb="stop"
+          rows={rows}
+          open
+          onClose={onClose}
+          onDone={onDone}
+          onDetails={setReport}
+          {...props}
+        />
+        <BulkResultDialog envId={ENV} report={report} onClose={() => setReport(null)} />
+      </>
+    );
+  }
   render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
         <PendingContext.Provider value={api}>
-          <ActionDialog
-            envId={ENV}
-            verb="stop"
-            rows={rows}
-            open
-            onClose={onClose}
-            onDone={onDone}
-            {...props}
-          />
+          <Host />
         </PendingContext.Provider>
         <Toaster />
       </TooltipProvider>
@@ -257,5 +274,430 @@ describe("ActionDialog stop", () => {
     mount([row(long)]);
     const title = await screen.findByRole("heading", { name: `Stop ${long}?` });
     expect(title.className).toContain("break-all");
+  });
+});
+
+// ---- Task 2 -----------------------------------------------------------------
+
+const body = () => posts()[0]?.body as Record<string, unknown>;
+const confirmButton = (name: string | RegExp) => screen.getByRole("button", { name });
+
+async function dialogOf(name: string | RegExp) {
+  return screen.findByRole("alertdialog", { name });
+}
+
+describe("ActionDialog kill", () => {
+  it("asks 'Kill {name}?' with the SIGKILL warning and a destructive confirm", async () => {
+    mount([row("web")], { verb: "kill" });
+    const dialog = await dialogOf("Kill web?");
+    expect(dialog.textContent).toContain(
+      "Sends SIGKILL now. The process gets no chance to shut down cleanly, and data it was writing can be lost.",
+    );
+    const confirm = within(dialog).getByRole("button", { name: "Kill container" });
+    expect(confirm.className).toContain("bg-destructive-fill");
+    fireEvent.click(confirm);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(body()).toEqual({ action: "kill", targets: [{ nodeId: "n1", id: "id-web" }] });
+    expect(await screen.findByText("Killed web.")).toBeTruthy();
+  });
+
+  it("lists a container that is not running as skipped, leaves it out of the count and the request, and counts it in the toast", async () => {
+    mount([row("a"), row("b", { state: "exited" }), row("c")], { verb: "kill" });
+    const dialog = await dialogOf("Kill 2 containers?");
+    const rows = within(dialog).getAllByRole("row").slice(1);
+    expect(rows.map((r) => r.textContent)).toEqual(["a", "bNot running, skipped", "c"]);
+    expect(rows[1]?.hasAttribute("data-skipped")).toBe(true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kill 2 containers" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect((body().targets as { id: string }[]).map((t) => t.id)).toEqual(["id-a", "id-c"]);
+    expect(await screen.findByText("Killed 2 containers. 1 skipped")).toBeTruthy();
+  });
+
+  it("sends a signal only when one is typed in Advanced, with SIGKILL as its placeholder", async () => {
+    mount([row("web")], { verb: "kill" });
+    const dialog = await dialogOf("Kill web?");
+    expect(within(dialog).queryByLabelText("Signal")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Advanced" }));
+    const signal = await within(dialog).findByLabelText("Signal");
+    expect(signal.getAttribute("placeholder")).toBe("SIGKILL");
+    expect(dialog.textContent).toContain("Leave empty to use the container's own settings.");
+    fireEvent.change(signal, { target: { value: "SIGTERM" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Kill container" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(body()).toEqual({
+      action: "kill",
+      signal: "SIGTERM",
+      targets: [{ nodeId: "n1", id: "id-web" }],
+    });
+  });
+});
+
+describe("ActionDialog stop options", () => {
+  it("sends neither timeout nor signal when Advanced is left empty", async () => {
+    mount([row("web")]);
+    const dialog = await dialogOf("Stop web?");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Advanced" }));
+    await within(dialog).findByLabelText("Timeout (seconds)");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop container" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(body()).toEqual({ action: "stop", targets: [{ nodeId: "n1", id: "id-web" }] });
+  });
+
+  it("sends the timeout and signal that were filled, the placeholders showing the container's own", async () => {
+    mount([row("web")], { seconds: 15 });
+    const dialog = await dialogOf("Stop web?");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Advanced" }));
+    const timeout = await within(dialog).findByLabelText("Timeout (seconds)");
+    expect(timeout.getAttribute("placeholder")).toBe("15");
+    fireEvent.change(timeout, { target: { value: "30" } });
+    fireEvent.change(within(dialog).getByLabelText("Signal"), { target: { value: "sigint" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop container" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(body()).toEqual({
+      action: "stop",
+      timeout: 30,
+      signal: "SIGINT",
+      targets: [{ nodeId: "n1", id: "id-web" }],
+    });
+  });
+
+  it("refuses a timeout that is not a whole number without sending anything", async () => {
+    mount([row("web")]);
+    const dialog = await dialogOf("Stop web?");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Advanced" }));
+    fireEvent.change(await within(dialog).findByLabelText("Timeout (seconds)"), {
+      target: { value: "soon" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop container" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "Enter a whole number of seconds, 0 to 86400.",
+    );
+    expect(posts()).toEqual([]);
+  });
+
+  it("has no Advanced section for several containers, and never sends options", async () => {
+    mount(TWO);
+    const dialog = await dialogOf("Stop 2 containers?");
+    expect(within(dialog).queryByRole("button", { name: "Advanced" })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop 2 containers" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(Object.keys(body()).sort()).toEqual(["action", "targets"]);
+  });
+});
+
+describe("ActionDialog remove", () => {
+  it("asks 'Remove {name}?' with both options unticked", async () => {
+    mount([row("web", { state: "exited" })], { verb: "remove" });
+    const dialog = await dialogOf("Remove web?");
+    expect(dialog.textContent).toContain(
+      "The container is deleted. Its image and its named volumes stay.",
+    );
+    expect(dialog.textContent).toContain("Needed to remove a running container.");
+    expect(dialog.textContent).toContain(
+      "Volumes Docker made for this container without a name. Named volumes are never removed.",
+    );
+    expect(
+      within(dialog)
+        .getByRole("checkbox", { name: "Force (stop if running)" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      within(dialog)
+        .getByRole("checkbox", { name: "Also remove anonymous volumes" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(confirmButton("Remove container").className).toContain("bg-destructive-fill");
+  });
+
+  it("keeps Remove container disabled for a running container until Force is ticked", async () => {
+    mount([row("web")], { verb: "remove" });
+    const dialog = await dialogOf("Remove web?");
+    const confirm = within(dialog).getByRole("button", { name: "Remove container" });
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    expect(dialog.textContent).toContain("Tick Force to remove a running container.");
+    fireEvent.click(confirm);
+    expect(posts()).toEqual([]);
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Force (stop if running)" }));
+    await waitFor(() => expect(confirm.getAttribute("aria-disabled")).not.toBe("true"));
+    expect(dialog.textContent).not.toContain("Tick Force");
+    fireEvent.click(confirm);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.path).toBe(`/api/env/${ENV}/containers/remove`);
+    expect(body()).toEqual({
+      force: true,
+      removeVolumes: false,
+      targets: [{ nodeId: "n1", id: "id-web" }],
+    });
+    expect(await screen.findByText("Removed web.")).toBeTruthy();
+  });
+
+  it("needs no Force for a container that is not running", async () => {
+    mount([row("web", { state: "exited" })], { verb: "remove" });
+    const dialog = await dialogOf("Remove web?");
+    const confirm = within(dialog).getByRole("button", { name: "Remove container" });
+    expect(confirm.getAttribute("aria-disabled")).not.toBe("true");
+    expect(dialog.textContent).not.toContain("Tick Force");
+  });
+
+  it("sends removeVolumes when Also remove anonymous volumes is ticked and the caller may delete volumes", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" }, extras: { [ENV]: ["volumes.delete"] } });
+    mount([row("web", { state: "exited" })], { verb: "remove" });
+    const dialog = await dialogOf("Remove web?");
+    const volumes = within(dialog).getByRole("checkbox", { name: "Also remove anonymous volumes" });
+    await waitFor(() => expect(volumes.getAttribute("aria-disabled")).not.toBe("true"));
+    fireEvent.click(volumes);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove container" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(body().removeVolumes).toBe(true);
+  });
+
+  it("disables Also remove anonymous volumes with a reason when the caller may not delete volumes", async () => {
+    mount([row("web", { state: "exited" })], { verb: "remove" });
+    const dialog = await dialogOf("Remove web?");
+    const volumes = within(dialog).getByRole("checkbox", { name: "Also remove anonymous volumes" });
+    await waitFor(() => expect(volumes.getAttribute("aria-disabled")).toBe("true"));
+    expect(dialog.textContent).toContain("Needs the delete volumes permission");
+    fireEvent.click(volumes);
+    expect(volumes.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("removes several with one title, one button and one toast, and lists a running one needing Force", async () => {
+    mount([row("a", { state: "exited" }), row("b")], { verb: "remove" });
+    const dialog = await dialogOf("Remove 2 containers?");
+    expect(
+      within(dialog)
+        .getByRole("button", { name: "Remove 2 containers" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Force (stop if running)" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove 2 containers" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(await screen.findByText("Removed 2 containers.")).toBeTruthy();
+  });
+
+  it("does not skip any container: every state can be removed", async () => {
+    mount([row("a", { state: "exited" }), row("b", { state: "dead" })], { verb: "remove" });
+    const dialog = await dialogOf("Remove 2 containers?");
+    expect(
+      within(dialog)
+        .getAllByRole("row")
+        .slice(1)
+        .every((r) => !r.hasAttribute("data-skipped")),
+    ).toBe(true);
+  });
+});
+
+describe("ActionDialog warnings for swarm tasks and projects", () => {
+  it("warns that Swarm will replace a single task", async () => {
+    mount([row("web.1", { service: "web" })]);
+    const dialog = await dialogOf("Stop web.1?");
+    expect(dialog.textContent).toContain(
+      "This is a task of service web. Swarm will replace it. To stop it for good, scale the service.",
+    );
+  });
+
+  it("warns that the next deploy will recreate a single container of a project", async () => {
+    mount([row("shop-web", { project: "shop" })]);
+    const dialog = await dialogOf("Stop shop-web?");
+    expect(dialog.textContent).toContain("Part of project shop. The next deploy will recreate it.");
+  });
+
+  it("counts them in the plural forms, and notes each row in the list", async () => {
+    mount([
+      row("a.1", { service: "a" }),
+      row("b.1", { service: "b" }),
+      row("c-1", { project: "c" }),
+      row("d-1", { project: "d" }),
+      row("e"),
+    ]);
+    const dialog = await dialogOf("Stop 5 containers?");
+    expect(dialog.textContent).toContain(
+      "2 of these are tasks of swarm services. Swarm will replace them.",
+    );
+    expect(dialog.textContent).toContain(
+      "2 of these belong to projects. The next deploy will recreate them.",
+    );
+    const notes = within(dialog)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.cells[1]?.textContent);
+    expect(notes).toEqual([
+      "Task of service a",
+      "Task of service b",
+      "Part of project c",
+      "Part of project d",
+      "",
+    ]);
+  });
+
+  it("has the singular-of-several form for exactly one", async () => {
+    mount([row("a.1", { service: "a" }), row("b")]);
+    const dialog = await dialogOf("Stop 2 containers?");
+    expect(dialog.textContent).toContain(
+      "1 of these is a task of a swarm service. Swarm will replace it.",
+    );
+  });
+
+  it("shows no warning for a plain container", async () => {
+    mount([row("web")]);
+    const dialog = await dialogOf("Stop web?");
+    expect(dialog.textContent).not.toContain("Swarm will replace");
+    expect(dialog.textContent).not.toContain("next deploy");
+  });
+});
+
+describe("ActionDialog on Bayplan's own containers", () => {
+  const own = (extra: Partial<ContainerRow> = {}) =>
+    row("bayplan", { selfKind: "server", isSelf: true, ...extra });
+
+  it("warns, asks for the name, keeps the destructive confirm disabled until it matches, and sends it", async () => {
+    mount([own()]);
+    const dialog = await dialogOf("Stop bayplan?");
+    expect(dialog.textContent).toContain(
+      "This is Bayplan's own container. Stopping it cuts Bayplan off from this host, and you can't start it again from here.",
+    );
+    const confirm = within(dialog).getByRole("button", { name: "Stop Bayplan" });
+    expect(confirm.className).toContain("bg-destructive-fill");
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    const field = within(dialog).getByLabelText("Type bayplan to confirm");
+    // Focus starts on Cancel, not on the field.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })),
+    );
+    fireEvent.click(confirm);
+    expect(posts()).toEqual([]);
+    fireEvent.change(field, { target: { value: "bayplan-x" } });
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(posts()).toEqual([]);
+    fireEvent.change(field, { target: { value: "bayplan" } });
+    expect(confirm.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(confirm);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(body()).toEqual({
+      action: "stop",
+      confirm: "bayplan",
+      targets: [{ nodeId: "n1", id: "id-bayplan" }],
+    });
+  });
+
+  it("has no Advanced section for it", async () => {
+    mount([own()]);
+    const dialog = await dialogOf("Stop bayplan?");
+    expect(within(dialog).queryByRole("button", { name: "Advanced" })).toBeNull();
+  });
+
+  it("names the node for an agent and its own confirm 'Kill agent'", async () => {
+    mount([row("bayplan-agent", { selfKind: "agent" })], { verb: "kill" });
+    const dialog = await dialogOf("Kill bayplan-agent?");
+    expect(dialog.textContent).toContain(
+      "This is the Bayplan agent on node-1. Killing it cuts Bayplan off from node-1.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Kill agent" })).toBeTruthy();
+  });
+
+  it.each([
+    ["restart", "Restart bayplan?", "Restarting it", "Restart Bayplan"],
+    ["pause", "Pause bayplan?", "Pausing it", "Pause Bayplan"],
+    ["remove", "Remove bayplan?", "Removing it", "Remove Bayplan"],
+  ] as const)("words %s for it", async (verb, title, gerund, button) => {
+    mount([own({ state: verb === "remove" ? "exited" : "running" })], { verb });
+    const dialog = await dialogOf(title);
+    expect(dialog.textContent).toContain(`${gerund} cuts Bayplan off from this host`);
+    expect(within(dialog).getByRole("button", { name: button })).toBeTruthy();
+  });
+
+  it("says to type the name when the server still wants it", async () => {
+    answer = () => Response.json({ status: 422, type: "confirmation_required" }, { status: 422 });
+    mount([own()]);
+    const dialog = await dialogOf("Stop bayplan?");
+    fireEvent.change(within(dialog).getByLabelText("Type bayplan to confirm"), {
+      target: { value: "bayplan" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop Bayplan" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "Type the container's name to confirm this.",
+    );
+  });
+});
+
+describe("ActionDialog results", () => {
+  const partial = (req: Sent) =>
+    Response.json({
+      results: (req.body?.targets ?? []).map((t, i) => ({
+        nodeId: i === 1 ? "n2" : "n1",
+        id: t.id,
+        name: t.id.replace("id-", ""),
+        result: i === 0 ? "done" : i === 1 ? "failed" : "skipped",
+        code: i === 0 ? undefined : i === 1 ? "node_unreachable" : "own_container",
+      })),
+    });
+
+  it("sums a partial result in a toast with Details, which opens the results with a reason for each", async () => {
+    answer = partial;
+    mount([row("a"), row("b", { node: "node-2", nodeId: "n2" }), row("c")], { swarm: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Stop 3 containers" }));
+    expect(await screen.findByText("Stopped 1, 1 failed, 1 skipped")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    const results = await screen.findByRole("dialog", { name: "Stop results" });
+    expect(
+      within(results)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Container", "Node", "Result", "Reason"]);
+    const rows = within(results)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => [...r.cells].map((c) => c.textContent));
+    expect(rows).toEqual([
+      ["a", "node-1", "Done", "—"],
+      ["b", "node-2", "Failed", "node-2 isn't reachable right now. Try again when it's back."],
+      [
+        "c",
+        "node-1",
+        "Skipped",
+        "c is one of Bayplan's own containers. Stopping it would cut Bayplan off from the host, so it can't be done from this list.",
+      ],
+    ]);
+    expect(results.textContent).not.toContain("node_unreachable");
+    fireEvent.click(within(results).getByRole("button", { name: "Close results" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Stop results" })).toBeNull());
+  });
+
+  it("includes the rows that were skipped before the request in the results", async () => {
+    mount([row("a"), row("b", { state: "exited" })], { verb: "kill" });
+    // Only one is left to kill, so this is a single request in a bulk dialog.
+    fireEvent.click(await screen.findByRole("button", { name: /^Kill/ }));
+    expect(await screen.findByText(/^Killed 1 container\./)).toBeTruthy();
+  });
+
+  it("shows the agent update notice inside the dialog when the agent refuses by its own policy", async () => {
+    answer = (req) =>
+      Response.json({
+        results: [
+          {
+            nodeId: "n1",
+            id: req.body?.targets[0]?.id,
+            name: "web",
+            result: "failed",
+            code: "agent_policy_denied",
+          },
+        ],
+      });
+    mount([row("web")]);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop container" }));
+    const notice = await screen.findByRole("alert");
+    expect(notice.textContent).toContain("This host's agent needs an update");
+    await waitFor(() => expect(notice.textContent).toContain("Ask an administrator to update it."));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+  });
+
+  it("shows the notice when the whole request is refused for the agent's policy", async () => {
+    answer = () => Response.json({ status: 502, type: "agent_policy_denied" }, { status: 502 });
+    mount(TWO);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop 2 containers" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "This host's agent needs an update",
+    );
   });
 });

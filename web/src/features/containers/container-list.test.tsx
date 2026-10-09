@@ -1067,3 +1067,143 @@ describe("container list: stopping from the bulk bar", () => {
     ).toBeGreaterThan(0);
   });
 });
+
+describe("container list: every bulk action", () => {
+  it("offers Start, Stop…, Restart, Pause, Unpause, Kill… and Remove… and Clear selection", async () => {
+    await mountFlat();
+    fireEvent.click(box("loose"));
+    const bar = screen.getByRole("toolbar", { name: "Bulk actions" });
+    expect(
+      within(bar)
+        .getAllByRole("button")
+        .map((b) => b.textContent)
+        .filter((n) => n !== "More"),
+    ).toEqual([
+      "Start",
+      "Stop…",
+      "Restart",
+      "Pause",
+      "Unpause",
+      "Kill…",
+      "Remove…",
+      "Clear selection",
+    ]);
+  });
+
+  it("says why Pause cannot be used when nothing selected is running", async () => {
+    await mountFlat();
+    fireEvent.click(box("shop-db"));
+    const pause = screen.getByRole("button", { name: "Pause" });
+    expect(pause.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(pause);
+    expect(actionPosts).toEqual([]);
+    expect(
+      screen.getAllByText("None of the selected containers can be paused.").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Unpause" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
+  });
+
+  it("restarts the chosen containers at once with no dialog", async () => {
+    await mountFlat();
+    fireEvent.click(box("loose"));
+    fireEvent.click(box("shop-web"));
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    await waitFor(() => expect(actionPosts).toHaveLength(1));
+    expect(actionPosts[0]?.body.action).toBe("restart");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(await screen.findByText("Restarted 2 containers.")).toBeTruthy();
+  });
+
+  it("lists a stopped container as skipped in the Kill dialog, kills the others and counts it in the toast", async () => {
+    await mountFlat();
+    fireEvent.click(box("loose"));
+    fireEvent.click(box("shop-db"));
+    fireEvent.click(box("shop-web"));
+    fireEvent.click(screen.getByRole("button", { name: "Kill…" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Kill 2 containers?" });
+    const rows = within(dialog).getAllByRole("row").slice(1);
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "loose",
+      "shop-dbNot running, skipped",
+      "shop-web",
+    ]);
+    const confirm = within(dialog).getByRole("button", { name: "Kill 2 containers" });
+    expect(confirm.className).toContain("bg-destructive-fill");
+    fireEvent.click(confirm);
+    await waitFor(() => expect(actionPosts).toHaveLength(1));
+    expect(actionPosts[0]?.body).toEqual({
+      action: "kill",
+      targets: [
+        { nodeId: "n1", id: "id-loose" },
+        { nodeId: "n1", id: "id-shop-web" },
+      ],
+    });
+    expect(await screen.findByText("Killed 2 containers. 1 skipped")).toBeTruthy();
+  });
+
+  it("removes the chosen containers once Force is ticked, from the remove route", async () => {
+    await mountFlat();
+    fireEvent.click(box("loose"));
+    fireEvent.click(box("shop-db"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove…" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove 2 containers?" });
+    const confirm = within(dialog).getByRole("button", { name: "Remove 2 containers" });
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Force (stop if running)" }));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(actionPosts).toHaveLength(1));
+    expect(actionPosts[0]?.path).toBe(`/api/env/${ENV}/containers/remove`);
+    expect(actionPosts[0]?.body).toMatchObject({ force: true, removeVolumes: false });
+    expect(await screen.findByText("Removed 2 containers.")).toBeTruthy();
+  });
+
+  it("opens the results from a partial toast, with the agent update notice for an agent that refused", async () => {
+    actionAnswer = (req) =>
+      Response.json({
+        results: req.body.targets.map((t, i) => ({
+          nodeId: "n1",
+          id: t.id,
+          name: t.id.replace("id-", ""),
+          result: i === 0 ? "done" : "failed",
+          code: i === 0 ? undefined : "agent_policy_denied",
+        })),
+      });
+    await mountFlat();
+    fireEvent.click(box("loose"));
+    fireEvent.click(box("shop-web"));
+    fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop 2 containers" }));
+    expect(await screen.findByText("Stopped 1, 1 failed")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    const results = await screen.findByRole("dialog", { name: "Stop results" });
+    expect(
+      within(results).getByText("This host's agent needs an update", { selector: "*" }),
+    ).toBeTruthy();
+    expect(
+      within(results)
+        .getAllByRole("row")
+        .slice(1)
+        .map((r) => r.cells[0]?.textContent),
+    ).toEqual(["loose", "shop-web"]);
+  });
+});
+
+describe("container list: Bayplan's own container", () => {
+  it("opens the own-container dialog from the row menu, where the name must be typed", async () => {
+    answer = () =>
+      Response.json(body([row("bayplan", { selfKind: "server", isSelf: true }), ...ROWS]));
+    mount({ group: "none" });
+    await screen.findByText("bayplan");
+    await openRowMenu("bayplan");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Stop" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Stop bayplan?" });
+    expect(dialog.textContent).toContain("This is Bayplan's own container.");
+    const confirm = within(dialog).getByRole("button", { name: "Stop Bayplan" });
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(actionPosts).toEqual([]);
+  });
+});
