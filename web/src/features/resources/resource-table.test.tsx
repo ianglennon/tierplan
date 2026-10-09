@@ -459,3 +459,75 @@ describe("ResourceTable groups and slots", () => {
     expect(onSort).toHaveBeenCalledWith("name");
   });
 });
+
+// Row states (plan 04-07, D-05): a changed row is muted for a moment, a new row
+// slides in, a gone row fades out or stays dimmed.
+describe("ResourceTable row states", () => {
+  function states(map: Record<string, Record<string, boolean>>) {
+    const rows: Row[] = [
+      { id: "a", name: "alpha" },
+      { id: "b", name: "beta" },
+      { id: "c", name: "gamma" },
+      { id: "d", name: "delta" },
+    ];
+    render(
+      <TooltipProvider>
+        <ResourceTable
+          resource="containers"
+          columns={COLUMNS}
+          query={query({ data: { items: rows, total: 4, truncated: false } })}
+          envName="Lab"
+          getRowKey={(r) => r.id}
+          groups={{
+            items: [{ key: "all", rows }],
+            collapse: {
+              collapsed: new Set(),
+              toggle: () => undefined,
+              collapseAll: () => undefined,
+              expandAll: () => undefined,
+            },
+          }}
+          rowStates={new Map(Object.entries(map))}
+        />
+      </TooltipProvider>,
+    );
+    return (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+  }
+
+  it("marks changed, added and removed rows with data attributes", () => {
+    const row = states({
+      a: { changed: true },
+      b: { added: true },
+      c: { removed: true },
+      d: { removed: true, leaving: true },
+    });
+    expect(row("alpha").hasAttribute("data-changed")).toBe(true);
+    expect(row("alpha").hasAttribute("data-added")).toBe(false);
+    expect(row("beta").hasAttribute("data-added")).toBe(true);
+    expect(row("gamma").hasAttribute("data-removed")).toBe(true);
+    expect(row("delta").hasAttribute("data-removed")).toBe(true);
+    expect(row("delta").hasAttribute("data-leaving")).toBe(true);
+  });
+
+  it("mutes a changed row, and moves rows only when motion is allowed", () => {
+    const row = states({ a: { changed: true }, b: { added: true }, d: { leaving: true } });
+    expect(row("alpha").className).toContain("bg-muted");
+    expect(row("beta").className).toContain("motion-safe:animate-in");
+    expect(row("delta").className).toContain("motion-safe:animate-out");
+    // No row carries a transition or an animation that reduced motion would not turn off.
+    for (const name of ["alpha", "beta", "gamma", "delta"]) {
+      const bare = row(name)
+        .className.split(/\s+/)
+        .filter(
+          (c) => /^(transition|animate|duration|slide|fade)/.test(c) && c !== "transition-none",
+        );
+      expect(bare).toEqual([]);
+    }
+  });
+
+  it("dims a removed row", () => {
+    const row = states({ c: { removed: true } });
+    expect(row("gamma").className).toContain("opacity-60");
+    expect(row("alpha").className).not.toContain("opacity-60");
+  });
+});

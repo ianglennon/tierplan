@@ -404,3 +404,58 @@ describe("Restart, Pause and Unpause", () => {
     expect(screen.getAllByText("Needs Operator").length).toBeGreaterThan(0);
   });
 });
+
+describe("ContainerRowActions open state", () => {
+  function track(r: ContainerRow = row()) {
+    const seen: boolean[] = [];
+    const view = render(
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <ContainerRowActions envId={ENV} row={r} onOpenChange={(o) => seen.push(o)} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    return { seen, view };
+  }
+
+  it("reports the menu opening and closing", async () => {
+    const { seen } = track();
+    await openMenu();
+    await screen.findByRole("menuitem", { name: "Restart" });
+    expect(seen[seen.length - 1]).toBe(true);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(seen[seen.length - 1]).toBe(false));
+  });
+
+  it("reports open while the Stop dialog is up", async () => {
+    const { seen } = track();
+    await openMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Stop" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Stop web?" });
+    expect(seen[seen.length - 1]).toBe(true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(seen[seen.length - 1]).toBe(false));
+  });
+
+  it("reports closed when an open row goes away", async () => {
+    const { seen, view } = track();
+    await openMenu();
+    await screen.findByRole("menuitem", { name: "Restart" });
+    view.unmount();
+    expect(seen[seen.length - 1]).toBe(false);
+  });
+
+  it("disables the menu button for a removed row", async () => {
+    render(
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <ContainerRowActions envId={ENV} row={row()} disabled />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(sent.some((s) => s.path === "/api/me")).toBe(true));
+    expect(
+      (screen.getByRole("button", { name: "Actions for web" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+});

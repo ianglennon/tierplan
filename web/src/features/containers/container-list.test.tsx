@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
-import type { ContainerRow } from "@/api/resources";
+import { type ContainerRow, listKey } from "@/api/resources";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ContainerList } from "@/features/containers/container-list";
 import {
@@ -638,5 +638,140 @@ describe("container list: columns and cells", () => {
     await screen.findByText("shop-web");
     expect(screen.getByRole("columnheader", { name: "Name" }).className).toContain("min-w-[200px]");
     expect(screen.getByText("shop-web").className).toContain("truncate");
+  });
+});
+
+// A new answer arriving through a refetch, as the events feed or the 30 s poll
+// would bring it.
+async function refetch() {
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: listKey(ENV, "containers") });
+  });
+}
+
+const rowOf = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+async function openRowMenu(name: string) {
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: `Actions for ${name}` })).toBeTruthy(),
+  );
+  await act(async () => {});
+  await act(async () => {
+    fireEvent.keyDown(screen.getByRole("button", { name: `Actions for ${name}` }), {
+      key: "Enter",
+    });
+  });
+  await screen.findByRole("menu");
+}
+
+describe("container list: live updates in place", () => {
+  it("updates a row whose state changed in place and marks it for a moment", async () => {
+    mount({ group: "none" });
+    await screen.findByText("shop-web");
+    expect(rowOf("shop-web").hasAttribute("data-changed")).toBe(false);
+    answer = () =>
+      Response.json(body(ROWS.map((r) => (r.name === "shop-web" ? { ...r, state: "paused" } : r))));
+    await refetch();
+    await waitFor(() => expect(within(rowOf("shop-web")).getByText("Paused")).toBeTruthy());
+    expect(rowOf("shop-web").hasAttribute("data-changed")).toBe(true);
+    expect(rowOf("blog").hasAttribute("data-changed")).toBe(false);
+    await waitFor(() => expect(rowOf("shop-web").hasAttribute("data-changed")).toBe(false), {
+      timeout: 3000,
+    });
+  });
+
+  it("slides a new row in without a reload", async () => {
+    mount({ group: "none" });
+    await screen.findByText("shop-web");
+    answer = () => Response.json(body([...ROWS, row("zeta")]));
+    await refetch();
+    await screen.findByText("zeta");
+    expect(rowOf("zeta").hasAttribute("data-added")).toBe(true);
+    expect(rowOf("zeta").className).toContain("motion-safe:animate-in");
+  });
+
+  it("fades a removed row out and then drops it", async () => {
+    mount({ group: "none" });
+    await screen.findByText("shop-web");
+    answer = () => Response.json(body(ROWS.filter((r) => r.name !== "loose")));
+    await refetch();
+    await waitFor(() => expect(screen.queryByText("loose")).toBeNull(), { timeout: 2000 });
+  });
+
+  it("holds everything still while a row menu is open, and says so", async () => {
+    mount({ group: "none" });
+    await screen.findByText("shop-web");
+    await openRowMenu("blog");
+    answer = () =>
+      Response.json(
+        body([
+          row("zeta"),
+          ...ROWS.filter((r) => r.name !== "loose").map((r) =>
+            r.name === "shop-web" ? { ...r, state: "paused" as const } : r,
+          ),
+        ]),
+      );
+    await refetch();
+    // The changed row updates in place; nothing else moves.
+    await waitFor(() => expect(within(rowOf("shop-web")).getByText("Paused")).toBeTruthy());
+    expect(screen.queryByText("zeta")).toBeNull();
+    expect(screen.getByText("loose")).toBeTruthy();
+    const names = screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.querySelector("td")?.textContent);
+    expect(names).toEqual(["blog", "loose", "shop-db", "shop-web"]);
+    // The gone row stays, dimmed, as Removed, with its menu disabled.
+    expect(within(rowOf("loose")).getByText("Removed")).toBeTruthy();
+    expect(rowOf("loose").hasAttribute("data-removed")).toBe(true);
+    expect(
+      (
+        within(rowOf("loose")).getByRole("button", {
+          name: "Actions for loose",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(screen.getByText("2 changes waiting")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show changes" })).toBeTruthy();
+  });
+
+  it("applies the held changes at once with Show changes", async () => {
+    mount({ group: "none" });
+    await screen.findByText("shop-web");
+    await openRowMenu("blog");
+    answer = () => Response.json(body([...ROWS, row("zeta")]));
+    await refetch();
+    expect(await screen.findByText("1 change waiting")).toBeTruthy();
+    expect(screen.queryByText("zeta")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show changes" }));
+    await screen.findByText("zeta");
+    expect(screen.queryByText(/change waiting|changes waiting/)).toBeNull();
+  });
+
+  it("applies the held changes by itself when the menu closes", async () => {
+    mount({ group: "none" });
+    await screen.findByText("shop-web");
+    await openRowMenu("blog");
+    answer = () => Response.json(body([...ROWS, row("zeta")]));
+    await refetch();
+    await screen.findByText("1 change waiting");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await screen.findByText("zeta");
+    expect(screen.queryByText("1 change waiting")).toBeNull();
+  });
+
+  it("does not flag the rows of a new search as added or removed", async () => {
+    mount({ group: "none" });
+    await screen.findByText("shop-web");
+    answer = (url) =>
+      Response.json(body(ROWS.filter((r) => r.name.includes(url.searchParams.get("q") ?? ""))));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search containers" }), {
+      target: { value: "shop" },
+    });
+    await waitFor(() => expect(screen.queryByText("loose")).toBeNull(), { timeout: 2000 });
+    for (const name of ["shop-web", "shop-db"]) {
+      expect(rowOf(name).hasAttribute("data-added")).toBe(false);
+      expect(rowOf(name).hasAttribute("data-removed")).toBe(false);
+    }
   });
 });
