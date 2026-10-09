@@ -503,7 +503,7 @@ export interface paths {
         put?: never;
         /**
          * Start, stop, restart, kill, pause or unpause containers
-         * @description Does one action to up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. The actions are start, stop, restart, kill, pause and unpause. A stop or restart uses the container's own stop timeout and signal and a kill sends SIGKILL; a request with exactly one target may set timeout or signal, and a request with more is refused 422 options_single_only. Starting a running container or stopping a stopped one is answered done, and a container removed meanwhile is not_found, so repeating an action is safe. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. At most 4 calls run at once on one node and 16 targets at once overall. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Bayplan's own server container and any agent container are refused with own_container. A node whose agent runs read-only (BAYPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. Each target is audited as container.started, container.stopped, container.restarted, container.killed, container.paused or container.unpaused, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
+         * @description Does one action to up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. The actions are start, stop, restart, kill, pause and unpause. A stop or restart uses the container's own stop timeout and signal and a kill sends SIGKILL; a request with exactly one target may set timeout or signal, and a request with more is refused 422 options_single_only. Starting a running container or stopping a stopped one is answered done, and a container removed meanwhile is not_found, so repeating an action is safe. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. At most 4 calls run at once on one node and 16 targets at once overall. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Bayplan's own server container and any agent container are protected: to stop, kill, restart or pause one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. A node whose agent runs read-only (BAYPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. Each target is audited as container.started, container.stopped, container.restarted, container.killed, container.paused or container.unpaused, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
          */
         post: operations["actOnContainers"];
         delete?: never;
@@ -523,7 +523,7 @@ export interface paths {
         put?: never;
         /**
          * Remove containers
-         * @description Removes up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order, as the actions route does. A running container is refused with container_running unless force is true, and nothing is sent for it. Named volumes are never removed. removeVolumes also removes the container's anonymous volumes, and needs the delete volumes permission on top of containers.remove: a caller without it is refused 403 before any call and the refusal is audited as permission.denied. Bayplan's own server container and any agent container are refused with own_container. Each target is audited as container.removed with its force and volumes choices. Needs containers.remove (Operator) on the environment.
+         * @description Removes up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order, as the actions route does. A running container is refused with container_running unless force is true, and nothing is sent for it. Named volumes are never removed. removeVolumes also removes the container's anonymous volumes, and needs the delete volumes permission on top of containers.remove: a caller without it is refused 403 before any call and the refusal is audited as permission.denied. Bayplan's own server container and any agent container are protected: to remove one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. Each target is audited as container.removed with its force and volumes choices. Needs containers.remove (Operator) on the environment.
          */
         post: operations["removeContainers"];
         delete?: never;
@@ -2067,6 +2067,8 @@ export interface components {
              * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
              */
             bulkId?: string;
+            /** @description The container's name, typed. Needed to stop, kill, restart or pause Bayplan's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only */
+            confirm?: string;
             /** @description The signal a stop, restart or kill sends, for example SIGTERM. Only with exactly one target (else 422 options_single_only); ignored by the other actions */
             signal?: string;
             /** @description The containers to act on, at most 25. Each is acted on and answered separately; one that fails never stops the others */
@@ -2085,10 +2087,10 @@ export interface components {
         };
         ContainerActionResult: {
             /**
-             * @description Why a target failed. own_container: Bayplan's own server or an agent, refused until it is confirmed by typing its name. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent, so Bayplan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed. own_container (with result skipped): Bayplan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of Bayplan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent, so Bayplan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
-            code?: "own_container" | "node_unreachable" | "not_found" | "host_read_only" | "agent_policy_denied" | "container_running" | "action_failed";
+            code?: "own_container" | "node_unreachable" | "not_found" | "host_read_only" | "agent_policy_denied" | "container_running" | "connection_lost" | "action_failed";
             /** @description The engine's message for action_failed, at most 300 characters; for the other codes a plain sentence */
             detail?: string;
             /** @description The container ID or name the request named */
@@ -2098,7 +2100,7 @@ export interface components {
             /** @description The node ID the request named */
             nodeId: string;
             /**
-             * @description done: the engine accepted the action. failed: it was refused or could not be sent; code says why
+             * @description done: the engine accepted the action. failed: it was refused or could not be sent; code says why. skipped: not acted on because it is one of Bayplan's own containers in a bulk
              * @enum {string}
              */
             result: "done" | "failed" | "skipped";
@@ -2155,6 +2157,8 @@ export interface components {
              * @description Groups the audit rows of one bulk request, as for the actions route
              */
             bulkId?: string;
+            /** @description The container's name, typed. Needed to remove Bayplan's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only */
+            confirm?: string;
             /** @description Remove a running container too. Without it a running container is refused with container_running */
             force: boolean;
             /** @description Also remove the container's anonymous volumes; named volumes are never removed. Needs the delete volumes permission on top of containers.remove */

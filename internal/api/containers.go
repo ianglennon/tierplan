@@ -6,11 +6,14 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -28,10 +31,9 @@ import (
 // Result values and codes of one target of a container action. A code is a stable
 // word the SPA maps to its own copy; the detail is only a fallback sentence.
 const (
-	actionDone   = "done"
-	actionFailed = "failed"
-	// The result enum also names skipped, a target the endpoint did not act on and
-	// did not fail. It is reserved for the bulk plans; nothing here returns it.
+	actionDone    = "done"
+	actionFailed  = "failed"
+	actionSkipped = "skipped" // a target the request did not act on and did not fail: Bayplan's own container in a bulk
 
 	codeOwnContainer     = "own_container"
 	codeNodeUnreachable  = "node_unreachable"
@@ -40,10 +42,14 @@ const (
 	codeHostReadOnly     = "host_read_only"
 	codeActionFailed     = "action_failed"
 	codeContainerRunning = "container_running"
-	maxActionDetail      = 300
-	containerTargetType  = "container"
-	ownerLabelAgent      = "bayplan.agent"
-	ownerLabelAgentValue = "true"
+	codeConnectionLost   = "connection_lost"
+	// codeConfirmationRequired never appears in a result: a single target that needs its
+	// name typed makes the whole request a 422 of this type.
+	codeConfirmationRequired = "confirmation_required"
+	maxActionDetail          = 300
+	containerTargetType      = "container"
+	ownerLabelAgent          = "bayplan.agent"
+	ownerLabelAgentValue     = "true"
 
 	// A target's fresh inspect gets inspectTimeout. Its write gets writeTimeout, or for a
 	// stop or restart the stop timeout (the request's, else the container's own, else
@@ -55,6 +61,15 @@ const (
 	defaultStopTimeout = 10 // seconds, the engine's own default
 
 	problemOptionsSingleOnly = "options_single_only"
+
+	// The audit stages of an action on one of Bayplan's own containers: the attempt is
+	// recorded before the call, because the call may take the recorder down, and again
+	// after it (RESEARCH Pitfall 10).
+	stageInitiated      = "initiated"
+	stageCompleted      = "completed"
+	stageConnectionLost = "connection_lost"
+	ownServer           = "server"
+	ownAgent            = "agent"
 
 	// A bulk runs at most perNodeCalls calls at once on one node and bulkParallel
 	// targets at once overall, so 25 targets cannot flood one engine (T-04-25).
@@ -90,12 +105,14 @@ type ContainerActionRequest struct {
 	BulkID  string                  `json:"bulkId,omitempty" format:"uuid" doc:"Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it"`
 	Timeout *int                    `json:"timeout,omitempty" minimum:"0" maximum:"86400" doc:"Seconds a stop or restart waits before it kills the container. Only with exactly one target (else 422 options_single_only); ignored by the other actions"`
 	Signal  string                  `json:"signal,omitempty" pattern:"^[A-Z0-9+]{1,16}$" doc:"The signal a stop, restart or kill sends, for example SIGTERM. Only with exactly one target (else 422 options_single_only); ignored by the other actions"`
+	Confirm string                  `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to stop, kill, restart or pause Bayplan's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only"`
 	Targets []ContainerActionTarget `json:"targets" minItems:"1" maxItems:"25" doc:"The containers to act on, at most 25. Each is acted on and answered separately; one that fails never stops the others"`
 }
 
 // ContainerRemoveRequest is the body of POST /api/env/{envId}/containers/remove.
 type ContainerRemoveRequest struct {
 	BulkID        string                  `json:"bulkId,omitempty" format:"uuid" doc:"Groups the audit rows of one bulk request, as for the actions route"`
+	Confirm       string                  `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to remove Bayplan's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only"`
 	Force         bool                    `json:"force" doc:"Remove a running container too. Without it a running container is refused with container_running"`
 	RemoveVolumes bool                    `json:"removeVolumes" doc:"Also remove the container's anonymous volumes; named volumes are never removed. Needs the delete volumes permission on top of containers.remove"`
 	Targets       []ContainerActionTarget `json:"targets" minItems:"1" maxItems:"25" doc:"The containers to remove, at most 25. Each is answered separately; one that fails never stops the others"`
@@ -119,11 +136,15 @@ type ContainerActionInput struct {
 
 // ContainerActionResult is the answer for one target.
 type ContainerActionResult struct {
+	// own and stage are for the audit row only: which of Bayplan's own containers this is,
+	// and how far an action on it got. They are not part of the contract.
+	own, stage string
+
 	NodeID string `json:"nodeId" doc:"The node ID the request named"`
 	ID     string `json:"id" doc:"The container ID or name the request named"`
 	Name   string `json:"name" doc:"The container name when the engine could be asked; otherwise the ID or name the request named"`
-	Result string `json:"result" enum:"done,failed,skipped" doc:"done: the engine accepted the action. failed: it was refused or could not be sent; code says why"`
-	Code   string `json:"code,omitempty" enum:"own_container,node_unreachable,not_found,host_read_only,agent_policy_denied,container_running,action_failed" doc:"Why a target failed. own_container: Bayplan's own server or an agent, refused until it is confirmed by typing its name. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent, so Bayplan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message"`
+	Result string `json:"result" enum:"done,failed,skipped" doc:"done: the engine accepted the action. failed: it was refused or could not be sent; code says why. skipped: not acted on because it is one of Bayplan's own containers in a bulk"`
+	Code   string `json:"code,omitempty" enum:"own_container,node_unreachable,not_found,host_read_only,agent_policy_denied,container_running,connection_lost,action_failed" doc:"Why a target failed. own_container (with result skipped): Bayplan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of Bayplan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent, so Bayplan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message"`
 	Detail string `json:"detail,omitempty" doc:"The engine's message for action_failed, at most 300 characters; for the other codes a plain sentence"`
 }
 
@@ -161,7 +182,9 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			"A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. " +
 			"At most 4 calls run at once on one node and 16 targets at once overall. " +
 			"With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. " +
-			"Bayplan's own server container and any agent container are refused with own_container. " +
+			"Bayplan's own server container and any agent container are protected: to stop, kill, restart or pause one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); " +
+			"in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. " +
+			"An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. " +
 			"A node whose agent runs read-only (BAYPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. " +
 			"Each target is audited as container.started, container.stopped, container.restarted, container.killed, container.paused or container.unpaused, with result failure and the code when it failed. " +
 			"Needs containers.control (Operator) on the environment.",
@@ -172,27 +195,37 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			if p == nil || env == nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
-			if (in.Body.Timeout != nil || in.Body.Signal != "") && len(in.Body.Targets) != 1 {
+			single := len(in.Body.Targets) == 1
+			if (in.Body.Timeout != nil || in.Body.Signal != "") && !single {
 				return nil, httpx.Problem(http.StatusUnprocessableEntity, problemOptionsSingleOnly,
 					"timeout and signal can be set for one container at a time; a bulk request uses each container's own settings")
 			}
+			if in.Body.Confirm != "" && !single {
+				return nil, httpx.Problem(http.StatusUnprocessableEntity, problemOptionsSingleOnly,
+					"a typed name confirms one container at a time; Bayplan's own containers are never acted on in a bulk")
+			}
 			spec := verbSpecs[in.Body.Action]
 			opts := dockerx.ActionOptions{Timeout: in.Body.Timeout, Signal: in.Body.Signal}
-			op := containerOp{verb: spec.verb, opts: opts}
-
 			bulkID, err := bulkIDFor(in.Body.BulkID, len(in.Body.Targets))
 			if err != nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
-			results := runTargets(ctx, in.Body.Targets, func(ctx context.Context, t ContainerActionTarget) ContainerActionResult {
-				return actOnOne(ctx, d, isSelf, env.ID, t, op)
-			})
 			extra := map[string]string{}
 			if spec.usesTimeout && in.Body.Timeout != nil {
 				extra["timeout"] = strconv.Itoa(*in.Body.Timeout)
 			}
 			if spec.usesSignal && in.Body.Signal != "" {
 				extra["signal"] = in.Body.Signal
+			}
+			op := containerOp{
+				verb: spec.verb, opts: opts, single: single, confirm: in.Body.Confirm,
+				initiate: initiator(ctx, d, p, env.ID, in.UserAgent, spec.action, bulkID, extra),
+			}
+			results := runTargets(ctx, in.Body.Targets, func(ctx context.Context, t ContainerActionTarget) ContainerActionResult {
+				return actOnOne(ctx, d, isSelf, env.ID, t, op)
+			})
+			if err := confirmationRequired(single, results); err != nil {
+				return nil, err
 			}
 			auditTargets(ctx, d, p, env.ID, in.UserAgent, spec.action, bulkID, extra, in.Body.Targets, results)
 			return &ContainerActionOutput{CacheControl: "no-store", Body: ContainerActionResponse{BulkID: bulkID, Results: results}}, nil
@@ -205,7 +238,9 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			"A running container is refused with container_running unless force is true, and nothing is sent for it. " +
 			"Named volumes are never removed. removeVolumes also removes the container's anonymous volumes, and needs the delete volumes permission on top of containers.remove: " +
 			"a caller without it is refused 403 before any call and the refusal is audited as permission.denied. " +
-			"Bayplan's own server container and any agent container are refused with own_container. " +
+			"Bayplan's own server container and any agent container are protected: to remove one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); " +
+			"in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. " +
+			"An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. " +
 			"Each target is audited as container.removed with its force and volumes choices. " +
 			"Needs containers.remove (Operator) on the environment.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusOK,
@@ -220,15 +255,27 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 					return nil, err
 				}
 			}
+			single := len(in.Body.Targets) == 1
+			if in.Body.Confirm != "" && !single {
+				return nil, httpx.Problem(http.StatusUnprocessableEntity, problemOptionsSingleOnly,
+					"a typed name confirms one container at a time; Bayplan's own containers are never acted on in a bulk")
+			}
 			bulkID, err := bulkIDFor(in.Body.BulkID, len(in.Body.Targets))
 			if err != nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
-			op := containerOp{remove: true, rm: dockerx.RemoveOptions{Force: in.Body.Force, Volumes: in.Body.RemoveVolumes}}
+			extra := map[string]string{"force": strconv.FormatBool(in.Body.Force), "volumes": strconv.FormatBool(in.Body.RemoveVolumes)}
+			op := containerOp{
+				remove: true, rm: dockerx.RemoveOptions{Force: in.Body.Force, Volumes: in.Body.RemoveVolumes},
+				single: single, confirm: in.Body.Confirm,
+				initiate: initiator(ctx, d, p, env.ID, in.UserAgent, audit.ActionContainerRemoved, bulkID, extra),
+			}
 			results := runTargets(ctx, in.Body.Targets, func(ctx context.Context, t ContainerActionTarget) ContainerActionResult {
 				return actOnOne(ctx, d, isSelf, env.ID, t, op)
 			})
-			extra := map[string]string{"force": strconv.FormatBool(in.Body.Force), "volumes": strconv.FormatBool(in.Body.RemoveVolumes)}
+			if err := confirmationRequired(single, results); err != nil {
+				return nil, err
+			}
 			auditTargets(ctx, d, p, env.ID, in.UserAgent, audit.ActionContainerRemoved, bulkID, extra, in.Body.Targets, results)
 			return &ContainerActionOutput{CacheControl: "no-store", Body: ContainerActionResponse{BulkID: bulkID, Results: results}}, nil
 		})
@@ -259,6 +306,26 @@ type containerOp struct {
 	opts   dockerx.ActionOptions
 	remove bool
 	rm     dockerx.RemoveOptions
+	// single is true for a request with exactly one target, the only kind that may act on
+	// one of Bayplan's own containers; confirm is the name typed for it.
+	single  bool
+	confirm string
+	// initiate records the audit row written before a call to one of Bayplan's own
+	// containers.
+	initiate func(t ContainerActionTarget, name, own string) error
+}
+
+// disruptive reports whether op, done to one of Bayplan's own containers, can cut Bayplan
+// off from a host. A start and an unpause cannot (D-11).
+func (op containerOp) disruptive() bool {
+	if op.remove {
+		return true
+	}
+	switch op.verb {
+	case dockerx.VerbStop, dockerx.VerbKill, dockerx.VerbRestart, dockerx.VerbPause:
+		return true
+	}
+	return false
 }
 
 // writeDeadline is how long the write of op may take on a container with the given
@@ -314,8 +381,16 @@ func auditTargets(ctx context.Context, d ContainersDeps, p *rbac.Principal, envI
 		result, reason, code := audit.ResultSuccess, "", actionDone
 		if res.Result != actionDone {
 			result, reason, code = audit.ResultFailure, res.Code, res.Code
+		} else if res.Code != "" {
+			code = res.Code // connection_lost: accepted, not failed
 		}
 		details := map[string]string{"container": res.Name, "node": t.NodeID, "code": code}
+		if res.own != "" {
+			details["own"] = res.own
+		}
+		if res.stage != "" {
+			details["stage"] = res.stage
+		}
 		for k, v := range extra {
 			details[k] = v
 		}
@@ -422,8 +497,30 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 	if own.Name != "" {
 		res.Name = own.Name
 	}
-	if isSelf(own.ID) || own.Labels[ownerLabelAgent] == ownerLabelAgentValue {
-		return fail(codeOwnContainer, "This is Bayplan's own container. Acting on it would cut Bayplan off from the host, so it is refused.")
+	switch {
+	case isSelf(own.ID):
+		res.own = ownServer
+	case own.Labels[ownerLabelAgent] == ownerLabelAgentValue:
+		res.own = ownAgent
+	}
+	recorded := false // the initiated row of an action on an own container is written
+	if res.own != "" && op.disruptive() {
+		if !op.single {
+			// A bulk, and a select-all, never reaches Bayplan's own containers (D-12).
+			res.Result, res.Code = actionSkipped, codeOwnContainer
+			res.Detail = "This is Bayplan's own container. It is not acted on in a bulk; act on it alone, typing its name."
+			return res
+		}
+		if own.Name == "" || op.confirm != own.Name {
+			return fail(codeConfirmationRequired, "Type the container's name to confirm this.")
+		}
+		// The call may take the recorder down with it, so the attempt is written first.
+		// With no row, nothing is sent.
+		if err := op.initiate(t, res.Name, res.own); err != nil {
+			d.Log.Error("could not audit the start of an action on an own container", "container", res.Name, "error", err)
+			return fail(codeActionFailed, "The action could not be recorded in the audit log, so nothing was sent.")
+		}
+		recorded = true
 	}
 	if op.remove && own.Running && !op.rm.Force {
 		return fail(codeContainerRunning, "The container is running. Stop it first, or remove it with force.")
@@ -439,12 +536,58 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 		}
 		return c.ContainerAction(writeCtx, own.ID, op.verb, op.opts)
 	})
+	if recorded {
+		res.stage = stageCompleted
+	}
 	if err != nil {
+		if recorded && isConnectionLost(err) {
+			// Stopping the process that serves this call ends the call. The action is
+			// taken as accepted, not as a failure; the list shows what happened.
+			res.stage, res.Result, res.Code = stageConnectionLost, actionDone, codeConnectionLost
+			res.Detail = "The connection ended while the action ran, which is what it does to Bayplan's own container. Refresh to see the outcome."
+			return res
+		}
 		code, detail := actionError(err)
 		return fail(code, detail)
 	}
 	res.Result = actionDone
 	return res
+}
+
+// isConnectionLost reports whether err is the end of a connection rather than an answer
+// from the engine: a dropped tunnel, a closed or reset socket, an unexpected end of stream.
+func isConnectionLost(err error) bool {
+	return errors.Is(err, tunnel.ErrAgentGone) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, net.ErrClosed)
+}
+
+// confirmationRequired turns the one target that needs its name typed into the request's
+// answer: a 422, with nothing sent for it.
+func confirmationRequired(single bool, results []ContainerActionResult) error {
+	if single && len(results) == 1 && results[0].Code == codeConfirmationRequired {
+		return httpx.Problem(http.StatusUnprocessableEntity, codeConfirmationRequired, results[0].Detail)
+	}
+	return nil
+}
+
+// initiator returns the function that writes the initiated row of an action on one of
+// Bayplan's own containers. The row carries what the final row would, with stage
+// initiated, and the result success because nothing has failed yet.
+func initiator(ctx context.Context, d ContainersDeps, p *rbac.Principal, envID, userAgent, action, bulkID string, extra map[string]string) func(ContainerActionTarget, string, string) error {
+	return func(t ContainerActionTarget, name, own string) error {
+		details := map[string]string{"container": name, "node": t.NodeID, "code": stageInitiated, "stage": stageInitiated, "own": own}
+		for k, v := range extra {
+			details[k] = v
+		}
+		if bulkID != "" {
+			details["bulk"] = bulkID
+		}
+		return d.Audit.Record(ctx, audit.Entry{
+			Actor: p.AuditActor(), Action: action, TargetType: containerTargetType, TargetID: t.ID,
+			EnvID: envID, Result: audit.ResultSuccess,
+			IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
+		})
+	}
 }
 
 // actionError maps the error of one engine call to a result code and a sentence.

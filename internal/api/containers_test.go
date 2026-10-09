@@ -986,3 +986,24 @@ func TestOwnContainerADroppedConnectionIsRecordedAsConnectionLostWithResultSucce
 		t.Fatalf("an ordinary container with a dropped connection = %+v, want failed", res)
 	}
 }
+
+func TestOwnContainerADroppedAgentConnectionIsRecordedAsConnectionLost(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Remote")
+	cfg := actionEngine()
+	cfg.DropWrites = true
+	a := f.connect(t, env, cfg, nil)
+	f.whenState(t, env.ID, "online")
+
+	rec := f.actOn(t, env.ID, withConfirm(actionJSON("stop", [2]string{a.id, "bayplan-agent"}), "bayplan-agent"))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	if res := decode[actionBody](t, rec).Results[0]; res.Result != "done" || res.Code != "connection_lost" {
+		t.Fatalf("result = %+v, want done with connection_lost", res)
+	}
+	rows := f.actionAudits(t)
+	if len(rows) != 2 || rows[1].Details["stage"] != "connection_lost" || rows[1].Result != "success" || rows[1].Details["own"] != "agent" {
+		t.Fatalf("audit = %+v", rows)
+	}
+}
