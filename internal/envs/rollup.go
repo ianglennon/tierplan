@@ -82,6 +82,9 @@ type AgentView struct {
 	// Socket marks the one view that is not an agent: the folded local host, reached
 	// through the Docker socket (D-48). Its ID is its target key.
 	Socket bool
+	// ReadOnly is what the host owner set (BAYPLAN_AGENT_READ_ONLY): the agent
+	// refuses every write. It is known only while the agent is connected.
+	ReadOnly bool
 }
 
 // TargetKey is the monitor key of the view's Docker engine: the agent's target, or for

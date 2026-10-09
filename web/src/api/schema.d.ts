@@ -503,7 +503,7 @@ export interface paths {
         put?: never;
         /**
          * Start or stop containers
-         * @description Starts or stops up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. Bayplan's own server container and any agent container are refused with own_container. Each target is audited as container.started or container.stopped, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
+         * @description Starts or stops up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. Bayplan's own server container and any agent container are refused with own_container. A node whose agent runs read-only (BAYPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. Each target is audited as container.started or container.stopped, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
          */
         post: operations["actOnContainers"];
         delete?: never;
@@ -2051,10 +2051,10 @@ export interface components {
         };
         ContainerActionResult: {
             /**
-             * @description Why a target failed. own_container: Bayplan's own server or an agent, refused until it is confirmed by typing its name. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed. own_container: Bayplan's own server or an agent, refused until it is confirmed by typing its name. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent, so Bayplan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
-            code?: "own_container" | "node_unreachable" | "not_found" | "agent_policy_denied" | "action_failed";
+            code?: "own_container" | "node_unreachable" | "not_found" | "host_read_only" | "agent_policy_denied" | "action_failed";
             /** @description The engine's message for action_failed, at most 300 characters; for the other codes a plain sentence */
             detail?: string;
             /** @description The container ID or name the request named */

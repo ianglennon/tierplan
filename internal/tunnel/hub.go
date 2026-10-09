@@ -535,6 +535,7 @@ func (h *Hub) Views(envID string) []AgentLive {
 			v.Connected, v.LastSeen = true, s.lastSignOfLife()
 			v.EngineReachable = st.LastHeartbeat.IsZero() || st.EngineReachable
 			v.ClockOffset, v.ClockWarning = st.ClockOffset, st.ClockWarning
+			v.ReadOnly = s.Facts.Policy.ReadOnly
 		}
 		out = append(out, v)
 	}

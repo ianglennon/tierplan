@@ -808,6 +808,10 @@ func (s *Server) Sessions() *auth.Sessions { return s.session }
 // Environments is the environment registry.
 func (s *Server) Environments() *envs.Service { return s.envs }
 
+// Aggregator is the read and write path to one node's engine. Tests drive
+// node-targeted calls through it.
+func (s *Server) Aggregator() *envs.Aggregator { return s.aggregator }
+
 // Snapshots is the per-environment resource snapshot cache; the events feed
 // invalidates it when Docker reports a change.
 func (s *Server) Snapshots() *envs.Snapshots { return s.snapshots }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/wire"
 )
 
 // The first endpoint that changes Docker state (plan 04-01, RES-01, D-06, D-11, D-14,
@@ -305,5 +306,61 @@ func TestContainerActionAnUnknownEnvironmentIs404(t *testing.T) {
 	rec := f.req(t, http.MethodPost, "/api/env/nope/containers/actions", actionJSON("stop", [2]string{"x", "web"}))
 	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
 		t.Fatalf("%d %q, want 404 environment_not_found", rec.code, rec.ptyp)
+	}
+}
+
+// A remote node is refused by name before any call when its agent reported a read-only
+// host, and an agent that refuses by its own policy is a different answer (plan 04-03,
+// D-35, Pitfall 3, Pitfall 13).
+
+func (f *agentFix) actOn(t *testing.T, envID, body string) *envRec {
+	t.Helper()
+	return f.req(t, http.MethodPost, "/api/env/"+envID+"/containers/actions", body)
+}
+
+func TestContainerActionOnAReadOnlyHostIsHostReadOnlyAuditedAndNothingIsSent(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Locked")
+	a := f.connect(t, env, actionEngine(), &wire.Facts{
+		EngineID: "ENG:ro", Hostname: "node-1", EngineReachable: true, Policy: wire.PolicyFacts{ReadOnly: true},
+	})
+	f.whenState(t, env.ID, "online")
+
+	rec := f.actOn(t, env.ID, actionJSON("stop", [2]string{a.id, webID}))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	got := decode[actionBody](t, rec)
+	if len(got.Results) != 1 || got.Results[0].Result != "failed" || got.Results[0].Code != "host_read_only" {
+		t.Fatalf("results = %+v, want failed with host_read_only", got.Results)
+	}
+	if w := a.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a read-only host received %v", w)
+	}
+	rows := f.actionAudits(t)
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "host_read_only" || rows[0].Details["code"] != "host_read_only" {
+		t.Fatalf("audit rows = %+v, want one failure with reason host_read_only", rows)
+	}
+}
+
+func TestContainerActionAnAgentThatRefusesByPolicyIsAgentPolicyDenied(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Old agent")
+	cfg := actionEngine()
+	cfg.PolicyDeny = true
+	a := f.connect(t, env, cfg, nil)
+	f.whenState(t, env.ID, "online")
+
+	rec := f.actOn(t, env.ID, actionJSON("stop", [2]string{a.id, webID}))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	got := decode[actionBody](t, rec)
+	if len(got.Results) != 1 || got.Results[0].Result != "failed" || got.Results[0].Code != "agent_policy_denied" {
+		t.Fatalf("results = %+v, want failed with agent_policy_denied", got.Results)
+	}
+	rows := f.actionAudits(t)
+	if len(rows) != 1 || rows[0].Reason != "agent_policy_denied" {
+		t.Fatalf("audit rows = %+v, want one failure with reason agent_policy_denied", rows)
 	}
 }

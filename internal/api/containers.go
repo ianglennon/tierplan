@@ -33,6 +33,7 @@ const (
 	codeNodeUnreachable  = "node_unreachable"
 	codeNotFound         = "not_found"
 	codeAgentPolicyDeny  = problemAgentPolicyDenied
+	codeHostReadOnly     = "host_read_only"
 	codeActionFailed     = "action_failed"
 	maxActionDetail      = 300
 	containerTargetType  = "container"
@@ -46,7 +47,8 @@ const (
 
 // ContainersDeps are the dependencies of the container action routes.
 type ContainersDeps struct {
-	// Aggregator is the one write path to a node's engine (Aggregator.OnNode).
+	// Aggregator reaches a node's engine: reads through OnNode, writes through
+	// WriteOnNode, the one write path.
 	Aggregator *envs.Aggregator
 	Audit      *audit.Writer
 	// Checker is carried for the second-permission checks and the masking the later
@@ -85,7 +87,7 @@ type ContainerActionResult struct {
 	ID     string `json:"id" doc:"The container ID or name the request named"`
 	Name   string `json:"name" doc:"The container name when the engine could be asked; otherwise the ID or name the request named"`
 	Result string `json:"result" enum:"done,failed,skipped" doc:"done: the engine accepted the action. failed: it was refused or could not be sent; code says why"`
-	Code   string `json:"code,omitempty" enum:"own_container,node_unreachable,not_found,agent_policy_denied,action_failed" doc:"Why a target failed. own_container: Bayplan's own server or an agent, refused until it is confirmed by typing its name. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message"`
+	Code   string `json:"code,omitempty" enum:"own_container,node_unreachable,not_found,host_read_only,agent_policy_denied,action_failed" doc:"Why a target failed. own_container: Bayplan's own server or an agent, refused until it is confirmed by typing its name. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent, so Bayplan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message"`
 	Detail string `json:"detail,omitempty" doc:"The engine's message for action_failed, at most 300 characters; for the other codes a plain sentence"`
 }
 
@@ -101,7 +103,7 @@ type ContainerActionOutput struct {
 }
 
 // RegisterContainers registers the container action route. Every target is routed
-// by node ID through the aggregator's one write path, is checked against Bayplan's
+// by node ID through the aggregator's one write path (WriteOnNode), is checked against Bayplan's
 // own containers from a fresh inspect, and gets exactly one audit row (D-14). A
 // write is never retried (P2 D-42).
 func RegisterContainers(r *httpx.Router, d ContainersDeps) {
@@ -118,6 +120,7 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 		Description: "Starts or stops up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. " +
 			"A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. " +
 			"Bayplan's own server container and any agent container are refused with own_container. " +
+			"A node whose agent runs read-only (BAYPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. " +
 			"Each target is audited as container.started or container.stopped, with result failure and the code when it failed. " +
 			"Needs containers.control (Operator) on the environment.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusOK,
@@ -193,7 +196,7 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 
 	// A write is sent once. If its answer is lost the outcome is unknown, and the
 	// caller refreshes the list to see it (P2 D-42).
-	err = d.Aggregator.OnNode(ctx, envID, t.NodeID, func(c *dockerx.Client) error {
+	err = d.Aggregator.WriteOnNode(ctx, envID, t.NodeID, func(c *dockerx.Client) error {
 		return c.ContainerAction(ctx, own.ID, verb, dockerx.ActionOptions{})
 	})
 	if err != nil {
@@ -207,6 +210,8 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 // actionError maps the error of one engine call to a result code and a sentence.
 func actionError(err error) (code, detail string) {
 	switch denied := (*envs.AgentPolicyDeniedError)(nil); {
+	case errors.Is(err, envs.ErrHostReadOnly):
+		return codeHostReadOnly, "This host is read-only: its owner set BAYPLAN_AGENT_READ_ONLY on the agent, so Bayplan cannot change anything on it."
 	case errors.Is(err, envs.ErrNodeUnavailable):
 		return codeNodeUnreachable, "The node is not connected to Bayplan."
 	case errors.Is(err, envs.ErrNotFound):

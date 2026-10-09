@@ -62,6 +62,12 @@ func (f *Fake) serveWrite(w http.ResponseWriter, r *http.Request, p string, cfg 
 	}
 	id, verb := m[1], m[2]
 	f.recordWrite(r)
+	if cfg.PolicyDeny {
+		// The refusal an agent gives for a write its policy does not allow, in the
+		// words the server maps to agent_policy_denied.
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
 
 	c, known := cfg.resolveContainer(id)
 	if !known {
