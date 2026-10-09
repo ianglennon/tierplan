@@ -19,9 +19,9 @@ import (
 var _ = registerFakeHandler((*Fake).serveExec)
 
 var (
-	execCreateRoute  = regexp.MustCompile(`^/containers/([^/]+)/exec$`)
-	execRoute        = regexp.MustCompile(`^/exec/([^/]+)/(start|resize|json)$`)
-	execOCIMissing = "OCI runtime exec failed: exec failed: unable to start container process: exec: %q: stat %s: no such file or directory\r\n"
+	execCreateRoute = regexp.MustCompile(`^/containers/([^/]+)/exec$`)
+	execRoute       = regexp.MustCompile(`^/exec/([^/]+)/(start|resize|json)$`)
+	execOCIMissing  = "OCI runtime exec failed: exec failed: unable to start container process: exec: %q: stat %s: no such file or directory\r\n"
 )
 
 // fakeExec is one exec of the fake daemon.
