@@ -579,7 +579,7 @@ func TestARevokedAgentWithAJoinTokenDiscardsItsIdentityAndEnrolsAgain(t *testing
 		mu.Unlock()
 		return reply{cert: []byte("rejoined-cert-der")}
 	})
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	startAgent(t, Config{
 		URL: srv.url(), JoinToken: "bpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
 		Log: slog.New(slog.NewTextHandler(&logs, nil)),
@@ -620,7 +620,7 @@ func TestARevokedAgentWithNoJoinTokenWaitsTheMaximumAndSaysOnceThatItNeedsAToken
 	dir := t.TempDir()
 	saved := enrolledState(t, dir)
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonRevoked} })
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	sl, err := runUntilSleeps(t, Config{
 		URL: srv.url(), StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)), SocketPath: filepath.Join(dir, "none.sock"),
 		BackoffMin: time.Second, BackoffMax: 60 * time.Second,
@@ -671,7 +671,7 @@ func TestAnUnknownAgentRefusalWithAJoinTokenDiscardsTheIdentityAndEnrolsAgain(t 
 		mu.Unlock()
 		return reply{cert: []byte("reinstalled-cert-der")}
 	})
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	startAgent(t, Config{
 		URL: srv.url(), JoinToken: "bpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
 		Log: slog.New(slog.NewTextHandler(&logs, nil)),
@@ -708,7 +708,7 @@ func TestAnUnknownAgentRefusalWithNoJoinTokenWaitsTheMaximumAndSaysOnceWhatToDo(
 	dir := t.TempDir()
 	saved := enrolledState(t, dir)
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonUnknownAgent} })
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	sl, err := runUntilSleeps(t, Config{
 		URL: srv.url(), StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)), SocketPath: filepath.Join(dir, "none.sock"),
 		BackoffMin: time.Second, BackoffMax: 60 * time.Second,
@@ -755,7 +755,7 @@ func TestAnEnrolledAgentRefusedAuthRejectedIsToldToStartWithTheNewAddressAndKeep
 	dir := t.TempDir()
 	enrolledState(t, dir)
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonAuthRejected} })
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	if _, err := runUntilSleeps(t, Config{
 		URL: srv.url(), StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)), SocketPath: filepath.Join(dir, "none.sock"),
 		BackoffMin: time.Second, BackoffMax: 60 * time.Second,
@@ -778,7 +778,7 @@ func TestABlockedAgentWaitsTheMaximumLogsTheCodeOnceAndKeepsItsIdentity(t *testi
 			dir := t.TempDir()
 			saved := enrolledState(t, dir)
 			srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonBlocked} })
-			var logs bytes.Buffer
+			var logs lockedBuffer
 			sl, err := runUntilSleeps(t, Config{
 				URL: srv.url(), JoinToken: token, StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
 				SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
@@ -820,7 +820,7 @@ func TestARevokedAgentWhoseHostIsBlockedEnrolsOnceThenWaitsTheMaximum(t *testing
 		}
 		return reply{refuse: wire.ReasonBlocked}
 	})
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	sl, err := runUntilSleeps(t, Config{
 		URL: srv.url(), JoinToken: "bpjt_tok", StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
 		SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
