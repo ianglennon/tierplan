@@ -321,3 +321,86 @@ describe("After an answer", () => {
     await waitFor(() => expect(invalidate).toHaveBeenCalled());
   });
 });
+
+describe("Restart, Pause and Unpause", () => {
+  const itemNames = () => screen.getAllByRole("menuitem").map((i) => i.textContent);
+
+  it("offers Stop, Restart and Pause on a running row", async () => {
+    mount(row({ state: "running" }));
+    await openMenu();
+    await screen.findByRole("menuitem", { name: "Restart" });
+    expect(itemNames()).toEqual(["Stop", "Restart", "Pause"]);
+  });
+
+  it("offers Start and Restart on an exited row", async () => {
+    mount(row({ state: "exited" }));
+    await openMenu();
+    await screen.findByRole("menuitem", { name: "Restart" });
+    expect(itemNames()).toEqual(["Start", "Restart"]);
+  });
+
+  it("offers Stop, Restart and Unpause on a paused row", async () => {
+    mount(row({ state: "paused" }));
+    await openMenu();
+    await screen.findByRole("menuitem", { name: "Unpause" });
+    expect(itemNames()).toEqual(["Stop", "Restart", "Unpause"]);
+  });
+
+  it("offers Stop and Restart on a restarting row, and only Start on a created one", async () => {
+    mount(row({ state: "restarting" }));
+    await openMenu();
+    await screen.findByRole("menuitem", { name: "Restart" });
+    expect(itemNames()).toEqual(["Stop", "Restart"]);
+    cleanup();
+    mount(row({ state: "created" }));
+    await openMenu();
+    await screen.findByRole("menuitem", { name: "Start" });
+    expect(itemNames()).toEqual(["Start"]);
+  });
+
+  it.each([
+    ["Restart", "restart", "Restarted web."],
+    ["Pause", "pause", "Paused web."],
+  ])("%s posts at once with no dialog and toasts %s", async (label, action, toastText) => {
+    mount(row({ state: "running" }));
+    await openMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: label }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({ action, targets: [{ nodeId: "n1", id: "web-id" }] });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(await screen.findByText(toastText)).toBeTruthy();
+  });
+
+  it("Unpause posts at once and toasts Unpaused", async () => {
+    mount(row({ state: "paused" }));
+    await openMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Unpause" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({
+      action: "unpause",
+      targets: [{ nodeId: "n1", id: "web-id" }],
+    });
+    expect(await screen.findByText("Unpaused web.")).toBeTruthy();
+  });
+
+  it("toasts the reason when the engine refuses a restart", async () => {
+    answer = resultOf({ code: "engine_error", detail: "container is not running" });
+    mount(row({ state: "running" }));
+    await openMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
+    expect(await screen.findByText("Couldn't restart web. container is not running")).toBeTruthy();
+  });
+
+  it("shows all three disabled with Needs Operator for a viewer", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    mount(row({ state: "paused" }));
+    await openMenu();
+    for (const name of ["Restart", "Unpause"]) {
+      const item = await screen.findByRole("menuitem", { name });
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(item);
+    }
+    expect(posts()).toEqual([]);
+    expect(screen.getAllByText("Needs Operator").length).toBeGreaterThan(0);
+  });
+});

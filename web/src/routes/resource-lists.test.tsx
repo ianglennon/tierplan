@@ -234,21 +234,20 @@ afterEach(() => {
 });
 
 describe("containers list", () => {
-  it("shows Name, State, Image, Created, Status and Ports, then the actions column, in the server's order", async () => {
+  it("shows Name, State, Image, Ports and Created, then the actions column, sorted by name", async () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByRole("heading", { name: "Containers" });
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
     // The last column is the row menu; its header is for assistive technology only.
-    expect(headers).toEqual(["Name", "State", "Image", "Created", "Status", "Ports", "Actions"]);
+    expect(headers).toEqual(["Name", "State", "Image", "Ports", "Created", "Actions"]);
     const rows = (await screen.findAllByRole("row")).slice(1);
     expect(rows).toHaveLength(3);
     const first = cellsOf(rows[0] as HTMLElement);
     expect(first[0]).toContain("bayplan");
     expect(first[1]).toBe("Running");
     expect(first[2]).toBe("ghcr.io/ianglennon/bayplan:latest");
-    expect(first[3]).toBe("3 h ago");
-    expect(first[4]).toBe("Up 3 hours");
-    expect(first[5]).toBe("0.0.0.0:7480->7480/tcp");
+    expect(first[3]).toBe("0.0.0.0:7480->7480/tcp");
+    expect(first[4]).toBe("3 h ago");
     const names = rows.map((r) => cellsOf(r as HTMLElement)[0]);
     expect(names[0]).toContain("bayplan");
     expect(names[1]).toContain("db");
@@ -271,9 +270,9 @@ describe("containers list", () => {
     expect(cellsOf(rows[1] as HTMLElement)[1]).toBe("Restarting");
     const last = cellsOf(rows[2] as HTMLElement);
     expect(last[1]).toBe("Exited");
+    expect(last[4]).toBe("—");
     expect(last[3]).toBe("—");
-    expect(last[5]).toBe("—");
-    expect(cellsOf(rows[1] as HTMLElement)[5]).toBe("5432/tcp, 5433/tcp");
+    expect(cellsOf(rows[1] as HTMLElement)[3]).toBe("5432/tcp, 5433/tcp");
   });
 
   it("has no checkboxes or links in the table, and its only buttons are the closed row action menus (D-56, plan 04-01)", async () => {
@@ -551,16 +550,7 @@ describe("swarm lists", () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("web.1");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(headers).toEqual([
-      "Name",
-      "Node",
-      "State",
-      "Image",
-      "Created",
-      "Status",
-      "Ports",
-      "Actions",
-    ]);
+    expect(headers).toEqual(["Name", "Node", "State", "Image", "Ports", "Created", "Actions"]);
     const rows = screen.getAllByRole("row").slice(1);
     // The page sorts by name, whatever order the server sent.
     expect(cellsOf(rows[0] as HTMLElement).slice(0, 2)).toEqual(["db", "n3"]);
