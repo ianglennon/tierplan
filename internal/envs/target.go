@@ -61,6 +61,50 @@ func (a *Aggregator) WriteOnNode(ctx context.Context, envID, nodeID string, fn f
 	return err
 }
 
+// WriteOnManager runs fn once against the engine that answers for the whole
+// environment, for a call that changes something at the level of the cluster: on a
+// swarm the manager the cluster reader would choose, on a standalone host or the local
+// socket its single engine. Like WriteOnNode it refuses a read-only host with
+// ErrHostReadOnly before it takes a client, never retries (P2 D-42), and drops the
+// cached snapshot of the node it used whatever fn returned. It is ErrNodeUnavailable
+// when no node of the environment can be reached now.
+//
+// A swarm-scoped object is created once, by one manager. Every other manager sees it
+// through the cluster, so there is nothing to repeat on another node, and a retry on
+// another manager after a lost answer could create it twice.
+func (a *Aggregator) WriteOnManager(ctx context.Context, envID string, fn func(*dockerx.Client) error) error {
+	in, err := a.svc.Input(ctx, envID, a.now())
+	if err != nil {
+		return err
+	}
+	key, ok := a.svc.primary(in)
+	if !ok {
+		return ErrNodeUnavailable
+	}
+	if managerReadOnly(in, key) {
+		return fmt.Errorf("environment %s: %w", envID, ErrHostReadOnly)
+	}
+	cli, _, err := a.svc.mon.Client(key)
+	if err != nil {
+		// Nothing was sent, so there is nothing to invalidate.
+		return fmt.Errorf("environment %s: %w", envID, err)
+	}
+	err = fn(cli)
+	a.snaps.Invalidate(key)
+	return err
+}
+
+// managerReadOnly reports whether the agent behind the monitor key is on a read-only
+// host. The local socket never is.
+func managerReadOnly(in RollupInput, key string) bool {
+	for _, ag := range in.Agents {
+		if ag.TargetKey() == key {
+			return ag.ReadOnly
+		}
+	}
+	return false
+}
+
 // nodeClient resolves a node to its monitor key and a client for its engine. For a
 // write it refuses a read-only host first, before a client is asked for.
 func (a *Aggregator) nodeClient(ctx context.Context, envID, nodeID string, write bool) (string, *dockerx.Client, error) {

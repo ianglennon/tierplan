@@ -258,3 +258,102 @@ func TestOnNodeLeavesTheSnapshotCached(t *testing.T) {
 		t.Fatal("a read flushed the snapshot cache")
 	}
 }
+
+// WriteOnManager is the write path for what belongs to a whole environment: the one
+// engine of a standalone host or the local socket, and on a swarm the manager the
+// cluster reader chooses (plan 04-12, D-39, P2 D-42).
+
+func TestWriteOnManagerOnTheLocalSocketRunsOnceAndFlushesTheSnapshot(t *testing.T) {
+	local := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "this-host", Containers: webContainers()})
+	r := newTunRig(t, local)
+	e, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, _, err := r.agg.Snapshot(ctx, e.ID); err != nil { // warm the cache
+		t.Fatal(err)
+	}
+	calls := 0
+	err = r.agg.WriteOnManager(ctx, e.ID, func(c *dockerx.Client) error {
+		calls++
+		return stopWeb()(c)
+	})
+	if err != nil || calls != 1 {
+		t.Fatalf("err = %v, calls = %d; want one run", err, calls)
+	}
+	if got := local.Writes(); !slices.Equal(got, []string{"POST /containers/web/stop"}) {
+		t.Fatalf("writes = %v", got)
+	}
+	after, _, err := r.agg.Snapshot(ctx, e.ID)
+	if err != nil || after.Containers[0].State != "exited" {
+		t.Fatalf("the list after the write = %+v, %v; want a fresh read", after.Containers, err)
+	}
+}
+
+func TestWriteOnManagerUsesTheOneAgentOfAStandaloneHostAndNeverRetries(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Remote")
+	r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Containers: webContainers()}, nil)
+	r.whenOnline(t, env.ID)
+	ctx := context.Background()
+
+	calls := 0
+	err := r.agg.WriteOnManager(ctx, env.ID, func(c *dockerx.Client) error {
+		calls++
+		if got := probeHost(t, c); got != "edge-1" {
+			t.Errorf("the write went to %q, want edge-1", got)
+		}
+		return errBoom
+	})
+	if !errors.Is(err, errBoom) || calls != 1 {
+		t.Fatalf("err = %v, calls = %d; want the one attempt's error and no retry", err, calls)
+	}
+}
+
+func TestWriteOnManagerRefusesAReadOnlyHostAndAnEnvironmentWithNoNodeToReach(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	ctx := context.Background()
+
+	env := r.srv.NewEnvironment(t, "Locked")
+	facts := &wire.Facts{EngineID: "ENG:ro", Hostname: "ro-1", EngineReachable: true, Policy: wire.PolicyFacts{ReadOnly: true}}
+	a := r.connect(t, env, dockertest.FakeConfig{Hostname: "ro-1", Containers: webContainers()}, facts)
+	r.whenOnline(t, env.ID)
+	called := false
+	err := r.agg.WriteOnManager(ctx, env.ID, func(*dockerx.Client) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, ErrHostReadOnly) || called || len(a.fake.Writes()) != 0 {
+		t.Fatalf("err = %v, called = %v; want ErrHostReadOnly and nothing run", err, called)
+	}
+
+	empty := r.srv.NewEnvironment(t, "Nobody home")
+	if err := r.agg.WriteOnManager(ctx, empty.ID, func(*dockerx.Client) error {
+		t.Error("fn ran with no node to reach")
+		return nil
+	}); !errors.Is(err, ErrNodeUnavailable) {
+		t.Fatalf("an environment with no connected agent: err = %v, want ErrNodeUnavailable", err)
+	}
+	if err := r.agg.WriteOnManager(ctx, "no-such-environment", func(*dockerx.Client) error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown environment: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestWriteOnManagerOnASwarmGoesToTheManagerTheClusterReaderChoosesOnceEvenWhenItFails(t *testing.T) {
+	s := newSwarmRig(t, managerNodes(), nil)
+	ctx := context.Background()
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	var hosts []string
+	err := s.agg.WriteOnManager(ctx, s.env.ID, func(c *dockerx.Client) error {
+		hosts = append(hosts, probeHost(t, c))
+		return errBoom
+	})
+	if !errors.Is(err, errBoom) || !slices.Equal(hosts, []string{"mgr-2"}) {
+		t.Fatalf("err = %v, hosts = %v; want one attempt on the leader mgr-2 and no failover for a write", err, hosts)
+	}
+}

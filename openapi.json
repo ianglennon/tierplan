@@ -7544,7 +7544,7 @@
         ]
       },
       "post": {
-        "description": "Creates a bridge, overlay, macvlan or ipvlan network. A network is made on one node, named by nodeId (the nodeId of a row of a list), which may be left out on an environment of one node (else 422 node_required). Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.",
+        "description": "Creates a bridge, overlay, macvlan or ipvlan network. An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. 409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.",
         "operationId": "createNetwork",
         "parameters": [
           {

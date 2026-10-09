@@ -29,6 +29,40 @@
         "value": "Label value",
         "remove": "Remove label {{name}}",
         "removeEmpty": "Remove label"
+      },
+      "node": {
+        "label": "Create on node",
+        "placeholder": "Choose a node"
+      },
+      "advanced": {
+        "trigger": "Advanced"
+      },
+      "subnet": {
+        "label": "Subnet",
+        "placeholder": "10.20.0.0/24",
+        "helper": "In CIDR form. Bayplan warns if it overlaps another network but doesn't pick one for you."
+      },
+      "gateway": {
+        "label": "Gateway"
+      },
+      "ipRange": {
+        "label": "IP range"
+      },
+      "ipv6": {
+        "label": "Enable IPv6"
+      },
+      "options": {
+        "label": "Driver options",
+        "add": "Add option",
+        "key": "Option name",
+        "value": "Option value",
+        "remove": "Remove option {{name}}",
+        "removeEmpty": "Remove option"
+      },
+      "overlap": {
+        "one": "This overlaps {{name}} ({{cidr}}). Containers on both networks may not reach each other. You can still create it.",
+        "two": "This overlaps {{count}} networks: {{first}} and {{second}}. Containers on both networks may not reach each other. You can still create it.",
+        "many": "This overlaps {{count}} networks: {{first}}, {{second}} and {{more}} more. Containers on both networks may not reach each other. You can still create it."
       }
     },
     "errors": {
@@ -39,7 +73,12 @@
       "permission": "You no longer have permission to do that. Your access may have changed.",
       "nodeUnreachable": "That node isn't reachable right now. Try again when it's back.",
       "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
-      "nodeRequired": "Choose a node."
+      "nodeRequired": "Choose a node.",
+      "subnetInvalid": "Enter a subnet like 10.20.0.0/24.",
+      "gatewayOutside": "The gateway must be inside the subnet.",
+      "rangeOutside": "The IP range must be inside the subnet.",
+      "attachableOverlayOnly": "Only an overlay network on a swarm can be attachable.",
+      "overlayNeedsSwarm": "An overlay network needs a swarm. This environment isn't one."
     }
   }
 }

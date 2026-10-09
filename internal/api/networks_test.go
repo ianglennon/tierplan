@@ -43,8 +43,6 @@ func (f *envFix) createNet(t *testing.T, e envBody, body string) *envRec {
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/networks", body)
 }
 
-func netJSON(fields ...string) string { return "{" + strings.Join(fields, ",") + "}" }
-
 func (f *envFix) networkAudits(t *testing.T) []auditRowFull {
 	t.Helper()
 	rows, err := f.st.Read.Query(`SELECT action, target_type, target_id, COALESCE(env_id, ''), result, COALESCE(reason, ''), COALESCE(details, '{}')

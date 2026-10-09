@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -23,7 +24,12 @@ const (
 	networkTargetType = "network"
 	problemNameTaken  = "name_taken"
 	codeCreated       = "created"
-	maxMapEntries     = 64
+
+	problemSubnetInvalid         = "subnet_invalid"
+	problemGatewayOutsideSubnet  = "gateway_outside_subnet"
+	problemIPRangeOutsideSubnet  = "iprange_outside_subnet"
+	problemAttachableOverlayOnly = "attachable_overlay_only"
+	problemOverlayNeedsSwarm     = "overlay_needs_swarm"
 )
 
 // NetworksDeps are the dependencies of the network routes.
@@ -81,7 +87,11 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 		OperationID: "createNetwork", Method: http.MethodPost, Path: "/api/env/{envId}/networks",
 		Summary: "Create a network",
 		Description: "Creates a bridge, overlay, macvlan or ipvlan network. " +
-			"A network is made on one node, named by nodeId (the nodeId of a row of a list), which may be left out on an environment of one node (else 422 node_required). " +
+			"An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. " +
+			"Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). " +
+			"An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. " +
+			"subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. " +
+			"409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. " +
 			"Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusCreated,
 	}, rbac.Requirement{Perm: rbac.PermNetworksManage, Scope: rbac.ScopeEnvironment},
@@ -94,35 +104,62 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 		})
 }
 
-// createNetwork routes the create to its node, sends it once and audits the attempt.
+// createNetwork checks the request, routes the create to where the network belongs,
+// sends it once and audits the attempt.
+//
+// An overlay network on a swarm is cluster scoped: it is made once, through the manager
+// the aggregator chooses. Every other network is local to one engine and is made on the
+// node the request names, or on the environment's only node when it is not a swarm.
 func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID string, in *NetworkCreateInput) (*NetworkCreateOutput, error) {
 	body := in.Body
+	if err := validateAddressing(body.Subnet, body.Gateway, body.IPRange); err != nil {
+		return nil, err
+	}
+	if body.Attachable && body.Driver != dockerx.DriverOverlay {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemAttachableOverlayOnly,
+			"Only an overlay network on a swarm can be attachable.")
+	}
 	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, envID, err)
 	}
-	nodeID := body.NodeID
-	if nodeID == "" {
-		if len(agg.Nodes) != 1 {
-			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
-				"This environment has more than one node. Say which one to create the network on (nodeId).")
+	swarm := agg.Target.Probe.Type == dockerx.TypeSwarmManager || agg.Target.Probe.Type == dockerx.TypeSwarmWorker
+	if body.Driver == dockerx.DriverOverlay && !swarm {
+		code := problemOverlayNeedsSwarm
+		if body.Attachable {
+			code = problemAttachableOverlayOnly
 		}
-		nodeID = agg.Nodes[0].ID
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, code,
+			"An overlay network needs a swarm. This environment is not one.")
 	}
 
 	spec := dockerx.NetworkCreateSpec{
 		Name: body.Name, Driver: body.Driver, Attachable: body.Attachable, Internal: body.Internal, IPv6: body.IPv6,
 		Labels: body.Labels, Options: body.Options, Subnet: body.Subnet, Gateway: body.Gateway, IPRange: body.IPRange,
 	}
-	var id string
+	scope := dockerx.NetworkScope(body.Driver)
+	var id, nodeID string
 	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
-	err = d.Aggregator.WriteOnNode(writeCtx, envID, nodeID, func(c *dockerx.Client) error {
+	create := func(c *dockerx.Client) error {
 		var e error
 		id, _, e = c.NetworkCreate(writeCtx, spec)
 		return e
-	})
-	scope := dockerx.NetworkScope(body.Driver)
+	}
+	if swarm && scope == dockerx.ScopeSwarm {
+		spec.Scope = dockerx.ScopeSwarm
+		err = d.Aggregator.WriteOnManager(writeCtx, envID, create)
+	} else {
+		nodeID = body.NodeID
+		if nodeID == "" {
+			if swarm || len(agg.Nodes) != 1 {
+				return nil, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
+					"This network is local to one node. Say which one to create it on (nodeId).")
+			}
+			nodeID = agg.Nodes[0].ID
+		}
+		err = d.Aggregator.WriteOnNode(writeCtx, envID, nodeID, create)
+	}
 	if err != nil {
 		code, problem := networkCreateProblem(d.Log, envID, body.Name, err)
 		auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, body.Name, body.Name, nodeID, scope, spec, code)
@@ -130,6 +167,40 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	}
 	auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, id, body.Name, nodeID, scope, spec, codeCreated)
 	return &NetworkCreateOutput{CacheControl: "no-store", Body: NetworkCreateBody{ID: id, Name: body.Name}}, nil
+}
+
+// validateAddressing checks the subnet, gateway and IP range of a create with net/netip,
+// before anything is sent: the subnet must be a prefix, the gateway an address inside it
+// and the range a prefix inside it. A gateway or range with no subnet has nothing to be
+// inside. The problem types are the ones the SPA words (UI-SPEC "Field errors").
+func validateAddressing(subnet, gateway, ipRange string) error {
+	if subnet == "" {
+		if gateway != "" || ipRange != "" {
+			return httpx.Problem(http.StatusUnprocessableEntity, problemSubnetInvalid,
+				"A gateway or an IP range needs a subnet to be inside of.")
+		}
+		return nil
+	}
+	sp, err := netip.ParsePrefix(subnet)
+	if err != nil {
+		return httpx.Problem(http.StatusUnprocessableEntity, problemSubnetInvalid,
+			"The subnet must be in CIDR form, like 10.20.0.0/24.")
+	}
+	sp = sp.Masked()
+	if gateway != "" {
+		if a, err := netip.ParseAddr(gateway); err != nil || !sp.Contains(a) {
+			return httpx.Problem(http.StatusUnprocessableEntity, problemGatewayOutsideSubnet,
+				"The gateway must be an address inside the subnet.")
+		}
+	}
+	if ipRange != "" {
+		rp, err := netip.ParsePrefix(ipRange)
+		if err != nil || rp.Bits() < sp.Bits() || !sp.Contains(rp.Addr()) {
+			return httpx.Problem(http.StatusUnprocessableEntity, problemIPRangeOutsideSubnet,
+				"The IP range must be a prefix inside the subnet.")
+		}
+	}
+	return nil
 }
 
 // networkCreateProblem turns the error of a create into the audit code and the problem
@@ -159,8 +230,12 @@ func auditNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID,
 		result, reason = audit.ResultFailure, code
 	}
 	details := map[string]string{
-		"name": name, "node": node, "driver": spec.Driver, "scope": scope, "code": code,
+		"name": name, "driver": spec.Driver, "scope": scope, "code": code,
 		"internal": strconv.FormatBool(spec.Internal), "attachable": strconv.FormatBool(spec.Attachable),
+	}
+	// A cluster network is made by a manager, not on a node of the caller's choosing.
+	if node != "" {
+		details["node"] = node
 	}
 	if spec.Subnet != "" {
 		details["subnet"] = spec.Subnet

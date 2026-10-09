@@ -28,6 +28,8 @@ let answer: (req: Sent) => Response | Promise<Response>;
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 let list: unknown;
+let listFor: ((node: string) => unknown) | undefined;
+let environments: unknown;
 
 const created = () => Response.json({ id: "net-1", name: "app-net" }, { status: 201 });
 const problem = (status: number, type: string) =>
@@ -55,6 +57,8 @@ beforeEach(() => {
     nodes: ["node-1"],
     notReporting: [],
   };
+  listFor = undefined;
+  environments = { items: [] };
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -68,8 +72,12 @@ beforeEach(() => {
       sent.push(entry);
       if (entry.path === "/api/me") return Response.json(me);
       if (entry.path === `/api/env/${ENV}/networks` && req.method === "POST") return answer(entry);
-      if (entry.path === `/api/env/${ENV}/networks`) return Response.json(list);
-      if (entry.path === "/api/environments") return Response.json({ items: [] });
+      if (entry.path === `/api/env/${ENV}/networks`) {
+        const node = new URL(req.url).searchParams.get("node");
+        if (node && listFor) return Response.json(listFor(node));
+        return Response.json(list);
+      }
+      if (entry.path === "/api/environments") return Response.json(environments);
       return Response.json({}, { status: 404 });
     }),
   );
@@ -434,8 +442,8 @@ describe("CreateNetworkDialog (overlap warning)", () => {
     });
     const dialog = await screen.findByRole("dialog");
     const subnet = await openAdvanced(dialog);
-    blurSubnet(subnet, "10.0.1.0/23");
-    expect(await within(dialog).findByText(/This overlaps 2 networks: a and b\./)).toBeTruthy();
+    blurSubnet(subnet, "10.0.2.0/23");
+    expect(await within(dialog).findByText(/This overlaps 2 networks: b and c\./)).toBeTruthy();
     blurSubnet(subnet, "10.0.0.0/16");
     expect(
       await within(dialog).findByText(/This overlaps 4 networks: a, b and 2 more\./),
@@ -546,5 +554,61 @@ describe("CreateNetworkDialog (node of a local network on a swarm)", () => {
     const dialog = await screen.findByRole("dialog");
     await chooseDriver(dialog, "macvlan");
     expect(within(dialog).queryByRole("combobox", { name: "Create on node" })).toBeNull();
+  });
+});
+
+describe("NetworkList create dialog on a swarm list narrowed to one node", () => {
+  it("still offers every node and checks the subnet against every node's networks", async () => {
+    const mk = (name: string, node: string, nodeId: string, subnet: string) => ({
+      id: `id-${name}-${node}`,
+      name,
+      driver: "bridge",
+      scope: "local",
+      node,
+      nodeId,
+      subnets: [subnet],
+      created: "2026-10-01T10:00:00Z",
+    });
+    const all = [
+      mk("bridge", "node-1", "node-1-id", "172.17.0.0/16"),
+      mk("other", "node-2", "node-2-id", "10.50.0.0/24"),
+    ];
+    environments = { items: [{ id: ENV, envType: "swarm" }] };
+    list = {
+      items: all,
+      total: 2,
+      truncated: false,
+      nodes: ["node-1", "node-2"],
+      notReporting: [],
+    };
+    listFor = () => ({
+      items: [all[0]],
+      total: 1,
+      truncated: false,
+      nodes: ["node-1"],
+      notReporting: [],
+    });
+    render(wrap(<NetworkList envId={ENV} node="node-1" onNodeChange={() => {}} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Create network" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "Driver" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "bridge" }));
+    fireEvent.keyDown(await within(dialog).findByRole("combobox", { name: "Create on node" }), {
+      key: "Enter",
+    });
+    await waitFor(async () =>
+      expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([
+        "node-1",
+        "node-2",
+      ]),
+    );
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Advanced" }));
+    const subnet = await within(dialog).findByLabelText("Subnet");
+    fireEvent.change(subnet, { target: { value: "10.50.0.0/25" } });
+    fireEvent.blur(subnet);
+    expect(
+      await within(dialog).findByText(/This overlaps other \(10\.50\.0\.0\/24\)/),
+    ).toBeTruthy();
   });
 });

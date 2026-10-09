@@ -3,7 +3,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { overlaps, overlapsWith, parseCidr } from "@/features/networks/cidr";
+import {
+  containsAddress,
+  containsCidr,
+  overlaps,
+  overlapsWith,
+  parseCidr,
+} from "@/features/networks/cidr";
 
 describe("parseCidr", () => {
   it("reads an IPv4 prefix and drops the host bits", () => {
@@ -130,5 +136,31 @@ describe("overlapsWith", () => {
   it("reports the subnet of a network that overlaps, not its other subnets", () => {
     const got = overlapsWith("10.0.0.0/24", [net("multi", "192.168.0.0/24", "10.0.0.0/25")]);
     expect(got?.shown).toEqual([{ name: "multi", cidr: "10.0.0.0/25" }]);
+  });
+});
+
+describe("containsAddress and containsCidr", () => {
+  it("tells an address inside a prefix from one outside, at both edges", () => {
+    expect(containsAddress("10.20.0.0/24", "10.20.0.1")).toBe(true);
+    expect(containsAddress("10.20.0.0/24", "10.20.0.0")).toBe(true);
+    expect(containsAddress("10.20.0.0/24", "10.20.0.255")).toBe(true);
+    expect(containsAddress("10.20.0.0/24", "10.20.1.0")).toBe(false);
+    expect(containsAddress("10.20.0.0/24", "10.19.255.255")).toBe(false);
+    expect(containsAddress("fd00:20::/64", "fd00:20::1")).toBe(true);
+    expect(containsAddress("fd00:20::/64", "fd00:21::1")).toBe(false);
+  });
+
+  it("is false across families and for anything malformed", () => {
+    expect(containsAddress("10.20.0.0/24", "fd00::1")).toBe(false);
+    expect(containsAddress("10.20.0.0/24", "gw")).toBe(false);
+    expect(containsAddress("10.20.0.0", "10.20.0.1")).toBe(false);
+  });
+
+  it("accepts a range no wider than the subnet and starting inside it", () => {
+    expect(containsCidr("10.20.0.0/24", "10.20.0.128/25")).toBe(true);
+    expect(containsCidr("10.20.0.0/24", "10.20.0.0/24")).toBe(true);
+    expect(containsCidr("10.20.0.0/24", "10.20.0.0/16")).toBe(false);
+    expect(containsCidr("10.20.0.0/24", "10.20.1.0/25")).toBe(false);
+    expect(containsCidr("10.20.0.0/24", "10.20.0.5")).toBe(false);
   });
 });

@@ -35,11 +35,18 @@ export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
   const allowed = usePermission("networks.read", envId);
   const manage = useNeeds("networks.manage", envId);
   const swarm = useEnvIsSwarm(envId);
+  const [creating, setCreating] = useState(false);
   const nodeColumn = useNodeColumn<NetworkRow>();
   const query = useQuery({ ...networksQuery(envId, swarm ? node : undefined), enabled: allowed });
+  // The create dialog checks the subnet against every node's networks and offers
+  // every node, so while the list is narrowed to one node it reads the whole list.
+  const narrowed = swarm && node !== undefined;
+  const everything = useQuery({
+    ...networksQuery(envId),
+    enabled: allowed && narrowed && creating,
+  });
   const envName = useEnvName(envId);
   const missing = t("dashboard.time.missing");
-  const [creating, setCreating] = useState(false);
 
   const columns: Column<NetworkRow>[] = [
     {
@@ -108,7 +115,7 @@ export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
           open={creating}
           onOpenChange={setCreating}
           swarm={swarm}
-          networks={query.data?.items ?? []}
+          networks={(narrowed ? everything.data : query.data)?.items ?? []}
         />
       ) : null}
     </>
