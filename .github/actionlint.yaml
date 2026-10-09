@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+#
+# CI runs on self-hosted runners: two VMs, labelled bp-a and bp-b, two runners each.
+self-hosted-runner:
+  labels:
+    - bp-a
+    - bp-b

@@ -23,15 +23,18 @@ on:
 permissions:
   contents: read
 
-# Superseded pull-request runs are cancelled; pushes to main queue, so an edge
-# publish is never cut off between push and sign (WR-11, D-75).
+# CI runs on self-hosted runners (two VMs, two runners each) whose Docker daemons
+# the jobs share, and several jobs use fixed compose names and ports (e2e, the
+# upgrade and restore smokes). So one run at a time, across every branch: a newer
+# run waits, and replaces any run already waiting. Nothing running is cancelled,
+# so an edge publish is never cut off between push and sign (WR-11, D-75).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   lint:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,8 +59,8 @@ jobs:
       - run: make lint-config lint actionlint
 
   test:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -84,7 +87,7 @@ jobs:
       - run: make test
 
   gen-check:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,7 +112,7 @@ jobs:
       - run: make gen-check
 
   licences:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -134,14 +137,14 @@ jobs:
       - run: make licences
 
   spdx:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: make spdx
 
   build:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -163,7 +166,7 @@ jobs:
       - run: make agent-image agent-image-smoke
 
   dco:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
     if: github.event_name == 'pull_request'
     steps:
@@ -177,8 +180,8 @@ jobs:
   # service, and the tests dial it over TCP through the same dockerx code path
   # (a socket shared out of dind is root-only, so the runner user cannot open it).
   integration:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -189,10 +192,11 @@ jobs:
         env:
           DOCKER_TLS_CERTDIR: ""
         options: --privileged
+        # No fixed host port: two legs can share a runner VM, so Docker picks one
+        # and the steps read it from the job context.
         ports:
-          - 2375:2375
+          - 2375
     env:
-      BAYPLAN_TEST_DOCKER_HOST: tcp://localhost:2375
       BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -204,7 +208,7 @@ jobs:
       - name: Wait for the dind daemon
         run: |
           for i in $(seq 1 60); do
-            if curl -fsS http://localhost:2375/_ping >/dev/null; then
+            if curl -fsS "http://localhost:${{ job.services.dind.ports['2375'] }}/_ping" >/dev/null; then
               echo "docker:${{ matrix.engine }}-dind is up after ${i}s"
               exit 0
             fi
@@ -217,6 +221,8 @@ jobs:
       - name: Build the agent image
         run: make agent-image
       - run: make test-int
+        env:
+          BAYPLAN_TEST_DOCKER_HOST: tcp://localhost:${{ job.services.dind.ports['2375'] }}
 
   # D-57, D-58: the multi-node suite on the oldest and newest Engines, on every
   # pull request. Unlike the integration job there is no dind service: every test
@@ -224,12 +230,17 @@ jobs:
   # its own, so the in-process Bayplan is reachable from them, and loads the agent
   # image built here. One engine takes about ten minutes.
   swarm:
-    runs-on: ubuntu-24.04
+    # Each leg runs four dind nodes (6-8 GB), so the two legs go to different VMs.
+    runs-on: [self-hosted, linux, x64, "${{ matrix.vm }}"]
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        engine: [24, 29]
+        include:
+          - engine: 24
+            vm: bp-a
+          - engine: 29
+            vm: bp-b
     env:
       BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
     steps:
@@ -248,7 +259,7 @@ jobs:
   # tag and without Docker: goreleaser check, a snapshot build of this runner's
   # binary, and its version subcommand.
   release-check:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -275,7 +286,7 @@ jobs:
   # job has no secrets; the privileged dind container is what Docker-in-Docker
   # needs (T-01-115).
   e2e:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -314,7 +325,7 @@ jobs:
   # documented configurations, and the three deliberately broken nginx ones that
   # Bayplan must notice.
   proxy-smoke:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -342,7 +353,7 @@ jobs:
   # about 1 minute plus the builds). It prints one PASS or FAIL line per check and
   # holds back the edge image.
   upgrade:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -408,7 +419,7 @@ jobs:
     concurrency:
       group: edge-publish
       cancel-in-progress: false
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 45
     permissions:
       contents: read
