@@ -735,6 +735,33 @@ func TestSnapshotContainerRowsKeepLabelsMountsAndNetworksForTheServer(t *testing
 	}
 }
 
+func TestSnapshotContainerHealthComesFromTheSummaryOrTheStatusText(t *testing.T) {
+	for _, tc := range []struct {
+		name, health, status, want string
+	}{
+		{"summary unhealthy", "unhealthy", "Up 2 minutes", "unhealthy"},
+		{"summary healthy", "healthy", "Up 2 minutes", "healthy"},
+		{"summary starting", "starting", "Up 2 seconds", "starting"},
+		{"summary wins over the text", "healthy", "Up 2 minutes (unhealthy)", "healthy"},
+		{"text unhealthy", "", "Up 2 minutes (unhealthy)", "unhealthy"},
+		{"text starting", "", "Up 5 seconds (health: starting)", "starting"},
+		{"text healthy", "", "Up 1 hour (healthy)", "healthy"},
+		{"no healthcheck", "", "Up 1 hour", "none"},
+		{"summary none", "none", "Up 1 hour", "none"},
+		{"exited", "", "Exited (1) 2 hours ago", "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := dockertest.FakeConfig{Containers: []dockertest.FakeContainer{
+				{ID: "c1", Names: []string{"/web"}, State: "running", Status: tc.status, Health: tc.health},
+			}}
+			snap, _ := snapshot(t, cfg, false)
+			if got := snap.Containers[0].Health; got != tc.want {
+				t.Errorf("health = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSnapshotFailsWhenTheEngineIsDown(t *testing.T) {
 	fake := dockertest.NewFake(t, fakeEngine())
 	cli := newClient(t, fake)

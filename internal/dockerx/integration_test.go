@@ -368,3 +368,69 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 		}
 	}
 }
+
+// TestContainerHealthInList checks, against the engine BAYPLAN_TEST_ENGINE names
+// (24 to 29), that a container whose HEALTHCHECK keeps failing reads unhealthy in
+// the list within its retries (plan 04-06, RESEARCH A2). Engines before API 1.52
+// send no health summary, so this is what proves the status-text fallback.
+func TestContainerHealthInList(t *testing.T) {
+	host := dockertest.DockerHost(t)
+	cli, err := dockerx.New(dockertest.TCPTransportFor(host))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	raw := dockertest.RawClient(t, host)
+
+	pull, err := raw.ImagePull(ctx, "alpine:3", client.ImagePullOptions{})
+	if err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+	if err := pull.Wait(ctx); err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+
+	name := "bp-health-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: name,
+		Config: &container.Config{
+			Image: "alpine:3", Cmd: []string{"sleep", "300"},
+			Healthcheck: &container.HealthConfig{Test: []string{"CMD-SHELL", "false"}, Interval: time.Second, Timeout: time.Second, Retries: 1},
+		},
+	}); err != nil {
+		t.Fatalf("create %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		c, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _ = raw.ContainerRemove(c, name, client.ContainerRemoveOptions{Force: true})
+	})
+	if _, err := raw.ContainerStart(ctx, name, client.ContainerStartOptions{}); err != nil {
+		t.Fatalf("start %s: %v", name, err)
+	}
+	if _, err := cli.Probe(ctx); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+
+	var last string
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := cli.Snapshot(ctx, false)
+		if err != nil {
+			t.Fatalf("Snapshot: %v", err)
+		}
+		for _, c := range snap.Containers {
+			if c.Name == name {
+				last = c.Health + " (" + c.Status + ")"
+				if c.Health == dockerx.HealthUnhealthy {
+					return
+				}
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("the failing container never read unhealthy in the list; last seen %q", last)
+}
