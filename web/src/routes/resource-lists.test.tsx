@@ -234,11 +234,12 @@ afterEach(() => {
 });
 
 describe("containers list", () => {
-  it("shows Name, State, Image, Created, Status and Ports in the server's order", async () => {
+  it("shows Name, State, Image, Created, Status and Ports, then the actions column, in the server's order", async () => {
     renderAt("/env/e1/containers");
     await screen.findByRole("heading", { name: "Containers" });
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
-    expect(headers).toEqual(["Name", "State", "Image", "Created", "Status", "Ports"]);
+    // The last column is the row menu; its header is for assistive technology only.
+    expect(headers).toEqual(["Name", "State", "Image", "Created", "Status", "Ports", "Actions"]);
     const rows = (await screen.findAllByRole("row")).slice(1);
     expect(rows).toHaveLength(3);
     const first = cellsOf(rows[0] as HTMLElement);
@@ -275,14 +276,16 @@ describe("containers list", () => {
     expect(cellsOf(rows[1] as HTMLElement)[5]).toBe("5432/tcp, 5433/tcp");
   });
 
-  it("has no checkboxes, row actions, menus or links in the table (D-56)", async () => {
+  it("has no checkboxes or links in the table, and its only buttons are the closed row action menus (D-56, plan 04-01)", async () => {
     renderAt("/env/e1/containers");
     await screen.findByText("old-job");
     const table = screen.getByRole("table");
     expect(within(table).queryByRole("checkbox")).toBeNull();
-    expect(within(table).queryByRole("button")).toBeNull();
     expect(within(table).queryByRole("link")).toBeNull();
     expect(within(table).queryByRole("menu")).toBeNull();
+    const buttons = within(table).getAllByRole("button");
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) expect(b.getAttribute("aria-label")).toMatch(/^Actions for /);
   });
 
   it("sets the tab title to the resource and the instance name", async () => {
@@ -515,7 +518,16 @@ describe("swarm lists", () => {
     renderAt("/env/e1/containers");
     await screen.findByText("web.1");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(headers).toEqual(["Name", "Node", "State", "Image", "Created", "Status", "Ports"]);
+    expect(headers).toEqual([
+      "Name",
+      "Node",
+      "State",
+      "Image",
+      "Created",
+      "Status",
+      "Ports",
+      "Actions",
+    ]);
     const rows = screen.getAllByRole("row").slice(1);
     expect(cellsOf(rows[0] as HTMLElement).slice(0, 2)).toEqual(["web.1", "n1"]);
     expect(cellsOf(rows[2] as HTMLElement).slice(0, 2)).toEqual(["db", "n3"]);

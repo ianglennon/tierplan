@@ -1,0 +1,41 @@
+{
+  "actions": {
+    "column": "Actions",
+    "menu": {
+      "label": "Actions for {{name}}",
+      "start": "Start",
+      "stop": "Stop"
+    },
+    "verb": {
+      "start": "start",
+      "stop": "stop"
+    },
+    "toast": {
+      "started": "Started {{name}}.",
+      "stopped": "Stopped {{name}}.",
+      "failed": "Couldn't {{verb}} {{name}}. {{reason}}"
+    },
+    "stop": {
+      "title": "Stop {{name}}?",
+      "body": "It gets {{seconds}} seconds to shut down before Docker kills it, using the container's own stop settings.",
+      "bodyOwn": "Docker asks it to shut down first and kills it if it takes too long, using the container's own stop settings.",
+      "confirm": "Stop container",
+      "pending": "Stopping…",
+      "cancel": "Cancel"
+    },
+    "refusal": {
+      "own_container": "{{name}} is one of Bayplan's own containers. Stopping it would cut Bayplan off from the host, so it can't be done from this list.",
+      "node_unreachable": "{{node}} isn't reachable right now. Try again when it's back.",
+      "not_found": "{{name}} no longer exists. The list has been refreshed.",
+      "agent_policy_denied": "This host's agent needs an update",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening."
+    },
+    "agentUpdate": {
+      "title": "This host's agent needs an update",
+      "body": "It's too old to do this. Update it in Settings → Environments → {{environment}}, then try again.",
+      "link": "Open agent settings",
+      "ask": "Ask an administrator to update it."
+    }
+  }
+}

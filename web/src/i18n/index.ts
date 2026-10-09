@@ -4,6 +4,7 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
+import actions from "./en/actions.json";
 import aggregate from "./en/aggregate.json";
 import audit from "./en/audit.json";
 import auth from "./en/auth.json";
@@ -37,11 +38,12 @@ import users from "./en/users.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions) and registers it
 // here, so parallel work never edits the same JSON. Keys are shaped
 // area.screen.element. Plural keys use the i18next _one and _other suffixes.
 export const resources = {
   en: {
+    actions,
     aggregate,
     audit,
     auth,

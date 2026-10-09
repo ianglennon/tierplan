@@ -29,7 +29,8 @@ export type ResourceKind = "containers" | "images" | "volumes" | "networks";
 // translated label.
 export interface Column<T> {
   id: string;
-  header: string;
+  // Text, or a node for a column whose label is only for assistive technology.
+  header: ReactNode;
   cell: (row: T) => ReactNode;
   className?: string;
 }

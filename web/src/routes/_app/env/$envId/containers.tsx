@@ -10,6 +10,7 @@ import { NoPermission } from "@/components/full-page-state";
 import { RelativeTime } from "@/components/relative-time";
 import { StatusDot } from "@/components/status-dot";
 import { Badge } from "@/components/ui/badge";
+import { ContainerRowActions } from "@/features/containers/row-actions";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
 import {
@@ -93,6 +94,12 @@ function Containers() {
         const ports = c.ports ?? [];
         return ports.length > 0 ? <TruncatedText>{ports.join(", ")}</TruncatedText> : missing;
       },
+    },
+    {
+      id: "actions",
+      header: <span className="sr-only">{t("actions.column")}</span>,
+      className: "w-11 px-1 text-end",
+      cell: (c) => <ContainerRowActions envId={envId} row={c} />,
     },
   ];
 
