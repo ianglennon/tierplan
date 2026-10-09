@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import type { NetworkRow } from "@/api/resources";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CreateNetworkDialog } from "@/features/networks/create-network-dialog";
@@ -274,5 +275,276 @@ describe("NetworkList create button", () => {
     render(wrap(<NetworkList envId={ENV} onNodeChange={() => {}} />));
     const button = await screen.findByRole("button", { name: "Create network" });
     await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+  });
+});
+
+// Advanced addressing, the overlap warning and the node of a local network (plan
+// 04-12 task 2).
+
+const row = (name: string, subnets: string[], extra: Partial<NetworkRow> = {}): NetworkRow => ({
+  id: `id-${name}`,
+  name,
+  driver: "bridge",
+  scope: "local",
+  node: "node-1",
+  nodeId: "node-1-id",
+  subnets,
+  created: "2026-10-01T10:00:00Z",
+  ...extra,
+});
+
+async function openAdvanced(dialog: HTMLElement) {
+  fireEvent.click(within(dialog).getByRole("button", { name: "Advanced" }));
+  return await within(dialog).findByLabelText("Subnet");
+}
+
+function blurSubnet(input: HTMLElement, value: string) {
+  fireEvent.change(input, { target: { value } });
+  fireEvent.blur(input);
+}
+
+describe("CreateNetworkDialog (Advanced)", () => {
+  it("keeps Advanced collapsed until it is opened, then shows the addressing fields", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByLabelText("Subnet")).toBeNull();
+    const subnet = await openAdvanced(dialog);
+    expect(subnet.getAttribute("placeholder")).toBe("10.20.0.0/24");
+    expect(dialog.textContent).toContain(
+      "In CIDR form. Bayplan warns if it overlaps another network but doesn't pick one for you.",
+    );
+    expect(within(dialog).getByLabelText("Gateway")).toBeTruthy();
+    expect(within(dialog).getByLabelText("IP range")).toBeTruthy();
+    expect(within(dialog).getByRole("switch", { name: "Enable IPv6" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Add option" })).toBeTruthy();
+  });
+
+  it("scrolls within 90svh", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.className).toContain("max-h-[90svh]");
+    expect(dialog.className).toContain("overflow-y-auto");
+  });
+
+  it("posts the subnet, gateway, IP range, IPv6 and driver options", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    const subnet = await openAdvanced(dialog);
+    fireEvent.change(subnet, { target: { value: "10.20.0.0/24" } });
+    fireEvent.change(within(dialog).getByLabelText("Gateway"), { target: { value: "10.20.0.1" } });
+    fireEvent.change(within(dialog).getByLabelText("IP range"), {
+      target: { value: "10.20.0.128/25" },
+    });
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Enable IPv6" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add option" }));
+    fireEvent.change(within(dialog).getByLabelText("Option name"), {
+      target: { value: "com.docker.network.bridge.name" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Option value"), {
+      target: { value: "br-app" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({
+      name: "app-net",
+      driver: "bridge",
+      subnet: "10.20.0.0/24",
+      gateway: "10.20.0.1",
+      ipRange: "10.20.0.128/25",
+      ipv6: true,
+      options: { "com.docker.network.bridge.name": "br-app" },
+    });
+  });
+
+  it("refuses a subnet that is not in CIDR form, a gateway or range outside it, and sends nothing", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    const subnet = await openAdvanced(dialog);
+    fireEvent.change(subnet, { target: { value: "10.20.0.0" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    expect(await within(dialog).findByText("Enter a subnet like 10.20.0.0/24.")).toBeTruthy();
+
+    fireEvent.change(subnet, { target: { value: "10.20.0.0/24" } });
+    fireEvent.change(within(dialog).getByLabelText("Gateway"), { target: { value: "10.20.1.1" } });
+    fireEvent.change(within(dialog).getByLabelText("IP range"), {
+      target: { value: "10.20.1.0/25" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    expect(await within(dialog).findByText("The gateway must be inside the subnet.")).toBeTruthy();
+    expect(within(dialog).getByText("The IP range must be inside the subnet.")).toBeTruthy();
+    expect(posts()).toEqual([]);
+  });
+
+  it("asks for a subnet when a gateway or an IP range is given without one", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    await openAdvanced(dialog);
+    fireEvent.change(within(dialog).getByLabelText("Gateway"), { target: { value: "10.20.0.1" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    expect(await within(dialog).findByText("Enter a subnet like 10.20.0.0/24.")).toBeTruthy();
+    expect(posts()).toEqual([]);
+  });
+
+  it("puts a subnet problem the server found under the Subnet field", async () => {
+    answer = () => problem(422, "gateway_outside_subnet");
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    expect(await within(dialog).findByText("The gateway must be inside the subnet.")).toBeTruthy();
+  });
+});
+
+describe("CreateNetworkDialog (overlap warning)", () => {
+  const OVERLAPS = "Containers on both networks may not reach each other. You can still create it.";
+
+  it("warns on blur when the subnet overlaps a listed network, names it, and leaves Create enabled", async () => {
+    mount({ networks: [row("bridge", ["172.17.0.0/16"])] });
+    const dialog = await screen.findByRole("dialog");
+    const subnet = await openAdvanced(dialog);
+    fireEvent.change(subnet, { target: { value: "172.17.1.0/24" } });
+    expect(within(dialog).queryByText(/This overlaps/)).toBeNull();
+    fireEvent.blur(subnet);
+    expect(
+      await within(dialog).findByText(`This overlaps bridge (172.17.0.0/16). ${OVERLAPS}`),
+    ).toBeTruthy();
+    const create = within(dialog).getByRole("button", { name: "Create network" });
+    expect(create.hasAttribute("disabled")).toBe(false);
+    expect(create.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("does not warn for an adjacent subnet", async () => {
+    mount({ networks: [row("app", ["10.0.0.0/24"])] });
+    const dialog = await screen.findByRole("dialog");
+    blurSubnet(await openAdvanced(dialog), "10.0.1.0/24");
+    expect(within(dialog).queryByText(/This overlaps/)).toBeNull();
+  });
+
+  it("names two networks, and for more names the first two and the rest as 'and {m} more'", async () => {
+    mount({
+      networks: [
+        row("a", ["10.0.1.0/24"]),
+        row("b", ["10.0.2.0/24"]),
+        row("c", ["10.0.3.0/24"]),
+        row("d", ["10.0.4.0/24"]),
+      ],
+    });
+    const dialog = await screen.findByRole("dialog");
+    const subnet = await openAdvanced(dialog);
+    blurSubnet(subnet, "10.0.1.0/23");
+    expect(await within(dialog).findByText(/This overlaps 2 networks: a and b\./)).toBeTruthy();
+    blurSubnet(subnet, "10.0.0.0/16");
+    expect(
+      await within(dialog).findByText(/This overlaps 4 networks: a, b and 2 more\./),
+    ).toBeTruthy();
+  });
+
+  it("takes the warning away when the subnet no longer overlaps, and still creates with one showing", async () => {
+    mount({ networks: [row("bridge", ["172.17.0.0/16"])] });
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    const subnet = await openAdvanced(dialog);
+    blurSubnet(subnet, "172.17.1.0/24");
+    await within(dialog).findByText(/This overlaps bridge/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toMatchObject({ subnet: "172.17.1.0/24" });
+  });
+
+  it("clears the warning on a blur that finds no overlap", async () => {
+    mount({ networks: [row("bridge", ["172.17.0.0/16"])] });
+    const dialog = await screen.findByRole("dialog");
+    const subnet = await openAdvanced(dialog);
+    blurSubnet(subnet, "172.17.1.0/24");
+    await within(dialog).findByText(/This overlaps bridge/);
+    blurSubnet(subnet, "10.99.0.0/24");
+    await waitFor(() => expect(within(dialog).queryByText(/This overlaps/)).toBeNull());
+  });
+
+  it("shows a network name as text, never as markup", async () => {
+    mount({ networks: [row("<img src=x onerror=alert(1)>", ["10.0.0.0/24"])] });
+    const dialog = await screen.findByRole("dialog");
+    blurSubnet(await openAdvanced(dialog), "10.0.0.0/25");
+    await within(dialog).findByText(/This overlaps/);
+    expect(document.querySelector("img")).toBeNull();
+  });
+});
+
+describe("CreateNetworkDialog (node of a local network on a swarm)", () => {
+  const SWARM_NETS = [
+    row("bridge", ["172.17.0.0/16"], { node: "node-1", nodeId: "node-1-id" }),
+    row("bridge", ["172.17.0.0/16"], { node: "node-2", nodeId: "node-2-id" }),
+    row("ingress", ["10.0.0.0/24"], {
+      driver: "overlay",
+      scope: "swarm",
+      node: "Cluster",
+      nodeId: "mgr-id",
+    }),
+  ];
+
+  async function chooseDriver(dialog: HTMLElement, name: string) {
+    fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "Driver" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name }));
+  }
+
+  it("shows no node select for an overlay network", async () => {
+    mount({ swarm: true, networks: SWARM_NETS });
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("combobox", { name: "Create on node" })).toBeNull();
+  });
+
+  it("asks which node for a local driver, and refuses Create until one is chosen", async () => {
+    mount({ swarm: true, networks: SWARM_NETS });
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    await chooseDriver(dialog, "bridge");
+    const node = await within(dialog).findByRole("combobox", { name: "Create on node" });
+    expect(node.textContent).toContain("Choose a node");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    expect(await within(dialog).findByText("Choose a node.")).toBeTruthy();
+    expect(posts()).toEqual([]);
+
+    fireEvent.keyDown(node, { key: "Enter" });
+    const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(options).toEqual(["node-1", "node-2"]);
+    fireEvent.click(screen.getByRole("option", { name: "node-2" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({ name: "app-net", driver: "bridge", nodeId: "node-2-id" });
+  });
+
+  it("sends an overlay network with no node, attachable when asked", async () => {
+    mount({ swarm: true, networks: SWARM_NETS });
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "ovl");
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Attachable" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({ name: "ovl", driver: "overlay", attachable: true });
+  });
+
+  it("drops the attachable choice when the driver changes to one that cannot have it", async () => {
+    mount({ swarm: true, networks: SWARM_NETS });
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Attachable" }));
+    await chooseDriver(dialog, "bridge");
+    fireEvent.keyDown(await within(dialog).findByRole("combobox", { name: "Create on node" }), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByRole("option", { name: "node-1" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({ name: "app-net", driver: "bridge", nodeId: "node-1-id" });
+  });
+
+  it("shows no node select off a swarm, whatever the driver", async () => {
+    mount({ networks: [row("bridge", ["172.17.0.0/16"])] });
+    const dialog = await screen.findByRole("dialog");
+    await chooseDriver(dialog, "macvlan");
+    expect(within(dialog).queryByRole("combobox", { name: "Create on node" })).toBeNull();
   });
 });
