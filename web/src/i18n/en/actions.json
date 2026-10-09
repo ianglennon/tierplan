@@ -4,16 +4,25 @@
     "menu": {
       "label": "Actions for {{name}}",
       "start": "Start",
-      "stop": "Stop"
+      "stop": "Stop",
+      "restart": "Restart",
+      "pause": "Pause",
+      "unpause": "Unpause"
     },
     "verb": {
       "start": "start",
-      "stop": "stop"
+      "stop": "stop",
+      "restart": "restart",
+      "pause": "pause",
+      "unpause": "unpause"
     },
     "toast": {
       "started": "Started {{name}}.",
       "stopped": "Stopped {{name}}.",
-      "failed": "Couldn't {{verb}} {{name}}. {{reason}}"
+      "failed": "Couldn't {{verb}} {{name}}. {{reason}}",
+      "restarted": "Restarted {{name}}.",
+      "paused": "Paused {{name}}.",
+      "unpaused": "Unpaused {{name}}."
     },
     "stop": {
       "title": "Stop {{name}}?",
@@ -36,6 +45,7 @@
       "body": "It's too old to do this. Update it in Settings → Environments → {{environment}}, then try again.",
       "link": "Open agent settings",
       "ask": "Ask an administrator to update it."
-    }
+    },
+    "readOnlyHost": "This host is read-only (set on the host)"
   }
 }

@@ -16,6 +16,47 @@
           "stack": "Stack",
           "project": "Project"
         }
+      },
+      "groupBy": {
+        "label": "Group by",
+        "stack": "Stack or project",
+        "node": "Node",
+        "none": "None"
+      },
+      "collapseAll": "Collapse all groups",
+      "expandAll": "Expand all groups",
+      "clearFilters": "Clear filters",
+      "status": {
+        "label": "Filter by status",
+        "running": "Running",
+        "exited": "Exited",
+        "paused": "Paused",
+        "restarting": "Restarting",
+        "unhealthy": "Unhealthy",
+        "chip": "{{label}} {{count, number}}"
+      },
+      "caption": {
+        "filtered_one": "{{n, number}} of {{count, number}} container",
+        "filtered_other": "{{n, number}} of {{count, number}} containers"
+      },
+      "cap": "Showing the first 500 of {{total, number}}. Narrow the search to see the rest.",
+      "empty": {
+        "filters": {
+          "title": "No containers match these filters.",
+          "action": "Clear filters"
+        },
+        "search": {
+          "title": "No containers match “{{q}}”.",
+          "action": "Clear search"
+        }
+      },
+      "unhealthy": "Unhealthy",
+      "self": {
+        "server": "Bayplan (this instance)",
+        "agent": "Bayplan agent"
+      },
+      "ports": {
+        "more": "+{{count}}"
       }
     }
   }

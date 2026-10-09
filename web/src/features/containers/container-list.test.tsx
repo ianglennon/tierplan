@@ -149,7 +149,7 @@ describe("container list: groups", () => {
   it("opens grouped by stack or project, expanded, Ungrouped last, with counts and kind badges", async () => {
     mount();
     await screen.findByText("shop-web");
-    const headers = screen.getAllByRole("button", { name: /^Collapse / });
+    const headers = screen.getAllByRole("button", { name: /^Collapse (?!all)/ });
     expect(headers.map((b) => b.getAttribute("aria-label"))).toEqual([
       "Collapse Blog",
       "Collapse shop",
@@ -188,7 +188,7 @@ describe("container list: groups", () => {
   it("is one flat table without headers when grouping is none", async () => {
     mount({ group: "none" });
     await screen.findByText("shop-web");
-    expect(screen.queryByRole("button", { name: /^(Collapse|Expand) / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^(Collapse|Expand) (?!all)/ })).toBeNull();
     const names = screen
       .getAllByRole("row")
       .slice(1)

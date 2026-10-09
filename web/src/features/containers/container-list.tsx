@@ -2,14 +2,14 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { Search, X } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, Search, X } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
-import type { HealthState } from "@/api/environments";
 import { type ContainerRow, containersQuery } from "@/api/resources";
 import { RelativeTime } from "@/components/relative-time";
-import { StatusDot } from "@/components/status-dot";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import {
   InputGroup,
   InputGroupAddon,
@@ -17,14 +17,31 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ContainerStateCell } from "@/features/containers/container-state-cell";
 import { groupContainers, sortContainers } from "@/features/containers/group";
 import {
   type ContainerSearch,
   type ContainerSearchPatch,
+  GROUP_VALUES,
+  type GroupBy,
   MAX_QUERY,
   type SortKey,
+  STATUS_VALUES,
+  type StatusValue,
+  statusList,
+  statusParam,
 } from "@/features/containers/list-search";
 import { ContainerRowActions } from "@/features/containers/row-actions";
+import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { useGroupCollapse } from "@/features/resources/group-header-row";
 import {
@@ -37,19 +54,6 @@ import {
 import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { useT } from "@/i18n/use-t";
-
-// The container state badge (UI-SPEC D-56): running is online; restarting,
-// paused and removing are warning; dead is offline; exited and created are
-// neutral. The dot is always paired with the state's text.
-const STATE_DOT: Record<ContainerRow["state"], HealthState> = {
-  running: "online",
-  restarting: "unsupported",
-  paused: "unsupported",
-  removing: "unsupported",
-  dead: "offline",
-  exited: "unknown",
-  created: "unknown",
-};
 
 // How long the box waits after the last key before the search goes into the URL
 // and to the server (UI-SPEC "Screens": 250 ms).
@@ -135,6 +139,32 @@ function SearchBox({ value, onCommit }: SearchBoxProps) {
   );
 }
 
+// PortsCell shows the first two published ports and "+n" for the rest, whose
+// tooltip lists them all. A container with none shows a dash.
+function PortsCell({ ports, missing }: { ports: string[] | null; missing: string }) {
+  const list = ports ?? [];
+  if (list.length === 0) return missing;
+  const rest = list.length - SHOWN_PORTS;
+  return (
+    <span className="flex items-center gap-1">
+      <TruncatedText className="max-w-32">{list.slice(0, SHOWN_PORTS).join(", ")}</TruncatedText>
+      {rest > 0 ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="shrink-0 rounded text-xs text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+              {/* Focusable, so the full list opens from the keyboard too. */}+{rest}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-80 break-all">{list.join(", ")}</TooltipContent>
+        </Tooltip>
+      ) : null}
+    </span>
+  );
+}
+
+// How many ports show before the rest fold into "+n".
+const SHOWN_PORTS = 2;
+
 interface ContainerListProps {
   envId: string;
   // The route's validated search, and the way to change it: a key set to
@@ -144,10 +174,11 @@ interface ContainerListProps {
 }
 
 // ContainerList is the containers page (D-01 to D-05): the rows grouped by stack
-// or project, found by a search the server answers, sorted from the column
-// headers. The host's Docker names are text only (T-04-33).
+// or project, found by a search and the status chips that the server answers,
+// sorted from the column headers. Docker's names are text only (T-04-33).
 export function ContainerList({ envId, search, onSearchChange }: ContainerListProps) {
   const t = useT();
+  const groupById = useId();
   const swarm = useEnvIsSwarm(envId);
   const nodeColumn = useNodeColumn<ContainerRow>();
   const envName = useEnvName(envId);
@@ -156,13 +187,15 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
 
   const node = swarm ? search.node : undefined;
   const query = useQuery(containersQuery(envId, { node, q: search.q, status: search.status }));
+  const data = query.data;
 
   // Grouping by node means nothing on a standalone host, which has one.
-  const by = search.group === "node" && !swarm ? "stack" : (search.group ?? "stack");
+  const by: GroupBy = search.group === "node" && !swarm ? "stack" : (search.group ?? "stack");
   const sortKey = search.sort ?? "name";
   const sortDir = search.dir ?? "asc";
+  const statuses = statusList(search.status);
 
-  const items = query.data?.items;
+  const items = data?.items;
   const groups = useMemo<TableGroup<ContainerRow>[]>(() => {
     const sorted = sortContainers(items ?? [], { key: sortKey, dir: sortDir });
     return groupContainers(sorted, by, null).map((g) => ({
@@ -182,34 +215,68 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
     }));
   }, [items, by, sortKey, sortDir, t]);
 
+  const headed = groups.filter((g) => g.header).map((g) => g.key);
+  const allCollapsed = headed.length > 0 && headed.every((k) => collapse.collapsed.has(k));
+
+  const filtered = Boolean(search.q || search.status);
+  const anyFilter = filtered || node !== undefined;
+  const clearFilters = () => onSearchChange({ q: undefined, status: undefined, node: undefined });
+
   function onSort(key: string) {
     const next = key as SortKey;
     if (next === sortKey) onSearchChange({ sort: next, dir: sortDir === "asc" ? "desc" : "asc" });
     else onSearchChange({ sort: next, dir: "asc" });
   }
 
+  // Search alone gets its own empty state; any chip or node makes it a filter
+  // match, since the filters may be the cause (UI-SPEC "Core elements"). A node
+  // alone keeps the plain empty state, which names the node.
+  const searchOnly = Boolean(search.q) && !search.status && node === undefined;
+  const empty = !filtered ? undefined : (
+    <Empty className="min-h-[30svh] border">
+      <EmptyHeader>
+        <EmptyTitle role="heading" aria-level={2} className="text-base break-words">
+          {searchOnly
+            ? t("containers.list.empty.search.title", { q: search.q })
+            : t("containers.list.empty.filters.title")}
+        </EmptyTitle>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button
+          variant="outline"
+          className="max-md:h-11"
+          onClick={() => (searchOnly ? onSearchChange({ q: undefined }) : clearFilters())}
+        >
+          {searchOnly
+            ? t("containers.list.empty.search.action")
+            : t("containers.list.empty.filters.action")}
+        </Button>
+      </EmptyContent>
+    </Empty>
+  );
+
   const columns: Column<ContainerRow>[] = [
     {
       id: "name",
       header: t("dashboard.lists.containers.columns.name"),
+      className: "min-w-[200px]",
       sortKey: "name",
-      cell: (c) => (
-        <span className="flex items-center gap-2">
-          <TruncatedText>{c.name}</TruncatedText>
-          {c.isSelf ? <Badge variant="outline">{t("dashboard.selfBadge")}</Badge> : null}
-        </span>
-      ),
+      cell: (c) => {
+        const kind = c.selfKind || (c.isSelf ? "server" : "");
+        return (
+          <span className="flex items-center gap-2">
+            <TruncatedText>{c.name}</TruncatedText>
+            {kind === "server" || kind === "agent" ? <SelfContainerBadge kind={kind} /> : null}
+          </span>
+        );
+      },
     },
     {
       id: "state",
       header: t("dashboard.lists.containers.columns.state"),
+      className: "w-40 min-w-40",
       sortKey: "state",
-      cell: (c) => (
-        <StatusDot
-          state={STATE_DOT[c.state] ?? "unknown"}
-          label={t(`dashboard.lists.states.${c.state}`)}
-        />
-      ),
+      cell: (c) => <ContainerStateCell state={c.state} health={c.health} />,
     },
     {
       id: "image",
@@ -217,23 +284,17 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
       cell: (c) => (c.image ? <TruncatedText>{c.image}</TruncatedText> : missing),
     },
     {
-      id: "created",
-      header: t("dashboard.lists.containers.columns.created"),
-      sortKey: "created",
-      cell: (c) => <RelativeTime value={c.created} />,
-    },
-    {
-      id: "status",
-      header: t("dashboard.lists.containers.columns.status"),
-      cell: (c) => (c.status ? <TruncatedText>{c.status}</TruncatedText> : missing),
-    },
-    {
       id: "ports",
       header: t("dashboard.lists.containers.columns.ports"),
-      cell: (c) => {
-        const ports = c.ports ?? [];
-        return ports.length > 0 ? <TruncatedText>{ports.join(", ")}</TruncatedText> : missing;
-      },
+      className: "w-40 min-w-40",
+      cell: (c) => <PortsCell ports={c.ports} missing={missing} />,
+    },
+    {
+      id: "created",
+      header: t("dashboard.lists.containers.columns.created"),
+      className: "w-[120px] min-w-[120px]",
+      sortKey: "created",
+      cell: (c) => <RelativeTime value={c.created} />,
     },
     {
       id: "actions",
@@ -243,6 +304,93 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
     },
   ];
 
+  const toolbar = (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2 max-md:[&>*]:min-w-0">
+        <SearchBox value={search.q} onCommit={(q) => onSearchChange({ q })} />
+        <div className="flex items-center gap-2">
+          <Label htmlFor={groupById} className="text-sm text-muted-foreground">
+            {t("containers.list.groupBy.label")}
+          </Label>
+          <Select
+            value={by}
+            onValueChange={(v) =>
+              onSearchChange({ group: v === "stack" ? undefined : (v as GroupBy) })
+            }
+          >
+            <SelectTrigger id={groupById} size="sm" className="min-w-40 max-md:h-11">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper" align="start">
+              {GROUP_VALUES.filter((g) => g !== "node" || swarm).map((g) => (
+                <SelectItem key={g} value={g}>
+                  {t(`containers.list.groupBy.${g}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {swarm ? (
+          <NodeSelect
+            value={node}
+            onChange={(n) => onSearchChange({ node: n })}
+            nodes={data?.nodes ?? []}
+          />
+        ) : null}
+        {headed.length > 0 ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="max-md:size-11"
+            aria-label={t(
+              allCollapsed ? "containers.list.expandAll" : "containers.list.collapseAll",
+            )}
+            onClick={() => (allCollapsed ? collapse.expandAll() : collapse.collapseAll(headed))}
+          >
+            {allCollapsed ? (
+              <ChevronsUpDown aria-hidden="true" />
+            ) : (
+              <ChevronsDownUp aria-hidden="true" />
+            )}
+          </Button>
+        ) : null}
+        {anyFilter ? (
+          <Button variant="ghost" className="max-md:h-11" onClick={clearFilters}>
+            {t("containers.list.clearFilters")}
+          </Button>
+        ) : null}
+      </div>
+      <ToggleGroup
+        type="multiple"
+        // The chips are toggle buttons in a labelled group, not a toolbar.
+        role="group"
+        variant="outline"
+        size="sm"
+        spacing={2}
+        aria-label={t("containers.list.status.label")}
+        value={statuses}
+        onValueChange={(v) => onSearchChange({ status: statusParam(v as StatusValue[]) })}
+        className="max-w-full max-md:w-full max-md:flex-nowrap max-md:overflow-x-auto md:flex-wrap"
+      >
+        {STATUS_VALUES.map((v) => {
+          const label = t(`containers.list.status.${v}`);
+          return (
+            <ToggleGroupItem
+              key={v}
+              value={v}
+              className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
+            >
+              {data
+                ? t("containers.list.status.chip", { label, count: data.statusCounts?.[v] ?? 0 })
+                : label}
+            </ToggleGroupItem>
+          );
+        })}
+      </ToggleGroup>
+    </div>
+  );
+
   return (
     <ResourceTable
       resource="containers"
@@ -251,22 +399,16 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
       envName={envName}
       nodeColumn={swarm ? nodeColumn : undefined}
       nodeFilter={swarm ? { value: node, onChange: (n) => onSearchChange({ node: n }) } : undefined}
-      banner={swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : undefined}
+      banner={swarm ? <NodesBanner notReporting={data?.notReporting} /> : undefined}
       groups={{ items: groups, collapse }}
-      toolbar={
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <SearchBox value={search.q} onCommit={(q) => onSearchChange({ q })} />
-            {swarm ? (
-              <NodeSelect
-                value={node}
-                onChange={(n) => onSearchChange({ node: n })}
-                nodes={query.data?.nodes ?? []}
-              />
-            ) : null}
-          </div>
-        </div>
+      toolbar={toolbar}
+      caption={
+        data && filtered
+          ? t("containers.list.caption.filtered", { n: data.total, count: data.unfilteredTotal })
+          : undefined
       }
+      empty={empty}
+      capNote={data ? t("containers.list.cap", { total: data.total }) : undefined}
       sort={{ key: sortKey, dir: sortDir, onSort }}
       getRowKey={(c) => nodeRowKey(c.node, c.id)}
     />

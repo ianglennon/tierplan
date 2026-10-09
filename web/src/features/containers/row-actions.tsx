@@ -40,6 +40,19 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 // eligibility). Any other state (removing, dead) offers neither.
 const STARTABLE: ReadonlySet<string> = new Set(["exited", "created"]);
 const STOPPABLE: ReadonlySet<string> = new Set(["running", "restarting", "paused"]);
+const RESTARTABLE: ReadonlySet<string> = new Set(["running", "exited", "paused", "restarting"]);
+const PAUSABLE: ReadonlySet<string> = new Set(["running"]);
+const UNPAUSABLE: ReadonlySet<string> = new Set(["paused"]);
+
+// The actions that need no confirmation, with the words of their toast.
+type ImmediateAction = "start" | "restart" | "pause" | "unpause";
+
+const DONE_TOAST: Record<ImmediateAction, string> = {
+  start: "started",
+  restart: "restarted",
+  pause: "paused",
+  unpause: "unpaused",
+};
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
@@ -194,9 +207,9 @@ interface ContainerRowActionsProps {
   row: ContainerRow;
 }
 
-// ContainerRowActions is the row menu of the containers list: Start for a
-// stopped container and Stop for a running one (D-06, D-07). Start runs at once;
-// Stop asks first. A caller without containers.control sees the item disabled,
+// ContainerRowActions is the row menu of the containers list: the actions that
+// fit the container's state (D-06, D-07). Start, Restart, Pause and Unpause run
+// at once; Stop asks first. A caller without containers.control sees the item disabled,
 // with the reason (D-19); the server decides either way.
 export function ContainerRowActions({ envId, row }: ContainerRowActionsProps) {
   const t = useT();
@@ -210,35 +223,36 @@ export function ContainerRowActions({ envId, row }: ContainerRowActionsProps) {
 
   const canStart = STARTABLE.has(row.state);
   const canStop = STOPPABLE.has(row.state);
-  if (!canStart && !canStop) return null;
+  const canRestart = RESTARTABLE.has(row.state);
+  const canPause = PAUSABLE.has(row.state);
+  const canUnpause = UNPAUSABLE.has(row.state);
+  if (!canStart && !canStop && !canRestart && !canPause && !canUnpause) return null;
 
-  // Unavailable: the reason when the caller's role is short, and just unavailable
-  // while the role is not yet known.
-  const unavailable = !needs.allowed;
+  // Unavailable: the reason when the caller's role is short or the host is
+  // read-only, and just unavailable while the role is not yet known.
+  const unavailable = !needs.allowed || row.readOnly;
+  const reason = needs.reason ?? (row.readOnly ? t("actions.readOnlyHost") : undefined);
   const busy = mutation.isPending;
 
-  async function start() {
+  // Start, restart, pause and unpause run at once: each is reversible, and
+  // none loses data, so none asks first (D-06, D-07).
+  async function run(action: ImmediateAction) {
+    const verb = t(`actions.verb.${action}`);
     try {
       const results = await mutation.mutateAsync({
-        action: "start",
+        action,
         targets: [{ nodeId: row.nodeId, id: row.id }],
       });
       const result = results[0];
       if (result?.result === "done") {
-        toastSuccess(t("actions.toast.started", { name: row.name }));
+        toastSuccess(t(`actions.toast.${DONE_TOAST[action]}`, { name: row.name }));
         return;
       }
       const reason = result ? reasonOf(t, row, result) : t("actions.refusal.generic");
-      toastError(
-        t("actions.toast.failed", { verb: t("actions.verb.start"), name: row.name, reason }),
-      );
+      toastError(t("actions.toast.failed", { verb, name: row.name, reason }));
     } catch (err) {
       toastError(
-        t("actions.toast.failed", {
-          verb: t("actions.verb.start"),
-          name: row.name,
-          reason: requestReasonOf(t, err),
-        }),
+        t("actions.toast.failed", { verb, name: row.name, reason: requestReasonOf(t, err) }),
       );
     }
   }
@@ -246,7 +260,7 @@ export function ContainerRowActions({ envId, row }: ContainerRowActionsProps) {
   const item = (label: string, onSelect: () => void) => (
     <DropdownMenuItem
       className="max-md:min-h-11"
-      disabled={unavailable && !needs.reason}
+      disabled={unavailable && !reason}
       onSelect={() => {
         if (busy) return;
         chose.current = true;
@@ -281,13 +295,28 @@ export function ContainerRowActions({ envId, row }: ContainerRowActionsProps) {
           }}
         >
           {canStart ? (
-            <NeedsTooltip reason={needs.reason}>
-              {item(t("actions.menu.start"), () => void start())}
+            <NeedsTooltip reason={reason}>
+              {item(t("actions.menu.start"), () => void run("start"))}
             </NeedsTooltip>
           ) : null}
           {canStop ? (
-            <NeedsTooltip reason={needs.reason}>
+            <NeedsTooltip reason={reason}>
               {item(t("actions.menu.stop"), () => setStopOpen(true))}
+            </NeedsTooltip>
+          ) : null}
+          {canRestart ? (
+            <NeedsTooltip reason={reason}>
+              {item(t("actions.menu.restart"), () => void run("restart"))}
+            </NeedsTooltip>
+          ) : null}
+          {canPause ? (
+            <NeedsTooltip reason={reason}>
+              {item(t("actions.menu.pause"), () => void run("pause"))}
+            </NeedsTooltip>
+          ) : null}
+          {canUnpause ? (
+            <NeedsTooltip reason={reason}>
+              {item(t("actions.menu.unpause"), () => void run("unpause"))}
             </NeedsTooltip>
           ) : null}
         </DropdownMenuContent>
