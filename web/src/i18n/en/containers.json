@@ -57,7 +57,11 @@
       },
       "ports": {
         "more": "+{{count}}"
-      }
+      },
+      "changes_one": "{{count}} change waiting",
+      "changes_other": "{{count}} changes waiting",
+      "showChanges": "Show changes",
+      "removed": "Removed"
     }
   }
 }

@@ -61,6 +61,18 @@ export interface TableGroup<T> {
   };
 }
 
+// How a row is drawn while the list changes under it (D-05, D-50).
+export interface RowState {
+  // Its values changed a moment ago: muted for 1.5 s.
+  changed?: boolean;
+  // It is new: it slides in.
+  added?: boolean;
+  // It is gone but still listed: dimmed.
+  removed?: boolean;
+  // ...and on its way out: it fades.
+  leaving?: boolean;
+}
+
 export interface TableGroups<T> {
   items: TableGroup<T>[];
   collapse: GroupCollapse;
@@ -110,6 +122,8 @@ interface ResourceTableProps<T> {
   // Replaces the sentence under the table when the server capped the list.
   capNote?: string;
   sort?: TableSort;
+  // How each row is drawn, by its row key. A row with no entry is plain.
+  rowStates?: ReadonlyMap<string, RowState>;
 }
 
 export interface NodeFilter {
@@ -124,6 +138,12 @@ const SKELETON_ROWS = 8;
 // A row is 36px, and 44px under 768px for touch (D-64).
 const ROW = "h-9 max-md:h-11";
 const CELL = "px-3 py-0";
+
+// Body rows. The row component animates colour on hover with no regard to the
+// reader's motion setting, so it is turned off here and back on only where
+// motion is welcome; the changed-row highlight is a background and shows either
+// way (UI-SPEC "Row change highlight").
+const BODY_ROW = "transition-none motion-safe:transition-colors motion-safe:duration-150";
 
 interface TruncatedTextProps {
   children: string;
@@ -234,6 +254,7 @@ export function ResourceTable<T>({
   empty: emptyState,
   capNote,
   sort,
+  rowStates,
 }: ResourceTableProps<T>) {
   const t = useT();
   const groupsId = useId();
@@ -262,8 +283,26 @@ export function ResourceTable<T>({
   const emptyName = nodeFilter?.value ?? envName;
 
   function renderRow(row: T) {
+    const rowKey = getRowKey(row);
+    const state = rowStates?.get(rowKey);
     return (
-      <TableRow key={getRowKey(row)} className={ROW}>
+      <TableRow
+        key={rowKey}
+        data-changed={state?.changed || undefined}
+        data-added={state?.added || undefined}
+        data-removed={state?.removed || undefined}
+        data-leaving={state?.leaving || undefined}
+        className={cn(
+          ROW,
+          BODY_ROW,
+          state?.changed && "bg-muted",
+          state?.added &&
+            "motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-150",
+          state?.removed && "opacity-60",
+          state?.leaving &&
+            "motion-safe:animate-out motion-safe:fade-out motion-safe:fill-mode-forwards motion-safe:duration-150",
+        )}
+      >
         {shownColumns.map((c) => (
           <TableCell key={c.id} className={cn(CELL, c.className)}>
             {c.cell(row)}

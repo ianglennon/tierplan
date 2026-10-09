@@ -3,9 +3,10 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { ChevronsDownUp, ChevronsUpDown, Search, X } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { type ContainerRow, containersQuery } from "@/api/resources";
+import { NewItemsPill } from "@/components/new-items-pill";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,11 +44,13 @@ import {
 import { ContainerRowActions } from "@/features/containers/row-actions";
 import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { NodesBanner } from "@/features/environments/nodes-banner";
+import { useFrozenRows } from "@/features/resources/frozen-rows";
 import { useGroupCollapse } from "@/features/resources/group-header-row";
 import {
   type Column,
   NodeSelect,
   ResourceTable,
+  type RowState,
   type TableGroup,
   TruncatedText,
 } from "@/features/resources/resource-table";
@@ -139,6 +142,14 @@ function SearchBox({ value, onCommit }: SearchBoxProps) {
   );
 }
 
+const rowKeyOf = (c: ContainerRow) => nodeRowKey(c.node, c.id);
+
+// What a row shows that can change under the user: its state and status text,
+// the health check, the image and the ports. A change in any of them marks the
+// row (D-05).
+const fingerprintOf = (c: ContainerRow) =>
+  [c.state, c.status, c.health, c.image, (c.ports ?? []).join(",")].join("|");
+
 // PortsCell shows the first two published ports and "+n" for the rest, whose
 // tooltip lists them all. A container with none shows a dash.
 function PortsCell({ ports, missing }: { ports: string[] | null; missing: string }) {
@@ -195,26 +206,78 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
   const sortDir = search.dir ?? "asc";
   const statuses = statusList(search.status);
 
+  // The rows in the order the list shows them. The same array until the answer
+  // or the sort changes, which is what lets the freeze tell an update from a
+  // re-render.
   const items = data?.items;
-  const groups = useMemo<TableGroup<ContainerRow>[]>(() => {
-    const sorted = sortContainers(items ?? [], { key: sortKey, dir: sortDir });
-    return groupContainers(sorted, by, null).map((g) => ({
-      key: g.key,
-      rows: g.rows,
-      header:
-        g.kind === "all"
-          ? undefined
-          : {
-              name: g.kind === "ungrouped" ? t("containers.list.group.ungrouped") : g.name,
-              summary: t("containers.list.group.running", { running: g.running, count: g.total }),
-              badge:
-                g.kind === "stack" || g.kind === "project" ? (
-                  <Badge variant="outline">{t(`containers.list.group.kind.${g.kind}`)}</Badge>
-                ) : undefined,
-            },
-    }));
-  }, [items, by, sortKey, sortDir, t]);
+  const sorted = useMemo(
+    () => sortContainers(items ?? [], { key: sortKey, dir: sortDir }),
+    [items, sortKey, sortDir],
+  );
 
+  // Rows with a menu or dialog open do not move (D-50): while any is open the
+  // list is frozen. Changed rows still update in place, new rows wait behind
+  // the pill, and gone rows stay dimmed until the freeze ends.
+  const [openRows, setOpenRows] = useState<ReadonlySet<string>>(() => new Set());
+  const setRowOpen = useCallback((key: string, open: boolean) => {
+    setOpenRows((prev) => {
+      if (prev.has(key) === open) return prev;
+      const next = new Set(prev);
+      if (open) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+  const frozen = useFrozenRows(sorted, {
+    frozen: openRows.size > 0,
+    getKey: rowKeyOf,
+    fingerprint: fingerprintOf,
+    // Rows of the previous filters, kept on screen while the new ones load, are
+    // not an earlier answer to this question.
+    ready: data !== undefined && !query.isPlaceholderData,
+    resetKey: [envId, node, search.q, search.status].join("\u0000"),
+  });
+
+  const shownRows = useMemo(() => frozen.rows.map((r) => r.row), [frozen.rows]);
+  const rowStates = useMemo(() => {
+    const out = new Map<string, RowState>();
+    for (const r of frozen.rows) {
+      if (r.changed || r.added || r.removed) {
+        out.set(rowKeyOf(r.row), {
+          changed: r.changed,
+          added: r.added,
+          removed: r.removed,
+          leaving: r.leaving,
+        });
+      }
+    }
+    return out;
+  }, [frozen.rows]);
+
+  const groups = useMemo<TableGroup<ContainerRow>[]>(
+    () =>
+      groupContainers(shownRows, by, null).map((g) => ({
+        key: g.key,
+        rows: g.rows,
+        header:
+          g.kind === "all"
+            ? undefined
+            : {
+                name: g.kind === "ungrouped" ? t("containers.list.group.ungrouped") : g.name,
+                summary: t("containers.list.group.running", {
+                  running: g.running,
+                  count: g.total,
+                }),
+                badge:
+                  g.kind === "stack" || g.kind === "project" ? (
+                    <Badge variant="outline">{t(`containers.list.group.kind.${g.kind}`)}</Badge>
+                  ) : undefined,
+              },
+      })),
+    [shownRows, by, t],
+  );
+
+  const pending = frozen.heldCount + frozen.removedCount;
   const headed = groups.filter((g) => g.header).map((g) => g.key);
   const allCollapsed = headed.length > 0 && headed.every((k) => collapse.collapsed.has(k));
 
@@ -276,7 +339,12 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
       header: t("dashboard.lists.containers.columns.state"),
       className: "w-40 min-w-40",
       sortKey: "state",
-      cell: (c) => <ContainerStateCell state={c.state} health={c.health} />,
+      cell: (c) =>
+        rowStates.get(rowKeyOf(c))?.removed ? (
+          <span className="text-xs text-muted-foreground">{t("containers.list.removed")}</span>
+        ) : (
+          <ContainerStateCell state={c.state} health={c.health} />
+        ),
     },
     {
       id: "image",
@@ -300,7 +368,14 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
       id: "actions",
       header: <span className="sr-only">{t("actions.column")}</span>,
       className: "w-11 px-1 text-end",
-      cell: (c) => <ContainerRowActions envId={envId} row={c} />,
+      cell: (c) => (
+        <ContainerRowActions
+          envId={envId}
+          row={c}
+          disabled={rowStates.get(rowKeyOf(c))?.removed}
+          onOpenChange={(open) => setRowOpen(rowKeyOf(c), open)}
+        />
+      ),
     },
   ];
 
@@ -409,8 +484,17 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
       }
       empty={empty}
       capNote={data ? t("containers.list.cap", { total: data.total }) : undefined}
+      captionExtra={
+        <NewItemsPill
+          count={pending}
+          label={t("containers.list.changes", { count: pending })}
+          action={t("containers.list.showChanges")}
+          onClick={frozen.release}
+        />
+      }
       sort={{ key: sortKey, dir: sortDir, onSort }}
-      getRowKey={(c) => nodeRowKey(c.node, c.id)}
+      rowStates={rowStates}
+      getRowKey={rowKeyOf}
     />
   );
 }

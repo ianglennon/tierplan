@@ -716,8 +716,10 @@ describe("container list: live updates in place", () => {
     await waitFor(() => expect(within(rowOf("shop-web")).getByText("Paused")).toBeTruthy());
     expect(screen.queryByText("zeta")).toBeNull();
     expect(screen.getByText("loose")).toBeTruthy();
+    // An open menu hides the page from assistive technology, so the roles are
+    // looked up with hidden on.
     const names = screen
-      .getAllByRole("row")
+      .getAllByRole("row", { hidden: true })
       .slice(1)
       .map((r) => r.querySelector("td")?.textContent);
     expect(names).toEqual(["blog", "loose", "shop-db", "shop-web"]);
@@ -728,11 +730,12 @@ describe("container list: live updates in place", () => {
       (
         within(rowOf("loose")).getByRole("button", {
           name: "Actions for loose",
+          hidden: true,
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
     expect(screen.getByText("2 changes waiting")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Show changes" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show changes", hidden: true })).toBeTruthy();
   });
 
   it("applies the held changes at once with Show changes", async () => {
@@ -743,7 +746,7 @@ describe("container list: live updates in place", () => {
     await refetch();
     expect(await screen.findByText("1 change waiting")).toBeTruthy();
     expect(screen.queryByText("zeta")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Show changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show changes", hidden: true }));
     await screen.findByText("zeta");
     expect(screen.queryByText(/change waiting|changes waiting/)).toBeNull();
   });

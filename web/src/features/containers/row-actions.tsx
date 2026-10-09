@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Ellipsis } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   ActionRequestError,
@@ -205,18 +205,42 @@ export function StopDialog({ envId, row, open, onClose, onClosed, seconds }: Sto
 interface ContainerRowActionsProps {
   envId: string;
   row: ContainerRow;
+  // Called with true while the menu or a dialog of this row is open and false
+  // when it is not, so the list can hold still while a person is choosing.
+  onOpenChange?: (open: boolean) => void;
+  // The row is gone from the list but still shown: the button is off.
+  disabled?: boolean;
 }
 
 // ContainerRowActions is the row menu of the containers list: the actions that
 // fit the container's state (D-06, D-07). Start, Restart, Pause and Unpause run
 // at once; Stop asks first. A caller without containers.control sees the item disabled,
 // with the reason (D-19); the server decides either way.
-export function ContainerRowActions({ envId, row }: ContainerRowActionsProps) {
+export function ContainerRowActions({
+  envId,
+  row,
+  onOpenChange,
+  disabled,
+}: ContainerRowActionsProps) {
   const t = useT();
   const needs = useNeeds("containers.control", envId);
   const mutation = useContainerAction(envId);
   const [stopOpen, setStopOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
+  const report = useRef(onOpenChange);
+  report.current = onOpenChange;
+  const open = menuOpen || stopOpen;
+  useEffect(() => {
+    report.current?.(open);
+  }, [open]);
+  // A row that goes away with its menu open must not leave the list frozen.
+  useEffect(
+    () => () => {
+      report.current?.(false);
+    },
+    [],
+  );
   // Set when an item was chosen, so the menu does not hand focus back to its
   // button before the dialog has opened.
   const chose = useRef(false);
@@ -273,7 +297,7 @@ export function ContainerRowActions({ envId, row }: ContainerRowActionsProps) {
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
           <Button
             ref={button}
@@ -281,6 +305,7 @@ export function ContainerRowActions({ envId, row }: ContainerRowActionsProps) {
             variant="ghost"
             size="icon"
             className="max-md:size-11"
+            disabled={disabled}
             aria-label={t("actions.menu.label", { name: row.name })}
           >
             {busy ? <Spinner aria-hidden="true" /> : <Ellipsis aria-hidden="true" />}
