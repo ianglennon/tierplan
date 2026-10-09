@@ -82,9 +82,8 @@ func TestRevokeClosesTheSessionWithinASecondFailsACallInFlightAndKeepsTheHostOut
 	case <-time.After(2 * time.Second):
 		t.Fatal("the call in flight is still hanging")
 	}
-	if srv.Hub.Session(agentID) != nil {
-		t.Error("the revoked agent still has a registered session")
-	}
+	// The hub forgets the session just after it ends, so wait rather than look once.
+	waitFor(t, "the hub to forget the revoked agent's session", func() bool { return srv.Hub.Session(agentID) == nil })
 	log := srv.Events.WaitLen(t, 2)
 	if want := "disconnected:" + agentID + ":revoked"; log[1] != want {
 		t.Errorf("lifecycle = %v, want %q second", log, want)
