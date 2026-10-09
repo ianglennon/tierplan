@@ -28,7 +28,9 @@ type fakeSocket struct {
 	seen []string
 	// headers are the headers of the requests seen, in the same order.
 	headers []http.Header
-	// release lets the /events handler finish.
+	// bodies are the request bodies seen, in the same order.
+	bodies [][]byte
+	// release lets the /events and /logs handlers finish.
 	release chan struct{}
 }
 
@@ -58,14 +60,30 @@ func newFakeSocket(t *testing.T) *fakeSocket {
 }
 
 func (f *fakeSocket) serve(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
 	f.seen = append(f.seen, r.Method+" "+r.URL.RequestURI())
 	f.headers = append(f.headers, r.Header.Clone())
+	f.bodies = append(f.bodies, body)
 	f.mu.Unlock()
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/exec/") && strings.HasSuffix(r.URL.Path, "/start") &&
+		strings.EqualFold(r.Header.Get("Upgrade"), "tcp") {
+		// The engine answers an exec start with 101 and then speaks raw bytes both
+		// ways. This one echoes them.
+		conn, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = rw.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+		_ = rw.Flush()
+		_, _ = io.Copy(conn, rw)
+		return
+	}
 	w.Header().Set("Api-Version", "1.52")
 	w.Header().Set("Ostype", "linux")
 	w.Header().Set("Swarm", "inactive")
-	if strings.HasSuffix(r.URL.Path, "/events") {
+	if strings.HasSuffix(r.URL.Path, "/events") || strings.HasSuffix(r.URL.Path, "/logs") {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"Type":"container"}` + "\n"))
@@ -77,6 +95,13 @@ func (f *fakeSocket) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write([]byte("OK"))
+}
+
+// bodiesSeen is the request bodies the engine received, in order.
+func (f *fakeSocket) bodiesSeen() [][]byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]byte(nil), f.bodies...)
 }
 
 func (f *fakeSocket) requests() []string {
@@ -93,9 +118,10 @@ func do(t *testing.T, h http.Handler, raw string) *http.Response {
 	go ServeConn(server, h)
 	t.Cleanup(func() { _ = client.Close() })
 	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err := io.WriteString(client, raw); err != nil {
-		t.Fatalf("write the request: %v", err)
-	}
+	// The request is written on its own goroutine: a net.Pipe has no buffer, so a
+	// handler that refuses a large body and answers before reading it all would
+	// otherwise leave this write blocked.
+	go func() { _, _ = io.WriteString(client, raw) }()
 	method, _, _ := strings.Cut(raw, " ")
 	// The request is named so a HEAD answer is read as one with no body.
 	resp, err := http.ReadResponse(bufio.NewReader(client), &http.Request{Method: method})
@@ -172,7 +198,7 @@ func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *test
 		name, raw, wantMessage string
 	}{
 		{"create a container", request("POST", "/containers/create", "Content-Length: 2\r\n") + "{}", "agent_policy_denied: POST /containers/create"},
-		{"the logs of a container", get("/containers/abc/logs"), "agent_policy_denied: GET /containers/abc/logs"},
+		{"the stats of a container", get("/containers/abc/stats"), "agent_policy_denied: GET /containers/abc/stats"},
 		{"inspect a container with a POST", request("POST", "/containers/abc/json"), "agent_policy_denied: POST /containers/abc/json"},
 		{"swarm inspect returns the join tokens", get("/swarm"), "agent_policy_denied: GET /swarm"},
 		{"plugins", get("/plugins"), "agent_policy_denied: GET /plugins"},
@@ -476,7 +502,9 @@ func TestHopByHopAndForwardingHeadersDoNotReachTheEngine(t *testing.T) {
 
 // The one thing opened up for plan 20 (D-27, T-02-70): GET and HEAD of
 // /containers/{id}/json, which Bayplan reads only for a container's restart
-// policy. Nothing else under /containers/{id}/ is allowed.
+// policy. Phase 4 adds the lifecycle, the logs and the exec create under
+// /containers/{id}/ (routes_test.go, body_test.go); the stats, archive, attach and
+// export stay refused.
 func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, path string
@@ -488,7 +516,7 @@ func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
 		{"a name with dots and underscores", "GET", "/containers/my_app.1/json", true},
 		{"a POST of an inspect", "POST", "/containers/abc/json", false},
 		{"a DELETE of an inspect", "DELETE", "/containers/abc/json", false},
-		{"the logs", "GET", "/containers/abc/logs", false},
+		{"the logs", "GET", "/containers/abc/logs", true},
 		{"a stats stream", "GET", "/containers/abc/stats", false},
 		{"a file archive", "GET", "/containers/abc/archive", false},
 		{"an export", "GET", "/containers/abc/export", false},

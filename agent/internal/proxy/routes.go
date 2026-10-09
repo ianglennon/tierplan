@@ -63,6 +63,16 @@ var (
 	boolValue = regexp.MustCompile(`^(0|1|true|false)$`)
 	// secondsValue is a timeout in seconds, -1 to 86400.
 	secondsValue = regexp.MustCompile(`^(-1|[0-9]{1,4}|[0-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$`)
+	// logTime is a log bound: a Unix time or an RFC 3339 time.
+	logTime = regexp.MustCompile(`^[0-9TZ:.+-]{1,40}$`)
+	// tailValue is how many log lines from the end, or all of them.
+	tailValue = regexp.MustCompile(`^(all|[0-9]{1,6})$`)
+	// sizeValue is one side of a terminal size.
+	sizeValue = regexp.MustCompile(`^[0-9]{1,4}$`)
+	// networkScope is the scope a network inspect may ask for.
+	networkScope = regexp.MustCompile(`^(local|swarm|global)$`)
+	// volumeType is the one object type a disk usage request may ask for.
+	volumeType = regexp.MustCompile(`^volume$`)
 	// signalValue is a signal name or number.
 	signalValue = regexp.MustCompile(`^[A-Za-z0-9+]{1,16}$`)
 )
@@ -122,6 +132,47 @@ var routes = []route{
 	{
 		name: "container remove", method: http.MethodDelete, path: pathOf(`containers/` + idShape),
 		query: map[string]*regexp.Regexp{"force": boolValue, "v": boolValue},
+	},
+
+	// Container logs, followed or not.
+	{
+		name: "container logs", method: http.MethodGet, path: pathOf(`containers/` + idShape + `/logs`),
+		query: map[string]*regexp.Regexp{
+			"stdout": boolValue, "stderr": boolValue, "timestamps": boolValue, "follow": boolValue,
+			"details": boolValue, "since": logTime, "until": logTime, "tail": tailValue,
+		},
+	},
+
+	// A shell: create the exec, start it (the one HTTP upgrade the agent
+	// forwards), resize its terminal and read its state.
+	{name: "exec create", method: http.MethodPost, path: pathOf(`containers/` + idShape + `/exec`), body: BodyExecCreate},
+	{name: "exec start", method: http.MethodPost, path: pathOf(`exec/` + idShape + `/start`), body: BodyExecStart, upgrade: true},
+	{
+		name: "exec resize", method: http.MethodPost, path: pathOf(`exec/` + idShape + `/resize`),
+		query: map[string]*regexp.Regexp{"h": sizeValue, "w": sizeValue},
+	},
+	{name: "exec inspect", method: http.MethodGet, path: pathOf(`exec/` + idShape + `/json`)},
+
+	// Networks.
+	{
+		name: "network inspect", method: http.MethodGet, path: pathOf(`networks/` + idShape),
+		query: map[string]*regexp.Regexp{"verbose": boolValue, "scope": networkScope},
+	},
+	{name: "network create", method: http.MethodPost, path: pathOf(`networks/create`), body: BodyNetworkCreate},
+	{name: "network remove", method: http.MethodDelete, path: pathOf(`networks/` + idShape)},
+	{name: "network connect", method: http.MethodPost, path: pathOf(`networks/` + idShape + `/connect`), body: BodyNetworkConnect},
+	{name: "network disconnect", method: http.MethodPost, path: pathOf(`networks/` + idShape + `/disconnect`), body: BodyNetworkDisconnect},
+
+	// Volumes. force is absent on remove on purpose: it removes a volume that is
+	// in use.
+	{name: "volume inspect", method: http.MethodGet, path: pathOf(`volumes/` + volumeShape)},
+	{name: "volume create", method: http.MethodPost, path: pathOf(`volumes/create`), body: BodyVolumeCreate},
+	{name: "volume remove", method: http.MethodDelete, path: pathOf(`volumes/` + volumeShape)},
+
+	// Disk usage, for the size of volumes only.
+	{
+		name: "system df", method: http.MethodGet, path: pathOf(`system/df`),
+		query: map[string]*regexp.Regexp{"type": volumeType, "verbose": boolValue},
 	},
 }
 

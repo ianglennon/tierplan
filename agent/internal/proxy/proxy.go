@@ -13,14 +13,17 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -149,12 +152,32 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 		rawPath, query, _ := strings.Cut(r.RequestURI, "?")
 		hasBody := r.ContentLength != 0 || len(r.TransferEncoding) > 0
 		hasUpgrade := r.Header.Get("Upgrade") != "" || connectionUpgrade(r.Header)
-		if ok, reason, _ := Allowed(r.Method, rawPath, query, hasBody, hasUpgrade, policy); !ok {
+		deny := func(reason string) {
 			if onDenied != nil {
 				onDenied(r.Method, shownPath(r), reason)
 			}
 			writeJSON(w, http.StatusForbidden, DeniedPrefix+": "+r.Method+" "+shownPath(r), true)
+		}
+		ok, reason, kind := Allowed(r.Method, rawPath, query, hasBody, hasUpgrade, policy)
+		if !ok {
+			deny(reason)
 			return
+		}
+		if kind != BodyNone {
+			// What is forwarded is the rebuilt body, never the bytes the server sent.
+			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, maxBody))
+			if err != nil {
+				deny(wire.DeniedAllowlist)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(rebuilt))
+			r.ContentLength = int64(len(rebuilt))
+			r.TransferEncoding = nil
+			r.Header.Set("Content-Length", strconv.Itoa(len(rebuilt)))
+			// The engine reads a form body as query keys when the type says form, so
+			// the type is always the one the rebuilt body has.
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Del("Content-Encoding")
 		}
 		rp.ServeHTTP(w, r)
 	})
