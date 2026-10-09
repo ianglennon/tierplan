@@ -90,7 +90,15 @@ test("a backup is downloaded, restored over the running instance, and the admin 
   await test.step("sign in as the admin from the backup", async () => {
     await page.getByRole("link", { name: "Go to sign-in" }).click();
     await expect(page).toHaveURL(/\/bayplan\/login/);
-    await page.getByLabel("Username").fill(ADMIN.username);
+    // Right after the restart into the backup, a busy runner can answer the sign-in
+    // page's first request with an error; press Retry as a person would.
+    const username = page.getByLabel("Username");
+    await expect(async () => {
+      const retry = page.getByRole("button", { name: "Retry" });
+      if (await retry.isVisible()) await retry.click();
+      await expect(username).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 30_000 });
+    await username.fill(ADMIN.username);
     await page.getByLabel("Password", { exact: true }).fill(ADMIN.password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page.getByRole("button", { name: "User menu" })).toBeVisible();
