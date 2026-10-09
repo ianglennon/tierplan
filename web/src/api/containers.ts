@@ -92,6 +92,11 @@ export async function postContainerAction(
   return answer.results;
 }
 
+// The results of a bulk, one per target in the order asked. bulkId is the ID the
+// server grouped the audit rows of the operation under (D-14), when it made one:
+// a single target with none sent has no bulk.
+export type BulkResults = ContainerActionResult[] & { bulkId?: string };
+
 // runBulk runs one action (or a remove) on any number of containers. The server
 // takes 25 at a time, so a longer list goes out in chunks one after the other
 // (the node and overall limits are the server's), and every chunk after the
@@ -103,7 +108,7 @@ export function runBulk(
   envId: string,
   body: BulkBody,
   targets: ContainerActionTarget[],
-): Promise<ContainerActionResult[]> {
+): Promise<BulkResults> {
   return runChunks(envId, body, targets);
 }
 
@@ -111,8 +116,8 @@ async function runChunks(
   envId: string,
   body: BulkBody,
   targets: ContainerActionTarget[],
-): Promise<ContainerActionResult[]> {
-  const results: ContainerActionResult[] = [];
+): Promise<BulkResults> {
+  const results: BulkResults = [];
   let bulkId: string | undefined;
   for (let at = 0; at < targets.length; at += BULK_CHUNK) {
     const chunk = targets.slice(at, at + BULK_CHUNK);
@@ -133,6 +138,7 @@ async function runChunks(
       }
     }
   }
+  if (bulkId !== undefined) results.bulkId = bulkId;
   return results;
 }
 
@@ -157,7 +163,7 @@ export interface BulkVariables {
 // retry, and refreshes the lists whatever the answer.
 export function useBulkAction(envId: string) {
   const queryClient = useQueryClient();
-  return useMutation<ContainerActionResult[], ActionRequestError, BulkVariables>({
+  return useMutation<BulkResults, ActionRequestError, BulkVariables>({
     mutationFn: ({ body, targets }) => runBulk(envId, body, targets),
     retry: false,
     onSettled: () => refreshAfter(queryClient, envId),

@@ -7,6 +7,7 @@ import { useId, useRef, useState } from "react";
 import {
   ActionRequestError,
   type BulkBody,
+  type BulkResults,
   type ContainerActionResult,
   useBulkAction,
 } from "@/api/containers";
@@ -136,7 +137,7 @@ export function useBulkRunner(envId: string) {
     verb: PendingVerb,
     rows: readonly ContainerRow[],
     extra: Record<string, unknown> = {},
-  ): Promise<ContainerActionResult[]> {
+  ): Promise<BulkResults> {
     const keys = rows.map(pendingKey);
     pend.mark(
       rows.map((r) => ({ key: pendingKey(r), name: r.name, fingerprint: pendingFingerprint(r) })),
@@ -169,7 +170,7 @@ export function reportOf(
   verb: PendingVerb,
   rows: readonly ContainerRow[],
   sent: readonly ContainerRow[],
-  results: readonly ContainerActionResult[],
+  results: readonly ContainerActionResult[] & { bulkId?: string },
 ): BulkReport {
   const answered = new Map<ContainerRow, ContainerActionResult | undefined>();
   sent.forEach((r, i) => {
@@ -177,6 +178,7 @@ export function reportOf(
   });
   return {
     verb,
+    bulkId: results.bulkId,
     rows: rows.map((r): BulkReportRow => {
       if (!answered.has(r)) {
         return {

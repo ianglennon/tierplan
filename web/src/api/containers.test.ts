@@ -51,6 +51,9 @@ describe("runBulk", () => {
     expect(sent[1]?.body.bulkId).toBe("018f0000-0000-7000-8000-000000000001");
     expect(sent.every((s) => s.path === "/api/env/e1/containers/actions")).toBe(true);
     expect(results.map((r) => r.id)).toEqual(targets(30).map((t) => t.id));
+    // The ID the server grouped the audit rows under comes back with the results,
+    // for the link to the audit log (D-14).
+    expect(results.bulkId).toBe("018f0000-0000-7000-8000-000000000001");
   });
 
   it("sends 25 or fewer in one request with no bulk ID", async () => {

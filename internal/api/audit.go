@@ -96,8 +96,9 @@ func (in *AuditFilterInput) filter() (audit.Filter, error) {
 // ListAuditInput is the query of GET /api/audit.
 type ListAuditInput struct {
 	AuditFilterInput
-	Cursor int64 `query:"cursor" minimum:"0" doc:"The nextCursor of the previous page; leave out for the newest entries"`
-	Limit  int   `query:"limit" minimum:"1" doc:"Entries per page; 50 by default, at most 100 (larger values are clamped)"`
+	Bulk   string `query:"bulk" format:"uuid" doc:"Only entries of one bulk operation: those whose bulk detail is this ID (the bulkId a container action answers with)"`
+	Cursor int64  `query:"cursor" minimum:"0" doc:"The nextCursor of the previous page; leave out for the newest entries"`
+	Limit  int    `query:"limit" minimum:"1" doc:"Entries per page; 50 by default, at most 100 (larger values are clamped)"`
 }
 
 // AuditEntryDTO is one audit entry: who, what, where, when and the result. It
@@ -253,8 +254,8 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 		Path:        "/api/audit",
 		Summary:     "List audit entries",
 		Description: "Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an " +
-			"inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated " +
-			"or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. " +
+			"inclusive time range, and optionally by one bulk operation (bulk, the bulkId of a container action). Pages are cut by insertion sequence, so entries that share a timestamp are never repeated " +
+			"or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to, and 422 for a bulk that is not a UUID. " +
 			"An instance admin reads every entry. An Admin of one or more environments (environments.audit) reads only the " +
 			"entries on those environments, or on every environment when they are Admin of all of them, never an instance-level " +
 			"event such as a sign-in or a settings change; the scope is applied before paging. Anyone else gets 403, audited as " +
@@ -265,6 +266,7 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 		if err != nil {
 			return nil, err
 		}
+		f.Bulk = in.Bulk
 		if f, err = scoped(ctx, d, "GET /api/audit", in.UserAgent, f); err != nil {
 			return nil, err
 		}

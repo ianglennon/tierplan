@@ -141,6 +141,7 @@ const day = z.string().regex(DAY).optional().catch(undefined);
 export const auditSearchSchema = z.object({
   user: text,
   action: actions,
+  bulk: text,
   range: z.enum(RANGES).default(DEFAULT_RANGE).catch(DEFAULT_RANGE),
   from: day,
   to: day,
@@ -151,6 +152,8 @@ export const auditSearchSchema = z.object({
 export interface AuditSearch {
   user?: string | undefined;
   action?: string[] | undefined;
+  // One bulk operation's ID (D-14): only the entries it left.
+  bulk?: string | undefined;
   range?: Range | undefined;
   from?: string | undefined;
   to?: string | undefined;
@@ -223,12 +226,13 @@ export function actionLabel(key: string, t: Translate): string {
 }
 
 // listParams are the API's filter parameters for a search: the user, one
-// repeated action parameter per action, and from and to. A cursor and a page
+// repeated action parameter per action, the bulk ID, and from and to. A cursor and a page
 // size are the list's business, not a filter, so they are not here.
 export function listParams(search: AuditSearch, now: Date): URLSearchParams {
   const params = new URLSearchParams();
   if (search.user) params.set("user", search.user);
   for (const action of search.action ?? []) params.append("action", action);
+  if (search.bulk) params.set("bulk", search.bulk);
   const { from, to } = rangeFor(search, now);
   if (from) params.set("from", from);
   if (to) params.set("to", to);

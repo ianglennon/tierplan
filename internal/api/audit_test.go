@@ -572,3 +572,75 @@ func TestAuditEntriesOfADeletedUserReadAsDeletedAndTheSignedRowsAreUntouched(t *
 		t.Errorf("verify after a delete = %+v, %v", res, err)
 	}
 }
+
+const (
+	bulkOne = "018f0000-0000-7000-8000-000000000001"
+	bulkTwo = "018f0000-0000-7000-8000-000000000002"
+)
+
+// logBulk appends one container entry on an environment whose details carry a
+// bulk ID ("" for none), like the rows of 04-05.
+func (f *auditFix) logBulk(t *testing.T, at time.Time, actor, target, envID, bulk string) {
+	t.Helper()
+	w := audit.NewWriter(f.st, f.v, slog.New(slog.DiscardHandler), func() time.Time { return at })
+	details := map[string]string{"k": "v"}
+	if bulk != "" {
+		details["bulk"] = bulk
+	}
+	err := w.Record(context.Background(), audit.Entry{
+		Actor:  audit.Actor{Type: audit.ActorUser, ID: "id-" + actor, Name: actor},
+		Action: "container.stopped", TargetType: "container", TargetID: target, EnvID: envID,
+		Result: audit.ResultSuccess, IP: "198.51.100.7", UserAgent: "ua", Details: details,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newBulkFix holds three rows of bulk one (two on env-a, one on env-b), two of
+// bulk two and one with no bulk, all on env-a unless said.
+func newBulkFix(t *testing.T) *scopeFix {
+	t.Helper()
+	f := newScopeFix(t)
+	at := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	f.logBulk(t, at, "alice", "one-a1", scopeEnvA, bulkOne)
+	f.logBulk(t, at, "alice", "two-a1", scopeEnvA, bulkTwo)
+	f.logBulk(t, at, "alice", "one-a2", scopeEnvA, bulkOne)
+	f.logBulk(t, at, "alice", "none-a", scopeEnvA, "")
+	f.logBulk(t, at, "erin", "one-b", scopeEnvB, bulkOne)
+	f.logBulk(t, at, "alice", "two-a2", scopeEnvA, bulkTwo)
+	return f
+}
+
+func targetsOf(r auditListResp) []string {
+	var out []string
+	for _, it := range r.Items {
+		out = append(out, it.Target)
+	}
+	return out
+}
+
+func TestAuditBulkListReturnsOnlyThatOperationsRowsNewestFirst(t *testing.T) {
+	f := newBulkFix(t)
+	got := f.get(t, "/api/audit?bulk="+bulkOne, f.cookie).list(t)
+	if fmt.Sprint(targetsOf(got)) != "[one-b one-a2 one-a1]" {
+		t.Errorf("bulk one = %v, want its three rows newest first", targetsOf(got))
+	}
+	for _, it := range got.Items {
+		if it.Details["bulk"] != bulkOne {
+			t.Errorf("row %s carries bulk %q", it.Target, it.Details["bulk"])
+		}
+	}
+	two := f.get(t, "/api/audit?bulk="+bulkTwo, f.cookie).list(t)
+	if fmt.Sprint(targetsOf(two)) != "[two-a2 two-a1]" {
+		t.Errorf("bulk two = %v", targetsOf(two))
+	}
+	unknown := f.get(t, "/api/audit?bulk=018f0000-0000-7000-8000-0000000000ff", f.cookie).list(t)
+	if len(unknown.Items) != 0 {
+		t.Errorf("an unknown bulk returned %v", targetsOf(unknown))
+	}
+	all := f.get(t, "/api/audit", f.cookie).list(t)
+	if len(all.Items) < 6 {
+		t.Errorf("no bulk filter returned %d rows, want the bulk and non-bulk rows alike", len(all.Items))
+	}
+}

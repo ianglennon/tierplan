@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { Link } from "@tanstack/react-router";
+
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { PendingVerb } from "@/features/containers/pending";
+import { useCanReadAudit } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +32,9 @@ export interface BulkReportRow {
 
 export interface BulkReport {
   verb: PendingVerb;
+  // The ID the audit rows of this operation share (D-14), when the server made
+  // one; it is what the link to the audit log filters by.
+  bulkId?: string | undefined;
   rows: BulkReportRow[];
 }
 
@@ -44,6 +50,7 @@ interface BulkResultDialogProps {
 // and reasons are text only; the table is keyboard navigable by being a table.
 export function BulkResultDialog({ envId, report, onClose }: BulkResultDialogProps) {
   const t = useT();
+  const canReadAudit = useCanReadAudit();
   const missing = t("dashboard.time.missing");
   const agentOld = report?.rows.some((r) => r.code === "agent_policy_denied") ?? false;
   return (
@@ -101,6 +108,13 @@ export function BulkResultDialog({ envId, report, onClose }: BulkResultDialogPro
           </table>
         </div>
         <DialogFooter>
+          {report?.bulkId && canReadAudit ? (
+            <Button asChild variant="outline" className="max-md:h-11">
+              <Link to="/audit" search={{ bulk: report.bulkId }} onClick={onClose}>
+                {t("actions.results.audit")}
+              </Link>
+            </Button>
+          ) : null}
           <Button type="button" className="max-md:h-11" onClick={onClose}>
             {t("actions.results.close")}
           </Button>

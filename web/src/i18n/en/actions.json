@@ -250,6 +250,7 @@
       "done": "Done",
       "failed": "Failed",
       "skipped": "Skipped",
+      "audit": "View in audit log",
       "close": "Close results"
     }
   }

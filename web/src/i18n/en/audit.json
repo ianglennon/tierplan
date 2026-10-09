@@ -24,6 +24,8 @@
       "actionCount_other": "{{count}} actions",
       "range": "Time range",
       "clear": "Clear filters",
+      "bulkChip": "Bulk operation {{id}}",
+      "bulkRemove": "Remove bulk filter",
       "customSummary": "{{from}} to {{to}}",
       "customOpenEnded": "Pick days",
       "customDialog": "Choose the first and last day. Both days are included.",

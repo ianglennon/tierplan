@@ -290,12 +290,14 @@ WHERE (CAST(?1 AS TEXT) = '' OR a.actor_name = ?1)
   AND (json_array_length(?2) = 0 OR a.action IN (SELECT value FROM json_each(?2)))
   AND (CAST(?3 AS INTEGER) = 0 OR a.ts >= ?3)
   AND (CAST(?4 AS INTEGER) = 0 OR a.ts <= ?4)
-  AND (CAST(?5 AS INTEGER) = 0 OR a.seq < ?5)
-  AND (CAST(?6 AS INTEGER) = 0
-       OR (CAST(?7 AS INTEGER) = 1 AND a.env_id IS NOT NULL)
-       OR a.env_id IN (SELECT value FROM json_each(CAST(?8 AS TEXT))))
+  AND (CAST(?5 AS TEXT) = ''
+       OR json_extract(a.details, '$.bulk') = ?5)
+  AND (CAST(?6 AS INTEGER) = 0 OR a.seq < ?6)
+  AND (CAST(?7 AS INTEGER) = 0
+       OR (CAST(?8 AS INTEGER) = 1 AND a.env_id IS NOT NULL)
+       OR a.env_id IN (SELECT value FROM json_each(CAST(?9 AS TEXT))))
 ORDER BY a.seq DESC
-LIMIT ?9
+LIMIT ?10
 `
 
 type ListAuditPageParams struct {
@@ -303,6 +305,7 @@ type ListAuditPageParams struct {
 	Actions interface{}
 	FromTs  int64
 	ToTs    int64
+	Bulk    string
 	Cursor  int64
 	Scoped  int64
 	AnyEnv  int64
@@ -339,6 +342,9 @@ type ListAuditPageRow struct {
 // environment when any_env is set; an entry with no environment, an instance-level
 // event, never matches. The scope is part of the WHERE clause, so it applies
 // before the cursor and the limit and a page is never short of entries.
+// bulk is the bulk-operation ID of the container actions (D-14), compared to the
+// bulk detail of an entry on a fixed JSON path; empty means every entry. Like the
+// other filters it is ANDed with the scope clause, before the cursor and limit.
 // actor_deleted is a display-time join to the user tombstone (D-22c): the signed
 // row is never rewritten when a user is deleted.
 func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([]ListAuditPageRow, error) {
@@ -347,6 +353,7 @@ func (q *Queries) ListAuditPage(ctx context.Context, arg ListAuditPageParams) ([
 		arg.Actions,
 		arg.FromTs,
 		arg.ToTs,
+		arg.Bulk,
 		arg.Cursor,
 		arg.Scoped,
 		arg.AnyEnv,
