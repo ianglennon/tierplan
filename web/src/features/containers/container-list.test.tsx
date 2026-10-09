@@ -941,7 +941,7 @@ describe("container list: stopping from the bulk bar", () => {
         .getAllByRole("row")
         .slice(1)
         .map((r) => r.textContent),
-    ).toEqual(["loose", "shop-web"]);
+    ).toEqual(["loose", "shop-webPart of project shop"]);
     expect(actionPosts).toEqual([]);
   });
 
@@ -1127,7 +1127,7 @@ describe("container list: every bulk action", () => {
     expect(rows.map((r) => r.textContent)).toEqual([
       "loose",
       "shop-dbNot running, skipped",
-      "shop-web",
+      "shop-webPart of project shop",
     ]);
     const confirm = within(dialog).getByRole("button", { name: "Kill 2 containers" });
     expect(confirm.className).toContain("bg-destructive-fill");
@@ -1178,14 +1178,14 @@ describe("container list: every bulk action", () => {
     expect(await screen.findByText("Stopped 1, 1 failed")).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Details" }));
     const results = await screen.findByRole("dialog", { name: "Stop results" });
-    expect(
-      within(results).getByText("This host's agent needs an update", { selector: "*" }),
-    ).toBeTruthy();
+    expect(within(results).getByRole("alert").textContent).toContain(
+      "This host's agent needs an update",
+    );
     expect(
       within(results)
         .getAllByRole("row")
         .slice(1)
-        .map((r) => r.cells[0]?.textContent),
+        .map((r) => (r as HTMLTableRowElement).cells[0]?.textContent),
     ).toEqual(["loose", "shop-web"]);
   });
 });

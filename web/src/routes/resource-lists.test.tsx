@@ -239,16 +239,16 @@ describe("containers list", () => {
     await screen.findByRole("heading", { name: "Containers" });
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
     // The last column is the row menu; its header is for assistive technology only.
-    expect(headers).toEqual(["Name", "State", "Image", "Ports", "Created", "Actions"]);
+    expect(headers).toEqual(["", "Name", "State", "Image", "Ports", "Created", "Actions"]);
     const rows = (await screen.findAllByRole("row")).slice(1);
     expect(rows).toHaveLength(3);
-    const first = cellsOf(rows[0] as HTMLElement);
+    const first = cellsOf(rows[0] as HTMLElement).slice(1);
     expect(first[0]).toContain("bayplan");
     expect(first[1]).toBe("Running");
     expect(first[2]).toBe("ghcr.io/ianglennon/bayplan:latest");
     expect(first[3]).toBe("0.0.0.0:7480->7480/tcp");
     expect(first[4]).toBe("3 h ago");
-    const names = rows.map((r) => cellsOf(r as HTMLElement)[0]);
+    const names = rows.map((r) => cellsOf(r as HTMLElement)[1]);
     expect(names[0]).toContain("bayplan");
     expect(names[1]).toContain("db");
     expect(names[2]).toContain("old-job");
@@ -259,27 +259,27 @@ describe("containers list", () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[0] as HTMLElement)[0]).toContain("Bayplan (this instance)");
-    expect(cellsOf(rows[1] as HTMLElement)[0]).not.toContain("Bayplan (this instance)");
+    expect(cellsOf(rows[0] as HTMLElement).slice(1)[0]).toContain("Bayplan (this instance)");
+    expect(cellsOf(rows[1] as HTMLElement).slice(1)[0]).not.toContain("Bayplan (this instance)");
   });
 
   it("pairs every state dot with its text and renders a dash for a missing created time and no ports", async () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[1] as HTMLElement)[1]).toBe("Restarting");
-    const last = cellsOf(rows[2] as HTMLElement);
+    expect(cellsOf(rows[1] as HTMLElement).slice(1)[1]).toBe("Restarting");
+    const last = cellsOf(rows[2] as HTMLElement).slice(1);
     expect(last[1]).toBe("Exited");
     expect(last[4]).toBe("—");
     expect(last[3]).toBe("—");
-    expect(cellsOf(rows[1] as HTMLElement)[3]).toBe("5432/tcp, 5433/tcp");
+    expect(cellsOf(rows[1] as HTMLElement).slice(1)[3]).toBe("5432/tcp, 5433/tcp");
   });
 
-  it("has no checkboxes or links in the table, and its only buttons are the closed row action menus (D-56, plan 04-01)", async () => {
+  it("has a checkbox for each row and one for all, no links, and its only other buttons are the closed row action menus (D-56, plan 04-08)", async () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const table = screen.getByRole("table");
-    expect(within(table).queryByRole("checkbox")).toBeNull();
+    expect(within(table).getAllByRole("checkbox")).toHaveLength(4);
     expect(within(table).queryByRole("link")).toBeNull();
     expect(within(table).queryByRole("menu")).toBeNull();
     // The sortable headers are buttons too (plan 04-07); the rows hold only menus.
@@ -287,7 +287,10 @@ describe("containers list", () => {
       .getAllByRole("button")
       .filter((b) => b.closest("td"));
     expect(buttons.length).toBeGreaterThan(0);
-    for (const b of buttons) expect(b.getAttribute("aria-label")).toMatch(/^Actions for /);
+    for (const b of buttons) {
+      if (b.getAttribute("role") === "checkbox") continue;
+      expect(b.getAttribute("aria-label")).toMatch(/^Actions for /);
+    }
   });
 
   it("sets the tab title to the resource and the instance name", async () => {
@@ -550,11 +553,11 @@ describe("swarm lists", () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("web.1");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(headers).toEqual(["Name", "Node", "State", "Image", "Ports", "Created", "Actions"]);
+    expect(headers).toEqual(["", "Name", "Node", "State", "Image", "Ports", "Created", "Actions"]);
     const rows = screen.getAllByRole("row").slice(1);
     // The page sorts by name, whatever order the server sent.
-    expect(cellsOf(rows[0] as HTMLElement).slice(0, 2)).toEqual(["db", "n3"]);
-    expect(cellsOf(rows[2] as HTMLElement).slice(0, 2)).toEqual(["web.2", "n2"]);
+    expect(cellsOf(rows[0] as HTMLElement).slice(1, 3)).toEqual(["db", "n3"]);
+    expect(cellsOf(rows[2] as HTMLElement).slice(1, 3)).toEqual(["web.2", "n2"]);
     expect(screen.getByText("3 containers across 3 nodes")).toBeTruthy();
     expect(
       screen.getByText("1 node isn't reporting: n4. The totals below leave it out."),
@@ -572,7 +575,7 @@ describe("swarm lists", () => {
     const header = screen.getByRole("columnheader", { name: "Node" });
     expect(header.className).toContain("w-56");
     expect(header.className).toContain("min-w-56");
-    const cell = within(screen.getAllByRole("row")[1] as HTMLElement).getAllByRole("cell")[1];
+    const cell = within(screen.getAllByRole("row")[1] as HTMLElement).getAllByRole("cell")[2];
     expect(cell?.className).toContain("w-56");
   });
 
@@ -835,7 +838,7 @@ describe("swarm lists", () => {
       renderAt("/env/e1/containers?group=none");
       await screen.findAllByText("web");
       rows = screen.getAllByRole("row").slice(1);
-      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[2])).toEqual(["n1", "n2"]);
       expect(sameKeyWarningsOf(spy)).toEqual([]);
     } finally {
       spy.mockRestore();

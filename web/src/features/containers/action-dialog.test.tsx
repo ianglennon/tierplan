@@ -443,9 +443,11 @@ describe("ActionDialog remove", () => {
     me = makeMe({ envs: { [ENV]: "operator" }, extras: { [ENV]: ["volumes.delete"] } });
     mount([row("web", { state: "exited" })], { verb: "remove" });
     const dialog = await dialogOf("Remove web?");
-    const volumes = within(dialog).getByRole("checkbox", { name: "Also remove anonymous volumes" });
-    await waitFor(() => expect(volumes.getAttribute("aria-disabled")).not.toBe("true"));
-    fireEvent.click(volumes);
+    const volumes = () =>
+      within(dialog).getByRole("checkbox", { name: "Also remove anonymous volumes" });
+    // Once the permissions are known the checkbox is rebuilt without its reason.
+    await waitFor(() => expect(volumes().getAttribute("aria-disabled")).not.toBe("true"));
+    fireEvent.click(volumes());
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove container" }));
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(body().removeVolumes).toBe(true);
@@ -520,7 +522,7 @@ describe("ActionDialog warnings for swarm tasks and projects", () => {
     const notes = within(dialog)
       .getAllByRole("row")
       .slice(1)
-      .map((r) => r.cells[1]?.textContent);
+      .map((r) => (r as HTMLTableRowElement).cells[1]?.textContent);
     expect(notes).toEqual([
       "Task of service a",
       "Task of service b",
@@ -648,7 +650,7 @@ describe("ActionDialog results", () => {
     const rows = within(results)
       .getAllByRole("row")
       .slice(1)
-      .map((r) => [...r.cells].map((c) => c.textContent));
+      .map((r) => [...(r as HTMLTableRowElement).cells].map((c) => c.textContent));
     expect(rows).toEqual([
       ["a", "node-1", "Done", "—"],
       ["b", "node-2", "Failed", "node-2 isn't reachable right now. Try again when it's back."],

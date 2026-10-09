@@ -12,22 +12,22 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Spinner } from "@/components/ui/spinner";
-import { ActionDialog, reasonOf, requestReasonOf } from "@/features/containers/action-dialog";
+import {
+  ActionDialog,
+  type DialogVerb,
+  reasonOf,
+  requestReasonOf,
+} from "@/features/containers/action-dialog";
+import type { BulkReport } from "@/features/containers/bulk-result-dialog";
+import { eligibleFor, ownKind } from "@/features/containers/eligibility";
 import { pendingFingerprint, pendingKey, usePendingApi } from "@/features/containers/pending";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
-
-// The states a container can be started from, and stopped from (UI-SPEC
-// eligibility). Any other state (removing, dead) offers neither.
-const STARTABLE: ReadonlySet<string> = new Set(["exited", "created"]);
-const STOPPABLE: ReadonlySet<string> = new Set(["running", "restarting", "paused"]);
-const RESTARTABLE: ReadonlySet<string> = new Set(["running", "exited", "paused", "restarting"]);
-const PAUSABLE: ReadonlySet<string> = new Set(["running"]);
-const UNPAUSABLE: ReadonlySet<string> = new Set(["paused"]);
 
 // The actions that need no confirmation, with the words of their toast.
 type ImmediateAction = "start" | "restart" | "pause" | "unpause";
@@ -47,28 +47,37 @@ interface ContainerRowActionsProps {
   onOpenChange?: (open: boolean) => void;
   // The row is gone from the list but still shown: the button is off.
   disabled?: boolean;
+  // Called with the report when the person asks for the details of a bulk; a
+  // single container never has one, so this is for the dialog's own sake.
+  onDetails?: (report: BulkReport) => void;
 }
 
 // ContainerRowActions is the row menu of the containers list: the actions that
 // fit the container's state (D-06, D-07). Start, Restart, Pause and Unpause run
-// at once; Stop asks first. A caller without containers.control sees the item disabled,
-// with the reason (D-19); the server decides either way.
+// at once; Stop, Kill and Remove ask first, and so does any action on one of
+// Bayplan's own containers (D-11). A caller without the permission sees the item
+// disabled, with the reason (D-19); the server decides either way.
 export function ContainerRowActions({
   envId,
   row,
   onOpenChange,
   disabled,
+  onDetails,
 }: ContainerRowActionsProps) {
   const t = useT();
   const needs = useNeeds("containers.control", envId);
+  const removeNeeds = useNeeds("containers.remove", envId);
   const mutation = useContainerAction(envId);
   const pend = usePendingApi();
-  const [stopOpen, setStopOpen] = useState(false);
+  // The dialog of the action chosen. The verb stays after it closes so the
+  // dialog does not change its words while it fades.
+  const [dialogVerb, setDialogVerb] = useState<DialogVerb>("stop");
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const report = useRef(onOpenChange);
   report.current = onOpenChange;
-  const open = menuOpen || stopOpen;
+  const open = menuOpen || dialogOpen;
   useEffect(() => {
     report.current?.(open);
   }, [open]);
@@ -83,17 +92,25 @@ export function ContainerRowActions({
   // button before the dialog has opened.
   const chose = useRef(false);
 
-  const canStart = STARTABLE.has(row.state);
-  const canStop = STOPPABLE.has(row.state);
-  const canRestart = RESTARTABLE.has(row.state);
-  const canPause = PAUSABLE.has(row.state);
-  const canUnpause = UNPAUSABLE.has(row.state);
-  if (!canStart && !canStop && !canRestart && !canPause && !canUnpause) return null;
+  const canStart = eligibleFor("start", row);
+  const canStop = eligibleFor("stop", row);
+  const canRestart = eligibleFor("restart", row);
+  const canPause = eligibleFor("pause", row);
+  const canUnpause = eligibleFor("unpause", row);
+  const canKill = eligibleFor("kill", row);
+  const canRemove = eligibleFor("remove", row);
+  if (!canStart && !canStop && !canRestart && !canPause && !canUnpause && !canKill && !canRemove)
+    return null;
+  // One of Bayplan's own containers asks for its name before it is stopped,
+  // killed, restarted, paused or removed; start and unpause need no more care.
+  const own = ownKind(row) !== "";
 
   // Unavailable: the reason when the caller's role is short or the host is
   // read-only, and just unavailable while the role is not yet known.
   const unavailable = !needs.allowed || row.readOnly;
   const reason = needs.reason ?? (row.readOnly ? t("actions.readOnlyHost") : undefined);
+  const removeUnavailable = !removeNeeds.allowed || row.readOnly;
+  const removeReason = removeNeeds.reason ?? (row.readOnly ? t("actions.readOnlyHost") : undefined);
   const busy = mutation.isPending;
 
   // Start, restart, pause and unpause run at once: each is reversible, and
@@ -123,10 +140,20 @@ export function ContainerRowActions({
     }
   }
 
-  const item = (label: string, onSelect: () => void) => (
+  function ask(verb: DialogVerb) {
+    setDialogVerb(verb);
+    setDialogOpen(true);
+  }
+
+  const item = (
+    label: string,
+    onSelect: () => void,
+    opts: { remove?: boolean; destructive?: boolean } = {},
+  ) => (
     <DropdownMenuItem
       className="max-md:min-h-11"
-      disabled={unavailable && !reason}
+      variant={opts.destructive ? "destructive" : "default"}
+      disabled={opts.remove ? removeUnavailable && !removeReason : unavailable && !reason}
       onSelect={() => {
         if (busy) return;
         chose.current = true;
@@ -168,17 +195,17 @@ export function ContainerRowActions({
           ) : null}
           {canStop ? (
             <NeedsTooltip reason={reason}>
-              {item(t("actions.menu.stop"), () => setStopOpen(true))}
+              {item(t("actions.menu.stop"), () => ask("stop"))}
             </NeedsTooltip>
           ) : null}
           {canRestart ? (
             <NeedsTooltip reason={reason}>
-              {item(t("actions.menu.restart"), () => void run("restart"))}
+              {item(t("actions.menu.restart"), () => (own ? ask("restart") : void run("restart")))}
             </NeedsTooltip>
           ) : null}
           {canPause ? (
             <NeedsTooltip reason={reason}>
-              {item(t("actions.menu.pause"), () => void run("pause"))}
+              {item(t("actions.menu.pause"), () => (own ? ask("pause") : void run("pause")))}
             </NeedsTooltip>
           ) : null}
           {canUnpause ? (
@@ -186,15 +213,33 @@ export function ContainerRowActions({
               {item(t("actions.menu.unpause"), () => void run("unpause"))}
             </NeedsTooltip>
           ) : null}
+          {(canKill || canRemove) &&
+          (canStart || canStop || canRestart || canPause || canUnpause) ? (
+            <DropdownMenuSeparator />
+          ) : null}
+          {canKill ? (
+            <NeedsTooltip reason={reason}>
+              {item(t("actions.menu.kill"), () => ask("kill"), { destructive: true })}
+            </NeedsTooltip>
+          ) : null}
+          {canRemove ? (
+            <NeedsTooltip reason={removeReason}>
+              {item(t("actions.menu.remove"), () => ask("remove"), {
+                remove: true,
+                destructive: true,
+              })}
+            </NeedsTooltip>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
       <ActionDialog
         envId={envId}
-        verb="stop"
+        verb={dialogVerb}
         rows={[row]}
-        open={stopOpen}
-        onClose={() => setStopOpen(false)}
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
         onClosed={() => button.current?.focus()}
+        onDetails={onDetails}
       />
     </>
   );

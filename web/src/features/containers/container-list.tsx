@@ -29,10 +29,13 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ActionDialog,
+  type DialogVerb,
+  reportOf,
   requestReasonOf,
   toastBulk,
   useBulkRunner,
 } from "@/features/containers/action-dialog";
+import { type BulkReport, BulkResultDialog } from "@/features/containers/bulk-result-dialog";
 import { ContainerStateCell } from "@/features/containers/container-state-cell";
 import { eligibleFor, ownKind, type Verb } from "@/features/containers/eligibility";
 import { groupContainers, sortContainers } from "@/features/containers/group";
@@ -457,6 +460,7 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
           row={c}
           disabled={rowStates.get(rowKeyOf(c))?.removed || pending.has(rowKeyOf(c))}
           onOpenChange={(open) => setRowOpen(rowKeyOf(c), open)}
+          onDetails={setReport}
         />
       ),
     },
@@ -492,38 +496,43 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
 
   const selectedRows = shownRows.filter((r) => selection.isSelected(rowKeyOf(r)));
   const canControl = useNeeds("containers.control", envId);
+  const canRemove = useNeeds("containers.remove", envId);
 
   // The reason a bulk button cannot be used: the caller's role, or no chosen row
   // it applies to.
   function reasonFor(verb: Verb): string | undefined {
-    if (!canControl.allowed) return canControl.reason ?? t("needs.role.operator");
+    const need = verb === "remove" ? canRemove : canControl;
+    if (!need.allowed) return need.reason ?? t("needs.role.operator");
     if (!selectedRows.some((r) => eligibleFor(verb, r, { bulk: true })))
       return t("actions.bulk.none", { verb: t(`actions.bulk.can.${verb}`) });
     return undefined;
   }
 
-  // Start runs at once on the rows it applies to, and sums up in one toast.
-  async function runNow(verb: "start") {
+  // The results a person asked to see from a toast's Details.
+  const [report, setReport] = useState<BulkReport | null>(null);
+
+  // Start, Restart, Pause and Unpause run at once on the rows they apply to, and
+  // sum up in one toast (D-06, D-07).
+  async function runNow(verb: "start" | "restart" | "pause" | "unpause") {
     const targets = selectedRows.filter((r) => eligibleFor(verb, r, { bulk: true }));
     try {
       const results = await runner.run(verb, targets);
-      toastBulk(t, verb, results, selectedRows.length - targets.length);
+      toastBulk(t, reportOf(t, verb, selectedRows, targets, results), setReport);
       selection.clear();
     } catch (err) {
       toastError(requestReasonOf(t, err));
     }
   }
 
-  const [dialog, setDialog] = useState<{ verb: "stop"; rows: ContainerRow[] }>({
+  // Stop, Kill and Remove ask first, with every chosen container listed. The
+  // ones the action does not apply to are listed too, as skipped.
+  const [dialog, setDialog] = useState<{ verb: DialogVerb; rows: ContainerRow[] }>({
     verb: "stop",
     rows: [],
   });
   const [dialogOpen, setDialogOpen] = useState(false);
-  function openDialog(verb: "stop") {
-    setDialog({
-      verb,
-      rows: selectedRows.filter((r) => eligibleFor(verb, r, { bulk: true })),
-    });
+  function openDialog(verb: DialogVerb) {
+    setDialog({ verb, rows: selectedRows });
     setDialogOpen(true);
   }
 
@@ -539,6 +548,38 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
       label: t("actions.bulk.stop"),
       reason: reasonFor("stop"),
       onClick: () => openDialog("stop"),
+    },
+    {
+      id: "restart",
+      label: t("actions.bulk.restart"),
+      reason: reasonFor("restart"),
+      onClick: () => void runNow("restart"),
+    },
+    {
+      id: "pause",
+      label: t("actions.bulk.pause"),
+      reason: reasonFor("pause"),
+      onClick: () => void runNow("pause"),
+    },
+    {
+      id: "unpause",
+      label: t("actions.bulk.unpause"),
+      reason: reasonFor("unpause"),
+      onClick: () => void runNow("unpause"),
+    },
+    {
+      id: "kill",
+      label: t("actions.bulk.kill"),
+      reason: reasonFor("kill"),
+      destructive: true,
+      onClick: () => openDialog("kill"),
+    },
+    {
+      id: "remove",
+      label: t("actions.bulk.remove"),
+      reason: reasonFor("remove"),
+      destructive: true,
+      onClick: () => openDialog("remove"),
     },
   ];
 
@@ -644,7 +685,9 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
         onDone={selection.clear}
+        onDetails={setReport}
       />
+      <BulkResultDialog envId={envId} report={report} onClose={() => setReport(null)} />
       <ResourceTable
         resource="containers"
         columns={columns}
