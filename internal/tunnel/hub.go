@@ -201,6 +201,9 @@ type Session struct {
 	// is the cap on one Docker answer that is not the events feed.
 	streams     chan struct{}
 	maxResponse int64
+	// interactive holds one token per log follow or shell in flight, which is
+	// also in streams; it keeps them to MaxInteractiveStreams of its 64.
+	interactive chan struct{}
 
 	// denyLimit spends one token per audited policy denial, and suppressed counts
 	// the denials since the last audited one that were not written (D-29).

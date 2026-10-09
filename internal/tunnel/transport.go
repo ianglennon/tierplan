@@ -78,11 +78,20 @@ type streamConn struct {
 
 	// read counts the bytes received for the exchange in progress, and is reset
 	// when the next request is written, so a keep-alive connection is capped per
-	// answer and not for its lifetime. uncapped is set for the events feed.
+	// answer and not for its lifetime. uncapped is set for the events feed, a log
+	// follow and an exec, which are meant to outlast any cap.
 	read     atomic.Int64
 	uncapped atomic.Bool
 	tooLarge atomic.Bool
 	released sync.Once
+
+	// mu guards holding: whether this connection holds one of the session's
+	// interactive slots, which it takes when a log follow or an exec starts and
+	// gives back when a request of another kind follows on the connection or the
+	// connection closes, exactly once either way.
+	mu      sync.Mutex
+	holding bool
+	closed  bool
 }
 
 func (c *streamConn) Read(p []byte) (int, error) {
@@ -100,19 +109,51 @@ func (c *streamConn) Read(p []byte) (int, error) {
 }
 
 func (c *streamConn) Write(p []byte) (int, error) {
-	// Each request starts a new exchange; the events feed is the one answer that
-	// is meant to be endless.
-	if events, ok := startsEventsRequest(p); ok {
+	// Each request starts a new exchange. The events feed, a log follow and an exec
+	// are the answers that are meant to be endless; the last two also take a slot of
+	// the session's interactive budget, and a full budget fails the write with
+	// ErrBusy before anything of the request is sent.
+	if kind, ok := startsStreamRequest(p); ok {
+		if err := c.enter(kind); err != nil {
+			return 0, err
+		}
 		c.read.Store(0)
-		c.uncapped.Store(events)
+		c.uncapped.Store(kind.uncapped())
 	}
 	n, err := c.Conn.Write(p)
 	return n, c.s.mark(err)
 }
 
-// Close closes the stream and frees its slot in the session's budget.
+// enter moves the connection's interactive slot to what the next request needs.
+func (c *streamConn) enter(kind streamKind) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case kind.interactive() && !c.holding:
+		if c.closed {
+			return net.ErrClosed
+		}
+		if !c.s.acquireInteractive() {
+			return fmt.Errorf("agent %s: %w (%d log follows and shells are open)", c.s.AgentID, ErrBusy, MaxInteractiveStreams)
+		}
+		c.holding = true
+	case !kind.interactive() && c.holding:
+		c.holding = false
+		c.s.releaseInteractive()
+	}
+	return nil
+}
+
+// Close closes the stream and frees its slots in the session's budgets.
 func (c *streamConn) Close() error {
 	err := c.Conn.Close()
+	c.mu.Lock()
+	c.closed = true
+	if c.holding {
+		c.holding = false
+		c.s.releaseInteractive()
+	}
+	c.mu.Unlock()
 	c.released.Do(c.s.releaseStream)
 	return err
 }
