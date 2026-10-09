@@ -45,7 +45,7 @@ func FuzzAllowed(f *testing.F) {
 		f.Add(s.method, s.path, s.query, s.body, s.upgrade, s.ro)
 	}
 	f.Fuzz(func(t *testing.T, method, rawPath, rawQuery string, hasBody, hasUpgrade, readOnly bool) {
-		ok, reason := Allowed(method, rawPath, rawQuery, hasBody, hasUpgrade, Policy{ReadOnly: readOnly})
+		ok, reason, _ := Allowed(method, rawPath, rawQuery, hasBody, hasUpgrade, Policy{ReadOnly: readOnly})
 		if !ok {
 			if reason != "allowlist" && reason != "read_only_flag" {
 				t.Fatalf("a refusal with the reason %q", reason)

@@ -184,7 +184,10 @@ func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *test
 		{"a body on a GET", request("GET", "/info", "Content-Length: 2\r\n") + "{}", "agent_policy_denied: GET /info"},
 		{"a chunked GET", request("GET", "/info", "Transfer-Encoding: chunked\r\n") + "0\r\n\r\n", "agent_policy_denied: GET /info"},
 		{"an absolute-form target", "GET http://docker/info HTTP/1.1\r\nHost: docker\r\n\r\n", "agent_policy_denied: GET http://docker/info"},
-		{"a delete", request("DELETE", "/containers/abc"), "agent_policy_denied: DELETE /containers/abc"},
+		{"a delete with the legacy link key", request("DELETE", "/containers/abc?link=1"), "agent_policy_denied: DELETE /containers/abc"},
+		{"attach to a container", request("POST", "/containers/abc/attach"), "agent_policy_denied: POST /containers/abc/attach"},
+		{"the file archive of a container", get("/containers/abc/archive"), "agent_policy_denied: GET /containers/abc/archive"},
+		{"a delete of an image", request("DELETE", "/images/abc"), "agent_policy_denied: DELETE /images/abc"},
 		{"a longer path under an allowed one", get("/containers/json/extra"), "agent_policy_denied: GET /containers/json/extra"},
 		{"a trailing slash", get("/info/"), "agent_policy_denied: GET /info/"},
 		{"an upper-case path", get("/INFO"), "agent_policy_denied: GET /INFO"},
@@ -309,7 +312,7 @@ func TestReadOnlyRefusesEveryChangeWhateverTheAllowlistSays(t *testing.T) {
 		{name: "a body on a GET", method: "GET", path: "/info", hasBody: true, wantReason: "allowlist"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, reason := Allowed(tc.method, tc.path, "", tc.hasBody, tc.upgra, tc.policy)
+			ok, reason, _ := Allowed(tc.method, tc.path, "", tc.hasBody, tc.upgra, tc.policy)
 			if ok != tc.wantOK || reason != tc.wantReason {
 				t.Fatalf("Allowed = %v %q, want %v %q", ok, reason, tc.wantOK, tc.wantReason)
 			}
@@ -344,7 +347,7 @@ func TestAllowedRejectsTheTrickyPaths(t *testing.T) {
 		{"a unicode look-alike", "/info\u2215x", ""},
 	} {
 		for _, readOnly := range []bool{false, true} {
-			if ok, _ := Allowed("GET", tc.path, tc.query, false, false, Policy{ReadOnly: readOnly}); ok {
+			if ok, _, _ := Allowed("GET", tc.path, tc.query, false, false, Policy{ReadOnly: readOnly}); ok {
 				t.Errorf("%s: %q?%q was allowed (read-only %v)", tc.name, tc.path, tc.query, readOnly)
 			}
 		}
@@ -352,7 +355,7 @@ func TestAllowedRejectsTheTrickyPaths(t *testing.T) {
 	// And the plain forms of the same paths are allowed, so the table tests the
 	// trick and not the path.
 	for _, p := range []string{"/info", "/v1.47/info", "/_ping", "/containers/json", "/v1.52/events"} {
-		if ok, reason := Allowed("GET", p, "all=1", false, false, Policy{}); !ok {
+		if ok, reason, _ := Allowed("GET", p, "all=1", false, false, Policy{}); !ok {
 			t.Errorf("%s was refused (%s)", p, reason)
 		}
 	}
@@ -501,14 +504,14 @@ func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
 		{"the images inspect is not opened", "GET", "/images/abc/json", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, _ := Allowed(tc.method, tc.path, "", false, false, Policy{})
+			ok, _, _ := Allowed(tc.method, tc.path, "", false, false, Policy{})
 			if ok != tc.wantOK {
 				t.Fatalf("Allowed(%s %q) = %v, want %v", tc.method, tc.path, ok, tc.wantOK)
 			}
 		})
 	}
 	// A read-only host still refuses the POST, whatever the allowlist grew to.
-	if ok, reason := Allowed("POST", "/containers/abc/json", "", false, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+	if ok, reason, _ := Allowed("POST", "/containers/abc/json", "", false, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
 		t.Errorf("a POST of an inspect on a read-only host = %v %q, want refused read_only_flag", ok, reason)
 	}
 }
