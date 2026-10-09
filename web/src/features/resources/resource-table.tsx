@@ -6,8 +6,10 @@ import type { ReactNode } from "react";
 import { Fragment, useId } from "react";
 
 import { CLUSTER_NODE } from "@/api/resources";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Label } from "@/components/ui/label";
 import {
@@ -73,6 +75,18 @@ export interface RowState {
   leaving?: boolean;
 }
 
+// The leading checkbox column of a list that can be acted on in bulk (D-05).
+// The owner draws the checkboxes (SelectCheckbox) so it can decide which rows
+// can be chosen; the table gives them a 44px column of their own and clears the
+// selection on Escape.
+export interface TableSelect<T> {
+  // The header checkbox: "Select all containers".
+  header: ReactNode;
+  cell: (row: T) => ReactNode;
+  // Called on Escape from inside the table, with no menu or dialog taking it.
+  onEscape?: () => void;
+}
+
 export interface TableGroups<T> {
   items: TableGroup<T>[];
   collapse: GroupCollapse;
@@ -124,6 +138,10 @@ interface ResourceTableProps<T> {
   sort?: TableSort;
   // How each row is drawn, by its row key. A row with no entry is plain.
   rowStates?: ReadonlyMap<string, RowState>;
+  // The checkbox column, and the bar that replaces the caption while rows are
+  // selected.
+  select?: TableSelect<T>;
+  bulkBar?: ReactNode;
 }
 
 export interface NodeFilter {
@@ -209,6 +227,41 @@ export function NodeSelect({ value, onChange, nodes }: NodeSelectProps) {
   );
 }
 
+interface SelectCheckboxProps {
+  checked: boolean | "indeterminate";
+  // "Select web-1", "Select all containers", "Select shop".
+  label: string;
+  // Called with whether Shift was held, for a range.
+  onToggle: (shift: boolean) => void;
+  // Off for good: the row cannot be selected at all. Used for a row that is
+  // gone or waiting on an action.
+  disabled?: boolean;
+  // Off with a reason: the checkbox stays in the tab order, aria-disabled, and
+  // says why (Bayplan's own containers).
+  reason?: string;
+}
+
+// SelectCheckbox is a row, group or header checkbox. A click, Space or
+// Shift+click toggles it; the 44px hit area comes from the column, not the box.
+export function SelectCheckbox({
+  checked,
+  label,
+  onToggle,
+  disabled,
+  reason,
+}: SelectCheckboxProps) {
+  const box = (
+    <Checkbox
+      checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      className="max-md:size-5"
+      onClick={(e) => onToggle(e.shiftKey)}
+    />
+  );
+  return <NeedsTooltip reason={reason}>{box}</NeedsTooltip>;
+}
+
 // SortHeader is a column header that sorts: a button in the th, with aria-sort
 // on the th, as the environments overview does.
 function SortHeader({ label, active, dir, onClick }: SortHeaderProps) {
@@ -255,6 +308,8 @@ export function ResourceTable<T>({
   capNote,
   sort,
   rowStates,
+  select,
+  bulkBar,
 }: ResourceTableProps<T>) {
   const t = useT();
   const groupsId = useId();
@@ -266,9 +321,18 @@ export function ResourceTable<T>({
   const empty = !loading && !failed && rows.length === 0;
 
   // The Node column goes right after the first one (Name).
-  const shownColumns = nodeColumn
-    ? [...columns.slice(0, 1), nodeColumn, ...columns.slice(1)]
-    : columns;
+  const withNode = nodeColumn ? [...columns.slice(0, 1), nodeColumn, ...columns.slice(1)] : columns;
+  const shownColumns: Column<T>[] = select
+    ? [
+        {
+          id: "select",
+          header: select.header,
+          cell: select.cell,
+          className: "w-11 min-w-11 px-0 text-center",
+        },
+        ...withNode,
+      ]
+    : withNode;
   const nodes = data?.nodes ?? [];
   // The swarm-wide Cluster entry is in the filter but is not a node.
   const nodeCount = nodes.filter((n) => n !== CLUSTER_NODE).length;
@@ -316,11 +380,13 @@ export function ResourceTable<T>({
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
       <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h1 className="text-2xl font-semibold">{t(`${key}.title`)}</h1>
-        {data ? (
+        {data && !bulkBar ? (
           <span className="text-sm text-muted-foreground tabular-nums">{caption}</span>
         ) : null}
         {data ? captionExtra : null}
       </header>
+
+      {bulkBar}
 
       {banner}
 
@@ -362,7 +428,17 @@ export function ResourceTable<T>({
       {!failed && !empty ? (
         // The wrapper scrolls sideways on a phone (D-64) and, past the page
         // height, down, so the sticky header has something to stick to.
-        <div className="max-h-[calc(100dvh-14rem)] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10">
+        // biome-ignore lint/a11y/noStaticElementInteractions: it only hears Escape from the controls inside the table; the wrapper itself is not interactive
+        <div
+          className="max-h-[calc(100dvh-14rem)] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10"
+          onKeyDown={(e) => {
+            // Escape from a menu or dialog is theirs: it arrives here already
+            // handled, or from a portal outside this table.
+            if (e.key !== "Escape" || e.defaultPrevented || !select?.onEscape) return;
+            if (!e.currentTarget.contains(e.target as Node)) return;
+            select.onEscape();
+          }}
+        >
           <table
             data-slot="table"
             aria-busy={loading || undefined}

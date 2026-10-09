@@ -27,7 +27,14 @@ import {
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  ActionDialog,
+  requestReasonOf,
+  toastBulk,
+  useBulkRunner,
+} from "@/features/containers/action-dialog";
 import { ContainerStateCell } from "@/features/containers/container-state-cell";
+import { eligibleFor, ownKind, type Verb } from "@/features/containers/eligibility";
 import { groupContainers, sortContainers } from "@/features/containers/group";
 import {
   type ContainerSearch,
@@ -41,9 +48,16 @@ import {
   statusList,
   statusParam,
 } from "@/features/containers/list-search";
+import {
+  PendingContext,
+  pendingFingerprint,
+  pendingKey,
+  usePendingRows,
+} from "@/features/containers/pending";
 import { ContainerRowActions } from "@/features/containers/row-actions";
 import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { NodesBanner } from "@/features/environments/nodes-banner";
+import { type BulkAction, BulkBar } from "@/features/resources/bulk-bar";
 import { useFrozenRows } from "@/features/resources/frozen-rows";
 import { useGroupCollapse } from "@/features/resources/group-header-row";
 import {
@@ -51,12 +65,17 @@ import {
   NodeSelect,
   ResourceTable,
   type RowState,
+  SelectCheckbox,
   type TableGroup,
+  type TableSelect,
   TruncatedText,
 } from "@/features/resources/resource-table";
+import { useChosenKeys, useSelection } from "@/features/resources/selection";
 import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
+import { toastError } from "@/lib/toast";
 
 // How long the box waits after the last key before the search goes into the URL
 // and to the server (UI-SPEC "Screens": 250 ms).
@@ -176,6 +195,11 @@ function PortsCell({ ports, missing }: { ports: string[] | null; missing: string
 // How many ports show before the rest fold into "+n".
 const SHOWN_PORTS = 2;
 
+// checkedOf is a checkbox's state from a selection's: tri-state for a group.
+function checkedOf(state: "checked" | "mixed" | "unchecked"): boolean | "indeterminate" {
+  return state === "checked" ? true : state === "mixed" ? "indeterminate" : false;
+}
+
 interface ContainerListProps {
   envId: string;
   // The route's validated search, and the way to change it: a key set to
@@ -197,6 +221,7 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
   const collapse = useGroupCollapse();
 
   const node = swarm ? search.node : undefined;
+  const runner = useBulkRunner(envId);
   const query = useQuery(containersQuery(envId, { node, q: search.q, status: search.status }));
   const data = query.data;
 
@@ -228,8 +253,11 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
       return next;
     });
   }, []);
+  // Rows chosen for a bulk action also hold the list still (D-05): a row that
+  // moved between choosing it and pressing the button would be the wrong one.
+  const chosen = useChosenKeys<string>();
   const frozen = useFrozenRows(sorted, {
-    frozen: openRows.size > 0,
+    frozen: openRows.size > 0 || chosen[0].size > 0,
     getKey: rowKeyOf,
     fingerprint: fingerprintOf,
     // Rows of the previous filters, kept on screen while the new ones load, are
@@ -254,7 +282,16 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
     return out;
   }, [frozen.rows]);
 
-  const groups = useMemo<TableGroup<ContainerRow>[]>(
+  const {
+    pending,
+    api: pendingApi,
+    announcement,
+  } = usePendingRows(shownRows, {
+    getKey: pendingKey,
+    fingerprint: pendingFingerprint,
+  });
+
+  const baseGroups = useMemo<TableGroup<ContainerRow>[]>(
     () =>
       groupContainers(shownRows, by, null).map((g) => ({
         key: g.key,
@@ -277,7 +314,49 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
     [shownRows, by, t],
   );
 
-  const pending = frozen.heldCount + frozen.removedCount;
+  // Which rows can be chosen: not Bayplan's own, not gone, not waiting on an
+  // action (D-05, D-12). The order a Shift range follows is the order on screen,
+  // folded groups left out.
+  const byKey = useMemo(() => new Map(shownRows.map((r) => [rowKeyOf(r), r])), [shownRows]);
+  const orderedKeys = useMemo(
+    () =>
+      baseGroups
+        .filter((g) => !g.header || !collapse.collapsed.has(g.key))
+        .flatMap((g) => g.rows.map(rowKeyOf)),
+    [baseGroups, collapse.collapsed],
+  );
+  const selection = useSelection(
+    {
+      orderedKeys,
+      isEligible: (key) => {
+        const r = byKey.get(key);
+        return (
+          r !== undefined && ownKind(r) === "" && !rowStates.get(key)?.removed && !pending.has(key)
+        );
+      },
+    },
+    chosen,
+  );
+
+  const groups: TableGroup<ContainerRow>[] = baseGroups.map((g) =>
+    g.header
+      ? {
+          ...g,
+          header: {
+            ...g.header,
+            checkbox: (
+              <SelectCheckbox
+                checked={checkedOf(selection.groupState(g.rows.map(rowKeyOf)))}
+                label={t("actions.select.group", { name: g.header.name })}
+                onToggle={() => selection.selectGroup(g.rows.map(rowKeyOf))}
+              />
+            ),
+          },
+        }
+      : g,
+  );
+
+  const changesWaiting = frozen.heldCount + frozen.removedCount;
   const headed = groups.filter((g) => g.header).map((g) => g.key);
   const allCollapsed = headed.length > 0 && headed.every((k) => collapse.collapsed.has(k));
 
@@ -343,7 +422,11 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
         rowStates.get(rowKeyOf(c))?.removed ? (
           <span className="text-xs text-muted-foreground">{t("containers.list.removed")}</span>
         ) : (
-          <ContainerStateCell state={c.state} health={c.health} />
+          <ContainerStateCell
+            state={c.state}
+            health={c.health}
+            pending={pending.get(rowKeyOf(c))?.verb}
+          />
         ),
     },
     {
@@ -372,10 +455,90 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
         <ContainerRowActions
           envId={envId}
           row={c}
-          disabled={rowStates.get(rowKeyOf(c))?.removed}
+          disabled={rowStates.get(rowKeyOf(c))?.removed || pending.has(rowKeyOf(c))}
           onOpenChange={(open) => setRowOpen(rowKeyOf(c), open)}
         />
       ),
+    },
+  ];
+
+  // The checkbox column. A container of Bayplan's own keeps a checkbox that
+  // cannot be ticked and says why; a gone row or one waiting on an action has
+  // none to tick (D-05, D-12).
+  const select: TableSelect<ContainerRow> = {
+    header: (
+      <SelectCheckbox
+        checked={checkedOf(selection.allState)}
+        label={t("actions.select.all")}
+        disabled={selection.eligibleCount === 0}
+        onToggle={() => selection.selectAll()}
+      />
+    ),
+    cell: (c) => {
+      const key = rowKeyOf(c);
+      const own = ownKind(c) !== "";
+      return (
+        <SelectCheckbox
+          checked={selection.isSelected(key)}
+          label={t("actions.select.row", { name: c.name })}
+          disabled={!own && (Boolean(rowStates.get(key)?.removed) || pending.has(key))}
+          reason={own ? t("actions.select.own") : undefined}
+          onToggle={(shift) => selection.toggle(key, { shift })}
+        />
+      );
+    },
+    onEscape: selection.selected.size > 0 ? selection.clear : undefined,
+  };
+
+  const selectedRows = shownRows.filter((r) => selection.isSelected(rowKeyOf(r)));
+  const canControl = useNeeds("containers.control", envId);
+
+  // The reason a bulk button cannot be used: the caller's role, or no chosen row
+  // it applies to.
+  function reasonFor(verb: Verb): string | undefined {
+    if (!canControl.allowed) return canControl.reason ?? t("needs.role.operator");
+    if (!selectedRows.some((r) => eligibleFor(verb, r, { bulk: true })))
+      return t("actions.bulk.none", { verb: t(`actions.bulk.can.${verb}`) });
+    return undefined;
+  }
+
+  // Start runs at once on the rows it applies to, and sums up in one toast.
+  async function runNow(verb: "start") {
+    const targets = selectedRows.filter((r) => eligibleFor(verb, r, { bulk: true }));
+    try {
+      const results = await runner.run(verb, targets);
+      toastBulk(t, verb, results, selectedRows.length - targets.length);
+      selection.clear();
+    } catch (err) {
+      toastError(requestReasonOf(t, err));
+    }
+  }
+
+  const [dialog, setDialog] = useState<{ verb: "stop"; rows: ContainerRow[] }>({
+    verb: "stop",
+    rows: [],
+  });
+  const [dialogOpen, setDialogOpen] = useState(false);
+  function openDialog(verb: "stop") {
+    setDialog({
+      verb,
+      rows: selectedRows.filter((r) => eligibleFor(verb, r, { bulk: true })),
+    });
+    setDialogOpen(true);
+  }
+
+  const actions: BulkAction[] = [
+    {
+      id: "start",
+      label: t("actions.bulk.start"),
+      reason: reasonFor("start"),
+      onClick: () => void runNow("start"),
+    },
+    {
+      id: "stop",
+      label: t("actions.bulk.stop"),
+      reason: reasonFor("stop"),
+      onClick: () => openDialog("stop"),
     },
   ];
 
@@ -467,34 +630,58 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
   );
 
   return (
-    <ResourceTable
-      resource="containers"
-      columns={columns}
-      query={query}
-      envName={envName}
-      nodeColumn={swarm ? nodeColumn : undefined}
-      nodeFilter={swarm ? { value: node, onChange: (n) => onSearchChange({ node: n }) } : undefined}
-      banner={swarm ? <NodesBanner notReporting={data?.notReporting} /> : undefined}
-      groups={{ items: groups, collapse }}
-      toolbar={toolbar}
-      caption={
-        data && filtered
-          ? t("containers.list.caption.filtered", { n: data.total, count: data.unfilteredTotal })
-          : undefined
-      }
-      empty={empty}
-      capNote={data ? t("containers.list.cap", { total: data.total }) : undefined}
-      captionExtra={
-        <NewItemsPill
-          count={pending}
-          label={t("containers.list.changes", { count: pending })}
-          action={t("containers.list.showChanges")}
-          onClick={frozen.release}
-        />
-      }
-      sort={{ key: sortKey, dir: sortDir, onSort }}
-      rowStates={rowStates}
-      getRowKey={rowKeyOf}
-    />
+    <PendingContext.Provider value={pendingApi}>
+      <div className="sr-only" role="status">
+        {announcement
+          ? t(`actions.announce.${announcement.verb}`, { names: announcement.names.join(", ") })
+          : null}
+      </div>
+      <ActionDialog
+        envId={envId}
+        verb={dialog.verb}
+        rows={dialog.rows}
+        swarm={swarm}
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        onDone={selection.clear}
+      />
+      <ResourceTable
+        resource="containers"
+        columns={columns}
+        query={query}
+        envName={envName}
+        nodeColumn={swarm ? nodeColumn : undefined}
+        nodeFilter={
+          swarm ? { value: node, onChange: (n) => onSearchChange({ node: n }) } : undefined
+        }
+        banner={swarm ? <NodesBanner notReporting={data?.notReporting} /> : undefined}
+        groups={{ items: groups, collapse }}
+        toolbar={toolbar}
+        caption={
+          data && filtered
+            ? t("containers.list.caption.filtered", { n: data.total, count: data.unfilteredTotal })
+            : undefined
+        }
+        empty={empty}
+        capNote={data ? t("containers.list.cap", { total: data.total }) : undefined}
+        captionExtra={
+          <NewItemsPill
+            count={changesWaiting}
+            label={t("containers.list.changes", { count: changesWaiting })}
+            action={t("containers.list.showChanges")}
+            onClick={frozen.release}
+          />
+        }
+        sort={{ key: sortKey, dir: sortDir, onSort }}
+        rowStates={rowStates}
+        getRowKey={rowKeyOf}
+        select={select}
+        bulkBar={
+          selection.selected.size > 0 ? (
+            <BulkBar count={selection.selected.size} actions={actions} onClear={selection.clear} />
+          ) : undefined
+        }
+      />
+    </PendingContext.Provider>
   );
 }

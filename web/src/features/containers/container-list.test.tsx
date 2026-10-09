@@ -4,10 +4,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { type ContainerRow, listKey } from "@/api/resources";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ContainerList } from "@/features/containers/container-list";
 import {
@@ -65,6 +67,21 @@ let urls: string[];
 let changes: ContainerSearchPatch[];
 let client: QueryClient;
 let envType: "standalone" | "swarm";
+// The writes the list sent, and what the server answers to one.
+let actionPosts: { path: string; body: { targets: { id: string }[]; [k: string]: unknown } }[];
+let actionAnswer: (req: (typeof actionPosts)[number]) => Response | Promise<Response>;
+
+function allDone(req: (typeof actionPosts)[number]) {
+  return Response.json({
+    bulkId: "018f0000-0000-7000-8000-000000000001",
+    results: req.body.targets.map((t) => ({
+      nodeId: "n1",
+      id: t.id,
+      name: t.id.replace("id-", ""),
+      result: "done",
+    })),
+  });
+}
 
 function body(items: ContainerRow[], extra: Record<string, unknown> = {}) {
   return {
@@ -82,6 +99,8 @@ function body(items: ContainerRow[], extra: Record<string, unknown> = {}) {
 beforeEach(() => {
   urls = [];
   changes = [];
+  actionPosts = [];
+  actionAnswer = allDone;
   envType = "standalone";
   answer = () => Response.json(body(ROWS));
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -99,6 +118,11 @@ beforeEach(() => {
         });
       if (url.pathname === `/api/env/${ENV}/summary`)
         return Response.json({ environment: { id: ENV, type: envType } });
+      if (url.pathname.startsWith(`/api/env/${ENV}/containers/`) && req.method === "POST") {
+        const entry = { path: url.pathname, body: await req.clone().json() };
+        actionPosts.push(entry);
+        return actionAnswer(entry);
+      }
       if (url.pathname === `/api/env/${ENV}/containers`) {
         urls.push(`${url.pathname}${url.search}`);
         return answer(url);
@@ -109,6 +133,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  toast.dismiss();
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -134,6 +159,7 @@ function mount(initial: ContainerSearch = {}) {
     <QueryClientProvider client={client}>
       <TooltipProvider>
         <Harness initial={initial} />
+        <Toaster />
       </TooltipProvider>
     </QueryClientProvider>,
   );
@@ -192,7 +218,7 @@ describe("container list: groups", () => {
     const names = screen
       .getAllByRole("row")
       .slice(1)
-      .map((r) => r.querySelector("td")?.textContent);
+      .map((r) => r.querySelectorAll("td")[1]?.textContent);
     expect(names).toEqual(["blog", "loose", "shop-db", "shop-web"]);
   });
 
@@ -538,6 +564,7 @@ describe("container list: columns and cells", () => {
     mount({ group: "none" });
     await screen.findByText("shop-web");
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "",
       "Name",
       "State",
       "Image",
@@ -552,6 +579,7 @@ describe("container list: columns and cells", () => {
     mount({ group: "none" });
     await screen.findByText("shop-web");
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "",
       "Name",
       "Node",
       "State",
@@ -576,7 +604,7 @@ describe("container list: columns and cells", () => {
     await screen.findByText("sick");
     const cellOf = (name: string) => {
       const tr = screen.getByText(name).closest("tr") as HTMLElement;
-      return within(tr).getAllByRole("cell")[1]?.textContent;
+      return within(tr).getAllByRole("cell")[2]?.textContent;
     };
     expect(cellOf("ok")).toBe("Running");
     expect(cellOf("sick")).toBe("RunningUnhealthy");
@@ -614,7 +642,7 @@ describe("container list: columns and cells", () => {
     mount({ group: "none" });
     await screen.findByText("many");
     const portsOf = (name: string) =>
-      within(screen.getByText(name).closest("tr") as HTMLElement).getAllByRole("cell")[3];
+      within(screen.getByText(name).closest("tr") as HTMLElement).getAllByRole("cell")[4];
     expect(portsOf("many")?.textContent).toBe("80/tcp, 443/tcp+2");
     expect(within(portsOf("many") as HTMLElement).getByText("+2")).toBeTruthy();
     expect(portsOf("two")?.textContent).toBe("80/tcp, 443/tcp");
@@ -629,8 +657,8 @@ describe("container list: columns and cells", () => {
     const cells = within(screen.getByText("bare").closest("tr") as HTMLElement).getAllByRole(
       "cell",
     );
-    expect(cells[2]?.textContent).toBe("\u2014");
-    expect(cells[4]?.textContent).toBe("\u2014");
+    expect(cells[3]?.textContent).toBe("\u2014");
+    expect(cells[5]?.textContent).toBe("\u2014");
   });
 
   it("gives the Name column a 200px minimum and keeps long names to one line", async () => {
@@ -649,7 +677,13 @@ async function refetch() {
   });
 }
 
-const rowOf = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+// A row of the list itself, even while a dialog is open with the same name in
+// its target list.
+const rowOf = (name: string) =>
+  screen
+    .getAllByText(name)
+    .map((el) => el.closest("tr"))
+    .find((tr) => tr?.closest("table")?.getAttribute("aria-label") === "Containers") as HTMLElement;
 
 async function openRowMenu(name: string) {
   await waitFor(() =>
@@ -721,7 +755,7 @@ describe("container list: live updates in place", () => {
     const names = screen
       .getAllByRole("row", { hidden: true })
       .slice(1)
-      .map((r) => r.querySelector("td")?.textContent);
+      .map((r) => r.querySelectorAll("td")[1]?.textContent);
     expect(names).toEqual(["blog", "loose", "shop-db", "shop-web"]);
     // The gone row stays, dimmed, as Removed, with its menu disabled.
     expect(within(rowOf("loose")).getByText("Removed")).toBeTruthy();
@@ -776,5 +810,260 @@ describe("container list: live updates in place", () => {
       expect(rowOf(name).hasAttribute("data-added")).toBe(false);
       expect(rowOf(name).hasAttribute("data-removed")).toBe(false);
     }
+  });
+});
+
+const box = (name: string) => screen.getByRole("checkbox", { name: `Select ${name}` });
+const isOn = (el: HTMLElement) => el.getAttribute("aria-checked");
+const selectedCount = () => screen.queryByRole("toolbar", { name: "Bulk actions" });
+
+// The rows of ROWS in the order group none shows them.
+async function mountFlat(initial: ContainerSearch = { group: "none" }) {
+  mount(initial);
+  await screen.findByText("shop-web");
+  await waitFor(() => expect(screen.getAllByRole("checkbox").length).toBeGreaterThan(0));
+}
+
+describe("container list: selection", () => {
+  it("gives every row a named checkbox and the header one to select every container", async () => {
+    await mountFlat();
+    for (const name of ["shop-web", "shop-db", "blog", "loose"]) expect(box(name)).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "Select all containers" })).toBeTruthy();
+    expect(selectedCount()).toBeNull();
+  });
+
+  it("shows the bulk bar in place of the caption with '{n} selected', and Clear selection empties it", async () => {
+    await mountFlat();
+    fireEvent.click(box("blog"));
+    fireEvent.click(box("loose"));
+    const bar = screen.getByRole("toolbar", { name: "Bulk actions" });
+    expect(within(bar).getByText("2 selected")).toBeTruthy();
+    expect(within(bar).getByRole("button", { name: "Start" })).toBeTruthy();
+    expect(within(bar).getByRole("button", { name: "Stop…" })).toBeTruthy();
+    expect(screen.queryByText("4 containers")).toBeNull();
+    fireEvent.click(within(bar).getByRole("button", { name: "Clear selection" }));
+    expect(selectedCount()).toBeNull();
+    expect(isOn(box("blog"))).toBe("false");
+  });
+
+  it("clears the selection on Escape from inside the table", async () => {
+    await mountFlat();
+    fireEvent.click(box("blog"));
+    expect(selectedCount()).toBeTruthy();
+    fireEvent.keyDown(box("blog"), { key: "Escape" });
+    expect(selectedCount()).toBeNull();
+  });
+
+  it("selects the range between two rows on Shift+click, in the order shown", async () => {
+    await mountFlat();
+    fireEvent.click(box("blog"));
+    fireEvent.click(box("shop-db"), { shiftKey: true });
+    // blog, loose, shop-db, shop-web
+    expect(["blog", "loose", "shop-db", "shop-web"].map((n) => isOn(box(n)))).toEqual([
+      "true",
+      "true",
+      "true",
+      "false",
+    ]);
+  });
+
+  it("selects every eligible visible row from the header and clears them from it", async () => {
+    await mountFlat();
+    const all = screen.getByRole("checkbox", { name: "Select all containers" });
+    fireEvent.click(all);
+    expect(within(screen.getByRole("toolbar")).getByText("4 selected")).toBeTruthy();
+    expect(isOn(all)).toBe("true");
+    fireEvent.click(all);
+    expect(selectedCount()).toBeNull();
+  });
+
+  it("shows the header checkbox mixed when only some rows are selected", async () => {
+    await mountFlat();
+    fireEvent.click(box("blog"));
+    expect(isOn(screen.getByRole("checkbox", { name: "Select all containers" }))).toBe("mixed");
+  });
+
+  it("has a tri-state checkbox on each group that selects the group's rows", async () => {
+    mount();
+    await screen.findByText("shop-web");
+    await waitFor(() => expect(screen.getAllByRole("checkbox").length).toBeGreaterThan(0));
+    const group = screen.getByRole("checkbox", { name: "Select shop" });
+    expect(isOn(group)).toBe("false");
+    fireEvent.click(box("shop-web"));
+    expect(isOn(group)).toBe("mixed");
+    fireEvent.click(group);
+    expect(isOn(group)).toBe("true");
+    expect(isOn(box("shop-db"))).toBe("true");
+    expect(isOn(box("blog"))).toBe("false");
+    fireEvent.click(group);
+    expect(selectedCount()).toBeNull();
+  });
+
+  it("gives Bayplan's own containers a checkbox that cannot be ticked, and keeps them out of select all", async () => {
+    answer = () =>
+      Response.json(body([row("bayplan", { selfKind: "server", isSelf: true }), ...ROWS]));
+    await mountFlat();
+    const own = box("bayplan");
+    expect(own.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(own);
+    expect(isOn(own)).toBe("false");
+    expect(selectedCount()).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all containers" }));
+    expect(within(screen.getByRole("toolbar")).getByText("4 selected")).toBeTruthy();
+    expect(isOn(own)).toBe("false");
+  });
+
+  it("holds the list still while rows are selected, then applies the held changes", async () => {
+    await mountFlat();
+    fireEvent.click(box("blog"));
+    answer = () => Response.json(body([...ROWS, row("zeta")]));
+    await refetch();
+    expect(await screen.findByText("1 change waiting")).toBeTruthy();
+    expect(screen.queryByText("zeta")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
+    await screen.findByText("zeta");
+  });
+});
+
+describe("container list: stopping from the bulk bar", () => {
+  async function chooseTwoAndStop() {
+    await mountFlat();
+    fireEvent.click(box("loose"));
+    fireEvent.click(box("shop-web"));
+    fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+    return screen.findByRole("alertdialog", { name: "Stop 2 containers?" });
+  }
+
+  it("opens one dialog naming both containers and sends nothing until confirmed", async () => {
+    const dialog = await chooseTwoAndStop();
+    expect(
+      within(dialog)
+        .getAllByRole("row")
+        .slice(1)
+        .map((r) => r.textContent),
+    ).toEqual(["loose", "shop-web"]);
+    expect(actionPosts).toEqual([]);
+  });
+
+  it("posts one request with both targets and toasts 'Stopped 2 containers.'", async () => {
+    const dialog = await chooseTwoAndStop();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop 2 containers" }));
+    await waitFor(() => expect(actionPosts).toHaveLength(1));
+    expect(actionPosts[0]?.path).toBe(`/api/env/${ENV}/containers/actions`);
+    expect(actionPosts[0]?.body).toEqual({
+      action: "stop",
+      targets: [
+        { nodeId: "n1", id: "id-loose" },
+        { nodeId: "n1", id: "id-shop-web" },
+      ],
+    });
+    expect(await screen.findByText("Stopped 2 containers.")).toBeTruthy();
+    // The selection is spent.
+    await waitFor(() => expect(selectedCount()).toBeNull());
+  });
+
+  it("shows both rows as Stopping… with a pulsing dot, disabled checkbox and menu, until the state changes", async () => {
+    let release: (r: Response) => void = () => {};
+    actionAnswer = () => new Promise<Response>((resolve) => (release = resolve));
+    const dialog = await chooseTwoAndStop();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop 2 containers" }));
+    await waitFor(() => expect(within(rowOf("loose")).getByText("Stopping…")).toBeTruthy());
+    expect(within(rowOf("shop-web")).getByText("Stopping…")).toBeTruthy();
+    expect(within(rowOf("blog")).queryByText("Stopping…")).toBeNull();
+    expect(rowOf("loose").querySelector("[data-pending]")).toBeTruthy();
+    expect(
+      within(rowOf("loose"))
+        .getByRole("checkbox", { name: "Select loose", hidden: true })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      (
+        within(rowOf("loose")).getByRole("button", {
+          name: "Actions for loose",
+          hidden: true,
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    // Politely announced once.
+    expect(
+      screen
+        .getAllByRole("status", { hidden: true })
+        .some((el) => el.textContent === "Stopping loose, shop-web"),
+    ).toBe(true);
+
+    await act(async () =>
+      release(
+        allDone({ path: "", body: { targets: [{ id: "id-loose" }, { id: "id-shop-web" }] } }),
+      ),
+    );
+    // Still waiting: nothing has confirmed the new state yet.
+    expect(within(rowOf("loose")).getByText("Stopping…")).toBeTruthy();
+    answer = () =>
+      Response.json(
+        body(
+          ROWS.map((r) =>
+            ["loose", "shop-web"].includes(r.name)
+              ? { ...r, state: "exited" as const, status: "Exited (0) now" }
+              : r,
+          ),
+        ),
+      );
+    await refetch();
+    await waitFor(() => expect(within(rowOf("loose")).queryByText("Stopping…")).toBeNull());
+    expect(within(rowOf("loose")).getByText("Exited")).toBeTruthy();
+    expect(within(rowOf("shop-web")).getByText("Exited")).toBeTruthy();
+  });
+
+  it("reads the list again at once and once more 2000 ms after the answer", async () => {
+    const dialog = await chooseTwoAndStop();
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop 2 containers" }));
+    await waitFor(() => expect(invalidate).toHaveBeenCalled());
+    expect(timers.mock.calls.some((c) => c[1] === 2000)).toBe(true);
+  });
+
+  it("takes the label off a container that failed at once and leaves the other stopping", async () => {
+    actionAnswer = (req) =>
+      Response.json({
+        results: req.body.targets.map((t, i) => ({
+          nodeId: "n1",
+          id: t.id,
+          name: t.id,
+          result: i === 0 ? "failed" : "done",
+          code: i === 0 ? "node_unreachable" : undefined,
+        })),
+      });
+    const dialog = await chooseTwoAndStop();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop 2 containers" }));
+    expect(await screen.findByText("Stopped 1, 1 failed")).toBeTruthy();
+    expect(within(rowOf("loose")).queryByText("Stopping…")).toBeNull();
+    expect(within(rowOf("shop-web")).getByText("Stopping…")).toBeTruthy();
+  });
+
+  it("runs Start at once on the stopped rows only and counts the rest as skipped", async () => {
+    await mountFlat();
+    fireEvent.click(box("shop-web"));
+    fireEvent.click(box("shop-db"));
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(actionPosts).toHaveLength(1));
+    expect(actionPosts[0]?.body).toEqual({
+      action: "start",
+      targets: [{ nodeId: "n1", id: "id-shop-db" }],
+    });
+    expect(await screen.findByText("Started 1 container. 1 skipped")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("disables Start with the reason when no chosen container is stopped", async () => {
+    await mountFlat();
+    fireEvent.click(box("shop-web"));
+    const start = screen.getByRole("button", { name: "Start" });
+    expect(start.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(start);
+    expect(actionPosts).toEqual([]);
+    expect(
+      screen.getAllByText("None of the selected containers can be started.").length,
+    ).toBeGreaterThan(0);
   });
 });

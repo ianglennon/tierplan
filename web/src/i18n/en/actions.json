@@ -22,7 +22,16 @@
       "failed": "Couldn't {{verb}} {{name}}. {{reason}}",
       "restarted": "Restarted {{name}}.",
       "paused": "Paused {{name}}.",
-      "unpaused": "Unpaused {{name}}."
+      "unpaused": "Unpaused {{name}}.",
+      "bulk": {
+        "stop_one": "Stopped {{count}} container.",
+        "stop_other": "Stopped {{count}} containers.",
+        "start_one": "Started {{count}} container.",
+        "start_other": "Started {{count}} containers."
+      },
+      "partial": "{{verb}} {{done}}, {{failed}} failed",
+      "skipped": "{{count}} skipped",
+      "failedMany": "Couldn't {{verb}} {{count}} containers. {{reason}}"
     },
     "stop": {
       "title": "Stop {{name}}?",
@@ -30,7 +39,12 @@
       "bodyOwn": "Docker asks it to shut down first and kills it if it takes too long, using the container's own stop settings.",
       "confirm": "Stop container",
       "pending": "Stopping…",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "titleBulk_one": "Stop {{count}} container?",
+      "titleBulk_other": "Stop {{count}} containers?",
+      "bodyBulk": "Each one uses its own stop settings.",
+      "confirmBulk_one": "Stop {{count}} container",
+      "confirmBulk_other": "Stop {{count}} containers"
     },
     "refusal": {
       "own_container": "{{name}} is one of Bayplan's own containers. Stopping it would cut Bayplan off from the host, so it can't be done from this list.",
@@ -46,6 +60,69 @@
       "link": "Open agent settings",
       "ask": "Ask an administrator to update it."
     },
-    "readOnlyHost": "This host is read-only (set on the host)"
+    "readOnlyHost": "This host is read-only (set on the host)",
+    "bulk": {
+      "label": "Bulk actions",
+      "selected_one": "{{count}} selected",
+      "selected_other": "{{count}} selected",
+      "more": "More",
+      "clear": "Clear selection",
+      "selectAll": "Select all {{count}}",
+      "start": "Start",
+      "stop": "Stop…",
+      "restart": "Restart",
+      "pause": "Pause",
+      "unpause": "Unpause",
+      "kill": "Kill…",
+      "remove": "Remove…",
+      "none": "None of the selected containers can be {{verb}}.",
+      "can": {
+        "start": "started",
+        "stop": "stopped",
+        "restart": "restarted",
+        "pause": "paused",
+        "unpause": "unpaused",
+        "kill": "killed",
+        "remove": "removed"
+      }
+    },
+    "select": {
+      "all": "Select all containers",
+      "row": "Select {{name}}",
+      "group": "Select {{name}}",
+      "own": "Bayplan's own containers can't be part of a bulk action."
+    },
+    "pending": {
+      "start": "Starting…",
+      "stop": "Stopping…",
+      "restart": "Restarting…",
+      "kill": "Killing…",
+      "pause": "Pausing…",
+      "unpause": "Unpausing…",
+      "remove": "Removing…"
+    },
+    "announce": {
+      "start": "Starting {{names}}",
+      "stop": "Stopping {{names}}",
+      "restart": "Restarting {{names}}",
+      "kill": "Killing {{names}}",
+      "pause": "Pausing {{names}}",
+      "unpause": "Unpausing {{names}}",
+      "remove": "Removing {{names}}"
+    },
+    "past": {
+      "start": "Started",
+      "stop": "Stopped",
+      "restart": "Restarted",
+      "kill": "Killed",
+      "pause": "Paused",
+      "unpause": "Unpaused",
+      "remove": "Removed"
+    },
+    "targets": {
+      "container": "Container",
+      "node": "Node",
+      "note": "Note"
+    }
   }
 }
