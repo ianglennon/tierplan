@@ -137,6 +137,10 @@ type FakeConfig struct {
 	// reports: a name such as "always", or "on-failure:3" with its maximum retry
 	// count. An ID that is not here is a container with no policy.
 	RestartPolicies map[string]string
+	// MissingExecutables are commands (the first word of an exec's Cmd) that no
+	// container has: starting an exec of one prints the runtime's "no such file or
+	// directory" message and ends with exit code 127 (fake_exec.go).
+	MissingExecutables []string
 }
 
 // FakeNode is one entry of /nodes. Leader marks the one manager whose
@@ -291,6 +295,8 @@ type Fake struct {
 	// writes is every write served, in order (fake_writes.go).
 	states map[string]fakeState
 	writes []string
+	// execs is the exec state (fake_exec.go).
+	execs fakeExecs
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
