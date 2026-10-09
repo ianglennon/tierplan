@@ -49,6 +49,8 @@ jobs:
             proto/go.mod
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -74,6 +76,8 @@ jobs:
             proto/go.mod
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -102,6 +106,8 @@ jobs:
             proto/go.mod
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -127,6 +133,8 @@ jobs:
             proto/go.mod
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -154,6 +162,8 @@ jobs:
           cache: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -271,6 +281,8 @@ jobs:
           cache: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -296,6 +308,8 @@ jobs:
           cache: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -335,6 +349,8 @@ jobs:
           cache: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -365,6 +381,8 @@ jobs:
           cache: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -435,6 +453,8 @@ jobs:
           cache: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
+          # Per runner, not ~/setup-pnpm: two runners share each VM and its home directory.
+          dest: ${{ runner.temp }}/setup-pnpm
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
