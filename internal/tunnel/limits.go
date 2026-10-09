@@ -34,6 +34,8 @@ const (
 	// MaxSessionStreams is how many server-opened streams one session carries at
 	// once. A request beyond it fails with ErrBusy and is never queued.
 	MaxSessionStreams = 64
+	// MaxInteractiveStreams is how many of those may be log follows or shells.
+	MaxInteractiveStreams = 32
 	// MaxResponseBytes caps one Docker response that is not the events feed, so a
 	// hostile agent cannot exhaust server memory with a huge JSON list.
 	MaxResponseBytes = 64 << 20
