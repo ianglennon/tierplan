@@ -693,16 +693,45 @@ func TestSnapshotOnAWorkerNeverAsksForNodesOrServices(t *testing.T) {
 }
 
 func TestSnapshotRowsCannotCarryEnvironmentVariablesLabelsOrMounts(t *testing.T) {
-	// T-01-77. The row types are the only thing that crosses to the API, so a
-	// field that could hold these must not exist.
+	// T-01-77. A field that could hold these must not exist on a row type.
+	// The one deliberate exception (plan 04-06): a ContainerRow keeps its labels, mounts
+	// and network attachments for the search and the usage rules of networks and
+	// volumes. It never has a variable or a command. The API's container list sends
+	// an allowlist and never these fields; TestListsNeverCarryLabelsMountsOrVariables
+	// proves it (T-04-29).
 	banned := regexp.MustCompile(`(?i)^(labels?|env|environment|mounts?|binds?|command|cmd|entrypoint|options|attachments|containers)$`)
+	internal := map[string]bool{"ContainerRow.Labels": true, "ContainerRow.Mounts": true}
 	for _, v := range []any{dockerx.ContainerRow{}, dockerx.ImageRow{}, dockerx.VolumeRow{}, dockerx.NetworkRow{}} {
 		typ := reflect.TypeOf(v)
 		for i := range typ.NumField() {
-			if f := typ.Field(i); banned.MatchString(f.Name) {
+			if f := typ.Field(i); banned.MatchString(f.Name) && !internal[typ.Name()+"."+f.Name] {
 				t.Errorf("%s has field %s, which can hold secrets", typ.Name(), f.Name)
 			}
 		}
+	}
+}
+
+func TestSnapshotContainerRowsKeepLabelsMountsAndNetworksForTheServer(t *testing.T) {
+	cfg := dockertest.FakeConfig{Containers: []dockertest.FakeContainer{{
+		ID: "c1", Names: []string{"/web"}, State: "running",
+		Labels: map[string]string{"com.docker.compose.project": "shop"},
+		Mounts: []string{"data", "/srv/x"},
+		Networks: map[string]dockertest.FakeEndpoint{
+			"zeta":  {NetworkID: "nz", IPv4: "10.0.1.5"},
+			"alpha": {NetworkID: "na", IPv4: "10.0.0.5", IPv6: "fd00::5", MAC: "02:42:0a:00:00:05"},
+		},
+	}}}
+	snap, _ := snapshot(t, cfg, false)
+	row := snap.Containers[0]
+	if row.Labels["com.docker.compose.project"] != "shop" {
+		t.Errorf("labels = %v", row.Labels)
+	}
+	if len(row.Mounts) != 2 || row.Mounts[0].Type != "volume" || row.Mounts[0].Name != "data" || row.Mounts[1].Type != "bind" || row.Mounts[1].Source != "/srv/x" {
+		t.Errorf("mounts = %+v", row.Mounts)
+	}
+	if len(row.Networks) != 2 || row.Networks[0].Name != "alpha" || row.Networks[0].NetworkID != "na" || row.Networks[0].IPv4 != "10.0.0.5" ||
+		row.Networks[0].IPv6 != "fd00::5" || row.Networks[0].MAC != "02:42:0a:00:00:05" || row.Networks[1].Name != "zeta" {
+		t.Errorf("networks = %+v, want alpha then zeta", row.Networks)
 	}
 }
 

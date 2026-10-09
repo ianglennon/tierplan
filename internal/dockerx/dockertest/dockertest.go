@@ -230,10 +230,25 @@ type FakeContainer struct {
 	Created int64
 	Ports   []FakePort
 	Labels  map[string]string
-	Mounts  []string
+	// Mounts are listed as volume mounts when the entry is a plain name and as
+	// bind mounts when it starts with a slash.
+	Mounts []string
+	// Networks are the container's attachments by network name.
+	Networks map[string]FakeEndpoint
+	// Health is the engine's health summary (starting, healthy, unhealthy). Empty
+	// sends none, as an engine before API 1.52 does.
+	Health string
 	// StopTimeout and StopSignal are the container's own, as inspect reports them.
 	StopTimeout *int
 	StopSignal  string
+}
+
+// FakeEndpoint is one network attachment of a FakeContainer.
+type FakeEndpoint struct {
+	NetworkID string
+	IPv4      string
+	IPv6      string
+	MAC       string
 }
 
 // FakePort is one published or exposed container port. IP is empty for a port
@@ -702,7 +717,30 @@ func (c FakeConfig) containerList(all bool) []container.Summary {
 			s.Ports = append(s.Ports, ps)
 		}
 		for _, m := range fc.Mounts {
-			s.Mounts = append(s.Mounts, container.MountPoint{Source: m, Destination: "/mnt"})
+			mp := container.MountPoint{Type: "volume", Name: m, Source: "/var/lib/docker/volumes/" + m + "/_data", Destination: "/mnt", RW: true}
+			if strings.HasPrefix(m, "/") {
+				mp = container.MountPoint{Type: "bind", Source: m, Destination: "/mnt", RW: true}
+			}
+			s.Mounts = append(s.Mounts, mp)
+		}
+		if len(fc.Networks) > 0 {
+			s.NetworkSettings = &container.NetworkSettingsSummary{Networks: map[string]*network.EndpointSettings{}}
+			for name, ep := range fc.Networks {
+				es := &network.EndpointSettings{NetworkID: ep.NetworkID}
+				if ep.IPv4 != "" {
+					es.IPAddress = netip.MustParseAddr(ep.IPv4)
+				}
+				if ep.IPv6 != "" {
+					es.GlobalIPv6Address = netip.MustParseAddr(ep.IPv6)
+				}
+				if ep.MAC != "" {
+					_ = es.MacAddress.UnmarshalText([]byte(ep.MAC))
+				}
+				s.NetworkSettings.Networks[name] = es
+			}
+		}
+		if fc.Health != "" {
+			s.Health = &container.HealthSummary{Status: container.HealthStatus(fc.Health)}
 		}
 		out = append(out, s)
 	}

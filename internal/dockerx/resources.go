@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -20,7 +21,10 @@ import (
 const untagged = "<none>"
 
 // ContainerRow is one container as the list view shows it. It carries no
-// variables, no metadata and no mounts: those can hold secrets (T-01-77).
+// variables. Labels, Mounts and Networks stay inside the server: they feed the
+// search, the grouping and the "attached" and "used by" rules of networks and
+// volumes. They can hold secrets, so the API exposes an allowlist and never
+// these fields (T-01-77, T-04-29).
 type ContainerRow struct {
 	ID      string
 	Name    string
@@ -30,6 +34,32 @@ type ContainerRow struct {
 	Created time.Time
 	// Ports reads like "0.0.0.0:8080->80/tcp", or "80/tcp" when not published.
 	Ports []string
+	// Labels is every label of the container. Never sent to a browser by a list.
+	Labels map[string]string
+	// Mounts are the container's mounts, in the engine's order.
+	Mounts []MountRow
+	// Networks are the networks the container is attached to, by name.
+	Networks []ContainerNet
+	// Health is none, starting, healthy or unhealthy.
+	Health string
+}
+
+// MountRow is one mount of a container.
+type MountRow struct {
+	Type        string
+	Name        string
+	Source      string
+	Destination string
+	RW          bool
+}
+
+// ContainerNet is one network attachment of a container.
+type ContainerNet struct {
+	NetworkID string
+	Name      string
+	IPv4      string
+	IPv6      string
+	MAC       string
 }
 
 // ImageRow is one image. RepoTags is ["<none>"] for an untagged image.
@@ -184,19 +214,54 @@ func containerRows(items []container.Summary) []ContainerRow {
 	rows := make([]ContainerRow, 0, len(items))
 	for _, it := range items {
 		rows = append(rows, ContainerRow{
-			ID:      it.ID,
-			Name:    containerName(it.ID, it.Names),
-			State:   string(it.State),
-			Status:  it.Status,
-			Image:   it.Image,
-			Created: time.Unix(it.Created, 0).UTC(),
-			Ports:   portStrings(it.Ports),
+			ID:       it.ID,
+			Name:     containerName(it.ID, it.Names),
+			State:    string(it.State),
+			Status:   it.Status,
+			Image:    it.Image,
+			Created:  time.Unix(it.Created, 0).UTC(),
+			Ports:    portStrings(it.Ports),
+			Labels:   maps.Clone(it.Labels),
+			Mounts:   mountRows(it.Mounts),
+			Networks: netRows(it.NetworkSettings),
 		})
 	}
 	slices.SortFunc(rows, func(a, b ContainerRow) int {
 		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
 	})
 	return rows
+}
+
+// mountRows maps the engine's mount points.
+func mountRows(in []container.MountPoint) []MountRow {
+	out := make([]MountRow, 0, len(in))
+	for _, m := range in {
+		out = append(out, MountRow{Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, RW: m.RW})
+	}
+	return out
+}
+
+// netRows maps the attachments of a container, sorted by network name.
+func netRows(ns *container.NetworkSettingsSummary) []ContainerNet {
+	if ns == nil {
+		return []ContainerNet{}
+	}
+	out := make([]ContainerNet, 0, len(ns.Networks))
+	for name, ep := range ns.Networks {
+		if ep == nil {
+			continue
+		}
+		n := ContainerNet{NetworkID: ep.NetworkID, Name: name, MAC: ep.MacAddress.String()}
+		if ep.IPAddress.IsValid() {
+			n.IPv4 = ep.IPAddress.String()
+		}
+		if ep.GlobalIPv6Address.IsValid() {
+			n.IPv6 = ep.GlobalIPv6Address.String()
+		}
+		out = append(out, n)
+	}
+	slices.SortFunc(out, func(a, b ContainerNet) int { return cmp.Compare(a.Name, b.Name) })
+	return out
 }
 
 // containerName is the name the container was given, without the leading

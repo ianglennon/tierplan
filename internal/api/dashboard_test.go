@@ -322,10 +322,21 @@ func TestListsCarryTheDocumentedColumns(t *testing.T) {
 	}
 }
 
+// containerKeys are the only keys a container row may have (T-04-29). Every other
+// label, every mount and every variable stays on the server.
+var containerKeys = []string{
+	"node", "nodeId", "id", "name", "state", "status", "image", "created", "ports", "isSelf",
+	"project", "stack", "service",
+}
+
 func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {
 	cfg := richEngine()
-	cfg.Containers[1].Labels = map[string]string{"app.note": "label-9f3"}
+	cfg.Containers[1].Labels = map[string]string{
+		"app.note": "label-9f3", "com.docker.compose.project": "shop",
+		"com.docker.stack.namespace": "blog", "com.docker.swarm.service.name": "blog_web",
+	}
 	cfg.Containers[1].Mounts = []string{"/srv/mount-9f3"}
+	cfg.Containers[1].Networks = map[string]dockertest.FakeEndpoint{"net-9f3": {NetworkID: "n9f3", IPv4: "10.9.3.2"}}
 	cfg.Images[0].Labels = map[string]string{"app.build": "image-9f3"}
 	cfg.Volumes[0].Labels = map[string]string{"app.owner": "volume-9f3"}
 	f, e := dashEnv(t, cfg)
@@ -334,12 +345,33 @@ func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {
 		if rec.code != http.StatusOK {
 			t.Fatalf("%s: %d %s", what, rec.code, rec.body)
 		}
-		if strings.Contains(string(rec.body), "9f3") {
-			t.Errorf("%s leaked a label, mount or variable (T-01-77): %s", what, rec.body)
+		for _, leaked := range []string{"9f3", "app.note", "app.build", "app.owner"} {
+			if strings.Contains(string(rec.body), leaked) {
+				t.Errorf("%s leaked %q, a label, mount, network or variable (T-01-77): %s", what, leaked, rec.body)
+			}
 		}
 		for _, banned := range []string{`"labels"`, `"mounts"`, `"env"`, `"Labels"`, `"Mounts"`, `"Env"`} {
 			if strings.Contains(string(rec.body), banned) {
 				t.Errorf("%s has a %s field: %s", what, banned, rec.body)
+			}
+		}
+	}
+	// A container row has exactly the documented keys.
+	var body struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(f.get(t, e, "containers").body, &body); err != nil || len(body.Items) == 0 {
+		t.Fatalf("decode containers: %v", err)
+	}
+	for _, item := range body.Items {
+		for key := range item {
+			if !slices.Contains(containerKeys, key) {
+				t.Errorf("a container row has the undocumented key %q", key)
+			}
+		}
+		for _, want := range containerKeys {
+			if _, ok := item[want]; !ok && want != "created" {
+				t.Errorf("a container row lacks the key %q", want)
 			}
 		}
 	}

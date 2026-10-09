@@ -28,6 +28,9 @@ function row(extra: Partial<ContainerRow> = {}): ContainerRow {
     created: "2026-10-01T10:00:00Z",
     ports: [],
     isSelf: false,
+    project: "",
+    stack: "",
+    service: "",
     ...extra,
   };
 }

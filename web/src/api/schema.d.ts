@@ -481,7 +481,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables, labels or mounts. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q). The search runs on the server before the 500-row cap, so at most 500 rows come back after it, with total the number that matched and unfilteredTotal the number before it. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -2128,6 +2128,12 @@ export interface components {
             nodeId: string;
             /** @description Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published */
             ports: string[] | null;
+            /** @description The compose project (com.docker.compose.project); empty when the container has none */
+            project: string;
+            /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
+            service: string;
+            /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
+            stack: string;
             /**
              * @description The container state
              * @enum {string}
@@ -2145,11 +2151,16 @@ export interface components {
             notReporting: string[] | null;
             /**
              * Format: int64
-             * @description How many there are, whatever the cap
+             * @description How many match the search, whatever the cap
              */
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+            /**
+             * Format: int64
+             * @description How many containers there are before the search is applied (after the node filter), so a page can say 3 of 600
+             */
+            unfilteredTotal: number;
         };
         ContainerRemoveRequest: {
             /**
@@ -4569,6 +4580,8 @@ export interface operations {
             query?: {
                 /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
                 node?: string;
+                /** @description Search: a case-insensitive substring of the name, image, compose project, stack, service or any label key or value. Applied before the 500-row cap */
+                q?: string;
             };
             header?: never;
             path: {

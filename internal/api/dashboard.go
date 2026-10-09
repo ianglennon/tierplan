@@ -137,8 +137,9 @@ type EnvironmentSummaryOutput struct {
 	Body         EnvironmentSummaryBody
 }
 
-// ContainerItem is one row of the containers list. It carries no variables,
-// labels or mounts (T-01-77).
+// ContainerItem is one row of the containers list. It carries no variables, mounts
+// or labels except the three that group a container: project, stack and service
+// (T-01-77, T-04-29).
 type ContainerItem struct {
 	Node    string   `json:"node" doc:"The node the container runs on"`
 	NodeID  string   `json:"nodeId" doc:"The ID of that node: what a write is routed by, since two hosts can share a display name"`
@@ -150,6 +151,9 @@ type ContainerItem struct {
 	Created string   `json:"created,omitempty" format:"date-time"`
 	Ports   []string `json:"ports" doc:"Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published"`
 	IsSelf  bool     `json:"isSelf" doc:"True for the container Bayplan itself runs in (D-27)"`
+	Project string   `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
+	Stack   string   `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
+	Service string   `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
 }
 
 // ImageItem is one row of the images list.
@@ -186,10 +190,12 @@ type NetworkItem struct {
 // ContainerListBody and its siblings are a capped list with the full total.
 type ContainerListBody struct {
 	Items        []ContainerItem `json:"items" doc:"At most 500 rows"`
-	Total        int             `json:"total" doc:"How many there are, whatever the cap"`
+	Total        int             `json:"total" doc:"How many match the search, whatever the cap"`
 	Truncated    bool            `json:"truncated" doc:"True when total is more than the rows returned"`
 	Nodes        []string        `json:"nodes" doc:"The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown"`
 	NotReporting []string        `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
+	// UnfilteredTotal is the count after the node filter and before the search.
+	UnfilteredTotal int `json:"unfilteredTotal" doc:"How many containers there are before the search is applied (after the node filter), so a page can say 3 of 600"`
 }
 
 // ImageListBody is a capped list of images.
@@ -241,6 +247,12 @@ type VolumeListOutput struct {
 type NetworkListOutput struct {
 	CacheControl string `header:"Cache-Control"`
 	Body         NetworkListBody
+}
+
+// ContainerListInput is the containers list: the node filter and the search.
+type ContainerListInput struct {
+	NodeFilterInput
+	Q string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, image, compose project, stack, service or any label key or value. Applied before the 500-row cap"`
 }
 
 // NodeFilterInput is the path of a list and its optional node filter (T-02-74).
@@ -415,22 +427,25 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 	httpx.Register(r, op("listContainers", "/api/env/{envId}/containers",
 		"List the containers of an environment",
 		"Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. "+
-			"Read-only rows: no variables, labels or mounts. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
+			"Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q). The search runs on the server before the 500-row cap, so at most 500 rows come back after it, with total the number that matched and unfilteredTotal the number before it."),
 		need(rbac.PermContainersRead),
-		func(ctx context.Context, in *NodeFilterInput) (*ContainerListOutput, error) {
+		func(ctx context.Context, in *ContainerListInput) (*ContainerListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			rows := filterNode(agg.Containers, in.Node, func(c envs.ContainerRow) string { return c.Node })
+			onNode := filterNode(agg.Containers, in.Node, func(c envs.ContainerRow) string { return c.Node })
+			rows := filterContainers(onNode, in.Q)
 			items, total, truncated := capRows(rows, func(c envs.ContainerRow) ContainerItem {
 				return ContainerItem{
 					Node: c.Node, NodeID: c.NodeID, ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
 					Created: rfc3339(c.Created), Ports: c.Ports, IsSelf: isSelf(c.ID),
+					Project: c.Labels[labelProject], Stack: c.Labels[labelStack], Service: c.Labels[labelService],
 				}
 			})
 			return &ContainerListOutput{CacheControl: "no-store", Body: ContainerListBody{
 				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
+				UnfilteredTotal: len(onNode),
 			}}, nil
 		})
 
