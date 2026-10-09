@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List audit entries
-         * @description Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range, and optionally by one bulk operation (bulk, the bulkId of a container action). Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to, and 422 for a bulk that is not a UUID. An instance admin reads every entry. An Admin of one or more environments (environments.audit) reads only the entries on those environments, or on every environment when they are Admin of all of them, never an instance-level event such as a sign-in or a settings change; the scope is applied before paging. Anyone else gets 403, audited as permission.denied with reason no_audit_scope.
+         * @description Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range, and optionally by one bulk operation (bulk, the bulkId of a container action). The export takes the same filters. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to, and 422 for a bulk that is not a UUID. An instance admin reads every entry. An Admin of one or more environments (environments.audit) reads only the entries on those environments, or on every environment when they are Admin of all of them, never an instance-level event such as a sign-in or a settings change; the scope is applied before paging. Anyone else gets 403, audited as permission.denied with reason no_audit_scope.
          */
         get: operations["listAudit"];
         put?: never;
@@ -3782,7 +3782,7 @@ export interface operations {
                 from?: string;
                 /** @description Only entries at or before this time (RFC 3339) */
                 to?: string;
-                /** @description Only entries of one bulk operation: those whose bulk detail is this ID (the bulkId a container action answers with) */
+                /** @description Only entries of one bulk operation: those whose bulk detail is this ID (the bulkId a container action answers with). 422 when it is not a UUID */
                 bulk?: string;
                 /** @description The nextCursor of the previous page; leave out for the newest entries */
                 cursor?: number;
@@ -3857,6 +3857,8 @@ export interface operations {
                 from?: string;
                 /** @description Only entries at or before this time (RFC 3339) */
                 to?: string;
+                /** @description Only entries of one bulk operation: those whose bulk detail is this ID (the bulkId a container action answers with). 422 when it is not a UUID */
+                bulk?: string;
                 /** @description csv or json */
                 format?: "csv" | "json";
             };

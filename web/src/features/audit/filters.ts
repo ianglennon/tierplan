@@ -125,6 +125,14 @@ const text = z
   .optional()
   .transform((v) => (v === undefined || v === "" ? undefined : String(v)));
 
+// A bulk operation's ID is a UUID; anything else is dropped rather than sent, so
+// the server never has to refuse a hand-edited address.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const bulk = z
+  .string()
+  .optional()
+  .transform((v) => (v !== undefined && UUID.test(v) ? v : undefined));
+
 // One action arrives as a string and several as an array.
 const actions = z
   .union([z.string(), z.array(z.string())])
@@ -141,7 +149,7 @@ const day = z.string().regex(DAY).optional().catch(undefined);
 export const auditSearchSchema = z.object({
   user: text,
   action: actions,
-  bulk: text,
+  bulk,
   range: z.enum(RANGES).default(DEFAULT_RANGE).catch(DEFAULT_RANGE),
   from: day,
   to: day,
