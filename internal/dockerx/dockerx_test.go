@@ -422,7 +422,13 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // their methods here, deliberately and one at a time (D-52). ContainerAction (Phase
 // 4) is the first typed write: it takes a closed set of verbs, never a path, and the
 // forbidden-name pattern below still refuses any raw or passthrough shape.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerOwnership", "Events", "Probe", "RestartPolicies", "Snapshot"}
+// StartExec (Phase 4, OBS-03) is the typed interactive shell: it takes a container
+// ID and an argv and sets only the TTY, size, user, working directory and command.
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerOwnership", "Events", "Probe", "RestartPolicies", "Snapshot", "StartExec"}
+
+// typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
+// pattern below refuses, each reviewed one by one.
+var typedMethodsWithForbiddenWords = []string{"StartExec"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 
@@ -439,6 +445,9 @@ func TestTheClientExportsOnlyTheAllowedReadOnlyMethods(t *testing.T) {
 		t.Errorf("exported methods of *dockerx.Client = %v, want exactly %v", got, want)
 	}
 	for _, name := range got {
+		if slices.Contains(typedMethodsWithForbiddenWords, name) {
+			continue
+		}
 		if forbiddenName.MatchString(name) {
 			t.Errorf("method %s matches a forbidden state-changing or passthrough name (D-52)", name)
 		}
