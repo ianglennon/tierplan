@@ -1213,6 +1213,25 @@
         ],
         "type": "object"
       },
+      "ContainerInspectBody": {
+        "additionalProperties": false,
+        "properties": {
+          "inspect": {
+            "additionalProperties": {},
+            "description": "The engine's inspect document, with the environment variables' values and the log driver's option values replaced by \u003chidden\u003e unless the caller holds secrets.reveal",
+            "type": "object"
+          },
+          "masked": {
+            "description": "True when a value was replaced by the placeholder \u003chidden\u003e because the caller may not reveal secrets on this environment",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "masked",
+          "inspect"
+        ],
+        "type": "object"
+      },
       "ContainerItem": {
         "additionalProperties": false,
         "properties": {
@@ -7139,6 +7158,80 @@
           }
         },
         "summary": "One container: its state and configuration",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/containers/{containerId}/inspect": {
+      "get": {
+        "description": "The engine's inspect document of the container as it is, for the Inspect tab. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). The environment variables' values and the log driver's option values can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder \u003chidden\u003e on the server, and masked says something was. Needs containers.read (Viewer) on the environment.",
+        "operationId": "inspectContainer",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The container ID or name",
+            "in": "path",
+            "name": "containerId",
+            "required": true,
+            "schema": {
+              "description": "The container ID or name",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required)",
+            "explode": false,
+            "in": "query",
+            "name": "nodeId",
+            "schema": {
+              "description": "The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required)",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerInspectBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One container's raw inspect document",
         "tags": [
           "environments"
         ]

@@ -6,7 +6,14 @@
     },
     "tabs": {
       "label": "Container sections",
-      "overview": "Overview"
+      "overview": "Overview",
+      "inspect": "Inspect"
+    },
+    "inspect": {
+      "label": "Inspect output for {{name}}",
+      "loading": "Loading the inspect output",
+      "loadFailed": "Couldn't load the inspect output of {{name}}.",
+      "retry": "Retry"
     },
     "loading": "Loading the container",
     "state": {

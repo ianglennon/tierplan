@@ -65,3 +65,26 @@ export function containerDetailQuery(envId: string, id: string, nodeId?: string)
     refetchInterval: DETAIL_REFETCH_MS,
   });
 }
+
+export type ContainerInspect = components["schemas"]["ContainerInspectBody"];
+
+// The raw inspect document of one container, under the key of its detail, so the
+// events feed and every action refresh an open Inspect tab with the page. The server
+// has already replaced every value the caller may not see.
+export function containerInspectQuery(envId: string, id: string, nodeId?: string) {
+  return queryOptions({
+    queryKey: [...containerDetailKey(envId, id, nodeId), "inspect"] as const,
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/containers/{containerId}/inspect", {
+        params: { path: { envId, containerId: id }, query: nodeId ? { nodeId } : undefined },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new DetailLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isGone(error) && count < detailRetry.attempts,
+    refetchInterval: DETAIL_REFETCH_MS,
+  });
+}

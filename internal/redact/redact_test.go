@@ -190,3 +190,58 @@ func TestCanRevealIsFalseWithNoCheckerNoPrincipalAndForAnAutomationWithoutRights
 		t.Error("CanReveal for a disabled Admin = true")
 	}
 }
+
+const inspectFixture = `{"Id":"abc","Config":{"Image":"nginx","Env":["DB_PASSWORD=hunter2","MODE=a=b","BARE"],"Labels":{"a":"b"}},"HostConfig":{"Memory":9007199254740993,"LogConfig":{"Type":"json-file","Config":{}}}}`
+
+func TestMaskContainerInspectHidesEveryVariableValueAndKeepsTheRestOfTheDocument(t *testing.T) {
+	out, masked, err := redact.MaskContainerInspect([]byte(inspectFixture), false)
+	if err != nil {
+		t.Fatalf("MaskContainerInspect: %v", err)
+	}
+	if !masked {
+		t.Error("masked = false, want true")
+	}
+	for _, leak := range []string{"hunter2", "a=b\""} {
+		if strings.Contains(string(out), leak) {
+			t.Errorf("output carries %q: %s", leak, out)
+		}
+	}
+	var got struct {
+		ID     string `json:"Id"`
+		Config struct {
+			Image  string
+			Env    []string
+			Labels map[string]string
+		}
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	wantEnv := []string{"DB_PASSWORD=<hidden>", "MODE=<hidden>", "BARE"}
+	if strings.Join(got.Config.Env, "|") != strings.Join(wantEnv, "|") {
+		t.Errorf("Env = %v, want %v", got.Config.Env, wantEnv)
+	}
+	if got.ID != "abc" || got.Config.Image != "nginx" || got.Config.Labels["a"] != "b" {
+		t.Errorf("the rest of the document changed: %+v", got)
+	}
+	if !strings.Contains(string(out), "9007199254740993") {
+		t.Errorf("a large number lost its digits: %s", out)
+	}
+	if !strings.Contains(string(out), "\n  \"Config\"") {
+		t.Errorf("not indented with two spaces: %s", out)
+	}
+}
+
+func TestMaskContainerInspectWithRevealReturnsTheInputAndReportsNothingMasked(t *testing.T) {
+	out, masked, err := redact.MaskContainerInspect([]byte(inspectFixture), true)
+	if err != nil || masked || string(out) != inspectFixture {
+		t.Fatalf("reveal = %q masked=%v err=%v", out, masked, err)
+	}
+}
+
+func TestMaskContainerInspectOfADocumentWithNoVariablesIsNotMasked(t *testing.T) {
+	out, masked, err := redact.MaskContainerInspect([]byte(`{"Id":"abc","Config":{"Env":[]}}`), false)
+	if err != nil || masked || !strings.Contains(string(out), `"Id": "abc"`) {
+		t.Fatalf("out=%q masked=%v err=%v", out, masked, err)
+	}
+}

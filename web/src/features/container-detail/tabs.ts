@@ -6,6 +6,9 @@
 // here, in that order, and its route file under containers_.$containerId.*.
 export interface ContainerTab {
   id: string;
+  // The route the tab links to: the page's own address for the Overview, a child
+  // of it for every other tab.
+  to: "/env/$envId/containers/$containerId" | "/env/$envId/containers/$containerId/inspect";
   // The i18n key of the tab's label.
   labelKey: string;
   // True when only the tab's own path is the tab, as for the Overview, whose
@@ -14,5 +17,16 @@ export interface ContainerTab {
 }
 
 export const CONTAINER_TABS = [
-  { id: "overview", labelKey: "containerdetail.tabs.overview", exact: true },
+  {
+    id: "overview",
+    to: "/env/$envId/containers/$containerId",
+    labelKey: "containerdetail.tabs.overview",
+    exact: true,
+  },
+  {
+    id: "inspect",
+    to: "/env/$envId/containers/$containerId/inspect",
+    labelKey: "containerdetail.tabs.inspect",
+    exact: false,
+  },
 ] as const satisfies readonly ContainerTab[];

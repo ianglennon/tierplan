@@ -203,7 +203,7 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
               className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
             >
               <Link
-                to="/env/$envId/containers/$containerId"
+                to={tab.to}
                 params={{ envId, containerId }}
                 search={{ node }}
                 activeOptions={{ exact: tab.exact }}

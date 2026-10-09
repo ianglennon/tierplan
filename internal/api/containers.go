@@ -4,7 +4,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -257,6 +259,30 @@ type ContainerDetailOutput struct {
 	Body         ContainerDetailBody
 }
 
+// ContainerInspectBody is the raw inspect document of one container.
+type ContainerInspectBody struct {
+	Masked  bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
+	Inspect map[string]any `json:"inspect" doc:"The engine's inspect document, with the environment variables' values and the log driver's option values replaced by <hidden> unless the caller holds secrets.reveal"`
+}
+
+// ContainerInspectOutput wraps ContainerInspectBody for huma.
+type ContainerInspectOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ContainerInspectBody
+}
+
+// decodeInspect reads the masked document into the response, keeping every number
+// with its exact digits.
+func decodeInspect(b []byte) (map[string]any, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, err
+	}
+	return doc, nil
+}
+
 // RegisterContainers registers the container action route. Every target is routed
 // by node ID through the aggregator's one write path (WriteOnNode), is checked against Bayplan's
 // own containers from a fresh inspect, and gets exactly one audit row (D-14). A
@@ -284,49 +310,44 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			if p == nil || env == nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
-			agg, _, err := d.Aggregator.Snapshot(ctx, env.ID)
+			detail, _, nodeID, node, err := inspectOnNode(ctx, d, env.ID, in.NodeID, in.ContainerID)
 			if err != nil {
-				return nil, snapshotProblem(d.Log, env.ID, err)
+				return nil, err
 			}
-			nodeID := in.NodeID
-			if nodeID == "" {
-				// Without a node, only an environment of one node that is not a swarm has
-				// an answer: anywhere else the container could be on any of several.
-				swarmType := agg.Target.Probe.Type == dockerx.TypeSwarmManager || agg.Target.Probe.Type == dockerx.TypeSwarmWorker
-				if len(agg.Nodes) != 1 || swarmType {
-					return nil, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
-						"This environment has more than one node. Say which one the container is on (nodeId).")
-				}
-				nodeID = agg.Nodes[0].ID
-			}
-			var node envs.NodeRef
-			for _, n := range agg.Nodes {
-				if n.ID == nodeID {
-					node = n
-				}
-			}
-
-			var detail dockerx.ContainerDetail
-			inspectCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
-			defer cancel()
-			err = d.Aggregator.OnNode(inspectCtx, env.ID, nodeID, func(c *dockerx.Client) error {
-				var e error
-				detail, _, e = c.ContainerDetail(inspectCtx, in.ContainerID)
-				return e
-			})
-			switch {
-			case err == nil:
-			case dockerx.IsNotFound(err):
-				return nil, httpx.Problem(http.StatusNotFound, problemContainerNotFound, "This container does not exist on that node. It may have been removed.")
-			case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
-				return nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
-			default:
-				return nil, snapshotProblem(d.Log, env.ID, err)
-			}
-
 			reveal := redact.CanReveal(ctx, d.Checker, p, env.ID)
 			body := containerDetailBody(detail, nodeID, node, isSelf(detail.ID), reveal)
 			return &ContainerDetailOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "inspectContainer", Method: http.MethodGet, Path: "/api/env/{envId}/containers/{containerId}/inspect",
+		Summary: "One container's raw inspect document",
+		Description: "The engine's inspect document of the container as it is, for the Inspect tab. " +
+			"The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). " +
+			"The environment variables' values and the log driver's option values can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. " +
+			"Needs containers.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermContainersRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ContainerDetailInput) (*ContainerInspectOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			_, raw, _, _, err := inspectOnNode(ctx, d, env.ID, in.NodeID, in.ContainerID)
+			if err != nil {
+				return nil, err
+			}
+			shown, masked, err := redact.MaskContainerInspect(raw, redact.CanReveal(ctx, d.Checker, p, env.ID))
+			if err != nil {
+				d.Log.Error("masking a container inspect failed", "environment", env.ID, "error", err)
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			doc, err := decodeInspect(shown)
+			if err != nil {
+				d.Log.Error("reading a container inspect failed", "environment", env.ID, "error", err)
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			return &ContainerInspectOutput{CacheControl: "no-store", Body: ContainerInspectBody{Masked: masked, Inspect: doc}}, nil
 		})
 
 	httpx.Register(r, huma.Operation{
@@ -436,6 +457,51 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			auditTargets(ctx, d, p, env.ID, in.UserAgent, audit.ActionContainerRemoved, bulkID, extra, in.Body.Targets, results)
 			return &ContainerActionOutput{CacheControl: "no-store", Body: ContainerActionResponse{BulkID: bulkID, Results: results}}, nil
 		})
+}
+
+// inspectOnNode resolves the node a container is on and reads its inspect there: the
+// typed detail and the raw document. Without a node only an environment of one node
+// that is not a swarm has an answer (422 node_required). The errors are already
+// problems: 404 container_not_found, 503 node_unavailable, or the environment's own.
+func inspectOnNode(ctx context.Context, d ContainersDeps, envID, wantNode, containerID string) (detail dockerx.ContainerDetail, raw []byte, nodeID string, node envs.NodeRef, err error) {
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return detail, nil, "", node, snapshotProblem(d.Log, envID, err)
+	}
+	nodeID = wantNode
+	if nodeID == "" {
+		// Without a node, only an environment of one node that is not a swarm has
+		// an answer: anywhere else the container could be on any of several.
+		swarmType := agg.Target.Probe.Type == dockerx.TypeSwarmManager || agg.Target.Probe.Type == dockerx.TypeSwarmWorker
+		if len(agg.Nodes) != 1 || swarmType {
+			return detail, nil, "", node, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
+				"This environment has more than one node. Say which one the container is on (nodeId).")
+		}
+		nodeID = agg.Nodes[0].ID
+	}
+	for _, n := range agg.Nodes {
+		if n.ID == nodeID {
+			node = n
+		}
+	}
+
+	inspectCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
+	err = d.Aggregator.OnNode(inspectCtx, envID, nodeID, func(c *dockerx.Client) error {
+		var e error
+		detail, raw, e = c.ContainerDetail(inspectCtx, containerID)
+		return e
+	})
+	switch {
+	case err == nil:
+		return detail, raw, nodeID, node, nil
+	case dockerx.IsNotFound(err):
+		return detail, nil, nodeID, node, httpx.Problem(http.StatusNotFound, problemContainerNotFound, "This container does not exist on that node. It may have been removed.")
+	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
+		return detail, nil, nodeID, node, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+	default:
+		return detail, nil, nodeID, node, snapshotProblem(d.Log, envID, err)
+	}
 }
 
 // containerDetailBody is the response for one container. Every value that can be a

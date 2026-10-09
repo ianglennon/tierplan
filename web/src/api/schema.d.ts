@@ -552,6 +552,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/containers/{containerId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One container's raw inspect document
+         * @description The engine's inspect document of the container as it is, for the Inspect tab. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). The environment variables' values and the log driver's option values can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. Needs containers.read (Viewer) on the environment.
+         */
+        get: operations["inspectContainer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/events": {
         parameters: {
             query?: never;
@@ -2223,6 +2243,14 @@ export interface components {
             stopTimeout?: number;
             user?: string;
             workingDir?: string;
+        };
+        ContainerInspectBody: {
+            /** @description The engine's inspect document, with the environment variables' values and the log driver's option values replaced by <hidden> unless the caller holds secrets.reveal */
+            inspect: {
+                [key: string]: unknown;
+            };
+            /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked: boolean;
         };
         ContainerItem: {
             /** Format: date-time */
@@ -4948,6 +4976,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContainerDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectContainer: {
+        parameters: {
+            query?: {
+                /** @description The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required) */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerInspectBody"];
                 };
             };
             /** @description Error */

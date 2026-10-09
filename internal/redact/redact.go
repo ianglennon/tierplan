@@ -11,7 +11,10 @@
 package redact
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -81,4 +84,54 @@ func CanReveal(ctx context.Context, c *rbac.Checker, p *rbac.Principal, envID st
 		return false
 	}
 	return c.Check(ctx, p, rbac.Requirement{Perm: rbac.PermSecretsReveal, Scope: rbac.ScopeEnvironment}, envID).Allowed
+}
+
+// MaskContainerInspect prepares the raw inspect document of a container for a
+// browser. With reveal true the document is returned as it is and masked is
+// false. Otherwise the value of every Config.Env entry ("NAME=value" becomes
+// "NAME=<hidden>") is replaced by Placeholder and the rest of the document is kept
+// as it was, re-encoded with two-space indentation; masked is true when anything
+// was replaced. Numbers keep their exact digits. A document that is not a JSON
+// object is an error, never passed through, so a malformed answer cannot carry
+// a value past the mask.
+func MaskContainerInspect(raw []byte, reveal bool) (out []byte, masked bool, err error) {
+	if reveal {
+		return raw, false, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, false, fmt.Errorf("container inspect is not a JSON object: %w", err)
+	}
+	if doc == nil {
+		return nil, false, fmt.Errorf("container inspect is not a JSON object")
+	}
+	if _, err := dec.Token(); err == nil {
+		return nil, false, fmt.Errorf("container inspect has data after the JSON object")
+	}
+	if cfg, ok := doc["Config"].(map[string]any); ok {
+		if env, ok := cfg["Env"].([]any); ok {
+			for i, e := range env {
+				kv, isString := e.(string)
+				if !isString {
+					env[i] = Placeholder
+					masked = true
+					continue
+				}
+				if name, _, hasValue := strings.Cut(kv, "="); hasValue {
+					env[i] = name + "=" + Placeholder
+					masked = true
+				}
+			}
+		}
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(doc); err != nil {
+		return nil, false, fmt.Errorf("encode container inspect: %w", err)
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), masked, nil
 }

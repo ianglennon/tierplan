@@ -1223,3 +1223,69 @@ func TestContainerDetailMarksBayplansOwnContainers(t *testing.T) {
 		t.Errorf("bad id = %d: %s", rec.code, rec.body)
 	}
 }
+
+// inspectBody is the answer of the raw inspect route.
+type inspectBody struct {
+	Masked  bool `json:"masked"`
+	Inspect struct {
+		ID     string `json:"Id"`
+		Config struct {
+			Env []string `json:"Env"`
+		} `json:"Config"`
+	} `json:"inspect"`
+}
+
+func TestContainerInspectOfAViewerMasksEveryVariableValue(t *testing.T) {
+	f, e := dashEnv(t, detailEngine())
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	cookie, _ := f.signIn(t, "viewer", false)
+
+	rec := f.detail(t, cookie, e, "web/inspect", "?nodeId="+e.ID)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s\n%s", rec.code, rec.body, f.logs)
+	}
+	for _, leak := range []string{"hunter2", "prod\""} {
+		if strings.Contains(string(rec.body), leak) {
+			t.Fatalf("a Viewer's inspect carries %q: %s", leak, rec.body)
+		}
+	}
+	d := decode[inspectBody](t, rec)
+	if !d.Masked || d.Inspect.ID != webID || len(d.Inspect.Config.Env) != 2 ||
+		d.Inspect.Config.Env[0] != "DB_PASSWORD=<hidden>" || d.Inspect.Config.Env[1] != "MODE=<hidden>" {
+		t.Errorf("inspect = %+v", d)
+	}
+}
+
+func TestContainerInspectOfAnAdminCarriesTheFullDocument(t *testing.T) {
+	f, e := dashEnv(t, detailEngine())
+	rec := f.detail(t, f.cookie, e, "web/inspect", "?nodeId="+e.ID)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	d := decode[inspectBody](t, rec)
+	if d.Masked || len(d.Inspect.Config.Env) != 2 || d.Inspect.Config.Env[0] != "DB_PASSWORD=hunter2" || d.Inspect.Config.Env[1] != "MODE=prod" {
+		t.Errorf("inspect = %+v", d)
+	}
+}
+
+func TestContainerInspectSharesTheDetailRoutesNodeRulesAndProblems(t *testing.T) {
+	f, e := dashEnv(t, detailEngine())
+	rec := f.detail(t, f.cookie, e, "ghost/inspect", "?nodeId="+e.ID)
+	if rec.code != http.StatusNotFound || rec.ptyp != "container_not_found" {
+		t.Fatalf("unknown container = %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	rec = f.detail(t, f.cookie, e, "web/inspect", "?nodeId=elsewhere")
+	if rec.code != http.StatusServiceUnavailable || rec.ptyp != "node_unavailable" {
+		t.Fatalf("unknown node = %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if rec = f.detail(t, f.cookie, e, "web/inspect", ""); rec.code != http.StatusOK {
+		t.Fatalf("no nodeId on one node = %d: %s", rec.code, rec.body)
+	}
+	f.addUser(t, "nobody", false)
+	nobody, _ := f.signIn(t, "nobody", false)
+	rec = f.detail(t, nobody, e, "web/inspect", "?nodeId="+e.ID)
+	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Fatalf("no grant = %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+}

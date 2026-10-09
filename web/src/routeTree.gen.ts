@@ -40,6 +40,7 @@ import { Route as AppSettingsAccessUsersUserIdRouteImport } from './routes/_app/
 import { Route as AppSettingsEnvironmentsEnvIdIndexRouteImport } from './routes/_app/settings/environments_.$envId.index'
 import { Route as AppSettingsEnvironmentsEnvIdAccessRouteImport } from './routes/_app/settings/environments_.$envId.access'
 import { Route as AppEnvEnvIdContainersContainerIdIndexRouteImport } from './routes/_app/env/$envId/containers_.$containerId.index'
+import { Route as AppEnvEnvIdContainersContainerIdInspectRouteImport } from './routes/_app/env/$envId/containers_.$containerId.inspect'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -202,6 +203,12 @@ const AppEnvEnvIdContainersContainerIdIndexRoute =
     path: '/',
     getParentRoute: () => AppEnvEnvIdContainersContainerIdRoute,
   } as any)
+const AppEnvEnvIdContainersContainerIdInspectRoute =
+  AppEnvEnvIdContainersContainerIdInspectRouteImport.update({
+    id: '/inspect',
+    path: '/inspect',
+    getParentRoute: () => AppEnvEnvIdContainersContainerIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -233,6 +240,7 @@ export interface FileRoutesByFullPath {
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
   '/settings/environments/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
+  '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/containers/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
 }
 export interface FileRoutesByTo {
@@ -260,6 +268,7 @@ export interface FileRoutesByTo {
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdIndexRoute
+  '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdIndexRoute
 }
 export interface FileRoutesById {
@@ -294,6 +303,7 @@ export interface FileRoutesById {
   '/_app/settings/access/users_/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/_app/settings/environments_/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
   '/_app/settings/environments_/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
+  '/_app/env/$envId/containers_/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/_app/env/$envId/containers_/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
 }
 export interface FileRouteTypes {
@@ -328,6 +338,7 @@ export interface FileRouteTypes {
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
     | '/settings/environments/$envId/'
+    | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/containers/$containerId/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -355,6 +366,7 @@ export interface FileRouteTypes {
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
     | '/settings/environments/$envId'
+    | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/containers/$containerId'
   id:
     | '__root__'
@@ -388,6 +400,7 @@ export interface FileRouteTypes {
     | '/_app/settings/access/users_/$userId'
     | '/_app/settings/environments_/$envId/access'
     | '/_app/settings/environments_/$envId/'
+    | '/_app/env/$envId/containers_/$containerId/inspect'
     | '/_app/env/$envId/containers_/$containerId/'
   fileRoutesById: FileRoutesById
 }
@@ -618,6 +631,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdContainersContainerIdIndexRouteImport
       parentRoute: typeof AppEnvEnvIdContainersContainerIdRoute
     }
+    '/_app/env/$envId/containers_/$containerId/inspect': {
+      id: '/_app/env/$envId/containers_/$containerId/inspect'
+      path: '/inspect'
+      fullPath: '/env/$envId/containers/$containerId/inspect'
+      preLoaderRoute: typeof AppEnvEnvIdContainersContainerIdInspectRouteImport
+      parentRoute: typeof AppEnvEnvIdContainersContainerIdRoute
+    }
   }
 }
 
@@ -684,11 +704,14 @@ const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
 )
 
 interface AppEnvEnvIdContainersContainerIdRouteChildren {
+  AppEnvEnvIdContainersContainerIdInspectRoute: typeof AppEnvEnvIdContainersContainerIdInspectRoute
   AppEnvEnvIdContainersContainerIdIndexRoute: typeof AppEnvEnvIdContainersContainerIdIndexRoute
 }
 
 const AppEnvEnvIdContainersContainerIdRouteChildren: AppEnvEnvIdContainersContainerIdRouteChildren =
   {
+    AppEnvEnvIdContainersContainerIdInspectRoute:
+      AppEnvEnvIdContainersContainerIdInspectRoute,
     AppEnvEnvIdContainersContainerIdIndexRoute:
       AppEnvEnvIdContainersContainerIdIndexRoute,
   }

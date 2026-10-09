@@ -72,6 +72,7 @@ let sent: Sent[];
 let me: ReturnType<typeof makeMe>;
 let answer: () => Response | Promise<Response>;
 let actionAnswer: () => Response | Promise<Response>;
+let inspectAnswer: () => Response | Promise<Response>;
 let envType: "swarm" | "standalone";
 const defaults = queryClient.getDefaultOptions();
 
@@ -81,6 +82,8 @@ beforeEach(() => {
   answer = () => Response.json(detail());
   actionAnswer = () =>
     Response.json({ results: [{ nodeId: "n1", id: "web-id", name: "web", result: "done" }] });
+  inspectAnswer = () =>
+    Response.json({ masked: true, inspect: { Id: "web-id", Config: { Env: ["MODE=<hidden>"] } } });
   envType = "standalone";
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   detailRetry.attempts = 0;
@@ -151,6 +154,8 @@ beforeEach(() => {
           });
         case `/api/env/${ENV}/containers/web-id`:
           return answer();
+        case `/api/env/${ENV}/containers/web-id/inspect`:
+          return inspectAnswer();
         case `/api/env/${ENV}/containers/actions`:
         case `/api/env/${ENV}/containers/remove`:
           return actionAnswer();
@@ -403,5 +408,43 @@ describe("a container that fails to load or is gone", () => {
     });
     expect(screen.getByRole("heading", { name: "web" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "This container is gone" })).toBeNull();
+  });
+});
+
+describe("the Inspect tab", () => {
+  it("is the last tab and keeps the node in its address", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
+    expect(tabs).toEqual(["Overview", "Inspect"]);
+    expect(screen.getByRole("tab", { name: "Inspect" }).getAttribute("href")).toBe(
+      "/env/e1/containers/web-id/inspect?node=n1",
+    );
+  });
+
+  it("shows the raw JSON the server sent, as text, in a focusable block named for the container", async () => {
+    renderAt(`/env/${ENV}/containers/web-id/inspect?node=n1`);
+    const block = await screen.findByLabelText("Inspect output for web");
+    expect(block.tagName).toBe("SECTION");
+    expect(block.getAttribute("tabindex")).toBe("0");
+    expect(block.textContent).toContain('"Id": "web-id"');
+    // Whatever the server put in place of a value is shown as it was sent.
+    expect(block.textContent).toContain("MODE=<hidden>");
+    expect(
+      sent.some((s) => s.path === "/api/env/e1/containers/web-id/inspect" && s.method === "GET"),
+    ).toBe(true);
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Inspect" }).getAttribute("data-active")).toBeTruthy(),
+    );
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("data-active")).toBeNull();
+  });
+
+  it("says when the document could not be read and tries again on Retry", async () => {
+    inspectAnswer = () => problem(503, "node_unavailable");
+    renderAt(`/env/${ENV}/containers/web-id/inspect?node=n1`);
+    expect(await screen.findByText("Couldn't load the inspect output of web.")).toBeTruthy();
+    inspectAnswer = () => Response.json({ masked: false, inspect: { Id: "web-id" } });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByLabelText("Inspect output for web")).toBeTruthy();
   });
 });
