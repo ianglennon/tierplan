@@ -11,6 +11,10 @@
     },
     "inspect": {
       "label": "Inspect output for {{name}}",
+      "masked": "Environment variable values are hidden. Needs the reveal secrets permission to show them.",
+      "copy": "Copy JSON",
+      "copied": "Copied",
+      "download": "Download JSON",
       "loading": "Loading the inspect output",
       "loadFailed": "Couldn't load the inspect output of {{name}}.",
       "retry": "Retry"

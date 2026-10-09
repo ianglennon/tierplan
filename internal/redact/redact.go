@@ -90,10 +90,11 @@ func CanReveal(ctx context.Context, c *rbac.Checker, p *rbac.Principal, envID st
 // browser. With reveal true the document is returned as it is and masked is
 // false. Otherwise the value of every Config.Env entry ("NAME=value" becomes
 // "NAME=<hidden>") is replaced by Placeholder and the rest of the document is kept
-// as it was, re-encoded with two-space indentation; masked is true when anything
-// was replaced. Numbers keep their exact digits. A document that is not a JSON
-// object is an error, never passed through, so a malformed answer cannot carry
-// a value past the mask.
+// as it was, re-encoded with two-space indentation; every HostConfig.LogConfig.Config
+// option value is replaced the same way. masked is true when anything was
+// replaced. Numbers keep their exact digits. A document that is not a JSON object
+// is an error, never passed through, so a malformed answer cannot carry a value
+// past the mask.
 func MaskContainerInspect(raw []byte, reveal bool) (out []byte, masked bool, err error) {
 	if reveal {
 		return raw, false, nil
@@ -121,6 +122,18 @@ func MaskContainerInspect(raw []byte, reveal bool) (out []byte, masked bool, err
 				}
 				if name, _, hasValue := strings.Cut(kv, "="); hasValue {
 					env[i] = name + "=" + Placeholder
+					masked = true
+				}
+			}
+		}
+	}
+	// The log driver's options can hold credentials too (a Splunk token, a syslog
+	// address with a password): every value goes, the option names stay.
+	if host, ok := doc["HostConfig"].(map[string]any); ok {
+		if lc, ok := host["LogConfig"].(map[string]any); ok {
+			if opts, ok := lc["Config"].(map[string]any); ok {
+				for name := range opts {
+					opts[name] = Placeholder
 					masked = true
 				}
 			}
