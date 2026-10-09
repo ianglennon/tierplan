@@ -644,3 +644,78 @@ func TestAuditBulkListReturnsOnlyThatOperationsRowsNewestFirst(t *testing.T) {
 		t.Errorf("no bulk filter returned %d rows, want the bulk and non-bulk rows alike", len(all.Items))
 	}
 }
+
+func TestAuditBulkExportCSVAndJSONHoldOnlyThatOperationsRows(t *testing.T) {
+	f := newBulkFix(t)
+	rec := f.get(t, "/api/audit/export?format=csv&bulk="+bulkOne, f.cookie)
+	if rec.code != http.StatusOK {
+		t.Fatalf("csv export: status %d: %s", rec.code, rec.body)
+	}
+	rows, err := csv.NewReader(strings.NewReader(rec.body)).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var targets []string
+	for _, r := range rows[1:] {
+		targets = append(targets, r[6])
+	}
+	if fmt.Sprint(targets) != "[one-b one-a2 one-a1]" {
+		t.Errorf("csv export of bulk one = %v, want its three rows newest first", targets)
+	}
+
+	rec = f.get(t, "/api/audit/export?format=json&bulk="+bulkTwo, f.cookie)
+	var got []struct {
+		Target  string            `json:"target"`
+		Details map[string]string `json:"details"`
+	}
+	if err := json.Unmarshal([]byte(rec.body), &got); err != nil {
+		t.Fatalf("json export: %v (%s)", err, rec.body)
+	}
+	if len(got) != 2 || got[0].Target != "two-a2" || got[1].Target != "two-a1" {
+		t.Errorf("json export of bulk two = %+v, want its two rows", got)
+	}
+	for _, g := range got {
+		if g.Details["bulk"] != bulkTwo {
+			t.Errorf("json export holds a row of bulk %q", g.Details["bulk"])
+		}
+	}
+}
+
+func TestAuditBulkIsAndedWithTheEnvAdminScope(t *testing.T) {
+	f := newBulkFix(t)
+	const bulkOnB = "018f0000-0000-7000-8000-0000000000b3"
+	at := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	f.logBulk(t, at, "erin", "only-b1", scopeEnvB, bulkOnB)
+	f.logBulk(t, at, "erin", "only-b2", scopeEnvB, bulkOnB)
+
+	// carol administers A: a bulk whose rows are all on B reads as empty.
+	if got := f.as(t, "carol", "/api/audit?bulk="+bulkOnB).list(t); len(got.Items) != 0 {
+		t.Errorf("an env Admin of A read %v of a bulk on B", targetsOf(got))
+	}
+	// A bulk spread over A and B shows her only the rows on A.
+	if got := f.as(t, "carol", "/api/audit?bulk="+bulkOne).list(t); fmt.Sprint(targetsOf(got)) != "[one-a2 one-a1]" {
+		t.Errorf("an env Admin of A read %v of bulk one, want its two rows on A", targetsOf(got))
+	}
+	// The exports are scoped the same way.
+	for _, format := range []string{"csv", "json"} {
+		rec := f.as(t, "carol", "/api/audit/export?format="+format+"&bulk="+bulkOnB)
+		if rec.code != http.StatusOK || strings.Contains(rec.body, "only-b") {
+			t.Errorf("%s export: status %d, body leaks a row of B: %q", format, rec.code, rec.body)
+		}
+	}
+	// An instance admin reads them all.
+	if got := f.get(t, "/api/audit?bulk="+bulkOnB, f.cookie).list(t); fmt.Sprint(targetsOf(got)) != "[only-b2 only-b1]" {
+		t.Errorf("an instance admin read %v of the bulk on B", targetsOf(got))
+	}
+}
+
+func TestAuditBulkThatIsNotAUUIDIsRefused422OnTheListAndTheExport(t *testing.T) {
+	f := newBulkFix(t)
+	for _, bad := range []string{"not-a-uuid", "018f0000", "x' OR '1'='1", "018f0000-0000-7000-8000-00000000000g"} {
+		for _, path := range []string{"/api/audit?bulk=", "/api/audit/export?format=csv&bulk=", "/api/audit/export?format=json&bulk="} {
+			if rec := f.get(t, path+url.QueryEscape(bad), f.cookie); rec.code != http.StatusUnprocessableEntity {
+				t.Errorf("%s%s: status = %d, want 422", path, bad, rec.code)
+			}
+		}
+	}
+}
