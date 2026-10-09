@@ -25,6 +25,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/redact"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -61,6 +62,9 @@ const (
 	defaultStopTimeout = 10 // seconds, the engine's own default
 
 	problemOptionsSingleOnly = "options_single_only"
+	problemNodeRequired      = "node_required"
+	problemContainerNotFound = "container_not_found"
+	problemNodeUnavailable   = "node_unavailable"
 
 	// The audit stages of an action on one of Bayplan's own containers: the attempt is
 	// recorded before the call, because the call may take the recorder down, and again
@@ -83,8 +87,8 @@ type ContainersDeps struct {
 	// WriteOnNode, the one write path.
 	Aggregator *envs.Aggregator
 	Audit      *audit.Writer
-	// Checker is carried for the second-permission checks and the masking the later
-	// plans of the phase add (volumes.delete on remove, secrets.reveal on inspect).
+	// Checker decides the second-permission checks (volumes.delete on remove) and the
+	// masking of the detail (secrets.reveal).
 	Checker *rbac.Checker
 	// SelfContainerID is Bayplan's own container ID; empty when it cannot tell.
 	SelfContainerID string
@@ -160,6 +164,99 @@ type ContainerActionOutput struct {
 	Body         ContainerActionResponse
 }
 
+// ContainerDetailInput is the path and query of the container detail route.
+type ContainerDetailInput struct {
+	EnvironmentPathInput
+	ContainerID string `path:"containerId" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" maxLength:"128" doc:"The container ID or name"`
+	NodeID      string `query:"nodeId" maxLength:"128" doc:"The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required)"`
+}
+
+// ContainerPortBody is one published port.
+type ContainerPortBody struct {
+	ContainerPort int    `json:"containerPort" doc:"The port inside the container"`
+	Protocol      string `json:"protocol" doc:"tcp, udp or sctp"`
+	HostIP        string `json:"hostIp,omitempty" doc:"The host address it is bound to; empty when the engine did not say"`
+	HostPort      string `json:"hostPort" doc:"The port on the host"`
+}
+
+// ContainerMountBody is one mount.
+type ContainerMountBody struct {
+	Type        string `json:"type" doc:"bind, volume, tmpfs, npipe or cluster"`
+	Name        string `json:"name,omitempty" doc:"The volume name, for a volume"`
+	Source      string `json:"source" doc:"The host path or, for a volume, where the engine keeps it"`
+	Destination string `json:"destination" doc:"The path inside the container"`
+	Mode        string `json:"mode,omitempty" doc:"The engine's mount options, for example z or ro"`
+	RW          bool   `json:"rw" doc:"True when the container may write to it"`
+}
+
+// ContainerNetworkBody is one network the container is attached to.
+type ContainerNetworkBody struct {
+	NetworkID string   `json:"networkId"`
+	Name      string   `json:"name"`
+	IPv4      string   `json:"ipv4,omitempty"`
+	IPv6      string   `json:"ipv6,omitempty"`
+	MAC       string   `json:"mac,omitempty"`
+	Aliases   []string `json:"aliases" doc:"The DNS names the container answers to on this network"`
+}
+
+// ContainerLogConfigBody is the log driver and its options.
+type ContainerLogConfigBody struct {
+	Type    string             `json:"type" doc:"The log driver, for example json-file; empty when the engine did not say"`
+	Options []redact.OptionVar `json:"options" doc:"The driver's options by name. Their values can carry credentials, so they are withheld unless the caller holds secrets.reveal on this environment"`
+}
+
+// ContainerDetailBody is one container as its detail page shows it.
+type ContainerDetailBody struct {
+	Node     string `json:"node,omitempty" doc:"The display name of the node, when it is among the nodes that answered"`
+	NodeID   string `json:"nodeId" doc:"The ID of the node the container is on: what a write is routed by"`
+	ReadOnly bool   `json:"readOnly" doc:"True when the host of this container's node is read-only, so no change to it will be accepted"`
+
+	ID       string `json:"id" doc:"The full container ID"`
+	Name     string `json:"name" doc:"The container name without the leading slash"`
+	Image    string `json:"image" doc:"The image as the container was created with it"`
+	ImageID  string `json:"imageId" doc:"The ID of the image it runs"`
+	Created  string `json:"created,omitempty" format:"date-time"`
+	State    string `json:"state" enum:"created,running,paused,restarting,removing,exited,dead" doc:"The container state"`
+	Health   string `json:"health" enum:"none,starting,healthy,unhealthy"`
+	Started  string `json:"startedAt,omitempty" format:"date-time" doc:"When it last started; absent when it never did"`
+	Finished string `json:"finishedAt,omitempty" format:"date-time" doc:"When it last stopped; absent while it runs or when it never ran"`
+	ExitCode int    `json:"exitCode" doc:"The exit code of its last run"`
+	OOM      bool   `json:"oomKilled" doc:"True when the kernel killed it for running out of memory"`
+	Error    string `json:"error,omitempty" doc:"The engine's last start error"`
+	Restarts int    `json:"restartCount" doc:"How many times the engine has restarted it"`
+
+	Command     []string `json:"command" doc:"The command (Cmd)"`
+	Entrypoint  []string `json:"entrypoint"`
+	WorkingDir  string   `json:"workingDir,omitempty"`
+	User        string   `json:"user,omitempty"`
+	StopTimeout *int     `json:"stopTimeout,omitempty" doc:"Seconds the container's own setting waits before a kill; absent when it sets none"`
+	StopSignal  string   `json:"stopSignal,omitempty"`
+
+	RestartPolicy     string `json:"restartPolicy" enum:"no,always,on-failure,unless-stopped"`
+	RestartMaxRetries int    `json:"restartMaxRetries" doc:"The on-failure maximum; 0 when none is set"`
+
+	Ports    []ContainerPortBody    `json:"ports" doc:"Published ports only"`
+	Mounts   []ContainerMountBody   `json:"mounts"`
+	Networks []ContainerNetworkBody `json:"networks"`
+	Labels   map[string]string      `json:"labels" doc:"Every label, as the engine reports them. Do not put secrets in labels"`
+
+	Env       []redact.EnvVar        `json:"env" doc:"The environment variables by name. Their values are withheld unless the caller holds secrets.reveal on this environment"`
+	LogConfig ContainerLogConfigBody `json:"logConfig"`
+	Masked    bool                   `json:"masked" doc:"True when any value was withheld from env or logConfig.options"`
+
+	IsSelf   bool   `json:"isSelf" doc:"True for the container Bayplan itself runs in"`
+	SelfKind string `json:"selfKind" enum:",server,agent" doc:"server for the container Bayplan itself runs in, agent for a Bayplan agent's container, empty otherwise"`
+	Project  string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
+	Stack    string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
+	Service  string `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
+}
+
+// ContainerDetailOutput wraps ContainerDetailBody for huma.
+type ContainerDetailOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ContainerDetailBody
+}
+
 // RegisterContainers registers the container action route. Every target is routed
 // by node ID through the aggregator's one write path (WriteOnNode), is checked against Bayplan's
 // own containers from a fresh inspect, and gets exactly one audit row (D-14). A
@@ -171,6 +268,66 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 	isSelf := func(id string) bool {
 		return len(d.SelfContainerID) >= minSelfIDLen && strings.HasPrefix(id, d.SelfContainerID)
 	}
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getContainer", Method: http.MethodGet, Path: "/api/env/{envId}/containers/{containerId}",
+		Summary: "One container: its state and configuration",
+		Description: "Everything the container detail page shows, read live from the container's engine: state, health, image, command, ports, mounts, networks with their aliases, restart policy, labels, environment variables and log driver. " +
+			"The container lives on one node, named by nodeId (the nodeId of its row in the containers list); it may be left out on an environment of one node and is required on a swarm (422 node_required). " +
+			"The values of the environment variables and of the log driver's options can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env and logConfig.options then list the names with masked true and no value, and masked at the top says something was withheld. " +
+			"404 container_not_found when the engine has no such container (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. " +
+			"Needs containers.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermContainersRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ContainerDetailInput) (*ContainerDetailOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			agg, _, err := d.Aggregator.Snapshot(ctx, env.ID)
+			if err != nil {
+				return nil, snapshotProblem(d.Log, env.ID, err)
+			}
+			nodeID := in.NodeID
+			if nodeID == "" {
+				// Without a node, only an environment of one node that is not a swarm has
+				// an answer: anywhere else the container could be on any of several.
+				swarmType := agg.Target.Probe.Type == dockerx.TypeSwarmManager || agg.Target.Probe.Type == dockerx.TypeSwarmWorker
+				if len(agg.Nodes) != 1 || swarmType {
+					return nil, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
+						"This environment has more than one node. Say which one the container is on (nodeId).")
+				}
+				nodeID = agg.Nodes[0].ID
+			}
+			var node envs.NodeRef
+			for _, n := range agg.Nodes {
+				if n.ID == nodeID {
+					node = n
+				}
+			}
+
+			var detail dockerx.ContainerDetail
+			inspectCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+			defer cancel()
+			err = d.Aggregator.OnNode(inspectCtx, env.ID, nodeID, func(c *dockerx.Client) error {
+				var e error
+				detail, _, e = c.ContainerDetail(inspectCtx, in.ContainerID)
+				return e
+			})
+			switch {
+			case err == nil:
+			case dockerx.IsNotFound(err):
+				return nil, httpx.Problem(http.StatusNotFound, problemContainerNotFound, "This container does not exist on that node. It may have been removed.")
+			case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
+				return nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+			default:
+				return nil, snapshotProblem(d.Log, env.ID, err)
+			}
+
+			reveal := redact.CanReveal(ctx, d.Checker, p, env.ID)
+			body := containerDetailBody(detail, nodeID, node, isSelf(detail.ID), reveal)
+			return &ContainerDetailOutput{CacheControl: "no-store", Body: body}, nil
+		})
 
 	httpx.Register(r, huma.Operation{
 		OperationID: "actOnContainers", Method: http.MethodPost, Path: "/api/env/{envId}/containers/actions",
@@ -279,6 +436,67 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			auditTargets(ctx, d, p, env.ID, in.UserAgent, audit.ActionContainerRemoved, bulkID, extra, in.Body.Targets, results)
 			return &ContainerActionOutput{CacheControl: "no-store", Body: ContainerActionResponse{BulkID: bulkID, Results: results}}, nil
 		})
+}
+
+// containerDetailBody is the response for one container. Every value that can be a
+// secret goes through the redact package here, the one place it can leave the server.
+func containerDetailBody(c dockerx.ContainerDetail, nodeID string, node envs.NodeRef, self, reveal bool) ContainerDetailBody {
+	env := redact.Env(c.Env, reveal)
+	opts := redact.Options(c.LogConfig.Options, reveal)
+	b := ContainerDetailBody{
+		Node: node.Name, NodeID: nodeID, ReadOnly: node.ReadOnly,
+		ID: c.ID, Name: c.Name, Image: c.Image, ImageID: c.ImageID, Created: engineTime(c.Created),
+		State: c.Status, Health: c.Health, Started: engineTime(c.StartedAt), Finished: engineTime(c.FinishedAt),
+		ExitCode: c.ExitCode, OOM: c.OOMKilled, Error: c.Error, Restarts: c.RestartCount,
+		Command: c.Cmd, Entrypoint: c.Entrypoint, WorkingDir: c.WorkingDir, User: c.User,
+		StopTimeout: c.StopTimeout, StopSignal: c.StopSignal,
+		RestartPolicy: c.RestartPolicy, RestartMaxRetries: c.RestartMaxRetries,
+		Ports: make([]ContainerPortBody, 0, len(c.Ports)), Mounts: make([]ContainerMountBody, 0, len(c.Mounts)),
+		Networks: make([]ContainerNetworkBody, 0, len(c.Networks)), Labels: c.Labels,
+		Env: env, LogConfig: ContainerLogConfigBody{Type: c.LogConfig.Type, Options: opts},
+		Masked: !reveal && (len(env) > 0 || len(opts) > 0),
+		IsSelf: self, SelfKind: selfKindOf(self, c.Labels),
+		Project: c.Labels[labelProject], Stack: c.Labels[labelStack], Service: c.Labels[labelService],
+	}
+	for _, p := range c.Ports {
+		b.Ports = append(b.Ports, ContainerPortBody{ContainerPort: int(p.ContainerPort), Protocol: p.Protocol, HostIP: p.HostIP, HostPort: p.HostPort})
+	}
+	for _, m := range c.Mounts {
+		b.Mounts = append(b.Mounts, ContainerMountBody{Type: m.Type, Name: m.Name, Source: m.Source, Destination: m.Destination, Mode: m.Mode, RW: m.RW})
+	}
+	for _, n := range c.Networks {
+		b.Networks = append(b.Networks, ContainerNetworkBody{NetworkID: n.NetworkID, Name: n.Name, IPv4: n.IPv4, IPv6: n.IPv6, MAC: n.MAC, Aliases: n.Aliases})
+	}
+	return b
+}
+
+// engineTime turns a timestamp of the engine into RFC 3339 UTC. The engine's zero
+// time, 0001-01-01T00:00:00Z, and anything unreadable are no time.
+func engineTime(s string) string {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil || t.Year() <= 1 {
+		return ""
+	}
+	return rfc3339(t)
+}
+
+// snapshotProblem turns the error of a read of an environment, or of one of its
+// engines, into the problem the SPA understands, as the lists do.
+func snapshotProblem(log *slog.Logger, envID string, err error) error {
+	err = envs.ClassifyDockerError(err)
+	var denied *envs.AgentPolicyDeniedError
+	var down envs.ErrNotOnline
+	switch {
+	case errors.As(err, &denied):
+		log.Warn("an agent refused a read of an environment", "environment", envID, "endpoint", denied.Endpoint)
+		return httpx.Problem(http.StatusBadGateway, problemAgentPolicyDenied, "The agent refused a request ("+denied.Endpoint+").")
+	case errors.As(err, &down):
+		return notOnlineProblem(down)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return httpx.Problem(http.StatusServiceUnavailable, "", "The environment took too long to answer.")
+	}
+	log.Error("reading an environment failed", "environment", envID, "error", err)
+	return offlineProblem(time.Time{}, dockerx.ReasonUnreachable)
 }
 
 // verbSpec says what an action name does and how it is audited.

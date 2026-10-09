@@ -235,6 +235,8 @@ type FakeContainer struct {
 	Mounts []string
 	// Networks are the container's attachments by network name.
 	Networks map[string]FakeEndpoint
+	// Inspect holds what only an inspect reports (fake_inspect.go).
+	Inspect FakeInspect
 	// Health is the engine's health summary (starting, healthy, unhealthy). Empty
 	// sends none, as an engine before API 1.52 does.
 	Health string
@@ -249,6 +251,8 @@ type FakeEndpoint struct {
 	IPv4      string
 	IPv6      string
 	MAC       string
+	// Aliases are the extra DNS names the container answers to on the network.
+	Aliases []string
 }
 
 // FakePort is one published or exposed container port. IP is empty for a port
@@ -568,10 +572,6 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	case "/nodes", "/services", "/tasks", "/swarm":
 		f.serveCluster(w, r, p, cfg)
 	default:
-		if id, ok := inspectID(p); ok {
-			f.serveInspect(w, id, cfg)
-			return
-		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "page not found"})
 	}
 }
@@ -604,55 +604,6 @@ func (f *Fake) serveCluster(w http.ResponseWriter, r *http.Request, p string, cf
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "page not found"})
 	}
-}
-
-// inspectContainer matches /containers/{id}/json.
-var inspectContainer = regexp.MustCompile(`^/containers/([^/]+)/json$`)
-
-func inspectID(p string) (string, bool) {
-	m := inspectContainer.FindStringSubmatch(p)
-	if m == nil || m[1] == "json" {
-		return "", false
-	}
-	return m[1], true
-}
-
-// serveInspect answers GET /containers/{id}/json with the restart policy and, to
-// prove it is never read, an environment variable that holds a secret.
-func (f *Fake) serveInspect(w http.ResponseWriter, id string, cfg FakeConfig) {
-	found, known := cfg.resolveContainer(id)
-	if known {
-		id = found.ID
-	}
-	policy, hasPolicy := cfg.RestartPolicies[id]
-	if !known && !hasPolicy {
-		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + id})
-		return
-	}
-	name, retries, _ := strings.Cut(policy, ":")
-	max, _ := strconv.Atoi(retries)
-	resp := container.InspectResponse{
-		ID:   id,
-		Name: "/" + id,
-		Config: &container.Config{
-			Env: []string{"DB_PASSWORD=hunter2"},
-		},
-		HostConfig: &container.HostConfig{
-			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(name), MaximumRetryCount: max},
-		},
-		State: &container.State{},
-	}
-	if known {
-		resp.Config.Labels = found.Labels
-		resp.Config.StopTimeout = found.StopTimeout
-		resp.Config.StopSignal = found.StopSignal
-		resp.State.Running = found.State == "running"
-		resp.State.Status = container.ContainerState(found.State)
-		if len(found.Names) > 0 {
-			resp.Name = found.Names[0]
-		}
-	}
-	writeJSON(w, http.StatusOK, resp)
 }
 
 // resolveContainer finds a container the way a real daemon does: by its full ID,

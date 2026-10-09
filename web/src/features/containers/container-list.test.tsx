@@ -19,6 +19,7 @@ import {
 } from "@/features/containers/list-search";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
@@ -157,10 +158,12 @@ function Harness({ initial = {} }: { initial?: ContainerSearch }) {
 function mount(initial: ContainerSearch = {}) {
   return render(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <Harness initial={initial} />
-        <Toaster />
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <Harness initial={initial} />
+          <Toaster />
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>,
   );
 }
@@ -170,6 +173,18 @@ const bodyRows = () =>
     .getAllByRole("row")
     .slice(1)
     .map((r) => r.textContent ?? "");
+
+describe("container list: the name opens the container", () => {
+  it("links each name to the container's page, carrying the node it is on", async () => {
+    mount();
+    await screen.findByText("shop-web");
+    const link = screen.getByRole("link", { name: "shop-web" });
+    expect(link.getAttribute("href")).toBe("/env/e1/containers/id-shop-web?node=n1");
+    expect(screen.getByRole("link", { name: "loose" }).getAttribute("href")).toBe(
+      "/env/e1/containers/id-loose?node=n1",
+    );
+  });
+});
 
 describe("container list: groups", () => {
   it("opens grouped by stack or project, expanded, Ungrouped last, with counts and kind badges", async () => {

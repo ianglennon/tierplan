@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { ChevronsDownUp, ChevronsUpDown, Search, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -410,7 +411,14 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
         const kind = c.selfKind || (c.isSelf ? "server" : "");
         return (
           <span className="flex items-center gap-2">
-            <TruncatedText>{c.name}</TruncatedText>
+            <Link
+              to="/env/$envId/containers/$containerId"
+              params={{ envId, containerId: c.id }}
+              search={{ node: c.nodeId }}
+              className="min-w-0 rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <TruncatedText>{c.name}</TruncatedText>
+            </Link>
             {kind === "server" || kind === "agent" ? <SelfContainerBadge kind={kind} /> : null}
           </span>
         );

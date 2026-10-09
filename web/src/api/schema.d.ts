@@ -532,6 +532,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/containers/{containerId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One container: its state and configuration
+         * @description Everything the container detail page shows, read live from the container's engine: state, health, image, command, ports, mounts, networks with their aliases, restart policy, labels, environment variables and log driver. The container lives on one node, named by nodeId (the nodeId of its row in the containers list); it may be left out on an environment of one node and is required on a swarm (422 node_required). The values of the environment variables and of the log driver's options can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env and logConfig.options then list the names with masked true and no value, and masked at the top says something was withheld. 404 container_not_found when the engine has no such container (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. Needs containers.read (Viewer) on the environment.
+         */
+        get: operations["getContainer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/events": {
         parameters: {
             query?: never;
@@ -2111,6 +2131,99 @@ export interface components {
             /** @description The node the container is on: the nodeId of its row in the containers list. Never the display name */
             nodeId: string;
         };
+        ContainerDetailBody: {
+            /** @description The command (Cmd) */
+            command: string[] | null;
+            /** Format: date-time */
+            created?: string;
+            entrypoint: string[] | null;
+            /** @description The environment variables by name. Their values are withheld unless the caller holds secrets.reveal on this environment */
+            env: components["schemas"]["EnvVar"][] | null;
+            /** @description The engine's last start error */
+            error?: string;
+            /**
+             * Format: int64
+             * @description The exit code of its last run
+             */
+            exitCode: number;
+            /**
+             * Format: date-time
+             * @description When it last stopped; absent while it runs or when it never ran
+             */
+            finishedAt?: string;
+            /** @enum {string} */
+            health: "none" | "starting" | "healthy" | "unhealthy";
+            /** @description The full container ID */
+            id: string;
+            /** @description The image as the container was created with it */
+            image: string;
+            /** @description The ID of the image it runs */
+            imageId: string;
+            /** @description True for the container Bayplan itself runs in */
+            isSelf: boolean;
+            /** @description Every label, as the engine reports them. Do not put secrets in labels */
+            labels: {
+                [key: string]: string;
+            };
+            logConfig: components["schemas"]["ContainerLogConfigBody"];
+            /** @description True when any value was withheld from env or logConfig.options */
+            masked: boolean;
+            mounts: components["schemas"]["ContainerMountBody"][] | null;
+            /** @description The container name without the leading slash */
+            name: string;
+            networks: components["schemas"]["ContainerNetworkBody"][] | null;
+            /** @description The display name of the node, when it is among the nodes that answered */
+            node?: string;
+            /** @description The ID of the node the container is on: what a write is routed by */
+            nodeId: string;
+            /** @description True when the kernel killed it for running out of memory */
+            oomKilled: boolean;
+            /** @description Published ports only */
+            ports: components["schemas"]["ContainerPortBody"][] | null;
+            /** @description The compose project (com.docker.compose.project); empty when the container has none */
+            project: string;
+            /** @description True when the host of this container's node is read-only, so no change to it will be accepted */
+            readOnly: boolean;
+            /**
+             * Format: int64
+             * @description How many times the engine has restarted it
+             */
+            restartCount: number;
+            /**
+             * Format: int64
+             * @description The on-failure maximum; 0 when none is set
+             */
+            restartMaxRetries: number;
+            /** @enum {string} */
+            restartPolicy: "no" | "always" | "on-failure" | "unless-stopped";
+            /**
+             * @description server for the container Bayplan itself runs in, agent for a Bayplan agent's container, empty otherwise
+             * @enum {string}
+             */
+            selfKind: "" | "server" | "agent";
+            /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
+            service: string;
+            /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
+            stack: string;
+            /**
+             * Format: date-time
+             * @description When it last started; absent when it never did
+             */
+            startedAt?: string;
+            /**
+             * @description The container state
+             * @enum {string}
+             */
+            state: "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead";
+            stopSignal?: string;
+            /**
+             * Format: int64
+             * @description Seconds the container's own setting waits before a kill; absent when it sets none
+             */
+            stopTimeout?: number;
+            user?: string;
+            workingDir?: string;
+        };
         ContainerItem: {
             /** Format: date-time */
             created?: string;
@@ -2175,6 +2288,48 @@ export interface components {
              * @description How many containers there are before the search and the status filter are applied (after the node filter), so a page can say 3 of 600
              */
             unfilteredTotal: number;
+        };
+        ContainerLogConfigBody: {
+            /** @description The driver's options by name. Their values can carry credentials, so they are withheld unless the caller holds secrets.reveal on this environment */
+            options: components["schemas"]["OptionVar"][] | null;
+            /** @description The log driver, for example json-file; empty when the engine did not say */
+            type: string;
+        };
+        ContainerMountBody: {
+            /** @description The path inside the container */
+            destination: string;
+            /** @description The engine's mount options, for example z or ro */
+            mode?: string;
+            /** @description The volume name, for a volume */
+            name?: string;
+            /** @description True when the container may write to it */
+            rw: boolean;
+            /** @description The host path or, for a volume, where the engine keeps it */
+            source: string;
+            /** @description bind, volume, tmpfs, npipe or cluster */
+            type: string;
+        };
+        ContainerNetworkBody: {
+            /** @description The DNS names the container answers to on this network */
+            aliases: string[] | null;
+            ipv4?: string;
+            ipv6?: string;
+            mac?: string;
+            name: string;
+            networkId: string;
+        };
+        ContainerPortBody: {
+            /**
+             * Format: int64
+             * @description The port inside the container
+             */
+            containerPort: number;
+            /** @description The host address it is bound to; empty when the engine did not say */
+            hostIp?: string;
+            /** @description The port on the host */
+            hostPort: string;
+            /** @description tcp, udp or sctp */
+            protocol: string;
         };
         ContainerRemoveRequest: {
             /**
@@ -2334,6 +2489,14 @@ export interface components {
              * @enum {string}
              */
             subjectType: "user" | "team";
+        };
+        EnvVar: {
+            /** @description True when the value was withheld because the caller may not reveal secrets on this environment */
+            masked: boolean;
+            /** @description The variable's name */
+            name: string;
+            /** @description The variable's value; absent while masked */
+            value?: string;
         };
         EnvWarningBody: {
             /** @description For cert_not_renewing and clock_skew: the agent */
@@ -2977,6 +3140,14 @@ export interface components {
             node: string;
             /** Format: int64 */
             volumes: number;
+        };
+        OptionVar: {
+            /** @description True when the value was withheld because the caller may not reveal secrets on this environment */
+            masked: boolean;
+            /** @description The option's name */
+            name: string;
+            /** @description The option's value; absent while masked */
+            value?: string;
         };
         OwnedBody: {
             /** @description The environment it acts on */
@@ -4739,6 +4910,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContainerActionResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getContainer: {
+        parameters: {
+            query?: {
+                /** @description The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required) */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerDetailBody"];
                 };
             };
             /** @description Error */

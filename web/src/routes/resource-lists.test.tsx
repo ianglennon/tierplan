@@ -275,12 +275,15 @@ describe("containers list", () => {
     expect(cellsOf(rows[1] as HTMLElement).slice(1)[3]).toBe("5432/tcp, 5433/tcp");
   });
 
-  it("has a checkbox for each row and one for all, no links, and its only other buttons are the closed row action menus (D-56, plan 04-08)", async () => {
+  it("has a checkbox for each row and one for all, a link for each name, and its only other buttons are the closed row action menus (D-56, plan 04-08, 04-10)", async () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const table = screen.getByRole("table");
     expect(within(table).getAllByRole("checkbox")).toHaveLength(4);
-    expect(within(table).queryByRole("link")).toBeNull();
+    // The only links are the names, which open the container (plan 04-10).
+    const links = within(table).getAllByRole("link");
+    expect(links).toHaveLength(3); // one per row; the fourth checkbox is Select all
+    for (const l of links) expect(l.getAttribute("href")).toMatch(/^\/env\/e1\/containers\/\w+/);
     expect(within(table).queryByRole("menu")).toBeNull();
     // The sortable headers are buttons too (plan 04-07); the rows hold only menus.
     const buttons = within(table)

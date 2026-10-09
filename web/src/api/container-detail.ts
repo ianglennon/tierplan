@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+import { queryOptions } from "@tanstack/react-query";
+
+import { api } from "@/api/client";
+import { readProblem } from "@/api/problem";
+import { listKey } from "@/api/resources";
+import type { components } from "@/api/schema";
+
+export type ContainerDetail = components["schemas"]["ContainerDetailBody"];
+
+// How often an open detail page reads the container again when no Docker event
+// has told it to: the same fallback the lists use.
+export const DETAIL_REFETCH_MS = 30_000;
+
+// DetailLoadError is a detail read the server refused or could not answer. The
+// status and the problem type tell a container that no longer exists (404
+// container_not_found) from every other failure.
+export class DetailLoadError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`GET container failed (${status})`);
+    this.name = "DetailLoadError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// isGone says whether the error is the engine answering that the container does
+// not exist: it was removed, or recreated under a new ID.
+export function isGone(error: unknown): boolean {
+  return (
+    error instanceof DetailLoadError && error.status === 404 && error.type === "container_not_found"
+  );
+}
+
+// The key of one container's detail. It extends the containers list key, so the
+// events feed and every action, which refresh that key, refresh an open detail
+// page too.
+export function containerDetailKey(envId: string, id: string, nodeId: string | undefined) {
+  return [...listKey(envId, "containers"), "detail", nodeId ?? "", id] as const;
+}
+
+export function containerDetailQuery(envId: string, id: string, nodeId?: string) {
+  return queryOptions({
+    queryKey: containerDetailKey(envId, id, nodeId),
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/containers/{containerId}", {
+        params: { path: { envId, containerId: id }, query: nodeId ? { nodeId } : undefined },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new DetailLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    // A container that does not exist will not exist on a second try.
+    retry: (count, error) => !isGone(error) && count < 1,
+    refetchInterval: DETAIL_REFETCH_MS,
+  });
+}

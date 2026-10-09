@@ -972,6 +972,247 @@
         ],
         "type": "object"
       },
+      "ContainerDetailBody": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "The command (Cmd)",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "created": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "entrypoint": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "env": {
+            "description": "The environment variables by name. Their values are withheld unless the caller holds secrets.reveal on this environment",
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "error": {
+            "description": "The engine's last start error",
+            "type": "string"
+          },
+          "exitCode": {
+            "description": "The exit code of its last run",
+            "format": "int64",
+            "type": "integer"
+          },
+          "finishedAt": {
+            "description": "When it last stopped; absent while it runs or when it never ran",
+            "format": "date-time",
+            "type": "string"
+          },
+          "health": {
+            "enum": [
+              "none",
+              "starting",
+              "healthy",
+              "unhealthy"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "description": "The full container ID",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image as the container was created with it",
+            "type": "string"
+          },
+          "imageId": {
+            "description": "The ID of the image it runs",
+            "type": "string"
+          },
+          "isSelf": {
+            "description": "True for the container Bayplan itself runs in",
+            "type": "boolean"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every label, as the engine reports them. Do not put secrets in labels",
+            "type": "object"
+          },
+          "logConfig": {
+            "$ref": "#/components/schemas/ContainerLogConfigBody"
+          },
+          "masked": {
+            "description": "True when any value was withheld from env or logConfig.options",
+            "type": "boolean"
+          },
+          "mounts": {
+            "items": {
+              "$ref": "#/components/schemas/ContainerMountBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The container name without the leading slash",
+            "type": "string"
+          },
+          "networks": {
+            "items": {
+              "$ref": "#/components/schemas/ContainerNetworkBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "node": {
+            "description": "The display name of the node, when it is among the nodes that answered",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of the node the container is on: what a write is routed by",
+            "type": "string"
+          },
+          "oomKilled": {
+            "description": "True when the kernel killed it for running out of memory",
+            "type": "boolean"
+          },
+          "ports": {
+            "description": "Published ports only",
+            "items": {
+              "$ref": "#/components/schemas/ContainerPortBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "The compose project (com.docker.compose.project); empty when the container has none",
+            "type": "string"
+          },
+          "readOnly": {
+            "description": "True when the host of this container's node is read-only, so no change to it will be accepted",
+            "type": "boolean"
+          },
+          "restartCount": {
+            "description": "How many times the engine has restarted it",
+            "format": "int64",
+            "type": "integer"
+          },
+          "restartMaxRetries": {
+            "description": "The on-failure maximum; 0 when none is set",
+            "format": "int64",
+            "type": "integer"
+          },
+          "restartPolicy": {
+            "enum": [
+              "no",
+              "always",
+              "on-failure",
+              "unless-stopped"
+            ],
+            "type": "string"
+          },
+          "selfKind": {
+            "description": "server for the container Bayplan itself runs in, agent for a Bayplan agent's container, empty otherwise",
+            "enum": [
+              "",
+              "server",
+              "agent"
+            ],
+            "type": "string"
+          },
+          "service": {
+            "description": "The swarm service name (com.docker.swarm.service.name); empty when the container has none",
+            "type": "string"
+          },
+          "stack": {
+            "description": "The swarm stack namespace (com.docker.stack.namespace); empty when the container has none",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "When it last started; absent when it never did",
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "The container state",
+            "enum": [
+              "created",
+              "running",
+              "paused",
+              "restarting",
+              "removing",
+              "exited",
+              "dead"
+            ],
+            "type": "string"
+          },
+          "stopSignal": {
+            "type": "string"
+          },
+          "stopTimeout": {
+            "description": "Seconds the container's own setting waits before a kill; absent when it sets none",
+            "format": "int64",
+            "type": "integer"
+          },
+          "user": {
+            "type": "string"
+          },
+          "workingDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "readOnly",
+          "id",
+          "name",
+          "image",
+          "imageId",
+          "state",
+          "health",
+          "exitCode",
+          "oomKilled",
+          "restartCount",
+          "command",
+          "entrypoint",
+          "restartPolicy",
+          "restartMaxRetries",
+          "ports",
+          "mounts",
+          "networks",
+          "labels",
+          "env",
+          "logConfig",
+          "masked",
+          "isSelf",
+          "selfKind",
+          "project",
+          "stack",
+          "service"
+        ],
+        "type": "object"
+      },
       "ContainerItem": {
         "additionalProperties": false,
         "properties": {
@@ -1145,6 +1386,130 @@
           "notReporting",
           "unfilteredTotal",
           "statusCounts"
+        ],
+        "type": "object"
+      },
+      "ContainerLogConfigBody": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "description": "The driver's options by name. Their values can carry credentials, so they are withheld unless the caller holds secrets.reveal on this environment",
+            "items": {
+              "$ref": "#/components/schemas/OptionVar"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "type": {
+            "description": "The log driver, for example json-file; empty when the engine did not say",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "options"
+        ],
+        "type": "object"
+      },
+      "ContainerMountBody": {
+        "additionalProperties": false,
+        "properties": {
+          "destination": {
+            "description": "The path inside the container",
+            "type": "string"
+          },
+          "mode": {
+            "description": "The engine's mount options, for example z or ro",
+            "type": "string"
+          },
+          "name": {
+            "description": "The volume name, for a volume",
+            "type": "string"
+          },
+          "rw": {
+            "description": "True when the container may write to it",
+            "type": "boolean"
+          },
+          "source": {
+            "description": "The host path or, for a volume, where the engine keeps it",
+            "type": "string"
+          },
+          "type": {
+            "description": "bind, volume, tmpfs, npipe or cluster",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "source",
+          "destination",
+          "rw"
+        ],
+        "type": "object"
+      },
+      "ContainerNetworkBody": {
+        "additionalProperties": false,
+        "properties": {
+          "aliases": {
+            "description": "The DNS names the container answers to on this network",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "ipv4": {
+            "type": "string"
+          },
+          "ipv6": {
+            "type": "string"
+          },
+          "mac": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "networkId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "networkId",
+          "name",
+          "aliases"
+        ],
+        "type": "object"
+      },
+      "ContainerPortBody": {
+        "additionalProperties": false,
+        "properties": {
+          "containerPort": {
+            "description": "The port inside the container",
+            "format": "int64",
+            "type": "integer"
+          },
+          "hostIp": {
+            "description": "The host address it is bound to; empty when the engine did not say",
+            "type": "string"
+          },
+          "hostPort": {
+            "description": "The port on the host",
+            "type": "string"
+          },
+          "protocol": {
+            "description": "tcp, udp or sctp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "containerPort",
+          "protocol",
+          "hostPort"
         ],
         "type": "object"
       },
@@ -1646,6 +2011,28 @@
           "subjectType",
           "subjectId",
           "role"
+        ],
+        "type": "object"
+      },
+      "EnvVar": {
+        "additionalProperties": false,
+        "properties": {
+          "masked": {
+            "description": "True when the value was withheld because the caller may not reveal secrets on this environment",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The variable's name",
+            "type": "string"
+          },
+          "value": {
+            "description": "The variable's value; absent while masked",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "masked"
         ],
         "type": "object"
       },
@@ -3216,6 +3603,28 @@
           "images",
           "volumes",
           "networks"
+        ],
+        "type": "object"
+      },
+      "OptionVar": {
+        "additionalProperties": false,
+        "properties": {
+          "masked": {
+            "description": "True when the value was withheld because the caller may not reveal secrets on this environment",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The option's name",
+            "type": "string"
+          },
+          "value": {
+            "description": "The option's value; absent while masked",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "masked"
         ],
         "type": "object"
       },
@@ -6656,6 +7065,80 @@
           }
         },
         "summary": "Remove containers",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/containers/{containerId}": {
+      "get": {
+        "description": "Everything the container detail page shows, read live from the container's engine: state, health, image, command, ports, mounts, networks with their aliases, restart policy, labels, environment variables and log driver. The container lives on one node, named by nodeId (the nodeId of its row in the containers list); it may be left out on an environment of one node and is required on a swarm (422 node_required). The values of the environment variables and of the log driver's options can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env and logConfig.options then list the names with masked true and no value, and masked at the top says something was withheld. 404 container_not_found when the engine has no such container (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. Needs containers.read (Viewer) on the environment.",
+        "operationId": "getContainer",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The container ID or name",
+            "in": "path",
+            "name": "containerId",
+            "required": true,
+            "schema": {
+              "description": "The container ID or name",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required)",
+            "explode": false,
+            "in": "query",
+            "name": "nodeId",
+            "schema": {
+              "description": "The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required)",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One container: its state and configuration",
         "tags": [
           "environments"
         ]

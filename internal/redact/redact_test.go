@@ -72,6 +72,43 @@ func TestEnvOfNothingIsAnEmptyListNotNull(t *testing.T) {
 	}
 }
 
+func TestOptionsMaskEveryValueUnlessTheCallerMayRevealAndSortByName(t *testing.T) {
+	opts := map[string]string{"syslog-address": "tcp://user:hunter2@logs:514", "tag": "web", "env": ""}
+	got := redact.Options(opts, false)
+	want := []redact.OptionVar{{Name: "env", Masked: true}, {Name: "syslog-address", Masked: true}, {Name: "tag", Masked: true}}
+	if len(got) != len(want) {
+		t.Fatalf("Options = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Options[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"hunter2", "tcp://", "web"} {
+		if strings.Contains(string(raw), leak) {
+			t.Fatalf("the masked body %s carries %q", raw, leak)
+		}
+	}
+
+	shown := redact.Options(opts, true)
+	if len(shown) != 3 || shown[1] != (redact.OptionVar{Name: "syslog-address", Value: "tcp://user:hunter2@logs:514"}) || shown[2].Value != "web" {
+		t.Errorf("revealed Options = %+v", shown)
+	}
+}
+
+func TestOptionsOfNothingIsAnEmptyListNotNull(t *testing.T) {
+	for _, reveal := range []bool{false, true} {
+		raw, err := json.Marshal(redact.Options(nil, reveal))
+		if err != nil || string(raw) != "[]" {
+			t.Errorf("Options(nil, %v) marshals to %s (%v), want []", reveal, raw, err)
+		}
+	}
+}
+
 type revealFx struct {
 	st *store.Store
 	c  *rbac.Checker

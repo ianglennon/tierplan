@@ -34,10 +34,12 @@ import { Route as AppSettingsAccessIndexRouteImport } from './routes/_app/settin
 import { Route as AppSettingsAccessTeamsRouteImport } from './routes/_app/settings/access/teams'
 import { Route as AppSettingsAccessUsersRouteImport } from './routes/_app/settings/access/users'
 import { Route as AppSettingsEnvironmentsEnvIdRouteImport } from './routes/_app/settings/environments_.$envId'
+import { Route as AppEnvEnvIdContainersContainerIdRouteImport } from './routes/_app/env/$envId/containers_.$containerId'
 import { Route as AppSettingsAccessTeamsTeamIdRouteImport } from './routes/_app/settings/access/teams_.$teamId'
 import { Route as AppSettingsAccessUsersUserIdRouteImport } from './routes/_app/settings/access/users_.$userId'
 import { Route as AppSettingsEnvironmentsEnvIdIndexRouteImport } from './routes/_app/settings/environments_.$envId.index'
 import { Route as AppSettingsEnvironmentsEnvIdAccessRouteImport } from './routes/_app/settings/environments_.$envId.access'
+import { Route as AppEnvEnvIdContainersContainerIdIndexRouteImport } from './routes/_app/env/$envId/containers_.$containerId.index'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -164,6 +166,12 @@ const AppSettingsEnvironmentsEnvIdRoute =
     path: '/environments/$envId',
     getParentRoute: () => AppSettingsRoute,
   } as any)
+const AppEnvEnvIdContainersContainerIdRoute =
+  AppEnvEnvIdContainersContainerIdRouteImport.update({
+    id: '/containers_/$containerId',
+    path: '/containers/$containerId',
+    getParentRoute: () => AppEnvEnvIdRoute,
+  } as any)
 const AppSettingsAccessTeamsTeamIdRoute =
   AppSettingsAccessTeamsTeamIdRouteImport.update({
     id: '/teams_/$teamId',
@@ -187,6 +195,12 @@ const AppSettingsEnvironmentsEnvIdAccessRoute =
     id: '/access',
     path: '/access',
     getParentRoute: () => AppSettingsEnvironmentsEnvIdRoute,
+  } as any)
+const AppEnvEnvIdContainersContainerIdIndexRoute =
+  AppEnvEnvIdContainersContainerIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AppEnvEnvIdContainersContainerIdRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -214,10 +228,12 @@ export interface FileRoutesByFullPath {
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdRouteWithChildren
   '/env/$envId/': typeof AppEnvEnvIdIndexRoute
   '/settings/access/': typeof AppSettingsAccessIndexRoute
+  '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
   '/settings/environments/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
+  '/env/$envId/containers/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/invite': typeof InviteRoute
@@ -244,6 +260,7 @@ export interface FileRoutesByTo {
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdIndexRoute
+  '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -272,10 +289,12 @@ export interface FileRoutesById {
   '/_app/settings/environments_/$envId': typeof AppSettingsEnvironmentsEnvIdRouteWithChildren
   '/_app/env/$envId/': typeof AppEnvEnvIdIndexRoute
   '/_app/settings/access/': typeof AppSettingsAccessIndexRoute
+  '/_app/env/$envId/containers_/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   '/_app/settings/access/teams_/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/_app/settings/access/users_/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/_app/settings/environments_/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
   '/_app/settings/environments_/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
+  '/_app/env/$envId/containers_/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -304,10 +323,12 @@ export interface FileRouteTypes {
     | '/settings/environments/$envId'
     | '/env/$envId/'
     | '/settings/access/'
+    | '/env/$envId/containers/$containerId'
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
     | '/settings/environments/$envId/'
+    | '/env/$envId/containers/$containerId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/invite'
@@ -334,6 +355,7 @@ export interface FileRouteTypes {
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
     | '/settings/environments/$envId'
+    | '/env/$envId/containers/$containerId'
   id:
     | '__root__'
     | '/_app'
@@ -361,10 +383,12 @@ export interface FileRouteTypes {
     | '/_app/settings/environments_/$envId'
     | '/_app/env/$envId/'
     | '/_app/settings/access/'
+    | '/_app/env/$envId/containers_/$containerId'
     | '/_app/settings/access/teams_/$teamId'
     | '/_app/settings/access/users_/$userId'
     | '/_app/settings/environments_/$envId/access'
     | '/_app/settings/environments_/$envId/'
+    | '/_app/env/$envId/containers_/$containerId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -552,6 +576,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsEnvironmentsEnvIdRouteImport
       parentRoute: typeof AppSettingsRoute
     }
+    '/_app/env/$envId/containers_/$containerId': {
+      id: '/_app/env/$envId/containers_/$containerId'
+      path: '/containers/$containerId'
+      fullPath: '/env/$envId/containers/$containerId'
+      preLoaderRoute: typeof AppEnvEnvIdContainersContainerIdRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
     '/_app/settings/access/teams_/$teamId': {
       id: '/_app/settings/access/teams_/$teamId'
       path: '/teams/$teamId'
@@ -579,6 +610,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings/environments/$envId/access'
       preLoaderRoute: typeof AppSettingsEnvironmentsEnvIdAccessRouteImport
       parentRoute: typeof AppSettingsEnvironmentsEnvIdRoute
+    }
+    '/_app/env/$envId/containers_/$containerId/': {
+      id: '/_app/env/$envId/containers_/$containerId/'
+      path: '/'
+      fullPath: '/env/$envId/containers/$containerId/'
+      preLoaderRoute: typeof AppEnvEnvIdContainersContainerIdIndexRouteImport
+      parentRoute: typeof AppEnvEnvIdContainersContainerIdRoute
     }
   }
 }
@@ -645,12 +683,28 @@ const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
   AppSettingsRouteChildren,
 )
 
+interface AppEnvEnvIdContainersContainerIdRouteChildren {
+  AppEnvEnvIdContainersContainerIdIndexRoute: typeof AppEnvEnvIdContainersContainerIdIndexRoute
+}
+
+const AppEnvEnvIdContainersContainerIdRouteChildren: AppEnvEnvIdContainersContainerIdRouteChildren =
+  {
+    AppEnvEnvIdContainersContainerIdIndexRoute:
+      AppEnvEnvIdContainersContainerIdIndexRoute,
+  }
+
+const AppEnvEnvIdContainersContainerIdRouteWithChildren =
+  AppEnvEnvIdContainersContainerIdRoute._addFileChildren(
+    AppEnvEnvIdContainersContainerIdRouteChildren,
+  )
+
 interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdContainersRoute: typeof AppEnvEnvIdContainersRoute
   AppEnvEnvIdImagesRoute: typeof AppEnvEnvIdImagesRoute
   AppEnvEnvIdNetworksRoute: typeof AppEnvEnvIdNetworksRoute
   AppEnvEnvIdVolumesRoute: typeof AppEnvEnvIdVolumesRoute
   AppEnvEnvIdIndexRoute: typeof AppEnvEnvIdIndexRoute
+  AppEnvEnvIdContainersContainerIdRoute: typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
 }
 
 const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
@@ -659,6 +713,8 @@ const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
   AppEnvEnvIdNetworksRoute: AppEnvEnvIdNetworksRoute,
   AppEnvEnvIdVolumesRoute: AppEnvEnvIdVolumesRoute,
   AppEnvEnvIdIndexRoute: AppEnvEnvIdIndexRoute,
+  AppEnvEnvIdContainersContainerIdRoute:
+    AppEnvEnvIdContainersContainerIdRouteWithChildren,
 }
 
 const AppEnvEnvIdRouteWithChildren = AppEnvEnvIdRoute._addFileChildren(

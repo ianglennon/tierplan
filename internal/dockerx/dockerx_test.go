@@ -426,7 +426,8 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // ID and an argv and sets only the TTY, size, user, working directory and command.
 // ContainerRemove (Phase 4) removes one container by ID with two booleans, force and
 // anonymous volumes; it never sets links and takes no path.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerOwnership", "ContainerRemove", "Events", "Probe", "RestartPolicies", "Snapshot", "StartExec"}
+// ContainerDetail (Phase 4, RES-01) is a read: one inspect by ID, typed.
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "Probe", "RestartPolicies", "Snapshot", "StartExec"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.

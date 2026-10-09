@@ -1,0 +1,37 @@
+{
+  "containerdetail": {
+    "breadcrumb": {
+      "label": "Breadcrumb",
+      "containers": "Containers"
+    },
+    "tabs": {
+      "label": "Container sections",
+      "overview": "Overview"
+    },
+    "loading": "Loading the container",
+    "state": {
+      "title": "State",
+      "status": "Status",
+      "health": "Health",
+      "started": "Started",
+      "finished": "Finished",
+      "exitCode": "Exit code",
+      "restarts": "Restarts",
+      "oomKilled": "Out of memory killed",
+      "yes": "Yes",
+      "no": "No"
+    },
+    "health": {
+      "none": "No health check",
+      "starting": "Starting",
+      "healthy": "Healthy",
+      "unhealthy": "Unhealthy"
+    },
+    "env": {
+      "title": "Environment variables",
+      "label": "Environment variables",
+      "empty": "No environment variables.",
+      "masked": "Values are hidden. Needs the reveal secrets permission to show them."
+    }
+  }
+}

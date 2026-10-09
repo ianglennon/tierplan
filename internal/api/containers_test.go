@@ -1007,3 +1007,219 @@ func TestOwnContainerADroppedAgentConnectionIsRecordedAsConnectionLost(t *testin
 		t.Fatalf("audit = %+v", rows)
 	}
 }
+
+// The container detail (plan 04-10, RES-01, D-04, P3 D-15a, T-04-40). Values of
+// variables and of log-driver options are masked on the server unless the caller
+// holds secrets.reveal.
+
+type detailBody struct {
+	Node      string `json:"node"`
+	NodeID    string `json:"nodeId"`
+	ReadOnly  bool   `json:"readOnly"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Image     string `json:"image"`
+	State     string `json:"state"`
+	Health    string `json:"health"`
+	ExitCode  int    `json:"exitCode"`
+	Command   []string
+	Masked    bool `json:"masked"`
+	IsSelf    bool `json:"isSelf"`
+	SelfKind  string
+	Project   string `json:"project"`
+	Stack     string `json:"stack"`
+	Service   string `json:"service"`
+	Restart   string `json:"restartPolicy"`
+	Retries   int    `json:"restartMaxRetries"`
+	StartedAt string `json:"startedAt"`
+	Env       []struct {
+		Name   string `json:"name"`
+		Value  string `json:"value"`
+		Masked bool   `json:"masked"`
+	} `json:"env"`
+	LogConfig struct {
+		Type    string `json:"type"`
+		Options []struct {
+			Name   string `json:"name"`
+			Value  string `json:"value"`
+			Masked bool   `json:"masked"`
+		} `json:"options"`
+	} `json:"logConfig"`
+	Ports []struct {
+		ContainerPort int    `json:"containerPort"`
+		Protocol      string `json:"protocol"`
+		HostPort      string `json:"hostPort"`
+	} `json:"ports"`
+	Mounts []struct {
+		Type, Destination, Mode string
+	} `json:"mounts"`
+	Networks []struct {
+		Name    string   `json:"name"`
+		Aliases []string `json:"aliases"`
+	} `json:"networks"`
+	Labels map[string]string `json:"labels"`
+}
+
+func detailEngine() dockertest.FakeConfig {
+	cfg := actionEngine()
+	cfg.Containers[1].Labels = map[string]string{"com.docker.compose.project": "shop"}
+	cfg.Containers[1].Ports = []dockertest.FakePort{{IP: "0.0.0.0", Private: 80, Public: 8080, Type: "tcp"}}
+	cfg.Containers[1].Mounts = []string{"data"}
+	cfg.Containers[1].Networks = map[string]dockertest.FakeEndpoint{"front": {NetworkID: "n1", IPv4: "10.0.0.2", Aliases: []string{"web"}}}
+	cfg.Containers[1].Health = "healthy"
+	cfg.Containers[1].Inspect = dockertest.FakeInspect{
+		Env: []string{"DB_PASSWORD=hunter2", "MODE=prod"}, Cmd: []string{"nginx", "-g", "daemon off;"},
+		StartedAt: "2026-10-01T10:00:00Z", FinishedAt: "0001-01-01T00:00:00Z",
+		LogType: "syslog", LogOptions: map[string]string{"syslog-address": "tcp://user:s3cret@logs:514"},
+	}
+	cfg.RestartPolicies = map[string]string{webID: "on-failure:3"}
+	return cfg
+}
+
+func (f *envFix) detail(t *testing.T, cookie string, e envBody, id, query string) *envRec {
+	t.Helper()
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/containers/" + id + query, cookie: cookie})
+	ptyp := ""
+	if rec.Code >= 400 {
+		ptyp = problemType(t, rec)
+	}
+	return &envRec{rec.Code, rec.Body.Bytes(), ptyp}
+}
+
+func TestContainerDetailOfAViewerNamesTheVariablesAndWithholdsEveryValue(t *testing.T) {
+	f, e := dashEnv(t, detailEngine())
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	cookie, _ := f.signIn(t, "viewer", false)
+
+	rec := f.detail(t, cookie, e, "web", "?nodeId="+e.ID)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s\n%s", rec.code, rec.body, f.logs)
+	}
+	for _, leak := range []string{"hunter2", "s3cret", "prod", "tcp://"} {
+		if strings.Contains(string(rec.body), leak) {
+			t.Fatalf("a Viewer's body carries %q: %s", leak, rec.body)
+		}
+	}
+	d := decode[detailBody](t, rec)
+	if !d.Masked || len(d.Env) != 2 || d.Env[0].Name != "DB_PASSWORD" || !d.Env[0].Masked || d.Env[0].Value != "" || d.Env[1].Name != "MODE" || !d.Env[1].Masked {
+		t.Errorf("env = %+v masked=%v", d.Env, d.Masked)
+	}
+	if d.LogConfig.Type != "syslog" || len(d.LogConfig.Options) != 1 || !d.LogConfig.Options[0].Masked || d.LogConfig.Options[0].Value != "" {
+		t.Errorf("log config = %+v", d.LogConfig)
+	}
+	// What is not secret is shown.
+	if d.ID != webID || d.Name != "web" || d.Image != "nginx:1.27" || d.State != "running" || d.Health != "healthy" || d.NodeID != e.ID || d.Node != "node-1" {
+		t.Errorf("identity = %+v", d)
+	}
+	if d.Project != "shop" || d.Labels["com.docker.compose.project"] != "shop" || d.Restart != "on-failure" || d.Retries != 3 {
+		t.Errorf("labels and restart = %+v", d)
+	}
+	if len(d.Ports) != 1 || d.Ports[0].ContainerPort != 80 || d.Ports[0].HostPort != "8080" || len(d.Mounts) != 1 || d.Mounts[0].Type != "volume" {
+		t.Errorf("ports and mounts = %+v %+v", d.Ports, d.Mounts)
+	}
+	if len(d.Networks) != 1 || d.Networks[0].Name != "front" || len(d.Networks[0].Aliases) != 1 || d.Networks[0].Aliases[0] != "web" {
+		t.Errorf("networks = %+v", d.Networks)
+	}
+	if d.StartedAt != "2026-10-01T10:00:00Z" || strings.Contains(string(rec.body), "0001-01-01") {
+		t.Errorf("times: the engine's zero time must be left out: %s", rec.body)
+	}
+	if got := rec.body; !strings.Contains(string(got), `"command":["nginx","-g","daemon off;"]`) {
+		t.Errorf("command missing: %s", got)
+	}
+}
+
+func TestContainerDetailOfAnAdminCarriesTheValues(t *testing.T) {
+	f, e := dashEnv(t, detailEngine())
+	rec := f.detail(t, f.cookie, e, webID, "?nodeId="+e.ID)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	d := decode[detailBody](t, rec)
+	if d.Masked || len(d.Env) != 2 || d.Env[0].Value != "hunter2" || d.Env[0].Masked || d.Env[1].Value != "prod" {
+		t.Errorf("env = %+v masked=%v", d.Env, d.Masked)
+	}
+	if len(d.LogConfig.Options) != 1 || d.LogConfig.Options[0].Value != "tcp://user:s3cret@logs:514" {
+		t.Errorf("log options = %+v", d.LogConfig.Options)
+	}
+}
+
+func TestContainerDetailOfAnOperatorShowsValuesOnlyWithTheRevealExtra(t *testing.T) {
+	f, e := dashEnv(t, detailEngine())
+	f.addUser(t, "plain", false)
+	f.addEnvRole(t, "plain", e.ID, "operator")
+	alice := f.addUser(t, "alice", false)
+	if rec := f.putGrant(t, f.cookie, f.csrf, "users", alice, `{"scope":"env","envId":"`+e.ID+`","role":"operator","extras":["secrets.reveal"]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("grant: %d %s", rec.Code, rec.Body)
+	}
+
+	plain, _ := f.signIn(t, "plain", false)
+	rec := f.detail(t, plain, e, "web", "?nodeId="+e.ID)
+	if rec.code != http.StatusOK || strings.Contains(string(rec.body), "hunter2") || !decode[detailBody](t, rec).Masked {
+		t.Fatalf("an Operator without the extra: %d %s", rec.code, rec.body)
+	}
+	revealing, _ := f.signIn(t, "alice", false)
+	rec = f.detail(t, revealing, e, "web", "?nodeId="+e.ID)
+	if d := decode[detailBody](t, rec); rec.code != http.StatusOK || d.Masked || d.Env[0].Value != "hunter2" {
+		t.Fatalf("an Operator with secrets.reveal: %d %s", rec.code, rec.body)
+	}
+}
+
+func TestContainerDetailAnUnknownContainerIs404AndWithoutAGrantTheEnvironmentIsNotFound(t *testing.T) {
+	f, e := dashEnv(t, detailEngine())
+	rec := f.detail(t, f.cookie, e, "ghost", "?nodeId="+e.ID)
+	if rec.code != http.StatusNotFound || rec.ptyp != "container_not_found" {
+		t.Fatalf("unknown container = %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	f.addUser(t, "nobody", false)
+	nobody, _ := f.signIn(t, "nobody", false)
+	rec = f.detail(t, nobody, e, "web", "?nodeId="+e.ID)
+	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Fatalf("no grant = %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if anon := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/containers/web"}); anon.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous = %d", anon.Code)
+	}
+}
+
+func TestContainerDetailNodeIDMayBeLeftOutOnOneNodeAndAnUnknownNodeIs503(t *testing.T) {
+	f, e := dashEnv(t, detailEngine())
+	rec := f.detail(t, f.cookie, e, "web", "")
+	if rec.code != http.StatusOK || decode[detailBody](t, rec).NodeID != e.ID {
+		t.Fatalf("no nodeId on one node = %d: %s", rec.code, rec.body)
+	}
+	rec = f.detail(t, f.cookie, e, "web", "?nodeId=elsewhere")
+	if rec.code != http.StatusServiceUnavailable || rec.ptyp != "node_unavailable" {
+		t.Fatalf("unknown node = %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+}
+
+func TestContainerDetailOnASwarmWithoutANodeIDIs422NodeRequired(t *testing.T) {
+	cfg := detailEngine()
+	cfg.SwarmState, cfg.SwarmControl, cfg.SwarmClusterID, cfg.SwarmNodeID = "active", true, "cluster-1", "node-a"
+	f, e := dashEnv(t, cfg)
+	rec := f.detail(t, f.cookie, e, "web", "")
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "node_required" {
+		t.Fatalf("swarm without nodeId = %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if rec = f.detail(t, f.cookie, e, "web", "?nodeId="+e.ID); rec.code != http.StatusOK {
+		t.Fatalf("swarm with nodeId = %d: %s", rec.code, rec.body)
+	}
+}
+
+func TestContainerDetailMarksBayplansOwnContainers(t *testing.T) {
+	f, e := dashEnv(t, detailEngine())
+	own := decode[detailBody](t, f.detail(t, f.cookie, e, selfCtr, "?nodeId="+e.ID))
+	if !own.IsSelf || own.SelfKind != "server" {
+		t.Errorf("own server = %+v", own)
+	}
+	agent := decode[detailBody](t, f.detail(t, f.cookie, e, "bayplan-agent", "?nodeId="+e.ID))
+	if agent.IsSelf || agent.SelfKind != "agent" {
+		t.Errorf("agent = %+v", agent)
+	}
+	// A bad ID is refused by the schema before anything is asked of the engine.
+	if rec := f.detail(t, f.cookie, e, "bad%20id", "?nodeId="+e.ID); rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("bad id = %d: %s", rec.code, rec.body)
+	}
+}

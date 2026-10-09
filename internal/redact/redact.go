@@ -12,6 +12,8 @@ package redact
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -24,6 +26,33 @@ type EnvVar struct {
 	Name   string `json:"name" doc:"The variable's name"`
 	Value  string `json:"value,omitempty" doc:"The variable's value; absent while masked"`
 	Masked bool   `json:"masked" doc:"True when the value was withheld because the caller may not reveal secrets on this environment"`
+}
+
+// Placeholder stands for a value withheld from a document that is sent as it is
+// structured, such as the raw inspect of a container.
+const Placeholder = "<hidden>"
+
+// OptionVar is one option of a log driver as a browser receives it. The values of
+// these options can hold credentials (a syslog address with a password, a Splunk
+// token), so they are masked exactly as environment values are.
+type OptionVar struct {
+	Name   string `json:"name" doc:"The option's name"`
+	Value  string `json:"value,omitempty" doc:"The option's value; absent while masked"`
+	Masked bool   `json:"masked" doc:"True when the value was withheld because the caller may not reveal secrets on this environment"`
+}
+
+// Options turns a map of driver options into OptionVars sorted by name. With reveal
+// false every value is withheld.
+func Options(opts map[string]string, reveal bool) []OptionVar {
+	out := make([]OptionVar, 0, len(opts))
+	for _, name := range slices.Sorted(maps.Keys(opts)) {
+		if reveal {
+			out = append(out, OptionVar{Name: name, Value: opts[name]})
+			continue
+		}
+		out = append(out, OptionVar{Name: name, Masked: true})
+	}
+	return out
 }
 
 // Env turns the "NAME=value" strings Docker reports into EnvVars, in the same

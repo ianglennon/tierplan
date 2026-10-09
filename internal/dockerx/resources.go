@@ -50,7 +50,9 @@ type MountRow struct {
 	Name        string
 	Source      string
 	Destination string
-	RW          bool
+	// Mode is the engine's comma separated mount options (for example "z" or "ro"); empty when it sends none.
+	Mode string
+	RW   bool
 }
 
 // ContainerNet is one network attachment of a container.
@@ -237,7 +239,7 @@ func containerRows(items []container.Summary) []ContainerRow {
 func mountRows(in []container.MountPoint) []MountRow {
 	out := make([]MountRow, 0, len(in))
 	for _, m := range in {
-		out = append(out, MountRow{Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, RW: m.RW})
+		out = append(out, MountRow{Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, Mode: m.Mode, RW: m.RW})
 	}
 	return out
 }
