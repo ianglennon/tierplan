@@ -112,6 +112,10 @@ type FakeConfig struct {
 	// ListDelay is how long /containers/json takes to answer, so a test can
 	// make concurrent callers overlap.
 	ListDelay time.Duration
+	// WriteDelay is how long each container write (start, stop, restart, kill, pause,
+	// unpause, remove) takes to answer, so a test can make concurrent writes overlap
+	// and read the high-water mark with MaxConcurrentWrites.
+	WriteDelay time.Duration
 	// PolicyDeny makes the four list endpoints and every write answer 403 with the
 	// message an agent gives for a request its policy refuses: agent_policy_denied:
 	// followed by the method and path.
@@ -295,6 +299,9 @@ type Fake struct {
 	// writes is every write served, in order (fake_writes.go).
 	states map[string]fakeState
 	writes []string
+	// inflight is how many container writes are being served now, and maxInflight
+	// the most there have been at once (fake_writes.go).
+	inflight, maxInflight int
 	// execs is the exec state (fake_exec.go).
 	execs fakeExecs
 

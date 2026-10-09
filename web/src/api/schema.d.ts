@@ -503,7 +503,7 @@ export interface paths {
         put?: never;
         /**
          * Start or stop containers
-         * @description Starts or stops up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. Bayplan's own server container and any agent container are refused with own_container. A node whose agent runs read-only (BAYPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. Each target is audited as container.started or container.stopped, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
+         * @description Starts or stops up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. At most 4 calls run at once on one node and 16 targets at once overall. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Bayplan's own server container and any agent container are refused with own_container. A node whose agent runs read-only (BAYPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. Each target is audited as container.started or container.stopped, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
          */
         post: operations["actOnContainers"];
         delete?: never;
@@ -2042,10 +2042,17 @@ export interface components {
              * @enum {string}
              */
             action: "start" | "stop";
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
+             */
+            bulkId?: string;
             /** @description The containers to act on, at most 25. Each is acted on and answered separately; one that fails never stops the others */
             targets: components["schemas"]["ContainerActionTarget"][] | null;
         };
         ContainerActionResponse: {
+            /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent */
+            bulkId?: string;
             /** @description One entry per requested target, in request order */
             results: components["schemas"]["ContainerActionResult"][] | null;
         };

@@ -10,6 +10,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
@@ -51,6 +54,7 @@ type actionResult struct {
 }
 
 type actionBody struct {
+	BulkID  string         `json:"bulkId"`
 	Results []actionResult `json:"results"`
 }
 
@@ -366,5 +370,150 @@ func TestContainerActionAnAgentThatRefusesByPolicyIsAgentPolicyDenied(t *testing
 	rows := f.actionAudits(t)
 	if len(rows) != 1 || rows[0].Reason != "agent_policy_denied" {
 		t.Fatalf("audit rows = %+v, want one failure with reason agent_policy_denied", rows)
+	}
+}
+
+// Bulk requests (plan 04-05, D-13, D-14): up to 25 targets, one result and one audit row
+// each, a shared bulk ID, bounded parallelism per node.
+
+const (
+	cacheID = "dddddddddddd44444444444444444444444444444444444444444444444444"
+)
+
+func bulkEngine() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Containers: []dockertest.FakeContainer{
+			{ID: webID, Names: []string{"/web"}, Image: "nginx:1.27", State: "running", Status: "Up 2 hours"},
+			{ID: cacheID, Names: []string{"/cache"}, Image: "redis:8", State: "running", Status: "Up 2 hours"},
+			{ID: dbID, Names: []string{"/db"}, Image: "postgres:17", State: "exited", Status: "Exited (0) 3 hours ago"},
+		},
+	}
+}
+
+func TestBulkStopAnswersInRequestOrderAndEveryAuditRowSharesTheServersBulkID(t *testing.T) {
+	f, e := dashEnv(t, bulkEngine())
+	rec := f.act(t, e, actionJSON("stop", [2]string{e.ID, webID}, [2]string{e.ID, cacheID}, [2]string{e.ID, "ghost"}))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s\n%s", rec.code, rec.body, f.logs)
+	}
+	got := decode[actionBody](t, rec)
+	want := []string{"done/", "done/", "failed/not_found"}
+	if len(got.Results) != 3 {
+		t.Fatalf("results = %+v", got.Results)
+	}
+	for i, r := range got.Results {
+		if r.Result+"/"+r.Code != want[i] {
+			t.Errorf("target %d = %s/%s, want %s", i, r.Result, r.Code, want[i])
+		}
+	}
+	id, err := uuid.Parse(got.BulkID)
+	if err != nil || id.Version() != 7 {
+		t.Fatalf("bulkId = %q (%v), want a UUIDv7 the server made", got.BulkID, err)
+	}
+	rows := f.actionAudits(t)
+	if len(rows) != 3 {
+		t.Fatalf("%d audit rows for 3 targets: %+v", len(rows), rows)
+	}
+	for i, r := range rows {
+		if r.Details["bulk"] != got.BulkID {
+			t.Errorf("row %d bulk = %q, want %q", i, r.Details["bulk"], got.BulkID)
+		}
+	}
+	if rows[2].Result != "failure" || rows[2].Reason != "not_found" {
+		t.Errorf("the unknown container's row = %+v", rows[2])
+	}
+}
+
+func TestBulkIDSentByTheClientIsUsedVerbatimAndANonUUIDIsRefused(t *testing.T) {
+	f, e := dashEnv(t, bulkEngine())
+	const sent = "0190a0a0-1b2c-7d3e-8f40-5a6b7c8d9e0f"
+	body := strings.Replace(actionJSON("stop", [2]string{e.ID, webID}, [2]string{e.ID, cacheID}), `{"action"`, `{"bulkId":"`+sent+`","action"`, 1)
+	rec := f.act(t, e, body)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	if got := decode[actionBody](t, rec); got.BulkID != sent {
+		t.Fatalf("bulkId = %q, want the one sent", got.BulkID)
+	}
+	for i, r := range f.actionAudits(t) {
+		if r.Details["bulk"] != sent {
+			t.Errorf("row %d bulk = %q", i, r.Details["bulk"])
+		}
+	}
+
+	before := len(f.fake.Writes())
+	bad := strings.Replace(actionJSON("stop", [2]string{e.ID, dbID}), `{"action"`, `{"bulkId":"not-a-uuid","action"`, 1)
+	if rec := f.act(t, e, bad); rec.code != http.StatusUnprocessableEntity {
+		t.Fatalf("a bulkId that is not a UUID: status = %d, want 422: %s", rec.code, rec.body)
+	}
+	if after := len(f.fake.Writes()); after != before {
+		t.Fatalf("a refused body sent %d writes", after-before)
+	}
+}
+
+func TestBulkOfNoTargetsOrMoreThan25IsRefusedBeforeAnyDockerCall(t *testing.T) {
+	f, e := dashEnv(t, bulkEngine())
+	many := make([][2]string, 26)
+	for i := range many {
+		many[i] = [2]string{e.ID, "web"}
+	}
+	for name, body := range map[string]string{
+		"zero targets": `{"action":"stop","targets":[]}`,
+		"26 targets":   actionJSON("stop", many...),
+	} {
+		if rec := f.act(t, e, body); rec.code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status = %d, want 422: %s", name, rec.code, rec.body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a refused body sent %v", w)
+	}
+	if rows := f.actionAudits(t); len(rows) != 0 {
+		t.Fatalf("a refused body was audited: %+v", rows)
+	}
+}
+
+func TestBulkRunsAtMostFourCallsAtOnceOnOneNode(t *testing.T) {
+	cfg := dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0", WriteDelay: 150 * time.Millisecond}
+	var targets [][2]string
+	for i := range 12 {
+		id := fmt.Sprintf("%012x%052x", i+1, i+1)
+		cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{ID: id, Names: []string{fmt.Sprintf("/c%d", i)}, Image: "nginx:1.27", State: "running", Status: "Up 1 hour"})
+		targets = append(targets, [2]string{"", id})
+	}
+	f, e := dashEnv(t, cfg)
+	for i := range targets {
+		targets[i][0] = e.ID
+	}
+	rec := f.act(t, e, actionJSON("stop", targets...))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	for i, r := range decode[actionBody](t, rec).Results {
+		if r.Result != "done" {
+			t.Errorf("target %d = %+v", i, r)
+		}
+	}
+	if got := f.fake.MaxConcurrentWrites(); got < 2 || got > 4 {
+		t.Fatalf("the node served up to %d writes at once, want between 2 (it ran in parallel) and 4 (the per-node limit)", got)
+	}
+	if rows := f.actionAudits(t); len(rows) != 12 {
+		t.Fatalf("%d audit rows for 12 targets", len(rows))
+	}
+}
+
+func TestBulkATargetOnANodeThatIsNotConnectedIsNodeUnreachableAndTheOthersStillRun(t *testing.T) {
+	f, e := dashEnv(t, bulkEngine())
+	rec := f.act(t, e, actionJSON("stop", [2]string{"elsewhere", webID}, [2]string{e.ID, cacheID}))
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	got := decode[actionBody](t, rec).Results
+	if got[0].Result != "failed" || got[0].Code != "node_unreachable" || got[1].Result != "done" {
+		t.Fatalf("results = %+v", got)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /containers/" + cacheID + "/stop"}) {
+		t.Fatalf("the daemon saw %v, want only the connected node's target", w)
 	}
 }

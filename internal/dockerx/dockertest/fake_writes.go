@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"time"
 )
 
 // fakeHandler answers one family of requests for the fake daemon. p is the path
@@ -62,6 +63,7 @@ func (f *Fake) serveWrite(w http.ResponseWriter, r *http.Request, p string, cfg 
 	}
 	id, verb := m[1], m[2]
 	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
 	if cfg.PolicyDeny {
 		// The refusal an agent gives for a write its policy does not allow, in the
 		// words the server maps to agent_policy_denied.
@@ -84,6 +86,32 @@ func (f *Fake) serveWrite(w http.ResponseWriter, r *http.Request, p string, cfg 
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 	return true
+}
+
+// beginWrite counts one write as in flight, keeps the high-water mark and waits for
+// delay; the returned function ends the count.
+func (f *Fake) beginWrite(delay time.Duration) func() {
+	f.mu.Lock()
+	f.inflight++
+	f.maxInflight = max(f.maxInflight, f.inflight)
+	f.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	return func() {
+		f.mu.Lock()
+		f.inflight--
+		f.mu.Unlock()
+	}
+}
+
+// MaxConcurrentWrites is the most container writes the daemon has served at the
+// same time since it started. With FakeConfig.WriteDelay set it shows how many calls
+// a caller made in parallel.
+func (f *Fake) MaxConcurrentWrites() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxInflight
 }
 
 // recordWrite notes a write as "METHOD path?query", the path as the daemon saw it
