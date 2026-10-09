@@ -224,6 +224,7 @@ func containerRows(items []container.Summary) []ContainerRow {
 			Labels:   maps.Clone(it.Labels),
 			Mounts:   mountRows(it.Mounts),
 			Networks: netRows(it.NetworkSettings),
+			Health:   healthOf(it),
 		})
 	}
 	slices.SortFunc(rows, func(a, b ContainerRow) int {
@@ -262,6 +263,39 @@ func netRows(ns *container.NetworkSettingsSummary) []ContainerNet {
 	}
 	slices.SortFunc(out, func(a, b ContainerNet) int { return cmp.Compare(a.Name, b.Name) })
 	return out
+}
+
+// Container health values.
+const (
+	HealthNone      = "none"
+	HealthStarting  = "starting"
+	HealthHealthy   = "healthy"
+	HealthUnhealthy = "unhealthy"
+)
+
+// healthOf is the container's health. The engine's own summary wins when it
+// sends one (API 1.52 and later list it); otherwise the status text carries it as
+// "(unhealthy)" or "(health: starting)", which every supported engine writes.
+func healthOf(it container.Summary) string {
+	if it.Health != nil {
+		switch it.Health.Status {
+		case container.Unhealthy:
+			return HealthUnhealthy
+		case container.Starting:
+			return HealthStarting
+		case container.Healthy:
+			return HealthHealthy
+		}
+	}
+	switch {
+	case strings.HasSuffix(it.Status, "(unhealthy)"):
+		return HealthUnhealthy
+	case strings.HasSuffix(it.Status, "(health: starting)"):
+		return HealthStarting
+	case strings.HasSuffix(it.Status, "(healthy)"):
+		return HealthHealthy
+	}
+	return HealthNone
 }
 
 // containerName is the name the container was given, without the leading

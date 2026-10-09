@@ -326,7 +326,7 @@ func TestListsCarryTheDocumentedColumns(t *testing.T) {
 // label, every mount and every variable stays on the server.
 var containerKeys = []string{
 	"node", "nodeId", "id", "name", "state", "status", "image", "created", "ports", "isSelf",
-	"project", "stack", "service",
+	"project", "stack", "service", "health", "selfKind", "readOnly",
 }
 
 func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {

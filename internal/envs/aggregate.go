@@ -18,8 +18,12 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 )
 
-// NodeRef names one node an aggregate was read from.
-type NodeRef struct{ ID, Name, Role string }
+// NodeRef names one node an aggregate was read from. ReadOnly is true when the node's
+// agent reported that its host owner made it read-only; the local socket is never.
+type NodeRef struct {
+	ID, Name, Role string
+	ReadOnly       bool
+}
 
 // Limits of the swarm fan-out (D-46, T-02-72).
 const (
@@ -220,7 +224,7 @@ func (a *Aggregator) Snapshot(ctx context.Context, envID string) (Aggregate, Hea
 func nodeOf(in RollupInput, key string, st Status) NodeRef {
 	for _, a := range in.Agents {
 		if a.TargetKey() == key {
-			return NodeRef{ID: a.ID, Name: nodeName(a), Role: a.Role}
+			return NodeRef{ID: a.ID, Name: nodeName(a), Role: a.Role, ReadOnly: a.ReadOnly}
 		}
 	}
 	name := cleanText(st.Probe.Hostname, maxNodeLen)
@@ -361,7 +365,7 @@ func (a *Aggregator) swarm(ctx context.Context, in RollupInput, h Health) (Aggre
 			agg.Counts.Nodes, agg.Counts.Services = r.snap.Counts.Nodes, r.snap.Counts.Services
 		}
 		before := len(agg.Networks)
-		ref := NodeRef{ID: r.agent.ID, Name: node, Role: r.agent.Role}
+		ref := NodeRef{ID: r.agent.ID, Name: node, Role: r.agent.Role, ReadOnly: r.agent.ReadOnly}
 		agg.addRows(r.snap, ref, nets)
 		agg.Nodes = append(agg.Nodes, ref)
 		agg.ByNode[node] = nodeCounts(r.snap, agg.Networks[before:])

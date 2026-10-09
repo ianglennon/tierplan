@@ -31,6 +31,9 @@ function row(extra: Partial<ContainerRow> = {}): ContainerRow {
     project: "",
     stack: "",
     service: "",
+    health: "none",
+    selfKind: "",
+    readOnly: false,
     ...extra,
   };
 }

@@ -481,7 +481,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q). The search runs on the server before the 500-row cap, so at most 500 rows come back after it, with total the number that matched and unfilteredTotal the number before it. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for Bayplan's own containers) and readOnly (its host refuses changes). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -2114,6 +2114,11 @@ export interface components {
         ContainerItem: {
             /** Format: date-time */
             created?: string;
+            /**
+             * @description The container's health: none when it has no healthcheck
+             * @enum {string}
+             */
+            health: "none" | "starting" | "healthy" | "unhealthy";
             /** @description The full container ID */
             id: string;
             /** @description The image the container was created from */
@@ -2130,6 +2135,13 @@ export interface components {
             ports: string[] | null;
             /** @description The compose project (com.docker.compose.project); empty when the container has none */
             project: string;
+            /** @description True when the host of this container's node is read-only, so no change to it will be accepted */
+            readOnly: boolean;
+            /**
+             * @description server for the container Bayplan itself runs in, agent for a Bayplan agent's container (marked by the label bayplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
+             * @enum {string}
+             */
+            selfKind: "" | "server" | "agent";
             /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
             service: string;
             /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
@@ -2149,6 +2161,8 @@ export interface components {
             nodes: string[] | null;
             /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
             notReporting: string[] | null;
+            /** @description How many containers each status chip counts, after the node filter and before the search and the status filter, so the numbers never shrink with what was typed */
+            statusCounts: components["schemas"]["StatusCountsBody"];
             /**
              * Format: int64
              * @description How many match the search, whatever the cap
@@ -2158,7 +2172,7 @@ export interface components {
             truncated: boolean;
             /**
              * Format: int64
-             * @description How many containers there are before the search is applied (after the node filter), so a page can say 3 of 600
+             * @description How many containers there are before the search and the status filter are applied (after the node filter), so a page can say 3 of 600
              */
             unfilteredTotal: number;
         };
@@ -3296,6 +3310,33 @@ export interface components {
             teamId?: string;
             /** @description The team's name; set when kind is team */
             teamName?: string;
+        };
+        StatusCountsBody: {
+            /**
+             * Format: int64
+             * @description Containers in state exited
+             */
+            exited: number;
+            /**
+             * Format: int64
+             * @description Containers in state paused
+             */
+            paused: number;
+            /**
+             * Format: int64
+             * @description Containers in state restarting
+             */
+            restarting: number;
+            /**
+             * Format: int64
+             * @description Containers in state running
+             */
+            running: number;
+            /**
+             * Format: int64
+             * @description Containers whose health is unhealthy, whatever their state
+             */
+            unhealthy: number;
         };
         SummaryCountsBody: {
             /**
@@ -4582,6 +4623,8 @@ export interface operations {
                 node?: string;
                 /** @description Search: a case-insensitive substring of the name, image, compose project, stack, service or any label key or value. Applied before the 500-row cap */
                 q?: string;
+                /** @description Only containers with one of these statuses, comma separated: running, exited, paused, restarting or unhealthy (a health, not a state). Applied before the 500-row cap; any other value is refused 422 invalid_status */
+                status?: string;
             };
             header?: never;
             path: {
