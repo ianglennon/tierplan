@@ -62,6 +62,8 @@ const (
 	writeTimeout       = 30 * time.Second
 	stopGrace          = 30 * time.Second
 	defaultStopTimeout = 10 // seconds, the engine's own default
+	// actionAuditTimeout bounds the write of one audit row for an action already done.
+	actionAuditTimeout = 10 * time.Second
 
 	problemOptionsSingleOnly = "options_single_only"
 	problemNodeRequired      = "node_required"
@@ -700,12 +702,18 @@ func auditTargets(ctx context.Context, d ContainersDeps, p *rbac.Principal, envI
 		if bulkID != "" {
 			details["bulk"] = bulkID
 		}
-		if err := d.Audit.Record(ctx, audit.Entry{
+		// The action has already happened, so its row must outlive a browser that went away
+		// while it ran (a restart waits out the stop timeout): a cancelled request would
+		// otherwise leave an action with no record.
+		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), actionAuditTimeout)
+		err := d.Audit.Record(wctx, audit.Entry{
 			Actor: p.AuditActor(), Action: action, TargetType: containerTargetType, TargetID: t.ID,
 			EnvID: envID, Result: result, Reason: reason,
 			IP: httpx.ClientIP(ctx), UserAgent: userAgent,
 			Details: details,
-		}); err != nil {
+		})
+		cancel()
+		if err != nil {
 			// The action has been done or refused, and the caller must still be
 			// told which; the lost row is the server's fault and is logged.
 			d.Log.Error("could not audit a container action", "action", action, "container", t.ID, "error", err)
