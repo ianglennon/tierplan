@@ -8,6 +8,7 @@
       "label": "Container sections",
       "overview": "Overview",
       "logs": "Logs",
+      "shell": "Shell",
       "inspect": "Inspect"
     },
     "inspect": {

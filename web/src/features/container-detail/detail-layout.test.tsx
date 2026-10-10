@@ -412,11 +412,11 @@ describe("a container that fails to load or is gone", () => {
 });
 
 describe("the Logs tab", () => {
-  it("sits between Overview and Inspect and keeps the node in its address", async () => {
+  it("follows Overview and keeps the node in its address", async () => {
     renderAt();
     await screen.findByRole("heading", { name: "web" });
     const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
-    expect(tabs).toEqual(["Overview", "Logs", "Inspect"]);
+    expect(tabs).toEqual(["Overview", "Logs", "Shell", "Inspect"]);
     expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("href")).toBe(
       "/env/e1/containers/web-id/logs?node=n1",
     );
@@ -463,12 +463,33 @@ describe("the Logs tab", () => {
   });
 });
 
+describe("the Shell tab", () => {
+  it("sits between Logs and Inspect, keeps the node in its address and is available to a holder of the shell permission", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" }, extras: { [ENV]: ["containers.exec"] } });
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    const tab = screen.getByRole("tab", { name: "Shell" });
+    expect(tab.getAttribute("href")).toBe("/env/e1/containers/web-id/shell?node=n1");
+    expect(tab.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("is shown to anyone who can read the container, unavailable with the reason when the shell permission is missing", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    const tab = screen.getByRole("tab", { name: "Shell" });
+    expect(tab.getAttribute("aria-disabled")).toBe("true");
+    expect(tab.textContent).toBe("Shell");
+    expect(document.body.textContent).toContain("Needs the container shell permission");
+  });
+});
+
 describe("the Inspect tab", () => {
   it("is the last tab and keeps the node in its address", async () => {
     renderAt();
     await screen.findByRole("heading", { name: "web" });
     const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
-    expect(tabs).toEqual(["Overview", "Logs", "Inspect"]);
+    expect(tabs).toEqual(["Overview", "Logs", "Shell", "Inspect"]);
     expect(screen.getByRole("tab", { name: "Inspect" }).getAttribute("href")).toBe(
       "/env/e1/containers/web-id/inspect?node=n1",
     );

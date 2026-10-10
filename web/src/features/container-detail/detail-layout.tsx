@@ -6,6 +6,7 @@ import { Link, Outlet } from "@tanstack/react-router";
 import { Box, Info } from "lucide-react";
 
 import { type ContainerDetail, containerDetailQuery, isGone } from "@/api/container-detail";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,11 +22,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HeaderActions } from "@/features/container-detail/header-actions";
-import { CONTAINER_TABS } from "@/features/container-detail/tabs";
+import { CONTAINER_TABS, type ContainerTab } from "@/features/container-detail/tabs";
 import { ContainerStateCell } from "@/features/containers/container-state-cell";
 import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { useDocumentTitle } from "@/hooks/use-me";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
 interface DetailLayoutProps {
@@ -114,6 +116,7 @@ function Gone({ envId, name }: { envId: string; name: string | undefined }) {
 export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
   const t = useT();
   const isSwarm = useEnvIsSwarm(envId);
+  const shellNeeds = useNeeds("containers.exec", envId);
   const query = useQuery(containerDetailQuery(envId, containerId, node));
   const { data } = query;
   const gone = isGone(query.error);
@@ -196,23 +199,31 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
           className="h-9 max-md:h-11"
         >
           {CONTAINER_TABS.map((tab) => (
-            <TabsTrigger
+            <NeedsTooltip
               key={tab.id}
-              value={tab.id}
-              asChild
-              className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
+              reason={
+                (tab as ContainerTab).needs === "containers.exec" && !shellNeeds.allowed
+                  ? shellNeeds.reason
+                  : undefined
+              }
             >
-              <Link
-                to={tab.to}
-                params={{ envId, containerId }}
-                search={{ node }}
-                activeOptions={{ exact: tab.exact }}
-                activeProps={{ "data-active": true }}
-                inactiveProps={{ "data-active": undefined }}
+              <TabsTrigger
+                value={tab.id}
+                asChild
+                className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
               >
-                {t(tab.labelKey)}
-              </Link>
-            </TabsTrigger>
+                <Link
+                  to={tab.to}
+                  params={{ envId, containerId }}
+                  search={{ node }}
+                  activeOptions={{ exact: tab.exact }}
+                  activeProps={{ "data-active": true }}
+                  inactiveProps={{ "data-active": undefined }}
+                >
+                  {t(tab.labelKey)}
+                </Link>
+              </TabsTrigger>
+            </NeedsTooltip>
           ))}
         </TabsList>
       </Tabs>

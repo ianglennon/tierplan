@@ -1,0 +1,36 @@
+{
+  "terminal": {
+    "name": "Terminal in {{name}}",
+    "launcher": {
+      "heading": "Open a shell in {{name}}",
+      "body": "You get a terminal inside the container. Nothing you type or see is recorded. Bayplan records that the session happened.",
+      "bodyNode": "You get a terminal inside the container, on {{node}}. Nothing you type or see is recorded. Bayplan records that the session happened.",
+      "open": "Open shell",
+      "opening": "Opening shell…"
+    },
+    "notRunning": {
+      "heading": "Start the container to open a shell",
+      "body": "A shell needs a running container."
+    },
+    "status": {
+      "connecting": "Connecting…",
+      "connected": "Connected"
+    },
+    "ended": {
+      "message": "Session ended (exit code {{code}}).",
+      "again": "Start a new session"
+    },
+    "disconnected": {
+      "heading": "Disconnected",
+      "body": "The connection dropped, so the shell was closed.",
+      "reconnect": "Reconnect shell"
+    },
+    "error": {
+      "failed": "Couldn't open a shell. Try again.",
+      "hostReadOnly": "This host is read-only (set on the host). Logs still work.",
+      "notRunning": "Start the container to open a shell.",
+      "busy": "This host's agent is serving as many logs and shells as it can. Close one and try again.",
+      "noShell": "Bayplan couldn't find bash or sh in this container."
+    }
+  }
+}

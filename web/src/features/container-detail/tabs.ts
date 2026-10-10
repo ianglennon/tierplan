@@ -11,12 +11,16 @@ export interface ContainerTab {
   to:
     | "/env/$envId/containers/$containerId"
     | "/env/$envId/containers/$containerId/logs"
+    | "/env/$envId/containers/$containerId/shell"
     | "/env/$envId/containers/$containerId/inspect";
   // The i18n key of the tab's label.
   labelKey: string;
   // True when only the tab's own path is the tab, as for the Overview, whose
   // path is the start of every other tab's.
   exact: boolean;
+  // The permission the tab's page needs to do anything. A tab never hides: without the
+  // permission it shows unavailable, with the reason (D-19).
+  needs?: string;
 }
 
 export const CONTAINER_TABS = [
@@ -31,6 +35,13 @@ export const CONTAINER_TABS = [
     to: "/env/$envId/containers/$containerId/logs",
     labelKey: "containerdetail.tabs.logs",
     exact: false,
+  },
+  {
+    id: "shell",
+    to: "/env/$envId/containers/$containerId/shell",
+    labelKey: "containerdetail.tabs.shell",
+    exact: false,
+    needs: "containers.exec",
   },
   {
     id: "inspect",
