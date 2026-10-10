@@ -79,6 +79,8 @@ interface Sent {
 let sent: Sent[];
 let me: ReturnType<typeof makeMe>;
 let answer: () => Response | Promise<Response>;
+let inspectAnswer: () => Response | Promise<Response>;
+let deleteAnswer: () => Response | Promise<Response>;
 let envType: "swarm" | "standalone";
 const defaults = queryClient.getDefaultOptions();
 
@@ -86,6 +88,9 @@ beforeEach(() => {
   sent = [];
   me = makeMe({ envs: { [ENV]: "viewer" } });
   answer = () => Response.json(detail());
+  inspectAnswer = () =>
+    Response.json({ inspect: { Id: "app0", Name: "app-net", Driver: "bridge" } });
+  deleteAnswer = () => new Response(null, { status: 204 });
   envType = "standalone";
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   detailRetry.attempts = 0;
@@ -148,7 +153,9 @@ beforeEach(() => {
             fetchedAt: "2026-10-01T10:00:00Z",
           });
         case `/api/env/${ENV}/networks/app0`:
-          return answer();
+          return req.method === "DELETE" ? deleteAnswer() : answer();
+        case `/api/env/${ENV}/networks/app0/inspect`:
+          return inspectAnswer();
       }
       return Response.json({}, { status: 404 });
     }),
@@ -298,5 +305,205 @@ describe("Attachments", () => {
       expect(within(table).getByRole("columnheader", { name: "Node" })).toBeTruthy(),
     );
     expect(within(table).getByText("worker-2")).toBeTruthy();
+  });
+});
+
+const deletes = () => sent.filter((s) => s.method === "DELETE");
+
+describe("the Overview tab", () => {
+  it("is the page's own address and lists the details, the subnets and gateways, the options and the labels", async () => {
+    answer = () =>
+      Response.json(
+        detail({
+          id: "app0-full-id",
+          internal: true,
+          ipv6: true,
+          attachable: true,
+          owner: "shop",
+          ownerKind: "stack",
+          ipam: [
+            { subnet: "10.20.0.0/24", gateway: "10.20.0.1", ipRange: "10.20.0.128/25" },
+            { subnet: "fd00:20::/64", gateway: "", ipRange: "" },
+          ],
+          options: { "com.docker.network.bridge.name": "br-app" },
+          labels: { "com.docker.stack.namespace": "shop", team: "<b>core</b>" },
+        }),
+      );
+    const router = renderAt(`/env/${ENV}/networks/app0?node=n1`);
+    expect(await screen.findByRole("heading", { name: "Details", level: 3 })).toBeTruthy();
+    expect(router.state.location.pathname).toBe(`/env/${ENV}/networks/app0`);
+    const details = screen.getByRole("table", { name: "Details" });
+    for (const [key, value] of [
+      ["Driver", "bridge"],
+      ["Scope", "Local"],
+      ["IPv6", "Yes"],
+      ["Internal", "Yes"],
+      ["Attachable", "Yes"],
+      ["Owner", "Stack shop"],
+    ]) {
+      const row = within(details)
+        .getByText(key as string, { exact: true })
+        .closest("tr") as HTMLElement;
+      expect(within(row).getByText(value as string)).toBeTruthy();
+    }
+    expect(screen.getByRole("button", { name: "Copy the network ID" })).toBeTruthy();
+    expect(within(details).getByText("app0-full-id")).toBeTruthy();
+    const pools = screen.getByRole("table", { name: "Subnets and gateways" });
+    expect(within(pools).getByText("10.20.0.1")).toBeTruthy();
+    expect(within(pools).getByText("10.20.0.128/25")).toBeTruthy();
+    expect(within(pools).getByText("fd00:20::/64")).toBeTruthy();
+    expect(screen.getByText("com.docker.network.bridge.name")).toBeTruthy();
+    expect(screen.getByText("br-app")).toBeTruthy();
+    // Docker's text is never read as markup.
+    expect(screen.getByText("<b>core</b>")).toBeTruthy();
+  });
+
+  it("says so when the network has no address pools, options or labels", async () => {
+    renderAt();
+    expect(await screen.findByText("No address pools.")).toBeTruthy();
+    expect(screen.getByText("No options.")).toBeTruthy();
+    expect(screen.getByText("No labels.")).toBeTruthy();
+  });
+
+  it("has the three tabs", async () => {
+    renderAt();
+    const tabs = await screen.findByRole("tablist", { name: "Network sections" });
+    expect(
+      within(tabs)
+        .getAllByRole("tab")
+        .map((t) => t.textContent),
+    ).toEqual(["Overview", "Attachments", "Inspect"]);
+  });
+});
+
+describe("the Inspect tab", () => {
+  it("shows the engine's document as text with Copy and Download", async () => {
+    renderAt(`/env/${ENV}/networks/app0/inspect?node=n1`);
+    const block = await screen.findByLabelText("Inspect output for app-net");
+    expect(block.textContent).toContain('"Driver": "bridge"');
+    expect(screen.getByRole("button", { name: "Copy JSON" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download JSON" })).toBeTruthy();
+    const read = sent.find((s) => s.path.endsWith("/inspect"));
+    expect(read?.search).toBe("?nodeId=n1");
+  });
+
+  it("shows a load error with Retry", async () => {
+    inspectAnswer = () => problem(503, "node_unavailable");
+    renderAt(`/env/${ENV}/networks/app0/inspect?node=n1`);
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    inspectAnswer = () => Response.json({ inspect: { Name: "app-net" } });
+    fireEvent.click(retry);
+    expect(await screen.findByLabelText("Inspect output for app-net")).toBeTruthy();
+  });
+});
+
+describe("Delete and why it is unavailable", () => {
+  it("blocks Delete on a network in use and lists what uses it above the tab, on every tab", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    answer = () =>
+      Response.json(
+        detail({
+          attachments: [
+            attachment("web", { node: "node-1" }),
+            attachment("db", { node: "node-2", nodeId: "n2" }),
+            attachment("api", { kind: "service", id: "svc1", node: "", nodeId: "", state: "" }),
+          ],
+        }),
+      );
+    renderAt(`/env/${ENV}/networks/app0/attachments?node=n1`);
+    const callout = await screen.findByRole("alert");
+    expect(within(callout).getByText("app-net is in use")).toBeTruthy();
+    expect(
+      within(callout).getByText(/Swarm services that mention this network count/),
+    ).toBeTruthy();
+    expect(within(callout).getByText("web on node-1")).toBeTruthy();
+    expect(within(callout).getByText("db on node-2")).toBeTruthy();
+    expect(within(callout).getByText("Service api")).toBeTruthy();
+    const del = screen.getByRole("button", { name: "Delete network app-net" });
+    expect(del.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(del);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(deletes()).toHaveLength(0);
+  });
+
+  it("shows the in-use callout on the Overview too", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    answer = () => Response.json(detail({ attachments: [attachment("web")] }));
+    renderAt(`/env/${ENV}/networks/app0?node=n1`);
+    expect(await screen.findByText("app-net is in use")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Details", level: 3 })).toBeTruthy();
+  });
+
+  it("shows a built-in network the info note and a disabled Delete", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    answer = () =>
+      Response.json(detail({ name: "bridge", builtIn: true, attachments: [attachment("web")] }));
+    renderAt();
+    expect(await screen.findByText("bridge is built in and can't be deleted.")).toBeTruthy();
+    expect(screen.queryByText("bridge is in use")).toBeNull();
+    const del = screen.getByRole("button", { name: "Delete network bridge" });
+    expect(del.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("shows an Operator Delete disabled with Needs Admin", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    renderAt();
+    const del = await screen.findByRole("button", { name: "Delete network app-net" });
+    expect(del.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.focus(del);
+    expect((await screen.findAllByText("Needs Admin")).length).toBeGreaterThan(0);
+  });
+
+  it("deletes an unused network after the confirm, with the node, and the page becomes the gone state", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    renderAt();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete network app-net" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Delete app-net?")).toBeTruthy();
+    answer = () => problem(404, "network_not_found");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete network" }));
+    await waitFor(() => expect(deletes()).toHaveLength(1));
+    expect(deletes()[0]?.path).toBe(`/api/env/${ENV}/networks/app0`);
+    expect(deletes()[0]?.search).toBe("?nodeId=n1");
+    expect(await screen.findByRole("heading", { name: "This network is gone" })).toBeTruthy();
+  });
+});
+
+describe("service rows", () => {
+  it("read 'Service {name}' with the task count and no link", async () => {
+    envType = "swarm";
+    answer = () =>
+      Response.json(
+        detail({
+          scope: "swarm",
+          node: "Cluster",
+          attachments: [
+            attachment("web", {
+              kind: "service",
+              id: "s1",
+              node: "",
+              nodeId: "",
+              state: "",
+              tasks: 2,
+            }),
+            attachment("idle", {
+              kind: "service",
+              id: "s2",
+              node: "",
+              nodeId: "",
+              state: "",
+              tasks: 0,
+            }),
+          ],
+        }),
+      );
+    renderAt(`/env/${ENV}/networks/app0/attachments`);
+    const table = await screen.findByRole("table", { name: "Attachments" });
+    expect(within(table).getByText("Service web")).toBeTruthy();
+    expect(within(table).getByText("Service idle")).toBeTruthy();
+    expect(within(table).queryByRole("link")).toBeNull();
+    expect(within(table).getAllByText("Service").length).toBe(2);
+    expect(within(table).getByText("2 tasks")).toBeTruthy();
+    expect(within(table).getByText("0 tasks")).toBeTruthy();
   });
 });
