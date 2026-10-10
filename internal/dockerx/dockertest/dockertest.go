@@ -200,6 +200,9 @@ type FakeService struct {
 // "bind" or "tmpfs".
 type FakeServiceMount struct {
 	Type, Source string
+	// Target is where the mount appears in the container; ReadOnly mounts it read-only.
+	Target   string
+	ReadOnly bool
 }
 
 // FakeAgentTask is one task of a service in ServiceRows, an agent's when that
@@ -730,6 +733,10 @@ func (c FakeConfig) containerList(all bool) []container.Summary {
 			if strings.HasPrefix(m, "/") {
 				mp = container.MountPoint{Type: "bind", Source: m, Destination: "/mnt", RW: true}
 			}
+			if to := fc.Inspect.MountTargets[m]; to != "" {
+				mp.Destination = to
+			}
+			mp.RW = !strings.Contains(fc.Inspect.MountModes[m], "ro")
 			s.Mounts = append(s.Mounts, mp)
 		}
 		if len(fc.Networks) > 0 {
@@ -1114,7 +1121,7 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		if len(fs.Mounts) > 0 {
 			s.Spec.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{}
 			for _, m := range fs.Mounts {
-				s.Spec.TaskTemplate.ContainerSpec.Mounts = append(s.Spec.TaskTemplate.ContainerSpec.Mounts, mount.Mount{Type: mount.Type(m.Type), Source: m.Source})
+				s.Spec.TaskTemplate.ContainerSpec.Mounts = append(s.Spec.TaskTemplate.ContainerSpec.Mounts, mount.Mount{Type: mount.Type(m.Type), Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
 			}
 		}
 		s.UpdatedAt = fs.UpdatedAt

@@ -42,8 +42,12 @@ type FakeInspect struct {
 	// LogType and LogOptions are HostConfig.LogConfig.
 	LogType    string
 	LogOptions map[string]string
-	// MountModes maps a Mounts entry to its Mode ("ro", "z").
+	// MountModes maps a Mounts entry to its Mode ("ro", "z"); a mode with ro in it makes the
+	// mount read-only in the list as well.
 	MountModes map[string]string
+	// MountTargets maps a Mounts entry to where it appears in the container; the default
+	// is /mnt.
+	MountTargets map[string]string
 }
 
 // serveInspect answers GET /containers/{id}/json with the restart policy, the
@@ -112,6 +116,10 @@ func (f *Fake) serveInspect(w http.ResponseWriter, r *http.Request, p string, cf
 				mp = container.MountPoint{Type: mount.TypeBind, Source: mn, Destination: "/mnt", RW: true}
 			}
 			mp.Mode = in.MountModes[mn]
+			if to := in.MountTargets[mn]; to != "" {
+				mp.Destination = to
+			}
+			mp.RW = !strings.Contains(mp.Mode, "ro")
 			resp.Mounts = append(resp.Mounts, mp)
 		}
 		resp.NetworkSettings = &container.NetworkSettings{Ports: network.PortMap{}, Networks: map[string]*network.EndpointSettings{}}

@@ -862,7 +862,7 @@ func newSwarmFix(t *testing.T) *swarmFix {
 				{ID: "svc-web", Name: "web", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"ovl"}},
 				// Scaled to zero, so no task keeps the volume, yet its spec mounts it.
 				{ID: "svc-idle", Name: "idle", Mode: "replicated", Running: 0, Desired: 0, Networks: []string{"ovl"},
-					Mounts: []dockertest.FakeServiceMount{{Type: "volume", Source: "data"}, {Type: "bind", Source: "/srv/x"}}},
+					Mounts: []dockertest.FakeServiceMount{{Type: "volume", Source: "data", Target: "/srv/data", ReadOnly: true}, {Type: "bind", Source: "/srv/x"}}},
 			},
 			Images:  []dockertest.FakeImage{{ID: "sha256:" + strings.Repeat("a", 64), RepoTags: []string{"nginx:1"}, Size: 5}},
 			Volumes: []dockertest.FakeVolume{{Name: "data", Driver: "local"}},

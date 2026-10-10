@@ -1035,3 +1035,200 @@ func TestVolumeSizesNeedVolumesReadAndAnUnknownEnvironmentIs404(t *testing.T) {
 		t.Errorf("the engine was asked %d times by callers who may not read", n)
 	}
 }
+
+// One volume's page: where it is, what it is made of and what uses it, with the options
+// withheld from callers who may not see secrets (plan 04-18 task 2, D-47, T-04-59).
+
+const shareSecret = "hunter2-share-password"
+
+func volumeDetailEngine() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Volumes: []dockertest.FakeVolume{
+			{Name: "appdata", Driver: "local", CreatedAt: "2026-10-01T10:00:00Z",
+				Labels: map[string]string{"com.docker.compose.project": "shop", "tier": "db"}},
+			{Name: "share", Driver: "local", CreatedAt: "2026-09-01T10:00:00Z",
+				Options: map[string]string{"type": "cifs", "device": "//10.0.0.9/data", "o": "username=bob,password=" + shareSecret}},
+			{Name: "idle", Driver: "local"},
+		},
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/web"}, State: "running", Mounts: []string{"appdata"},
+				Inspect: dockertest.FakeInspect{MountTargets: map[string]string{"appdata": "/var/lib/db"}}},
+			{ID: "c2", Names: []string{"/old-db"}, State: "exited", Mounts: []string{"appdata", "/appdata"},
+				Inspect: dockertest.FakeInspect{
+					MountTargets: map[string]string{"appdata": "/backup"}, MountModes: map[string]string{"appdata": "ro"},
+				}},
+			// A bind mount spelled like a volume's name is not a use of the volume.
+			{ID: "c3", Names: []string{"/other"}, State: "running", Mounts: []string{"/idle"}},
+		},
+	}
+}
+
+type volumeDetail struct {
+	Name       string `json:"name"`
+	Driver     string `json:"driver"`
+	Mountpoint string `json:"mountpoint"`
+	Scope      string `json:"scope"`
+	Node       string `json:"node"`
+	NodeID     string `json:"nodeId"`
+	Created    string `json:"created"`
+	Options    []struct {
+		Name   string `json:"name"`
+		Value  string `json:"value"`
+		Masked bool   `json:"masked"`
+	} `json:"options"`
+	Labels map[string]string `json:"labels"`
+	UsedBy []struct {
+		Kind      string `json:"kind"`
+		Name      string `json:"name"`
+		Node      string `json:"node"`
+		NodeID    string `json:"nodeId"`
+		MountedAt string `json:"mountedAt"`
+		ReadOnly  bool   `json:"readOnly"`
+		State     string `json:"state"`
+	} `json:"usedBy"`
+	UsedByContainers int `json:"usedByContainers"`
+	UsedByServices   int `json:"usedByServices"`
+}
+
+// asRole signs a user with that role on the environment in and returns a GET as them.
+func (f *envFix) asRole(t *testing.T, e envBody, user, role string) func(path string) *httptest.ResponseRecorder {
+	t.Helper()
+	f.addUser(t, user, false)
+	f.addEnvRole(t, user, e.ID, role)
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	cookie, csrf := f.signIn(t, user, false)
+	return func(path string) *httptest.ResponseRecorder {
+		return f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/" + path, cookie: cookie, csrf: csrf})
+	}
+}
+
+func TestVolumeDetailAViewerSeesTheDetailsAndWhatUsesTheVolumeButNoOptionValue(t *testing.T) {
+	f, e := dashEnv(t, volumeDetailEngine())
+	get := f.asRole(t, e, "vol-viewer", "viewer")
+
+	rec := get("volumes/share")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("share: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), shareSecret) {
+		t.Fatalf("a viewer's response carries the share password: %s", rec.Body)
+	}
+	var share volumeDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &share); err != nil {
+		t.Fatal(err)
+	}
+	if share.Name != "share" || share.Driver != "local" || share.Node != "node-1" || share.NodeID != e.ID || share.Scope != "local" ||
+		share.Mountpoint != "/var/lib/docker/volumes/share/_data" || share.Created != "2026-09-01T10:00:00Z" {
+		t.Errorf("details = %+v", share)
+	}
+	if len(share.Options) != 3 || share.Options[0].Name != "device" || share.Options[1].Name != "o" || share.Options[2].Name != "type" {
+		t.Fatalf("options = %+v, want device, o and type by name", share.Options)
+	}
+	for _, o := range share.Options {
+		if !o.Masked || o.Value != "" {
+			t.Errorf("option %+v: want masked with no value", o)
+		}
+	}
+
+	rec = get("volumes/appdata")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("appdata: %d %s", rec.Code, rec.Body)
+	}
+	var app volumeDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &app); err != nil {
+		t.Fatal(err)
+	}
+	if app.Labels["tier"] != "db" || app.Labels["com.docker.compose.project"] != "shop" {
+		t.Errorf("labels = %v", app.Labels)
+	}
+	if len(app.Options) != 0 || app.Options == nil {
+		t.Errorf("options = %#v, want an empty list and not null", app.Options)
+	}
+	if len(app.UsedBy) != 2 || app.UsedByContainers != 2 || app.UsedByServices != 0 {
+		t.Fatalf("usedBy = %+v (%d containers, %d services), want the two containers", app.UsedBy, app.UsedByContainers, app.UsedByServices)
+	}
+	// By name: old-db (stopped, read-only at /backup) then web (running, read-write).
+	if u := app.UsedBy[0]; u.Kind != "container" || u.Name != "old-db" || u.State != "exited" || u.MountedAt != "/backup" || !u.ReadOnly || u.Node != "node-1" || u.NodeID != e.ID {
+		t.Errorf("usedBy[0] = %+v", u)
+	}
+	if u := app.UsedBy[1]; u.Kind != "container" || u.Name != "web" || u.State != "running" || u.MountedAt != "/var/lib/db" || u.ReadOnly {
+		t.Errorf("usedBy[1] = %+v", u)
+	}
+
+	idle := decode[volumeDetail](t, &envRec{code: 200, body: get("volumes/idle").Body.Bytes()})
+	if len(idle.UsedBy) != 0 || idle.UsedBy == nil {
+		t.Errorf("idle usedBy = %#v, want an empty list: a bind mount spelled like the name is not a use", idle.UsedBy)
+	}
+}
+
+func TestVolumeDetailAHolderOfSecretsRevealSeesTheOptionValues(t *testing.T) {
+	f, e := dashEnv(t, volumeDetailEngine())
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	share := decode[volumeDetail](t, f.get(t, e, "volumes/share"))
+	got := map[string]string{}
+	for _, o := range share.Options {
+		if o.Masked {
+			t.Errorf("option %+v is masked for an instance admin", o)
+		}
+		got[o.Name] = o.Value
+	}
+	if got["type"] != "cifs" || !strings.Contains(got["o"], shareSecret) {
+		t.Errorf("options = %v, want the real values", got)
+	}
+}
+
+func TestVolumeDetailAVolumeThatIsNotThereIs404VolumeNotFoundAndANodeThatIsNotTheEnvironmentsIs503(t *testing.T) {
+	f, e := dashEnv(t, volumeDetailEngine())
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	if rec := f.get(t, e, "volumes/ghost"); rec.code != http.StatusNotFound || rec.ptyp != "volume_not_found" {
+		t.Errorf("unknown volume: %d %q, want 404 volume_not_found: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if rec := f.get(t, e, "volumes/appdata?nodeId=nobody"); rec.code != http.StatusServiceUnavailable || rec.ptyp != "node_unavailable" {
+		t.Errorf("unknown node: %d %q, want 503 node_unavailable: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if rec := f.get(t, e, "volumes/appdata?nodeId="+e.ID); rec.code != http.StatusOK {
+		t.Errorf("the node named: %d %s", rec.code, rec.body)
+	}
+}
+
+func TestVolumeDetailNeedsVolumesReadAndTheNameOfTheSizesRouteStillRoutesToIt(t *testing.T) {
+	f, e := dashEnv(t, volumeDetailEngine())
+	f.addUser(t, "stranger", false)
+	cookie, csrf := f.signIn(t, "stranger", false)
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/volumes/appdata", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
+		t.Errorf("a user with no role: %d, want 403 or 404", rec.Code)
+	}
+	// /volumes/sizes is the sizes route, not a volume named sizes.
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	if rec := f.get(t, e, "volumes/sizes"); rec.code != http.StatusOK || !strings.Contains(string(rec.body), `"nodes"`) {
+		t.Errorf("sizes: %d %s", rec.code, rec.body)
+	}
+}
+
+func TestSwarmVolumeDetailNeedsTheNodeAndNamesTheServicesWhoseSpecMountsItEvenWithNoTask(t *testing.T) {
+	s := newSwarmFix(t)
+	if rec := s.get(t, s.env.ID, "volumes/data"); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "node_required" {
+		t.Fatalf("no node on a swarm: %d %q, want 422 node_required: %s", rec.code, rec.ptyp, rec.body)
+	}
+	var got volumeDetail
+	waitFor(t, "the service in used by", func() bool {
+		rec := s.get(t, s.env.ID, "volumes/data?nodeId="+s.m1.id)
+		if rec.code != http.StatusOK {
+			return false
+		}
+		got = decode[volumeDetail](t, rec)
+		return got.UsedByServices == 1
+	})
+	if got.Node != "mgr-1" || got.NodeID != s.m1.id || len(got.UsedBy) != 1 {
+		t.Fatalf("detail = %+v", got)
+	}
+	if u := got.UsedBy[0]; u.Kind != "service" || u.Name != "idle" || u.MountedAt != "/srv/data" || !u.ReadOnly || u.State != "stopped" || u.NodeID != "" {
+		t.Errorf("usedBy = %+v, want the idle service, read-only at /srv/data, stopped, on no node", u)
+	}
+	// The worker has no copy of the volume.
+	if rec := s.get(t, s.env.ID, "volumes/data?nodeId="+s.w.id); rec.code != http.StatusNotFound || rec.ptyp != "volume_not_found" {
+		t.Errorf("the worker: %d %q, want 404 volume_not_found", rec.code, rec.ptyp)
+	}
+}
