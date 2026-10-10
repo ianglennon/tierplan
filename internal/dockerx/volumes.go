@@ -6,6 +6,7 @@ package dockerx
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/moby/moby/client"
 )
@@ -58,6 +59,23 @@ func (c *Client) VolumeDriver(ctx context.Context, name string) (driver string, 
 		return "", false, fmt.Errorf("inspect volume on %s: %w", c.t.Describe(), err)
 	}
 	return res.Volume.Driver, true, nil
+}
+
+// VolumeUsers names the containers on this node that mount the named volume, running or
+// not: the engine's own list of every container, read now. A bind mount that happens to be
+// spelled like the name is not a use of the volume.
+func (c *Client) VolumeUsers(ctx context.Context, name string) ([]string, error) {
+	cs, err := c.cur().ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list containers on %s: %w", c.t.Describe(), err)
+	}
+	users := []string{}
+	for _, row := range containerRows(cs.Items) {
+		if slices.ContainsFunc(row.Mounts, func(m MountRow) bool { return m.Type == "volume" && m.Name == name }) {
+			users = append(users, row.Name)
+		}
+	}
+	return users, nil
 }
 
 // VolumeRemove removes the volume once and never retries (P2 D-42). Force is never

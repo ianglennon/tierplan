@@ -179,6 +179,13 @@ type VolumeItem struct {
 	Name    string `json:"name"`
 	Driver  string `json:"driver"`
 	Created string `json:"created,omitempty" format:"date-time"`
+	// UsedByContainers and UsedByServices are what the volume cannot be deleted while
+	// any of them exist.
+	UsedByContainers int    `json:"usedByContainers" doc:"Containers on this node, running or not, that mount the volume"`
+	UsedByServices   int    `json:"usedByServices" doc:"Swarm services whose spec mounts a volume of this name, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts for the volume on every node. Always 0 off a swarm"`
+	Anonymous        bool   `json:"anonymous" doc:"True for a volume Docker made for a container without a name: it has the com.docker.volume.anonymous label, or on an engine without it a name of 64 hexadecimal characters"`
+	Project          string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the volume has none"`
+	Stack            string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the volume has none"`
 }
 
 // NetworkItem is one row of the networks list.
@@ -278,6 +285,14 @@ type ContainerListInput struct {
 type NetworkListInput struct {
 	NodeFilterInput
 	Q string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, driver, a subnet or the owner (stack or compose project). Applied before the 500-row cap"`
+}
+
+// VolumeListInput is the path of the volumes list with its node filter, its search and its
+// usage filter.
+type VolumeListInput struct {
+	NodeFilterInput
+	Q     string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, driver, a label (its name or its value) or the stack or compose project. Applied before the 500-row cap"`
+	Usage string `query:"usage" enum:"all,used,unused" default:"all" doc:"used: only volumes a container or a swarm service mounts. unused: only volumes nothing mounts. Applied before the 500-row cap"`
 }
 
 // NodeFilterInput is the path of a list and its optional node filter (T-02-74).
@@ -503,16 +518,25 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 
 	httpx.Register(r, op("listVolumes", "/api/env/{envId}/volumes",
 		"List the volumes of an environment",
-		"By name. On a swarm every node's volumes, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
+		"By name, then node. On a swarm every node's volumes, each with its node: the same name on two nodes is two volumes. "+
+			"Each row says what uses it (usedByContainers: containers on its node, stopped ones included; usedByServices: swarm services whose spec mounts that name), whether Docker made it without a name (anonymous), and its compose project and stack. "+
+			"Optionally only one node's (node), a search (q) and a usage filter (usage: used or unused). The node, the search and the usage filter run on the server before the 500-row cap, so at most 500 rows come back after them, with the total the number that matched."),
 		need(rbac.PermVolumesRead),
-		func(ctx context.Context, in *NodeFilterInput) (*VolumeListOutput, error) {
+		func(ctx context.Context, in *VolumeListInput) (*VolumeListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			rows := filterNode(agg.Volumes, in.Node, func(v envs.VolumeRow) string { return v.Node })
+			onNode := filterNode(agg.Volumes, in.Node, func(v envs.VolumeRow) string { return v.Node })
+			use := volumeUsageOf(ctx, d.Clusters, in.EnvID, agg)
+			rows := filterVolumes(onNode, in.Q, in.Usage, use)
 			items, total, truncated := capRows(rows, func(v envs.VolumeRow) VolumeItem {
-				return VolumeItem{Node: v.Node, NodeID: v.NodeID, Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created)}
+				containers, services := use.of(v)
+				return VolumeItem{
+					Node: v.Node, NodeID: v.NodeID, Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created),
+					UsedByContainers: containers, UsedByServices: services, Anonymous: v.Anonymous,
+					Project: v.Labels[labelProject], Stack: v.Labels[labelStack],
+				}
 			})
 			return &VolumeListOutput{CacheControl: "no-store", Body: VolumeListBody{
 				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,

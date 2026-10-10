@@ -316,7 +316,8 @@ func TestListsCarryTheDocumentedColumns(t *testing.T) {
 	}
 
 	vs := decode[listBody[volumeItem]](t, f.get(t, e, "volumes")).Items
-	if len(vs) != 1 || vs[0] != (volumeItem{Name: "data", Driver: "local", Created: "2026-03-04T05:06:07Z"}) {
+	if len(vs) != 1 || vs[0].Name != "data" || vs[0].Driver != "local" || vs[0].Created != "2026-03-04T05:06:07Z" ||
+		vs[0].UsedByContainers != 0 || vs[0].UsedByServices != 0 || vs[0].Anonymous || vs[0].Project != "" || vs[0].Stack != "" {
 		t.Errorf("volumes = %+v", vs)
 	}
 

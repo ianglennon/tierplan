@@ -4,7 +4,47 @@
       "empty": {
         "title": "No volumes",
         "body": "Volumes keep data after a container is gone. Create one, or deploy a stack that uses them."
-      }
+      },
+      "search": {
+        "label": "Search volumes",
+        "placeholder": "Search by name, driver, label or stack",
+        "clear": "Clear search"
+      },
+      "usage": {
+        "label": "Filter by usage",
+        "all": "All",
+        "used": "In use",
+        "unused": "Unused"
+      },
+      "clearFilters": "Clear filters",
+      "empty_filtered": {
+        "title": "No volumes match these filters.",
+        "action": "Clear filters"
+      },
+      "group": {
+        "count_one": "{{count}} volume",
+        "count_other": "{{count}} volumes"
+      },
+      "columns": {
+        "usedBy": "Used by",
+        "size": "Size"
+      },
+      "select": {
+        "all": "Select all volumes",
+        "inUse": "In use, so it can't be deleted."
+      },
+      "notInUse": "Not in use",
+      "used": {
+        "containers_one": "{{count, number}} container",
+        "containers_other": "{{count, number}} containers",
+        "services_one": "{{count, number}} service",
+        "services_other": "{{count, number}} services",
+        "both": "{{containers}}, {{services}}",
+        "and": "{{first}} and {{second}}"
+      },
+      "inUseBy": "In use by {{what}}. Remove what uses it first.",
+      "anonymous": "Anonymous",
+      "bulkDelete": "Delete…"
     },
     "create": {
       "button": "Create volume",
@@ -102,7 +142,21 @@
       "done": "Deleted {{name}}.",
       "gone": "{{name}} no longer exists. The list has been refreshed.",
       "inUse": "{{name}} is still in use. Remove what uses it, then try again.",
-      "confirmation": "Type the volume's name to confirm this."
+      "confirmation": "Type the volume's name to confirm this.",
+      "titleBulk_one": "Delete {{count}} volume?",
+      "titleBulk_other": "Delete {{count}} volumes?",
+      "bodyBulk": "This deletes the volumes and the data in them. This can't be undone.",
+      "confirmBulk_one": "Delete {{count}} volume",
+      "confirmBulk_other": "Delete {{count}} volumes",
+      "phrase_one": "delete {{count}} volume",
+      "phrase_other": "delete {{count}} volumes",
+      "doneBulk_one": "Deleted {{count}} volume.",
+      "doneBulk_other": "Deleted {{count}} volumes.",
+      "partial": "Deleted {{done}}, {{failed}} failed"
+    },
+    "results": {
+      "title": "Delete results",
+      "volume": "Volume"
     }
   }
 }

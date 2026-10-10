@@ -32,6 +32,11 @@ export interface BulkReportRow {
 
 export interface BulkReport {
   verb: PendingVerb;
+  // The words of a bulk that is not about containers: the dialog's title, and the
+  // header of the first column ("Volume"). Without them the dialog reads "{Verb}
+  // results" over a Container column.
+  title?: string;
+  itemLabel?: string;
   // The ID the audit rows of this operation share (D-14), when the server made
   // one; it is what the link to the audit log filters by.
   bulkId?: string | undefined;
@@ -52,21 +57,18 @@ export function BulkResultDialog({ envId, report, onClose }: BulkResultDialogPro
   const t = useT();
   const canReadAudit = useCanReadAudit();
   const missing = t("dashboard.time.missing");
+  const title =
+    report?.title ??
+    t("actions.results.title", {
+      verb: report ? t(`actions.results.verb.${report.verb}`) : "",
+    });
   const agentOld = report?.rows.some((r) => r.code === "agent_policy_denied") ?? false;
   return (
     <Dialog open={report !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent showCloseButton={false} className="max-h-[90svh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>
-            {t("actions.results.title", {
-              verb: report ? t(`actions.results.verb.${report.verb}`) : "",
-            })}
-          </DialogTitle>
-          <DialogDescription className="sr-only">
-            {t("actions.results.title", {
-              verb: report ? t(`actions.results.verb.${report.verb}`) : "",
-            })}
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription className="sr-only">{title}</DialogDescription>
         </DialogHeader>
         {agentOld ? <AgentUpdateNotice envId={envId} /> : null}
         <div className="max-h-[60svh] overflow-auto rounded-lg ring-1 ring-foreground/10">
@@ -75,7 +77,9 @@ export function BulkResultDialog({ envId, report, onClose }: BulkResultDialogPro
               <tr>
                 {(["container", "node", "result", "reason"] as const).map((c) => (
                   <th key={c} scope="col" className="px-2 py-1 text-start font-semibold">
-                    {t(`actions.results.${c}`)}
+                    {c === "container" && report?.itemLabel
+                      ? report.itemLabel
+                      : t(`actions.results.${c}`)}
                   </th>
                 ))}
               </tr>

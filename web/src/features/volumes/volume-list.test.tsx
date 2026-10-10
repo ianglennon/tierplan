@@ -169,7 +169,9 @@ describe("VolumeList filters", () => {
     search = { usage: "used" };
     mount();
     expect(await screen.findByText("No volumes match these filters.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    // The toolbar has one too; the empty state's is the one this is about.
+    const buttons = screen.getAllByRole("button", { name: "Clear filters" });
+    fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
     expect(changes.at(-1)).toEqual({ q: undefined, usage: undefined, node: undefined });
   });
 
@@ -233,7 +235,9 @@ describe("VolumeList selection", () => {
     const box = await screen.findByRole("checkbox", { name: "Select appdata" });
     expect(box.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(box);
-    expect(await screen.findByText("In use, so it can't be deleted.")).toBeTruthy();
+    expect((await screen.findAllByText("In use, so it can't be deleted.")).length).toBeGreaterThan(
+      0,
+    );
     expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull();
   });
 
@@ -265,7 +269,9 @@ describe("VolumeList selection", () => {
     ).findByRole("button", { name: "Delete…" });
     expect(button.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(button);
-    expect(await screen.findByText("Needs the delete volumes permission")).toBeTruthy();
+    expect(
+      (await screen.findAllByText("Needs the delete volumes permission")).length,
+    ).toBeGreaterThan(0);
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 

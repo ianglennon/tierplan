@@ -53,11 +53,12 @@ export interface ContainerFilters {
 
 // The part of a key that names the filters, or none when nothing is set, so the
 // unfiltered list keeps the bare listKey and every filtered read extends it.
-function filterPart(filters: ContainerFilters) {
-  const set: ContainerFilters = {};
+function filterPart(filters: ContainerFilters & { usage?: string }) {
+  const set: ContainerFilters & { usage?: string } = {};
   if (filters.node) set.node = filters.node;
   if (filters.q) set.q = filters.q;
   if (filters.status) set.status = filters.status;
+  if (filters.usage) set.usage = filters.usage;
   return Object.keys(set).length > 0 ? set : undefined;
 }
 
@@ -94,12 +95,21 @@ export function imagesQuery(envId: string, node?: string) {
   });
 }
 
-export function volumesQuery(envId: string, node?: string) {
+// What narrows the volumes list on the server, before its 500-row cap: the node, the
+// search text and whether the volume is in use.
+export interface VolumeFilters {
+  node?: string;
+  q?: string;
+  usage?: "used" | "unused";
+}
+
+export function volumesQuery(envId: string, filters: VolumeFilters = {}) {
+  const set = filterPart(filters) as VolumeFilters | undefined;
   return queryOptions({
-    queryKey: nodeKey(envId, "volumes", node),
+    queryKey: set ? ([...listKey(envId, "volumes"), set] as const) : listKey(envId, "volumes"),
     queryFn: async () => {
       const { data } = await api.GET("/api/env/{envId}/volumes", {
-        params: { path: { envId }, query: node ? { node } : undefined },
+        params: { path: { envId }, query: set },
       });
       if (!data) throw new Error("GET volumes failed");
       return data;

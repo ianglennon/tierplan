@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -291,6 +292,12 @@ func deleteVolumes(ctx context.Context, d VolumesDeps, p *rbac.Principal, envID 
 	if err != nil {
 		return nil, huma.Error500InternalServerError("internal error")
 	}
+	// Only a swarm has service specs that can mount a volume.
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return nil, snapshotProblem(d.Log, envID, err)
+	}
+	swarm := agg.Target.Probe.Type == dockerx.TypeSwarmManager || agg.Target.Probe.Type == dockerx.TypeSwarmWorker
 	results := make([]VolumeDeleteResult, len(in.Body.Targets))
 	lim := &nodeLimiter{sems: map[string]chan struct{}{}}
 	var g errgroup.Group
@@ -310,7 +317,7 @@ func deleteVolumes(ctx context.Context, d VolumesDeps, p *rbac.Principal, envID 
 				return nil
 			}
 			defer release()
-			res, driver, attempted := deleteOneVolume(ctx, d, envID, t)
+			res, driver, attempted := deleteOneVolume(ctx, d, envID, swarm, t)
 			results[i], attempts[i] = res, attempt{driver: driver, attempted: attempted}
 			return nil
 		})
@@ -324,16 +331,41 @@ func deleteVolumes(ctx context.Context, d VolumesDeps, p *rbac.Principal, envID 
 	return &VolumeDeleteOutput{CacheControl: "no-store", Body: VolumeDeleteResponse{BulkID: bulkID, Results: results}}, nil
 }
 
+// volumeBusyError is what the delete closure answers when something mounts the volume:
+// the containers and services that do, named for the refusal.
+type volumeBusyError struct{ users []string }
+
+func (e *volumeBusyError) Error() string {
+	return "api: volume is in use by " + strings.Join(e.users, ", ")
+}
+
+// errServicesUnread is what a delete answers when the services of a swarm could not be
+// read, so whether one of them mounts the volume is not known.
+var errServicesUnread = errors.New("api: could not read the swarm services")
+
 // deleteOneVolume removes one volume on its node and says what happened. It never
-// returns an error: a failure is a result of its own. driver and attempted are for the
-// audit row: attempted is false for a volume that does not exist, which there is nothing
-// to record about.
-func deleteOneVolume(ctx context.Context, d VolumesDeps, envID string, t VolumeDeleteTarget) (res VolumeDeleteResult, driver string, attempted bool) {
+// returns an error: a failure is a result of its own. Nothing is removed on the strength of
+// the list the caller saw: just before the removal the node's containers, running or not,
+// are read again and, on a swarm, the service specs are read from a manager, and anything
+// that mounts the volume refuses the delete without a call to remove it being made. force
+// is never sent, so a container that starts in between is refused by the engine. driver
+// and attempted are for the audit row: attempted is false for a volume that does not
+// exist, which there is nothing to record about.
+func deleteOneVolume(ctx context.Context, d VolumesDeps, envID string, swarm bool, t VolumeDeleteTarget) (res VolumeDeleteResult, driver string, attempted bool) {
 	res = VolumeDeleteResult{NodeID: t.NodeID, Name: t.Name}
 	fail := func(code, detail string) VolumeDeleteResult {
 		res.Result, res.Code, res.Detail = actionFailed, code, detail
 		return res
 	}
+	var serviceUsers []string
+	if swarm {
+		users, err := d.serviceUsers(ctx, envID, t.Name)
+		if err != nil {
+			return fail(codeNodeUnreachable, "Can't tell whether "+t.Name+" is in use: no manager answered. Try again when one is back."), "", true
+		}
+		serviceUsers = users
+	}
+
 	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
 	exists := false
@@ -346,6 +378,20 @@ func deleteOneVolume(ctx context.Context, d VolumesDeps, envID string, t VolumeD
 		if !exists {
 			return errVolumeGone
 		}
+		containers, e := c.VolumeUsers(writeCtx, t.Name)
+		if e != nil {
+			return e
+		}
+		var users []string
+		for _, name := range containers {
+			users = append(users, "container "+name)
+		}
+		for _, name := range serviceUsers {
+			users = append(users, "service "+name)
+		}
+		if len(users) > 0 {
+			return &volumeBusyError{users: users}
+		}
 		return c.VolumeRemove(writeCtx, t.Name)
 	})
 	if err != nil {
@@ -357,12 +403,41 @@ func deleteOneVolume(ctx context.Context, d VolumesDeps, envID string, t VolumeD
 	return res, driver, true
 }
 
+// serviceUsers reads the service specs from a manager now and names the services that
+// mount the volume. A service spec counts even when it has no running task (Pitfall 7).
+func (d VolumesDeps) serviceUsers(ctx context.Context, envID, name string) ([]string, error) {
+	if d.Clusters == nil {
+		return nil, errServicesUnread
+	}
+	readCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	var refs []dockerx.ServiceRef
+	if err := d.Clusters.ClusterRead(readCtx, envID, func(c *dockerx.Client) error {
+		var e error
+		refs, e = c.ServiceRefs(readCtx)
+		return e
+	}); err != nil {
+		d.Log.Warn("could not read the services before a volume delete", "environment", envID, "error", err)
+		return nil, errServicesUnread
+	}
+	var users []string
+	for _, ref := range refs {
+		if slices.Contains(ref.Volumes, name) {
+			users = append(users, ref.Name)
+		}
+	}
+	return users, nil
+}
+
 // volumeRemoveError maps the error of a removal to a result code and a sentence. An
 // engine that says the volume is gone is not_found, and one that says something mounts it,
 // which can happen when a container starts between the check and the call, is
 // volume_in_use and never a generic failure.
 func volumeRemoveError(name string, err error) (code, detail string) {
+	var busy *volumeBusyError
 	switch {
+	case errors.As(err, &busy):
+		return codeVolumeInUse, name + " is still in use by " + joinMore(busy.users, maxNamedUsers) + ". Remove what uses it, then try again."
 	case dockerx.IsNotFound(err), errors.Is(err, errVolumeGone):
 		return codeNotFound, name + " is already gone."
 	case dockerx.IsConflict(err):
@@ -393,4 +468,81 @@ func auditVolumeRemoved(ctx context.Context, d VolumesDeps, p *rbac.Principal, e
 	}); err != nil {
 		d.Log.Error("could not audit a volume action", "action", audit.ActionVolumeRemoved, "volume", t.Name, "error", err)
 	}
+}
+
+// volumeUsage is what mounts the volumes of an environment: containers per node and name,
+// and the swarm services whose specs mount a name.
+type volumeUsage struct {
+	containers map[[2]string]int
+	services   map[string]int
+}
+
+// volumeUsageOf counts the mounts in an aggregate. Services come from the cluster read of
+// a swarm, whatever age it has: a delete reads them live and never trusts this.
+func volumeUsageOf(ctx context.Context, clusters *envs.Clusters, envID string, agg envs.Aggregate) volumeUsage {
+	u := volumeUsage{containers: map[[2]string]int{}, services: map[string]int{}}
+	for _, c := range agg.Containers {
+		seen := map[string]bool{}
+		for _, m := range c.Mounts {
+			// A container that mounts one volume twice uses it once.
+			if m.Type == mountTypeVolume && m.Name != "" && !seen[m.Name] {
+				seen[m.Name] = true
+				u.containers[[2]string{c.NodeID, m.Name}]++
+			}
+		}
+	}
+	if clusters != nil && agg.Target.Probe.Type == dockerx.TypeSwarmManager {
+		// A failed read leaves what the last good one held.
+		st, _ := clusters.State(ctx, envID)
+		for _, ref := range st.ServiceRefs {
+			for _, name := range ref.Volumes {
+				u.services[name]++
+			}
+		}
+	}
+	return u
+}
+
+// mountTypeVolume is the type of a mount of a named volume.
+const mountTypeVolume = "volume"
+
+// of is the containers and services that mount one row. A container counts only on its own
+// node, since another node's volume of the same name is a different volume; a service can
+// run on any node, so it counts for every node's copy.
+func (u volumeUsage) of(v envs.VolumeRow) (containers, services int) {
+	return u.containers[[2]string{v.NodeID, v.Name}], u.services[v.Name]
+}
+
+// filterVolumes keeps the volumes whose name, driver, any label (name or value), stack or
+// project contains q, ignoring case, and that the usage filter lets through. An empty q
+// keeps them all; usage is all, used or unused.
+func filterVolumes(rows []envs.VolumeRow, q, usage string, use volumeUsage) []envs.VolumeRow {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" && (usage == "" || usage == "all") {
+		return rows
+	}
+	has := func(s string) bool { return strings.Contains(strings.ToLower(s), q) }
+	out := make([]envs.VolumeRow, 0, len(rows))
+	for _, v := range rows {
+		if q != "" && !has(v.Name) && !has(v.Driver) && !labelMatches(v.Labels, has) {
+			continue
+		}
+		containers, services := use.of(v)
+		switch used := containers+services > 0; {
+		case usage == "used" && !used, usage == "unused" && used:
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// labelMatches reports whether any label's name or value satisfies has.
+func labelMatches(labels map[string]string, has func(string) bool) bool {
+	for k, val := range labels {
+		if has(k) || has(val) {
+			return true
+		}
+	}
+	return false
 }

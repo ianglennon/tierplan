@@ -789,7 +789,7 @@ export interface paths {
         };
         /**
          * List the volumes of an environment
-         * @description By name. On a swarm every node's volumes, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description By name, then node. On a swarm every node's volumes, each with its node: the same name on two nodes is two volumes. Each row says what uses it (usedByContainers: containers on its node, stopped ones included; usedByServices: swarm services whose spec mounts that name), whether Docker made it without a name (anonymous), and its compose project and stack. Optionally only one node's (node), a search (q) and a usage filter (usage: used or unused). The node, the search and the usage filter run on the server before the 500-row cap, so at most 500 rows come back after them, with the total the number that matched. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listVolumes"];
         put?: never;
@@ -4255,6 +4255,8 @@ export interface components {
             nodeId: string;
         };
         VolumeItem: {
+            /** @description True for a volume Docker made for a container without a name: it has the com.docker.volume.anonymous label, or on an engine without it a name of 64 hexadecimal characters */
+            anonymous: boolean;
             /** Format: date-time */
             created?: string;
             driver: string;
@@ -4263,6 +4265,20 @@ export interface components {
             node: string;
             /** @description The ID of that node: what a write is routed by, since two hosts can share a display name */
             nodeId: string;
+            /** @description The compose project (com.docker.compose.project); empty when the volume has none */
+            project: string;
+            /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the volume has none */
+            stack: string;
+            /**
+             * Format: int64
+             * @description Containers on this node, running or not, that mount the volume
+             */
+            usedByContainers: number;
+            /**
+             * Format: int64
+             * @description Swarm services whose spec mounts a volume of this name, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts for the volume on every node. Always 0 off a swarm
+             */
+            usedByServices: number;
         };
         VolumeListBody: {
             /** @description At most 500 rows */
@@ -5865,6 +5881,10 @@ export interface operations {
             query?: {
                 /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
                 node?: string;
+                /** @description Search: a case-insensitive substring of the name, driver, a label (its name or its value) or the stack or compose project. Applied before the 500-row cap */
+                q?: string;
+                /** @description used: only volumes a container or a swarm service mounts. unused: only volumes nothing mounts. Applied before the 500-row cap */
+                usage?: "all" | "used" | "unused";
             };
             header?: never;
             path: {

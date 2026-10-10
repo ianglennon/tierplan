@@ -6,6 +6,7 @@ package dockerx_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -96,5 +97,65 @@ func TestVolumeRemoveOfAVolumeAContainerMountsIsAConflict(t *testing.T) {
 	}
 	if ok, _ := c.VolumeExists(context.Background(), "busy"); !ok {
 		t.Error("the volume was removed although a stopped container mounts it")
+	}
+}
+
+func TestVolumeUsersNamesEveryContainerThatMountsTheVolumeRunningOrNotAndNotBindMounts(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		Volumes: []dockertest.FakeVolume{{Name: "data", Driver: "local"}, {Name: "idle", Driver: "local"}},
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/web"}, State: "running", Mounts: []string{"data"}},
+			{ID: "c2", Names: []string{"/old"}, State: "exited", Mounts: []string{"data", "/data"}},
+			{ID: "c3", Names: []string{"/other"}, State: "running", Mounts: []string{"/srv/data"}},
+		},
+	})
+	c := newClient(t, fake)
+	got, err := c.VolumeUsers(context.Background(), "data")
+	if err != nil || !slices.Equal(got, []string{"old", "web"}) {
+		t.Fatalf("VolumeUsers(data) = %v, %v, want old and web (a stopped container counts)", got, err)
+	}
+	if got, err := c.VolumeUsers(context.Background(), "idle"); err != nil || len(got) != 0 {
+		t.Fatalf("VolumeUsers(idle) = %v, %v, want none", got, err)
+	}
+}
+
+func TestIsAnonymousVolumeIsTheLabelOrA64HexName(t *testing.T) {
+	hex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	for name, tc := range map[string]struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		"the label":                  {"x", map[string]string{"com.docker.volume.anonymous": ""}, true},
+		"64 hex characters":          {hex, nil, true},
+		"63 hex characters":          {hex[1:], nil, false},
+		"64 characters, not all hex": {"z" + hex[1:], nil, false},
+		"upper case hex":             {strings.ToUpper(hex), nil, false},
+		"a plain name":               {"data", map[string]string{"app": "x"}, false},
+	} {
+		if got := dockerx.IsAnonymousVolume(tc.name, tc.labels); got != tc.want {
+			t.Errorf("%s: IsAnonymousVolume = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestSnapshotVolumesCarryTheirLabelsAndWhetherDockerMadeThemWithoutAName(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Volumes: []dockertest.FakeVolume{
+		{Name: "named", Driver: "local", Labels: map[string]string{"app": "x"}},
+		{Name: "anon", Driver: "local", Labels: map[string]string{"com.docker.volume.anonymous": ""}},
+	}})
+	snap, err := newClient(t, fake).Snapshot(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]dockerx.VolumeRow{}
+	for _, v := range snap.Volumes {
+		got[v.Name] = v
+	}
+	if got["named"].Anonymous || got["named"].Labels["app"] != "x" {
+		t.Errorf("named = %+v", got["named"])
+	}
+	if !got["anon"].Anonymous {
+		t.Errorf("anon = %+v, want anonymous", got["anon"])
 	}
 }

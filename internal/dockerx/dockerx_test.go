@@ -439,9 +439,10 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // VolumeCreate (Phase 4, RES-07) takes a typed spec of a name, a driver, driver options and labels;
 // it cannot express a cluster volume. VolumeExists (Phase 4, RES-07) is a read: one inspect by name.
 // VolumeDriver (Phase 4, RES-07) is a read: the same inspect, answering the driver.
+// VolumeUsers (Phase 4, RES-07) is a read: the names of the containers that mount one volume.
 // VolumeRemove (Phase 4, RES-07) removes one volume by name, once; it takes no options, so force
 // is never sent, and the API refuses a volume that is in use before it is called.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeDriver", "VolumeExists", "VolumeRemove"}
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeUsers"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
@@ -715,9 +716,11 @@ func TestSnapshotRowsCannotCarryEnvironmentVariablesLabelsOrMounts(t *testing.T)
 	// an allowlist and never these fields; TestListsNeverCarryLabelsMountsOrVariables
 	// proves it (T-04-29). A NetworkRow keeps its labels (plan 04-13) for the same
 	// reason: the owner column and the search read the stack and project labels, and the
-	// list sends only the owner.
+	// list sends only the owner. A VolumeRow keeps its labels (plan 04-17) for the stack and
+	// project columns and the search; the list sends only those two and a flag, and
+	// the option values of a volume (which can hold a share password) are never on a row.
 	banned := regexp.MustCompile(`(?i)^(labels?|env|environment|mounts?|binds?|command|cmd|entrypoint|options|attachments|containers)$`)
-	internal := map[string]bool{"ContainerRow.Labels": true, "ContainerRow.Mounts": true, "NetworkRow.Labels": true}
+	internal := map[string]bool{"ContainerRow.Labels": true, "ContainerRow.Mounts": true, "NetworkRow.Labels": true, "VolumeRow.Labels": true}
 	for _, v := range []any{dockerx.ContainerRow{}, dockerx.ImageRow{}, dockerx.VolumeRow{}, dockerx.NetworkRow{}} {
 		typ := reflect.TypeOf(v)
 		for i := range typ.NumField() {

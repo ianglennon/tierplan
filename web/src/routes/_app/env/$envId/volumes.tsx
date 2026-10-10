@@ -3,8 +3,11 @@
 
 import { createFileRoute } from "@tanstack/react-router";
 
-import { nodeSearchSchema } from "@/features/resources/swarm-lists";
-import { VolumeList } from "@/features/volumes/volume-list";
+import {
+  VolumeList,
+  type VolumeSearchPatch,
+  volumeSearchSchema,
+} from "@/features/volumes/volume-list";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -12,18 +15,26 @@ function Volumes() {
   const { envId } = Route.useParams();
   const t = useT();
   useDocumentTitle(t("dashboard.lists.volumes.title"));
-  const { node } = Route.useSearch();
+  const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  return (
-    <VolumeList
-      envId={envId}
-      node={node}
-      onNodeChange={(n) => void navigate({ search: { node: n }, replace: true })}
-    />
-  );
+
+  // A change to the filters or the search replaces the history entry, so the back button
+  // leaves the page and does not walk through every key.
+  function change(patch: VolumeSearchPatch) {
+    void navigate({
+      search: (prev) => {
+        const next: Record<string, unknown> = { ...prev, ...patch };
+        for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key];
+        return next;
+      },
+      replace: true,
+    });
+  }
+
+  return <VolumeList envId={envId} search={search} onSearchChange={change} />;
 }
 
 export const Route = createFileRoute("/_app/env/$envId/volumes")({
-  validateSearch: nodeSearchSchema,
+  validateSearch: volumeSearchSchema,
   component: Volumes,
 });

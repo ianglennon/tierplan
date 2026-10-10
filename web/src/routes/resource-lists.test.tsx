@@ -116,7 +116,20 @@ const IMAGES = {
   truncated: false,
 };
 
-const VOLUMES = { items: [{ name: "pgdata", driver: "local" }], total: 1, truncated: false };
+// What every volume row carries besides its columns' own values (plan 04-17).
+const NO_VOLUME_USE = {
+  usedByContainers: 0,
+  usedByServices: 0,
+  anonymous: false,
+  project: "",
+  stack: "",
+};
+
+const VOLUMES = {
+  items: [{ ...NO_VOLUME_USE, name: "pgdata", driver: "local", node: "", nodeId: "" }],
+  total: 1,
+  truncated: false,
+};
 
 // What every network row carries besides its columns' own values (plan 04-13).
 const NO_USE = {
@@ -423,11 +436,14 @@ describe("images list", () => {
 });
 
 describe("volumes list", () => {
-  it("shows Name, Driver and Created, with a dash when the engine gave no time", async () => {
-    renderAt("/env/e1/volumes");
+  it("shows Name, Driver, Used by, Size and Created, with a dash when the engine gave no time", async () => {
+    renderAt("/env/e1/volumes?group=none");
     await screen.findByText("pgdata");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[0] as HTMLElement)).toEqual(["pgdata", "local", "—"]);
+    // The last cell is Delete…, disabled with its reason for a reader.
+    const cells = cellsOf(rows[0] as HTMLElement);
+    expect(cells.slice(0, 6)).toEqual(["", "pgdata", "local", "Not in use", "—", "—"]);
+    expect(cells[6]).toContain("Delete…");
   });
 });
 
@@ -767,7 +783,7 @@ describe("swarm lists", () => {
       });
     answers["/api/env/e1/volumes"] = () =>
       Response.json({
-        items: [{ name: "pgdata", node: "n2", driver: "local" }],
+        items: [{ ...NO_VOLUME_USE, name: "pgdata", node: "n2", nodeId: "n2-id", driver: "local" }],
         total: 1,
         truncated: false,
         nodes: ["n2"],
@@ -786,10 +802,14 @@ describe("swarm lists", () => {
     renderAt("/env/e1/volumes");
     await screen.findByText("pgdata");
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "",
       "Name",
       "Node",
       "Driver",
+      "Used by",
+      "Size",
       "Created",
+      "Actions",
     ]);
   });
 
@@ -834,8 +854,8 @@ describe("swarm lists", () => {
     answers["/api/env/e1/volumes"] = () =>
       Response.json({
         items: [
-          { name: "pgdata", node: "n1", driver: "local" },
-          { name: "pgdata", node: "n2", driver: "local" },
+          { ...NO_VOLUME_USE, name: "pgdata", node: "n1", nodeId: "n1-id", driver: "local" },
+          { ...NO_VOLUME_USE, name: "pgdata", node: "n2", nodeId: "n2-id", driver: "local" },
         ],
         total: 2,
         truncated: false,
@@ -844,10 +864,10 @@ describe("swarm lists", () => {
       });
     const spy = sameKeyWarnings();
     try {
-      renderAt("/env/e1/volumes");
+      renderAt("/env/e1/volumes?group=none");
       await screen.findAllByText("pgdata");
       const rows = screen.getAllByRole("row").slice(1);
-      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[2])).toEqual(["n1", "n2"]);
       expect(sameKeyWarningsOf(spy)).toEqual([]);
     } finally {
       spy.mockRestore();
@@ -905,7 +925,7 @@ describe("swarm lists", () => {
       await screen.findByText("nginx:1.27, nginx:latest");
       expect(screen.getAllByRole("row").slice(1)).toHaveLength(2);
       cleanup();
-      renderAt("/env/e1/volumes");
+      renderAt("/env/e1/volumes?group=none");
       await screen.findByText("pgdata");
       expect(screen.getAllByRole("row").slice(1)).toHaveLength(1);
       expect(sameKeyWarningsOf(spy)).toEqual([]);

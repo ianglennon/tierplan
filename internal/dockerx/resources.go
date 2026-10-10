@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -77,6 +78,29 @@ type VolumeRow struct {
 	Name    string
 	Driver  string
 	Created time.Time
+	// Labels is every label of the volume. It feeds the stack and project columns and
+	// the search and is never sent to a browser whole.
+	Labels map[string]string
+	// Anonymous is true for a volume Docker made for a container without a name: it
+	// carries the com.docker.volume.anonymous label, or on an engine that does not set
+	// it, its name is 64 hexadecimal characters.
+	Anonymous bool
+}
+
+// LabelVolumeAnonymous is the label newer engines put on a volume they made for a
+// container without a name.
+const LabelVolumeAnonymous = "com.docker.volume.anonymous"
+
+// anonymousName matches the name Docker gives an anonymous volume: the 64 hexadecimal
+// characters of a random ID.
+var anonymousName = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// IsAnonymousVolume says whether a volume is one Docker made without a name.
+func IsAnonymousVolume(name string, labels map[string]string) bool {
+	if _, ok := labels[LabelVolumeAnonymous]; ok {
+		return true
+	}
+	return anonymousName.MatchString(name)
 }
 
 // NetworkRow is one network. Subnets is empty, not nil, for a network with none.
@@ -154,7 +178,10 @@ func (c *Client) Snapshot(ctx context.Context, swarmManager bool) (Snapshot, err
 	}
 	snap.Volumes = make([]VolumeRow, 0, len(vs.Items))
 	for _, v := range vs.Items {
-		snap.Volumes = append(snap.Volumes, VolumeRow{Name: v.Name, Driver: v.Driver, Created: parseTime(v.CreatedAt)})
+		snap.Volumes = append(snap.Volumes, VolumeRow{
+			Name: v.Name, Driver: v.Driver, Created: parseTime(v.CreatedAt),
+			Labels: maps.Clone(v.Labels), Anonymous: IsAnonymousVolume(v.Name, v.Labels),
+		})
 	}
 	slices.SortFunc(snap.Volumes, func(a, b VolumeRow) int { return cmp.Compare(a.Name, b.Name) })
 
