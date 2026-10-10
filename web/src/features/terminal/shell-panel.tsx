@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import { IdleBanner } from "@/features/terminal/idle-banner";
 import { Terminal, type TerminalApi } from "@/features/terminal/terminal";
 import {
   createTerminalSocket,
@@ -34,18 +35,32 @@ export interface ShellPanelProps {
   createSocket?: (url: string) => WebSocketLike;
 }
 
-// Where the shell is. "ended" is a process that exited and "disconnected" a session
-// that was cut off; in both the screen stays, read only, above the message.
-type Phase = "launcher" | "opening" | "connecting" | "connected" | "ended" | "disconnected";
+// Where the shell is. "ended" is a process that exited, "closed" a session the server
+// ended and said why, and "disconnected" one that was cut off; in all three the screen
+// stays, read only, above the message.
+type Phase =
+  | "launcher"
+  | "opening"
+  | "connecting"
+  | "connected"
+  | "ended"
+  | "closed"
+  | "disconnected";
 
 interface PanelState {
   phase: Phase;
   // The session the terminal belongs to; a new session is a new terminal.
   sessionId?: string;
   exitCode?: number;
+  // Why the server closed the session, and for idle the limit it was closed at.
+  closed?: { reason: string; minutes?: number };
   // Why the last attempt to open a shell failed, when it did.
   failure?: ShellOpenError;
 }
+
+// The reasons the server closes a session with that have a message of their own. Any
+// other reason is shown as a plain disconnect.
+const CLOSED_REASONS = new Set(["idle"]);
 
 // The size the shell starts at; the terminal sends its real size as soon as it has
 // fitted its box and the socket is open.
@@ -91,6 +106,8 @@ export function ShellPanel({
   const size = useRef<{ cols: number; rows: number }>({ ...START_SIZE });
   const mounted = useRef(true);
   const again = useRef<HTMLButtonElement>(null);
+  // The server warned that the shell closes in a minute; input or output dismisses it.
+  const [warned, setWarned] = useState(false);
 
   const drop = useCallback(() => {
     socket.current?.close();
@@ -108,13 +125,17 @@ export function ShellPanel({
   // A message that says the session is over takes focus to its button.
   const phase = state.phase;
   useEffect(() => {
-    if (phase === "ended" || phase === "disconnected") again.current?.focus();
+    if (phase === "ended" || phase === "closed" || phase === "disconnected") {
+      again.current?.focus();
+      setWarned(false);
+    }
   }, [phase]);
 
   const start = useCallback(async () => {
     if (!needs.allowed) return;
     drop();
     held.current = [];
+    setWarned(false);
     setState({ phase: "opening" });
     let sessionId: string;
     try {
@@ -137,8 +158,14 @@ export function ShellPanel({
     const onControl = (c: TerminalControl) => {
       if (c.type === "exit") {
         setState((s) => ({ ...s, phase: "ended", exitCode: c.code }));
+      } else if (c.type === "idle_warning") {
+        setWarned(true);
       } else if (c.type === "closed") {
-        setState((s) => ({ ...s, phase: "disconnected" }));
+        setState((s) =>
+          CLOSED_REASONS.has(c.reason)
+            ? { ...s, phase: "closed", closed: { reason: c.reason, minutes: c.minutes } }
+            : { ...s, phase: "disconnected" },
+        );
       }
     };
     const sock = createTerminalSocket({
@@ -149,6 +176,7 @@ export function ShellPanel({
         sock.sendResize(size.current.cols, size.current.rows);
       },
       onData: (bytes) => {
+        setWarned(false);
         if (terminal.current) terminal.current.write(bytes);
         else held.current.push(bytes);
       },
@@ -170,7 +198,10 @@ export function ShellPanel({
     held.current = [];
     api.focus();
   }, []);
-  const onInput = useCallback((bytes: Uint8Array) => socket.current?.sendInput(bytes), []);
+  const onInput = useCallback((bytes: Uint8Array) => {
+    setWarned(false);
+    socket.current?.sendInput(bytes);
+  }, []);
   const onResize = useCallback((cols: number, rows: number) => {
     size.current = { cols, rows };
     socket.current?.sendResize(cols, rows);
@@ -180,13 +211,15 @@ export function ShellPanel({
     phase === "connecting" ||
     phase === "connected" ||
     phase === "ended" ||
+    phase === "closed" ||
     phase === "disconnected";
 
   if (hasTerminal && state.sessionId) {
-    const over = phase === "ended" || phase === "disconnected";
+    const over = phase === "ended" || phase === "closed" || phase === "disconnected";
     return (
       <div className="flex flex-col gap-3">
-        <div className="h-[calc(100svh-20rem)] min-h-80">
+        <div className="relative h-[calc(100svh-20rem)] min-h-80">
+          {warned && !over ? <IdleBanner /> : null}
           <Terminal
             key={state.sessionId}
             name={name}
@@ -205,6 +238,12 @@ export function ShellPanel({
             <output className="flex min-w-0 flex-col gap-0.5 text-sm">
               {phase === "ended" ? (
                 <span>{t("terminal.ended.message", { code: state.exitCode ?? 0 })}</span>
+              ) : phase === "closed" && state.closed ? (
+                <span>
+                  {t(`terminal.closed.${state.closed.reason}`, {
+                    count: state.closed.minutes ?? 0,
+                  })}
+                </span>
               ) : (
                 <>
                   <span className="font-medium">{t("terminal.disconnected.heading")}</span>
@@ -219,7 +258,9 @@ export function ShellPanel({
               disabled={!needs.allowed}
               onClick={() => void start()}
             >
-              {phase === "ended" ? t("terminal.ended.again") : t("terminal.disconnected.reconnect")}
+              {phase === "ended" || phase === "closed"
+                ? t("terminal.ended.again")
+                : t("terminal.disconnected.reconnect")}
             </Button>
           </div>
         )}

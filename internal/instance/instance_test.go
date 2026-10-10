@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/instance"
@@ -307,4 +308,77 @@ func mustLoad(t *testing.T, st *store.Store, cfg config.Config) *instance.Instan
 		t.Fatal(err)
 	}
 	return i
+}
+
+func setShell(t *testing.T, i *instance.Instance, st *store.Store, idle, capN int) error {
+	t.Helper()
+	tx, err := st.Write.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := i.SetShellLimitsTx(context.Background(), tx, st.Q, idle, capN); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return nil
+}
+
+func TestShellLimitsAreThirtyMinutesAndTenShellsUntilStored(t *testing.T) {
+	i, _ := load(t, config.Config{})
+	if i.ShellIdle() != 30*time.Minute || i.ShellCap() != 10 {
+		t.Fatalf("defaults = %v and %d, want 30m and 10", i.ShellIdle(), i.ShellCap())
+	}
+}
+
+func TestShellLimitsPersistAndApplyOnlyAfterTheCommit(t *testing.T) {
+	i, st := load(t, config.Config{})
+	if err := setShell(t, i, st, 45, 3); err != nil {
+		t.Fatal(err)
+	}
+	if i.ShellIdle() != 30*time.Minute || i.ShellCap() != 10 {
+		t.Fatalf("before Apply = %v and %d, want the cache untouched", i.ShellIdle(), i.ShellCap())
+	}
+	i.ApplyShellLimits(45, 3)
+	if i.ShellIdle() != 45*time.Minute || i.ShellCap() != 3 {
+		t.Fatalf("after Apply = %v and %d, want 45m and 3", i.ShellIdle(), i.ShellCap())
+	}
+	again, err := instance.Load(context.Background(), st, config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ShellIdle() != 45*time.Minute || again.ShellCap() != 3 {
+		t.Fatalf("reloaded = %v and %d, want 45m and 3", again.ShellIdle(), again.ShellCap())
+	}
+}
+
+func TestShellLimitsOutsideTheirRangeAreRefusedAndNeverCached(t *testing.T) {
+	i, st := load(t, config.Config{})
+	for _, c := range [][2]int{{4, 10}, {241, 10}, {30, 0}, {30, 51}} {
+		if err := setShell(t, i, st, c[0], c[1]); err == nil {
+			t.Errorf("limits %v were stored, want a refusal", c)
+		}
+	}
+	i.ApplyShellLimits(4, 51)
+	if i.ShellIdle() != 30*time.Minute || i.ShellCap() != 10 {
+		t.Fatalf("after Apply of out-of-range values = %v and %d, want the defaults kept", i.ShellIdle(), i.ShellCap())
+	}
+}
+
+func TestAStoredShellLimitOutsideItsRangeOrNotANumberLoadsAsTheDefault(t *testing.T) {
+	st := storetest.New(t)
+	for k, v := range map[string]string{instance.SettingShellIdleMinutes: "9999", instance.SettingShellMaxPerUser: "lots"} {
+		if _, err := st.Write.Exec(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, 0)`, k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	i, err := instance.Load(context.Background(), st, config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i.ShellIdle() != 30*time.Minute || i.ShellCap() != 10 {
+		t.Fatalf("loaded = %v and %d, want the defaults", i.ShellIdle(), i.ShellCap())
+	}
 }

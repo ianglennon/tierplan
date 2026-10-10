@@ -450,3 +450,117 @@ describe("what is typed and printed", () => {
     expect(ws.inputText()).toBe("export TOKEN=hunter2\n");
   });
 });
+
+describe("a shell nobody is using (plan 04-23, D-29)", () => {
+  const WARNING =
+    "This session closes in 1 minute because nothing has happened in it. Press any key to keep it open.";
+
+  it("shows the one-minute warning over the terminal without moving it, announced as a status", async () => {
+    renderPanel();
+    const ws = await openShell();
+    act(() => ws.open());
+    await screen.findByText("Connected");
+    const before = screen.getByLabelText("Terminal in web");
+
+    act(() => ws.control({ type: "idle_warning", seconds: 60 }));
+    const banner = await screen.findByText(WARNING);
+    expect(banner.closest("[role=status]")).toBeTruthy();
+    // The terminal is the same element, still mounted once, and the banner lies over it.
+    expect(screen.getByLabelText("Terminal in web")).toBe(before);
+    expect(term.mounts).toBe(1);
+    expect(before.parentElement?.contains(banner)).toBe(true);
+    expect(banner.closest(".absolute")).toBeTruthy();
+  });
+
+  it("is dismissed by a key, and shown again by the next warning", async () => {
+    renderPanel();
+    const ws = await openShell();
+    act(() => ws.open());
+    await screen.findByText("Connected");
+    act(() => ws.control({ type: "idle_warning", seconds: 60 }));
+    await screen.findByText(WARNING);
+
+    act(() => term.props?.onInput(new TextEncoder().encode("x")));
+    expect(screen.queryByText(WARNING)).toBeNull();
+    expect(ws.inputText()).toBe("x");
+
+    act(() => ws.control({ type: "idle_warning", seconds: 60 }));
+    expect(await screen.findByText(WARNING)).toBeTruthy();
+  });
+
+  it("is dismissed by output from the shell", async () => {
+    renderPanel();
+    const ws = await openShell();
+    act(() => ws.open());
+    await screen.findByText("Connected");
+    act(() => ws.control({ type: "idle_warning", seconds: 60 }));
+    await screen.findByText(WARNING);
+    act(() => ws.output("tick\r\n"));
+    expect(screen.queryByText(WARNING)).toBeNull();
+  });
+
+  it("closed for idleness: the message with the limit, the screen kept read only, Start a new session in focus", async () => {
+    renderPanel();
+    const ws = await openShell();
+    act(() => ws.open());
+    await screen.findByText("Connected");
+    act(() => {
+      ws.output("last words\r\n");
+      ws.control({ type: "idle_warning", seconds: 60 });
+      ws.control({ type: "closed", reason: "idle", minutes: 30 });
+      ws.drop();
+    });
+    const message = await screen.findByText("Session closed after 30 minutes without activity.");
+    expect(message.closest("output")).toBeTruthy();
+    expect(screen.queryByText(WARNING)).toBeNull();
+    expect(screen.queryByText("Disconnected")).toBeNull();
+    const button = screen.getByRole("button", { name: "Start a new session" });
+    expect(button.getAttribute("data-variant")).toBe("default");
+    await waitFor(() => expect(document.activeElement).toBe(button));
+    expect(screen.getByLabelText("Terminal in web").getAttribute("data-readonly")).toBe("true");
+    expect(term.written.map(text).join("")).toContain("last words");
+  });
+
+  it("reads right at the smallest limit, 5 minutes, and at a limit of one", async () => {
+    renderPanel();
+    const ws = await openShell();
+    act(() => ws.open());
+    await screen.findByText("Connected");
+    act(() => {
+      ws.control({ type: "closed", reason: "idle", minutes: 5 });
+      ws.drop();
+    });
+    expect(
+      await screen.findByText("Session closed after 5 minutes without activity."),
+    ).toBeTruthy();
+    cleanup();
+
+    FakeWebSocket.reset();
+    renderPanel();
+    const one = await openShell();
+    act(() => one.open());
+    await screen.findByText("Connected");
+    act(() => {
+      one.control({ type: "closed", reason: "idle", minutes: 1 });
+      one.drop();
+    });
+    expect(await screen.findByText("Session closed after 1 minute without activity.")).toBeTruthy();
+  });
+
+  it("Start a new session after an idle close opens a fresh session without the banner", async () => {
+    renderPanel();
+    const first = await openShell();
+    act(() => first.open());
+    await screen.findByText("Connected");
+    act(() => {
+      first.control({ type: "idle_warning", seconds: 60 });
+      first.control({ type: "closed", reason: "idle", minutes: 30 });
+      first.drop();
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Start a new session" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    expect(posts()).toHaveLength(2);
+    await screen.findByText("Connecting…");
+    expect(screen.queryByText(WARNING)).toBeNull();
+  });
+});

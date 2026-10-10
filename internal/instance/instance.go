@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	neturl "net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,22 @@ const (
 	SettingName      = "instance_name"
 	SettingPublicURL = "public_url"
 	SettingAgentURL  = "agent_url"
+
+	// SettingShellIdleMinutes and SettingShellMaxPerUser bound the browser shells
+	// (D-29, D-31): how long one may sit unused, and how many one person may hold.
+	SettingShellIdleMinutes = "shell_idle_minutes"
+	SettingShellMaxPerUser  = "shell_max_per_user"
+)
+
+// The browser-shell limits: the defaults, and the ranges a stored or submitted value
+// must lie in. A stored value outside its range is read as the default.
+const (
+	DefaultShellIdleMinutes = 30
+	MinShellIdleMinutes     = 5
+	MaxShellIdleMinutes     = 240
+	DefaultShellMaxPerUser  = 10
+	MinShellMaxPerUser      = 1
+	MaxShellMaxPerUser      = 50
 )
 
 // ErrPublicURLLocked is returned by SetTx when BAYPLAN_PUBLIC_URL fixes the
@@ -52,6 +69,9 @@ type Instance struct {
 	// agentLocked is separate from locked: each URL is fixed, or not, by its own
 	// environment variable.
 	agentLocked bool
+
+	shellIdle atomic.Int64 // minutes
+	shellCap  atomic.Int64
 }
 
 // Load reads the stored settings. When BAYPLAN_PUBLIC_URL is set it wins over
@@ -81,7 +101,31 @@ func Load(ctx context.Context, s *store.Store, cfg config.Config) (*Instance, er
 		}
 	}
 	i.agentURL.Store(&agent)
+
+	idle, err := readInt(ctx, s, SettingShellIdleMinutes, DefaultShellIdleMinutes, MinShellIdleMinutes, MaxShellIdleMinutes)
+	if err != nil {
+		return nil, err
+	}
+	capN, err := readInt(ctx, s, SettingShellMaxPerUser, DefaultShellMaxPerUser, MinShellMaxPerUser, MaxShellMaxPerUser)
+	if err != nil {
+		return nil, err
+	}
+	i.ApplyShellLimits(idle, capN)
 	return i, nil
+}
+
+// readInt reads a whole-number setting, and gives def when it is not stored, is not
+// a number, or lies outside lo..hi.
+func readInt(ctx context.Context, s *store.Store, key string, def, lo, hi int) (int, error) {
+	v, err := read(ctx, s, key)
+	if err != nil {
+		return 0, err
+	}
+	n, convErr := strconv.Atoi(strings.TrimSpace(v))
+	if convErr != nil || n < lo || n > hi {
+		return def, nil
+	}
+	return n, nil
 }
 
 func read(ctx context.Context, s *store.Store, key string) (string, error) {
@@ -224,5 +268,48 @@ func (i *Instance) SetAgentURLTx(ctx context.Context, tx *sql.Tx, q *sqlc.Querie
 func (i *Instance) ApplyAgentURL(agentURL string) {
 	if !i.agentLocked {
 		i.agentURL.Store(&agentURL)
+	}
+}
+
+// ShellIdle is how long a browser shell may go without input or output before it is
+// closed (D-29). It is read at every use, so a change applies to open shells at their
+// next idle check.
+func (i *Instance) ShellIdle() time.Duration {
+	return time.Duration(i.shellIdle.Load()) * time.Minute
+}
+
+// ShellCap is the most open or pending shells one person may hold across all
+// environments (D-31).
+func (i *Instance) ShellCap() int { return int(i.shellCap.Load()) }
+
+// SetShellLimitsTx stores the idle limit in minutes and the per-person cap inside the
+// caller's write transaction. Like SetTx it leaves the cache alone: call
+// ApplyShellLimits after the commit. A value outside its range is refused.
+func (i *Instance) SetShellLimitsTx(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, idleMinutes, maxPerUser int) error {
+	if idleMinutes < MinShellIdleMinutes || idleMinutes > MaxShellIdleMinutes {
+		return fmt.Errorf("shell idle minutes %d is outside %d to %d", idleMinutes, MinShellIdleMinutes, MaxShellIdleMinutes)
+	}
+	if maxPerUser < MinShellMaxPerUser || maxPerUser > MaxShellMaxPerUser {
+		return fmt.Errorf("shells per user %d is outside %d to %d", maxPerUser, MinShellMaxPerUser, MaxShellMaxPerUser)
+	}
+	now := time.Now().UTC().UnixNano()
+	qt := q.WithTx(tx)
+	if err := qt.UpsertSetting(ctx, sqlc.UpsertSettingParams{Key: SettingShellIdleMinutes, Value: strconv.Itoa(idleMinutes), UpdatedAt: now}); err != nil {
+		return fmt.Errorf("store %s: %w", SettingShellIdleMinutes, err)
+	}
+	if err := qt.UpsertSetting(ctx, sqlc.UpsertSettingParams{Key: SettingShellMaxPerUser, Value: strconv.Itoa(maxPerUser), UpdatedAt: now}); err != nil {
+		return fmt.Errorf("store %s: %w", SettingShellMaxPerUser, err)
+	}
+	return nil
+}
+
+// ApplyShellLimits updates the cache after the transaction that stored the limits has
+// committed. A value outside its range is ignored, so the cache never holds one.
+func (i *Instance) ApplyShellLimits(idleMinutes, maxPerUser int) {
+	if idleMinutes >= MinShellIdleMinutes && idleMinutes <= MaxShellIdleMinutes {
+		i.shellIdle.Store(int64(idleMinutes))
+	}
+	if maxPerUser >= MinShellMaxPerUser && maxPerUser <= MaxShellMaxPerUser {
+		i.shellCap.Store(int64(maxPerUser))
 	}
 }

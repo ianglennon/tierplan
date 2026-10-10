@@ -20,6 +20,13 @@
       "message": "Session ended (exit code {{code}}).",
       "again": "Start a new session"
     },
+    "idle": {
+      "warning": "This session closes in 1 minute because nothing has happened in it. Press any key to keep it open."
+    },
+    "closed": {
+      "idle_one": "Session closed after {{count}} minute without activity.",
+      "idle_other": "Session closed after {{count}} minutes without activity."
+    },
     "disconnected": {
       "heading": "Disconnected",
       "body": "The connection dropped, so the shell was closed.",

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { useMutation } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
-import { readProblem } from "@/api/problem";
+import { type Problem, readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
 import { apiUrl } from "@/lib/base-path";
 
@@ -73,4 +73,51 @@ export function shellSocketUrl(envId: string, sessionId: string): string {
   );
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
+}
+
+export type ShellSettings = components["schemas"]["ShellSettingsBody"];
+
+// The limits on browser shells (D-29, D-31): how long one may sit unused, and how many
+// one person may hold. Read with settings.read, changed with settings.write.
+export const shellSettingsQuery = queryOptions({
+  queryKey: ["settings", "shells"],
+  queryFn: async (): Promise<ShellSettings> => {
+    const { data } = await api.GET("/api/settings/shells");
+    if (!data) throw new Error("GET /api/settings/shells failed");
+    return data;
+  },
+});
+
+export function useShellSettings() {
+  return useQuery(shellSettingsQuery);
+}
+
+// ShellSettingsError is a change the server refused, with the problem it answered, or
+// status 0 when it could not be reached.
+export class ShellSettingsError extends Error {
+  readonly problem?: Problem;
+  constructor(problem?: Problem) {
+    super(`PATCH settings/shells failed (${problem?.status ?? 0})`);
+    this.name = "ShellSettingsError";
+    this.problem = problem;
+  }
+}
+
+export function useUpdateShellSettings() {
+  const queryClient = useQueryClient();
+  return useMutation<ShellSettings, ShellSettingsError, Partial<ShellSettings>>({
+    mutationFn: async (body) => {
+      try {
+        const { data, error, response } = await api.PATCH("/api/settings/shells", { body });
+        if (!data) throw new ShellSettingsError(readProblem(error, response));
+        return data;
+      } catch (e) {
+        throw e instanceof ShellSettingsError ? e : new ShellSettingsError();
+      }
+    },
+    retry: false,
+    onSuccess: (data) => {
+      queryClient.setQueryData(shellSettingsQuery.queryKey, data);
+    },
+  });
 }

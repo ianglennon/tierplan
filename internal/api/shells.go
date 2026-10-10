@@ -59,6 +59,15 @@ type PublicOriginSource interface {
 	PublicOrigin() string
 }
 
+// ShellInstance is what the shell routes read of the instance, on every use: where the
+// browser reaches it, how long a shell may sit unused and how many one person may hold
+// (D-29, D-31). *instance.Instance implements it.
+type ShellInstance interface {
+	PublicOriginSource
+	ShellIdle() time.Duration
+	ShellCap() int
+}
+
 // ShellsDeps are the dependencies of the shell routes.
 type ShellsDeps struct {
 	Aggregator ShellsSource
@@ -69,8 +78,9 @@ type ShellsDeps struct {
 	// Checker is the permission checker; the routes themselves are judged by the
 	// route harness (containers.exec).
 	Checker *rbac.Checker
-	// Instance says which origin the WebSocket may be opened from.
-	Instance PublicOriginSource
+	// Instance says which origin the WebSocket may be opened from, and the idle limit
+	// and the per-person cap.
+	Instance ShellInstance
 	// PendingTTL is how long a session waits for its browser. Zero means 30 s.
 	PendingTTL time.Duration
 	// Controls tune the byte bridge; tests shorten them.
@@ -355,7 +365,14 @@ func serveShell(w http.ResponseWriter, req *http.Request, d ShellsDeps) {
 		_ = conn.Close(websocket.StatusPolicyViolation, "no such session")
 		return
 	}
-	reason := shells.Bridge(ctx, conn, s, d.Controls)
+	ctl := d.Controls
+	if ctl.Clock == nil {
+		ctl.Clock = d.Registry.Clock()
+	}
+	if ctl.Idle == nil && d.Instance != nil {
+		ctl.Idle = d.Instance.ShellIdle // read on every tick, never captured
+	}
+	reason := shells.Bridge(ctx, conn, s, ctl)
 	d.Registry.End(s.ID, reason)
 }
 

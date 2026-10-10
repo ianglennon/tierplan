@@ -6,10 +6,11 @@
 // and closed from the server. Nothing that crosses this module is logged, stored or
 // handed to anything but the callbacks of the one terminal that owns the socket.
 
-// What the server sends as a text frame.
+// What the server sends as a text frame. "closed" carries minutes (the idle limit) when
+// the reason is idle.
 export type TerminalControl =
   | { type: "exit"; code: number }
-  | { type: "closed"; reason: string }
+  | { type: "closed"; reason: string; minutes?: number }
   | { type: "idle_warning"; seconds: number };
 
 // The part of a browser WebSocket this module uses, so a test can drive a fake.

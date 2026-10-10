@@ -1358,6 +1358,30 @@ export interface paths {
         patch: operations["updateSettings"];
         trace?: never;
     };
+    "/api/settings/shells": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the browser-shell limits
+         * @description idleMinutes is how long a shell may sit without input or output (5 to 240, default 30) and maxPerUser how many open shells one person may hold across all environments (1 to 50, default 10).
+         */
+        get: operations["getShellSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the browser-shell limits
+         * @description Only the fields sent are changed. A value outside its range answers 422. A change takes effect at once: open shells use the new idle limit at their next check, and the next open uses the new cap. A request that changes nothing answers 200 and is not audited. Each change is audited as settings.updated with the old and new value of every changed field.
+         */
+        patch: operations["updateShellSettings"];
+        trace?: never;
+    };
     "/api/setup/complete": {
         parameters: {
             query?: never;
@@ -3940,6 +3964,18 @@ export interface components {
             /** @description The WebSocket to attach to within 30 seconds, as a path under the public URL's base path. Binary frames are the terminal's bytes; text frames are JSON control: resize from the browser, exit and closed from the server */
             wsPath: string;
         };
+        ShellSettingsBody: {
+            /**
+             * Format: int64
+             * @description How many minutes a shell may sit without input or output before it is closed. A warning is shown a minute before
+             */
+            idleMinutes: number;
+            /**
+             * Format: int64
+             * @description The most open shells one person may hold across all environments
+             */
+            maxPerUser: number;
+        };
         SourceBody: {
             /**
              * @description Where the grant comes from: the instance-admin flag, an assignment to every environment, a team the user belongs to, or an assignment to the user on this environment
@@ -4197,6 +4233,18 @@ export interface components {
             instanceName?: string;
             /** @description New public URL, an absolute http or https URL. Refused with 409 public_url_locked while BAYPLAN_PUBLIC_URL is set */
             publicUrl?: string;
+        };
+        UpdateShellSettingsInputBody: {
+            /**
+             * Format: int64
+             * @description New idle limit in minutes, 5 to 240
+             */
+            idleMinutes?: number;
+            /**
+             * Format: int64
+             * @description New per-person cap on open shells, 1 to 50
+             */
+            maxPerUser?: number;
         };
         UpdateStateBody: {
             /** @description Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, insecure_session, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed */
@@ -7267,6 +7315,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getShellSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateShellSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateShellSettingsInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellSettingsBody"];
                 };
             };
             /** @description Error */

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
@@ -692,5 +693,109 @@ func TestPatchSettingsAcceptsAPlainAgentURLOnlyOnThisMachineOrWithTheSwitch(t *t
 				t.Errorf("agentEndpointRefused = %v in the answer (endpoint %q), want %v", s.AgentEndpointRefused, s.AgentEndpoint, tc.wantRefused)
 			}
 		})
+	}
+}
+
+// Browser-shell limits (plan 04-23, D-29, D-31).
+
+type shellSettingsResp struct {
+	IdleMinutes int `json:"idleMinutes"`
+	MaxPerUser  int `json:"maxPerUser"`
+}
+
+func (f *authFixture) getShellSettings(t *testing.T, cookie string) (int, shellSettingsResp) {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/settings/shells", cookie: cookie})
+	var s shellSettingsResp
+	if rec.Code == http.StatusOK {
+		if err := json.Unmarshal(rec.Body.Bytes(), &s); err != nil {
+			t.Fatalf("not a shell settings body: %v: %s", err, rec.Body)
+		}
+	}
+	return rec.Code, s
+}
+
+func (f *authFixture) patchShellSettings(t *testing.T, cookie, csrf, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(t, authReq{method: http.MethodPatch, path: "/api/settings/shells", body: body, cookie: cookie, csrf: csrf})
+}
+
+func TestShellSettingsStartAtThirtyMinutesAndTenShells(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, _ := f.signIn(t, "admin", false)
+	if code, s := f.getShellSettings(t, cookie); code != http.StatusOK || s.IdleMinutes != 30 || s.MaxPerUser != 10 {
+		t.Fatalf("got %d %+v, want 200 with 30 and 10", code, s)
+	}
+}
+
+func TestPatchShellSettingsChangesTheLimitsAtOnceAndAuditsThem(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	rec := f.patchShellSettings(t, cookie, csrf, `{"idleMinutes":45,"maxPerUser":3}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	var got shellSettingsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.IdleMinutes != 45 || got.MaxPerUser != 3 {
+		t.Fatalf("body = %s (%v), want 45 and 3", rec.Body, err)
+	}
+	if f.inst.ShellIdle() != 45*time.Minute || f.inst.ShellCap() != 3 {
+		t.Fatalf("cached = %v and %d, want 45m and 3 at once", f.inst.ShellIdle(), f.inst.ShellCap())
+	}
+	entries := f.audits(t, "settings.updated")
+	if len(entries) != 1 || entries[0].ActorID != "id-admin" || entries[0].Result != "success" {
+		t.Fatalf("audit = %+v, want one success entry by id-admin", entries)
+	}
+	d := f.auditDetails(t, "settings.updated")[0]
+	if d["shell_idle_minutes_from"] != "30" || d["shell_idle_minutes_to"] != "45" || d["shell_max_per_user_from"] != "10" || d["shell_max_per_user_to"] != "3" {
+		t.Fatalf("details = %v, want both limits with their old and new value", d)
+	}
+}
+
+func TestPatchShellSettingsChangesOnlyTheFieldSentAndANoOpIsNotAudited(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	if rec := f.patchShellSettings(t, cookie, csrf, `{"maxPerUser":4}`); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if f.inst.ShellIdle() != 30*time.Minute || f.inst.ShellCap() != 4 {
+		t.Fatalf("cached = %v and %d, want 30m and 4", f.inst.ShellIdle(), f.inst.ShellCap())
+	}
+	if rec := f.patchShellSettings(t, cookie, csrf, `{"maxPerUser":4,"idleMinutes":30}`); rec.Code != http.StatusOK {
+		t.Fatalf("no-op status = %d: %s", rec.Code, rec.Body)
+	}
+	if n := len(f.audits(t, "settings.updated")); n != 1 {
+		t.Fatalf("%d settings.updated entries, want 1: a PATCH that changes nothing is not audited", n)
+	}
+}
+
+func TestPatchShellSettingsRefusesValuesOutsideTheirRangeAndChangesNothing(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	for _, body := range []string{`{"idleMinutes":4}`, `{"idleMinutes":241}`, `{"maxPerUser":0}`, `{"maxPerUser":51}`, `{"idleMinutes":60,"maxPerUser":51}`} {
+		if rec := f.patchShellSettings(t, cookie, csrf, body); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status = %d, want 422: %s", body, rec.Code, rec.Body)
+		}
+	}
+	if f.inst.ShellIdle() != 30*time.Minute || f.inst.ShellCap() != 10 {
+		t.Fatalf("cached = %v and %d after refusals, want the defaults", f.inst.ShellIdle(), f.inst.ShellCap())
+	}
+	if n := len(f.audits(t, "settings.updated")); n != 0 {
+		t.Fatalf("%d settings.updated entries after refusals, want none", n)
+	}
+}
+
+func TestShellSettingsAreForTheInstanceAdministratorOnly(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addUser(t, "viewer", false) // no role at all
+	cookie, csrf := f.signIn(t, "viewer", false)
+	if code, _ := f.getShellSettings(t, cookie); code != http.StatusForbidden {
+		t.Fatalf("GET without settings.read: %d, want 403", code)
+	}
+	if rec := f.patchShellSettings(t, cookie, csrf, `{"maxPerUser":50}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("PATCH without settings.write: %d, want 403", rec.Code)
+	}
+	if f.inst.ShellCap() != 10 {
+		t.Fatalf("cap = %d after a refused PATCH, want 10", f.inst.ShellCap())
 	}
 }

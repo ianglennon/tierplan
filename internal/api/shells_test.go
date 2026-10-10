@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -568,4 +569,54 @@ func TestShellASessionThatIsNotAttachedInTimeIsEndedItsExecClosedAndTheEndAudite
 	}
 	_, status, ptype, err := f.dial(t, f.cookie, s.WSPath, f.srv.URL)
 	dialRefused(t, "attach after expiry", status, ptype, err, http.StatusNotFound)
+}
+
+// handClock is a shells.Clock the test moves by hand; its timers run on real time.
+type handClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *handClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *handClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
+func (c *handClock) AfterFunc(d time.Duration, f func()) func() bool {
+	return time.AfterFunc(d, f).Stop
+}
+
+func TestShellIdleAShellForgottenForTheInstancesLimitIsWarnedAndClosedAndTheEndAudited(t *testing.T) {
+	clk := &handClock{now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
+	f := newShellFix(t, func(f *envFix) {
+		f.shellsReg = shells.NewRegistry(clk)
+		f.shellsControls = shells.Controls{TickInterval: 5 * time.Millisecond}
+		f.inst.ApplyShellLimits(5, 10) // the instance's limit, not the bridge's, decides
+	})
+	s := f.session(t)
+	c := f.attach(t, s)
+	sendBinary(t, c, "echo up\n")
+	readUntilBinary(t, c, "up")
+
+	clk.Advance(4 * time.Minute)
+	if w := readControl(t, c, "idle_warning"); w.Seconds != 60 {
+		t.Errorf("warning = %+v, want 60 seconds", w)
+	}
+	clk.Advance(time.Minute)
+	if ctl := readControl(t, c, "closed"); ctl.Reason != "idle" {
+		t.Errorf("closed frame = %+v, want reason idle", ctl)
+	}
+	drain(t, c)
+	rows := f.waitShellRows(t, 2)
+	if rows[1].Action != audit.ActionShellClosed || rows[1].Details["reason"] != "idle" {
+		t.Errorf("closed row = %+v, want reason idle", rows[1])
+	}
+	waitFor(t, "the session to leave the registry", func() bool { return len(f.shellsReg.List(shells.Filter{})) == 0 })
 }

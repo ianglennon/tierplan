@@ -41,6 +41,22 @@
         "offline_other": "{{count}} agents are offline. They can't learn the new address, and Bayplan will refuse them until you reinstall them with the new address or change the URL back."
       }
     },
+    "shells": {
+      "title": "Container shells",
+      "caption": "Limits for shells opened from the browser.",
+      "loading": "Loading the shell limits…",
+      "loadFailed": "Couldn't load the shell limits.",
+      "idle": {
+        "label": "Close idle shells after (minutes)",
+        "helper": "A shell with no input or output for this long is closed, after a warning 1 minute before.",
+        "error": "Enter a whole number from 5 to 240."
+      },
+      "cap": {
+        "label": "Open shells per person",
+        "helper": "The most shells one person can have open at once.",
+        "error": "Enter a whole number from 1 to 50."
+      }
+    },
     "environments": {
       "tabTitle": "Environments",
       "loading": "Loading environments…",

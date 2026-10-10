@@ -5030,6 +5030,30 @@
         ],
         "type": "object"
       },
+      "ShellSettingsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "idleMinutes": {
+            "description": "How many minutes a shell may sit without input or output before it is closed. A warning is shown a minute before",
+            "format": "int64",
+            "maximum": 240,
+            "minimum": 5,
+            "type": "integer"
+          },
+          "maxPerUser": {
+            "description": "The most open shells one person may hold across all environments",
+            "format": "int64",
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "idleMinutes",
+          "maxPerUser"
+        ],
+        "type": "object"
+      },
       "SourceBody": {
         "additionalProperties": false,
         "properties": {
@@ -5546,6 +5570,26 @@
           "publicUrl": {
             "description": "New public URL, an absolute http or https URL. Refused with 409 public_url_locked while BAYPLAN_PUBLIC_URL is set",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UpdateShellSettingsInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "idleMinutes": {
+            "description": "New idle limit in minutes, 5 to 240",
+            "format": "int64",
+            "maximum": 240,
+            "minimum": 5,
+            "type": "integer"
+          },
+          "maxPerUser": {
+            "description": "New per-person cap on open shells, 1 to 50",
+            "format": "int64",
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "type": "object"
@@ -10853,6 +10897,92 @@
           }
         },
         "summary": "Change the instance name, the public URL or the agent URL",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/settings/shells": {
+      "get": {
+        "description": "idleMinutes is how long a shell may sit without input or output (5 to 240, default 30) and maxPerUser how many open shells one person may hold across all environments (1 to 50, default 10).",
+        "operationId": "getShellSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellSettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get the browser-shell limits",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "description": "Only the fields sent are changed. A value outside its range answers 422. A change takes effect at once: open shells use the new idle limit at their next check, and the next open uses the new cap. A request that changes nothing answers 200 and is not audited. Each change is audited as settings.updated with the old and new value of every changed field.",
+        "operationId": "updateShellSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateShellSettingsInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellSettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change the browser-shell limits",
         "tags": [
           "settings"
         ]

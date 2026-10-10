@@ -177,6 +177,9 @@ func (s *Session) Opened() bool { return s.opened.Load() }
 // Touch records activity (input or output now), for the idle timer.
 func (s *Session) Touch(now time.Time) { s.lastActivity.Store(now.UnixNano()) }
 
+// LastActivity is the time of the last Touch.
+func (s *Session) LastActivity() time.Time { return time.Unix(0, s.lastActivity.Load()) }
+
 // Registry is the set of open sessions. It is safe for concurrent use.
 type Registry struct {
 	clock Clock
@@ -203,6 +206,23 @@ func NewRegistry(clock Clock) *Registry {
 
 // Now is the registry's clock reading.
 func (r *Registry) Now() time.Time { return r.clock.Now() }
+
+// Clock is the registry's clock, for a bridge that measures idleness on the same one.
+func (r *Registry) Clock() Clock { return r.clock }
+
+// CountForUser is how many sessions the user holds, pending or attached, across all
+// environments: what the per-person cap counts (D-31).
+func (r *Registry) CountForUser(userID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, s := range r.byID {
+		if s.UserID == userID {
+			n++
+		}
+	}
+	return n
+}
 
 // OnEnd sets the function called once for every session that ends, after it has
 // left the registry and its process has been closed: the place the end is audited.

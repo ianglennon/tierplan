@@ -36,7 +36,8 @@ type rig struct {
 // newRig starts a bridge for a claimed session and dials it. ctl tunes the bridge.
 func newRig(t *testing.T, ctl Controls, exec Exec) *rig {
 	t.Helper()
-	r := &rig{reg: NewRegistry(nil), reason: make(chan string, 1)}
+	// A test that gives the bridge a clock gives the registry the same one.
+	r := &rig{reg: NewRegistry(ctl.Clock), reason: make(chan string, 1)}
 	if fe, ok := exec.(*fakeExec); ok {
 		r.exec = fe
 	}
@@ -379,4 +380,183 @@ func TestAnAnsweredPingKeepsASessionAndAnUnansweredOneEndsIt(t *testing.T) {
 	if got := r.gotReason(t); got != ReasonDisconnected {
 		t.Fatalf("reason = %q, want disconnected", got)
 	}
+}
+
+// idleRig is a rig on a clock the test advances by hand, with a bridge that checks
+// every few milliseconds of real time and an idle limit the test can change. A
+// goroutine reads the socket the whole time, so a test can look for a frame, or for
+// the absence of one, without a read timeout closing the connection.
+type idleRig struct {
+	*rig
+	clk    *fakeClock
+	limit  atomic.Int64 // nanoseconds
+	frames chan Control
+
+	mu     sync.Mutex
+	output bytes.Buffer
+}
+
+func newIdleRig(t *testing.T, limit time.Duration) *idleRig {
+	t.Helper()
+	clk := newFakeClock()
+	ir := &idleRig{clk: clk, frames: make(chan Control, 16)}
+	ir.limit.Store(int64(limit))
+	ir.rig = newRig(t, Controls{
+		Clock: clk, TickInterval: 5 * time.Millisecond,
+		Idle: func() time.Duration { return time.Duration(ir.limit.Load()) },
+	}, newFakeExec())
+	go func() {
+		for {
+			typ, data, err := ir.client.Read(context.Background())
+			if err != nil {
+				close(ir.frames)
+				return
+			}
+			if typ == websocket.MessageBinary {
+				ir.mu.Lock()
+				ir.output.Write(data)
+				ir.mu.Unlock()
+				continue
+			}
+			var c Control
+			if json.Unmarshal(data, &c) == nil {
+				ir.frames <- c
+			}
+		}
+	}()
+	return ir
+}
+
+func (ir *idleRig) printed() string {
+	ir.mu.Lock()
+	defer ir.mu.Unlock()
+	return ir.output.String()
+}
+
+// next waits for the next control frame.
+func (ir *idleRig) next(t *testing.T) Control {
+	t.Helper()
+	select {
+	case c, ok := <-ir.frames:
+		if !ok {
+			t.Fatal("the socket ended while a control frame was awaited")
+		}
+		return c
+	case <-time.After(10 * time.Second):
+		t.Fatal("no control frame arrived")
+		return Control{}
+	}
+}
+
+// none fails the test if a control frame arrives within d of real time.
+func (ir *idleRig) none(t *testing.T, d time.Duration) {
+	t.Helper()
+	select {
+	case c := <-ir.frames:
+		t.Fatalf("an unexpected control frame: %+v", c)
+	case <-time.After(d):
+	}
+}
+
+func TestAShellIdleForTheLimitIsWarnedAMinuteBeforeAndThenClosedWithReasonIdle(t *testing.T) {
+	ir := newIdleRig(t, 6*time.Minute)
+
+	ir.clk.Advance(4*time.Minute + 59*time.Second)
+	ir.none(t, 80*time.Millisecond)
+
+	ir.clk.Advance(time.Second) // five minutes of silence: one minute left
+	if c := ir.next(t); c.Type != "idle_warning" || c.Seconds != 60 {
+		t.Fatalf("frame = %+v, want idle_warning with 60 seconds", c)
+	}
+	ir.none(t, 80*time.Millisecond) // the warning is sent once for a stretch of silence
+	ir.clk.Advance(time.Minute)
+	if c := ir.next(t); c.Type != "closed" || c.Reason != ReasonIdle || c.Minutes != 6 {
+		t.Fatalf("frame = %+v, want closed with reason idle and the limit, 6 minutes", c)
+	}
+	if got := ir.gotReason(t); got != ReasonIdle {
+		t.Errorf("reason = %q, want idle", got)
+	}
+	if ir.reg.CountForUser("user:ann") != 0 || ir.sess.Reason() != ReasonIdle {
+		t.Errorf("the session is still held or ended for %q, want idle", ir.sess.Reason())
+	}
+	if ir.exec.closeCount() != 1 {
+		t.Errorf("the process was closed %d times, want once", ir.exec.closeCount())
+	}
+}
+
+func TestAKeystrokeAfterTheWarningStartsTheSilenceAfresh(t *testing.T) {
+	ir := newIdleRig(t, 6*time.Minute)
+	ir.clk.Advance(5 * time.Minute)
+	if c := ir.next(t); c.Type != "idle_warning" {
+		t.Fatalf("frame = %+v, want idle_warning", c)
+	}
+	ir.send(t, websocket.MessageBinary, "x")
+	waitFor(t, "the keystroke to reach the process", func() bool { return ir.exec.written() == "x" })
+	ir.clk.Advance(4*time.Minute + 59*time.Second) // nearly a stretch of silence again
+	ir.none(t, 150*time.Millisecond)               // not closed, and no warning yet
+	ir.clk.Advance(time.Second)
+	if c := ir.next(t); c.Type != "idle_warning" {
+		t.Fatalf("frame = %+v, want a second idle_warning after more silence", c)
+	}
+	ir.clk.Advance(time.Minute)
+	if c := ir.next(t); c.Type != "closed" || c.Reason != ReasonIdle {
+		t.Fatalf("frame = %+v, want closed idle", c)
+	}
+}
+
+func TestOutputFromTheShellAlsoStartsTheSilenceAfresh(t *testing.T) {
+	ir := newIdleRig(t, 6*time.Minute)
+	ir.clk.Advance(5*time.Minute + 30*time.Second)
+	if c := ir.next(t); c.Type != "idle_warning" {
+		t.Fatalf("frame = %+v, want idle_warning", c)
+	}
+	go ir.exec.Print([]byte("tick\r\n"))
+	waitFor(t, "the output", func() bool { return strings.Contains(ir.printed(), "tick") })
+	ir.clk.Advance(4*time.Minute + 59*time.Second)
+	ir.none(t, 150*time.Millisecond) // five minutes since the printing would be a warning
+	ir.clk.Advance(time.Second)
+	if c := ir.next(t); c.Type != "idle_warning" {
+		t.Fatalf("frame = %+v, want a new idle_warning rather than a close", c)
+	}
+	ir.clk.Advance(time.Minute)
+	if c := ir.next(t); c.Type != "closed" || c.Reason != ReasonIdle {
+		t.Fatalf("frame = %+v, want closed idle", c)
+	}
+}
+
+func TestTheIdleLimitIsReadOnEveryTickNotWhenTheShellOpened(t *testing.T) {
+	ir := newIdleRig(t, 6*time.Minute)
+	ir.clk.Advance(5 * time.Minute)
+	if c := ir.next(t); c.Type != "idle_warning" {
+		t.Fatalf("frame = %+v, want idle_warning", c)
+	}
+	ir.limit.Store(int64(60 * time.Minute)) // an admin raises it
+	ir.clk.Advance(2 * time.Minute)
+	ir.none(t, 150*time.Millisecond)
+	ir.limit.Store(int64(6 * time.Minute)) // and lowers it below the 7 minutes of silence so far
+	if c := ir.next(t); c.Type != "closed" || c.Reason != ReasonIdle {
+		t.Fatalf("frame = %+v, want closed idle at the lowered limit", c)
+	}
+}
+
+func TestAShellWithNoIdleLimitNeverGoesIdle(t *testing.T) {
+	clk := newFakeClock()
+	ir := &idleRig{clk: clk, frames: make(chan Control, 4)}
+	ir.rig = newRig(t, Controls{Clock: clk, TickInterval: 5 * time.Millisecond}, newFakeExec())
+	go func() {
+		for {
+			typ, data, err := ir.client.Read(context.Background())
+			if err != nil {
+				return
+			}
+			if typ == websocket.MessageText {
+				var c Control
+				if json.Unmarshal(data, &c) == nil {
+					ir.frames <- c
+				}
+			}
+		}
+	}()
+	clk.Advance(1000 * time.Hour)
+	ir.none(t, 100*time.Millisecond)
 }

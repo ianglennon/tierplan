@@ -35,6 +35,12 @@ const (
 	// MaxTerminal is the largest size a resize may ask for.
 	MaxTerminal = 1000
 
+	// DefaultTickInterval is how often the idle limit and the caller's access are
+	// checked (D-29, P3 D-10): a lost permission ends a shell within about this long.
+	DefaultTickInterval = 5 * time.Second
+	// IdleWarning is how long before the idle limit the browser is warned.
+	IdleWarning = time.Minute
+
 	resizeTimeout  = 5 * time.Second
 	waitTimeout    = 10 * time.Second
 	inspectTimeout = time.Second
@@ -47,6 +53,15 @@ const (
 	ReasonNoShell      = "no_shell"
 	ReasonEnded        = "ended"
 	ReasonError        = "error"
+	// ReasonIdle is a shell closed for sitting unused for the instance's idle limit.
+	ReasonIdle = "idle"
+	// ReasonAccessLost is a shell closed because its user no longer holds the right
+	// to have it: the permission, the environment, or the sign-in is gone.
+	ReasonAccessLost = "access_lost"
+	// ReasonEndedByAdmin and ReasonServerShutdown are given to Registry.End and
+	// CloseAll by whoever ends the session from outside.
+	ReasonEndedByAdmin   = "ended_by_admin"
+	ReasonServerShutdown = "server_shutdown"
 )
 
 // Control is a text frame.
@@ -57,6 +72,9 @@ type Control struct {
 	Code    *int   `json:"code,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Seconds int    `json:"seconds,omitempty"`
+	// Minutes is the idle limit, sent with the closed frame whose reason is idle, so
+	// the page can say how long the shell was left alone.
+	Minutes int `json:"minutes,omitempty"`
 }
 
 // Controls tune a bridge. The zero value is the production setting.
@@ -66,6 +84,18 @@ type Controls struct {
 	WriteTimeout time.Duration
 	// PingInterval is how often the browser is pinged. Zero means 20 seconds.
 	PingInterval time.Duration
+	// Idle is the idle limit, read on every tick so a change applies to a shell that
+	// is open. Nil or a limit of zero or less means shells never go idle.
+	Idle func() time.Duration
+	// StillAllowed says whether the shell's user may still have it; false ends the
+	// shell with the reason access_lost. Nil means always.
+	StillAllowed func() bool
+	// Clock is where activity and idleness are measured. Nil is the wall clock. It
+	// must be the clock the session's registry runs on, which stamps its creation.
+	Clock Clock
+	// TickInterval is how often Idle and StillAllowed are consulted. Zero means 5
+	// seconds.
+	TickInterval time.Duration
 }
 
 func (c Controls) withDefaults() Controls {
@@ -74,6 +104,12 @@ func (c Controls) withDefaults() Controls {
 	}
 	if c.PingInterval <= 0 {
 		c.PingInterval = DefaultPingInterval
+	}
+	if c.Clock == nil {
+		c.Clock = wallClock{}
+	}
+	if c.TickInterval <= 0 {
+		c.TickInterval = DefaultTickInterval
 	}
 	return c
 }
@@ -111,8 +147,9 @@ func Bridge(ctx context.Context, conn *websocket.Conn, s *Session, ctl Controls)
 	var wg sync.WaitGroup
 	for _, run := range []func(context.Context) string{
 		func(c context.Context) string { return pumpOutput(c, conn, s, ctl, &stopping) },
-		func(c context.Context) string { return pumpInput(c, conn, s) },
+		func(c context.Context) string { return pumpInput(c, conn, s, ctl) },
 		func(c context.Context) string { return pinger(c, conn, ctl) },
+		func(c context.Context) string { return watcher(c, conn, s, ctl) },
 	} {
 		wg.Add(1)
 		go func() {
@@ -195,7 +232,7 @@ func pumpOutput(ctx context.Context, conn *websocket.Conn, s *Session, ctl Contr
 	for {
 		n, err := s.exec.Read(buf)
 		if n > 0 {
-			s.Touch(time.Now())
+			s.Touch(ctl.Clock.Now())
 			wctx, cancel := context.WithTimeout(ctx, ctl.WriteTimeout)
 			werr := conn.Write(wctx, websocket.MessageBinary, buf[:n])
 			cancel()
@@ -241,7 +278,7 @@ func pumpOutput(ctx context.Context, conn *websocket.Conn, s *Session, ctl Contr
 // pumpInput copies the browser's binary frames to the process and acts on its
 // resize frames. Any other text frame, and a resize outside 1 to 1000 in either
 // direction, is ignored.
-func pumpInput(ctx context.Context, conn *websocket.Conn, s *Session) string {
+func pumpInput(ctx context.Context, conn *websocket.Conn, s *Session, ctl Controls) string {
 	for {
 		typ, data, err := conn.Read(ctx)
 		if err != nil {
@@ -252,7 +289,7 @@ func pumpInput(ctx context.Context, conn *websocket.Conn, s *Session) string {
 		}
 		switch typ {
 		case websocket.MessageBinary:
-			s.Touch(time.Now())
+			s.Touch(ctl.Clock.Now())
 			if _, err := s.exec.Write(data); err != nil {
 				// The process is gone or going; the output side says how it ended.
 				<-ctx.Done()
@@ -293,6 +330,47 @@ func pinger(ctx context.Context, conn *websocket.Conn, ctl Controls) string {
 				return ""
 			}
 			return ReasonDisconnected
+		}
+	}
+}
+
+// watcher checks on a tick that the shell's user may still have it and that the shell
+// has not sat unused for the idle limit. A shell with no input or output for the limit
+// minus a minute is sent {"type":"idle_warning","seconds":60} once for that stretch of
+// silence; input or output starts the stretch afresh. At the limit it is closed with
+// reason idle, and when the user's access is gone with reason access_lost; the
+// closing frame is sent before the reason is returned. Both the limit and the access
+// are read on every tick, never captured when the shell opened.
+func watcher(ctx context.Context, conn *websocket.Conn, s *Session, ctl Controls) string {
+	t := time.NewTicker(ctl.TickInterval)
+	defer t.Stop()
+	var warnedFor time.Time // the activity the last warning was sent for
+	for {
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-t.C:
+		}
+		if ctl.StillAllowed != nil && !ctl.StillAllowed() {
+			writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonAccessLost})
+			return ReasonAccessLost
+		}
+		if ctl.Idle == nil {
+			continue
+		}
+		limit := ctl.Idle()
+		if limit <= 0 {
+			continue
+		}
+		last := s.LastActivity()
+		quiet := ctl.Clock.Now().Sub(last)
+		switch {
+		case quiet >= limit:
+			writeControl(ctx, conn, ctl, Control{Type: "closed", Reason: ReasonIdle, Minutes: int(limit / time.Minute)})
+			return ReasonIdle
+		case quiet >= limit-IdleWarning && !last.Equal(warnedFor):
+			warnedFor = last
+			writeControl(ctx, conn, ctl, Control{Type: "idle_warning", Seconds: int(IdleWarning / time.Second)})
 		}
 	}
 }
