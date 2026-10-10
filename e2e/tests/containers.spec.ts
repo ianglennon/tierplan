@@ -7,7 +7,9 @@
 // back, so every change the page shows arrives the way a person's own `docker
 // run` would, not through a click of the page's.
 
-import type { Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+
+import type { CDPSession, Page } from "@playwright/test";
 
 import { AUTH_STATE, at } from "./env";
 import {
@@ -28,6 +30,66 @@ test.describe.configure({ mode: "serial" });
 // The row of one container in the containers list.
 function rowOf(page: Page, name: string) {
   return page.getByRole("row").filter({ has: page.getByRole("link", { name, exact: true }) });
+}
+
+// openContainerTab opens a container's page from the list, as a person clicking its
+// name would, and then one of its tabs.
+async function openContainerTab(page: Page, name: string, tab: string): Promise<void> {
+  await page.goto(at(`/env/${envId}/containers`));
+  await page.getByRole("link", { name, exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/bayplan/env/${envId}/containers/[^/]+`));
+  await page.getByRole("tab", { name: tab, exact: true }).click();
+}
+
+// The highest N among the "line-N" lines a log surface shows, or -1 when there are none.
+async function latestLine(log: ReturnType<Page["getByRole"]>): Promise<number> {
+  const texts = await log.locator('[data-stream="stdout"]').allInnerTexts();
+  const ns = texts.flatMap((t) => [...t.matchAll(/line-(\d+)/g)].map((m) => Number(m[1])));
+  return ns.length === 0 ? -1 : Math.max(...ns);
+}
+
+// What one page has open to the server right now, read from the browser's own network
+// events: a connection that has been started and has neither finished nor failed.
+interface OpenConnection {
+  url: string;
+  type: string;
+  protocol?: string;
+  status?: number;
+}
+
+interface NetworkProbe {
+  open(): OpenConnection[];
+  // Every WebSocket handshake that was answered, with its status.
+  handshakes(): Array<{ url: string; status: number }>;
+}
+
+async function probeNetwork(page: Page): Promise<NetworkProbe> {
+  const cdp: CDPSession = await page.context().newCDPSession(page);
+  await cdp.send("Network.enable");
+  const open = new Map<string, OpenConnection>();
+  const handshakes: Array<{ url: string; status: number }> = [];
+  cdp.on("Network.requestWillBeSent", (e) => {
+    open.set(e.requestId, { url: e.request.url, type: e.type ?? "Other" });
+  });
+  cdp.on("Network.responseReceived", (e) => {
+    const c = open.get(e.requestId);
+    if (c) {
+      c.protocol = e.response.protocol;
+      c.status = e.response.status;
+    }
+  });
+  cdp.on("Network.loadingFinished", (e) => open.delete(e.requestId));
+  cdp.on("Network.loadingFailed", (e) => open.delete(e.requestId));
+  cdp.on("Network.webSocketCreated", (e) => {
+    open.set(e.requestId, { url: e.url, type: "WebSocket" });
+  });
+  cdp.on("Network.webSocketHandshakeResponseReceived", (e) => {
+    const c = open.get(e.requestId);
+    if (c) c.status = e.response.status;
+    handshakes.push({ url: c?.url ?? "", status: e.response.status });
+  });
+  cdp.on("Network.webSocketClosed", (e) => open.delete(e.requestId));
+  return { open: () => [...open.values()], handshakes: () => handshakes };
 }
 
 // Everything this spec makes, and what the dashboard spec made under names this one
@@ -109,4 +171,161 @@ test("a container started behind Bayplan's back appears live, is stopped and sta
   );
   expect(startedAfter[0]).not.toBe(startedBefore[0]);
   expect(startedAfter[1]).not.toBe(startedBefore[1]);
+});
+
+test("the Logs tab streams stdout and stderr, searches, downloads, and pops out beside the tab", async ({
+  page,
+  context,
+}, info) => {
+  // Watched from the first request, so the streams the app keeps open on every page
+  // (health, events) are counted along with the log's own.
+  const probe = await probeNetwork(page);
+  await openContainerTab(page, "e2e-web", "Logs");
+  const log = page.getByRole("log", { name: "Logs for e2e-web" });
+
+  // Both streams, live; a stderr line carries the visible marker.
+  await expect(
+    log.locator('[data-stream="stdout"]').filter({ hasText: "line-" }).first(),
+  ).toBeVisible();
+  const err = log.locator('[data-stream="stderr"]').filter({ hasText: "err-" }).first();
+  await expect(err).toBeVisible();
+  await expect(err).toContainText("stderr");
+  // New lines keep arriving: the highest number grows while nobody touches the page.
+  const first = await latestLine(log);
+  await expect.poll(() => latestLine(log), { timeout: 20_000 }).toBeGreaterThan(first);
+
+  // Search works on the loaded lines and says how many it found.
+  await expect(
+    log.locator('[data-stream="stdout"]').filter({ hasText: "line-3" }).first(),
+  ).toBeVisible();
+  await page.getByRole("searchbox", { name: "Search logs" }).fill("line-3");
+  await expect(page.getByText(/^\d+ of \d+$/).first()).toBeVisible();
+
+  // Download logs: the browser is handed a .log file named after the container.
+  await page.getByRole("button", { name: "Download…" }).click();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download logs", exact: true }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/^e2e-web-\d{8}-\d{4}\.log$/);
+  const body = readFileSync((await file.path()) as string, "utf8");
+  expect(body, "the downloaded file holds the container's lines").toMatch(/line-\d+/);
+  await page.keyboard.press("Escape");
+  await page.getByRole("searchbox", { name: "Search logs" }).fill("");
+
+  // Pop-out: a second window streams while the tab does. Every page of the one
+  // origin shares the browser's connections to it, so both being live at once is
+  // what RESEARCH A3 asks about.
+  const cspInPopout: string[] = [];
+  context.on("page", (p) => {
+    p.on("console", (msg) => {
+      if (
+        /Content Security Policy|Refused to (load|apply|execute|connect|frame)/i.test(msg.text())
+      ) {
+        cspInPopout.push(msg.text());
+      }
+    });
+  });
+  const popupEvent = context.waitForEvent("page");
+  await page.getByRole("button", { name: "Open in new window" }).click();
+  const popup = await popupEvent;
+  const popupProbe = await probeNetwork(popup);
+  await popup.waitForLoadState("domcontentloaded");
+  expect(new URL(popup.url()).pathname).toMatch(/^\/bayplan\/popout\/.+\/logs$/);
+  const popLog = popup.getByRole("log", { name: "Logs for e2e-web" });
+  await expect(
+    popLog.locator('[data-stream="stdout"]').filter({ hasText: "line-" }).first(),
+  ).toBeVisible();
+
+  const tabBefore = await latestLine(log);
+  const popBefore = await latestLine(popLog);
+  await expect.poll(() => latestLine(log), { timeout: 20_000 }).toBeGreaterThan(tabBefore);
+  await expect.poll(() => latestLine(popLog), { timeout: 20_000 }).toBeGreaterThan(popBefore);
+
+  // RESEARCH A3, as observed: what each page holds open to the one origin.
+  const sse = (c: OpenConnection) => /\/logs\/stream/.test(c.url);
+  const tabOpen = probe.open();
+  const popOpen = popupProbe.open();
+  const report = {
+    tab: tabOpen.map((c) => `${c.type} ${new URL(c.url).pathname} ${c.protocol ?? ""}`),
+    popout: popOpen.map((c) => `${c.type} ${new URL(c.url).pathname} ${c.protocol ?? ""}`),
+  };
+  console.log(`A3 open connections: ${JSON.stringify(report)}`);
+  info.annotations.push({ type: "A3", description: JSON.stringify(report) });
+  expect(tabOpen.filter(sse), "the tab's own log stream is open").toHaveLength(1);
+  expect(popOpen.filter(sse), "the pop-out's own log stream is open").toHaveLength(1);
+  expect(cspInPopout, "CSP violations in the pop-out").toEqual([]);
+  await popup.close();
+});
+
+test("a shell from the Shell tab runs a command in the container, over a WebSocket through the proxy, with no CSP violation", async ({
+  page,
+  tracker,
+}, info) => {
+  const probe = await probeNetwork(page);
+  // What the server sends down the shell's WebSocket, as text.
+  let received = "";
+  page.on("websocket", (ws) => {
+    ws.on("framereceived", ({ payload }) => {
+      received += typeof payload === "string" ? payload : new TextDecoder().decode(payload);
+    });
+  });
+
+  await openContainerTab(page, "e2e-web", "Shell");
+  await page.getByRole("button", { name: "Open shell" }).click();
+  const terminal = page.getByRole("textbox", { name: "Terminal in e2e-web" });
+  await expect(terminal).toBeAttached();
+  await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+
+  // Typed into the terminal as a person would, ending in Enter. The file is made by
+  // the container's own shell, and the sum is printed back through the WebSocket.
+  await terminal.focus();
+  await page.keyboard.type("touch /tmp/e2e-shell-ok; echo out-$((6*7))");
+  await page.keyboard.press("Enter");
+
+  await expect
+    .poll(
+      () => {
+        try {
+          return dind("docker exec e2e-web ls /tmp/e2e-shell-ok");
+        } catch {
+          return "";
+        }
+      },
+      { timeout: 20_000 },
+    )
+    .toBe("/tmp/e2e-shell-ok");
+  await expect.poll(() => received, { timeout: 10_000 }).toContain("out-42");
+
+  // The upgrade was answered 101 at the subpath, over TLS, and is still open.
+  const shell = probe.handshakes().filter((h) => /\/bayplan\/api\/.+shell/i.test(h.url));
+  console.log(`A4 shell handshakes: ${JSON.stringify(shell)}`);
+  expect(shell.length, "the shell's WebSocket upgrade").toBeGreaterThanOrEqual(1);
+  expect(shell.every((h) => h.status === 101 && h.url.startsWith("wss://127.0.0.1"))).toBe(true);
+  const socket = probe.open().filter((c) => c.type === "WebSocket");
+  expect(socket, "the shell's WebSocket is still open").toHaveLength(1);
+
+  // RESEARCH A4: the policy that serves the page lets the shell's socket open and
+  // reports nothing against it, while the socket is open and after it was used.
+  const page_ = await page.request.get(at("/"));
+  const policy = page_.headers()["content-security-policy"] ?? "";
+  console.log(`A4 policy: ${policy}`);
+  expect(policy, "the page is served with a Content-Security-Policy").toContain("connect-src");
+  info.annotations.push({ type: "A4", description: JSON.stringify({ handshakes: shell, policy }) });
+  expect(tracker.cspViolations, "Content-Security-Policy violations with the shell open").toEqual(
+    [],
+  );
+});
+
+test("the Events page lists the container's start event", async ({ page }) => {
+  await page.goto(at(`/env/${envId}`));
+  await page.getByRole("link", { name: "Events", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Events", level: 1 })).toBeVisible();
+  // The newest events are other containers' by now, so narrow the feed to this one.
+  await page.getByRole("searchbox", { name: "Search events" }).fill("e2e-web");
+  const table = page.getByRole("table", { name: "Docker events, newest first" });
+  const start = table
+    .getByRole("row")
+    .filter({ has: page.getByRole("cell", { name: "e2e-web", exact: true }) })
+    .filter({ has: page.getByRole("cell", { name: "start", exact: true }) });
+  await expect(start.first()).toBeVisible();
 });
