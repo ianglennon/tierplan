@@ -560,8 +560,12 @@ func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *s
 			return
 		case ev, open := <-events:
 			if !open {
-				events = nil
-				continue
+				// The feed dropped this subscriber (it fell behind, or the feed was
+				// torn down). Carrying on without it would stop the stream following
+				// a restart for good, so end it like the events stream does: the
+				// browser reconnects, resumes from the last line and subscribes again.
+				flush()
+				return
 			}
 			// Only a start of this container matters: a restart is a stop (the log
 			// ends and the viewer is told) and a start. A "restart" event follows its

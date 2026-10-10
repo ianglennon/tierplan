@@ -675,6 +675,36 @@ func (s *spyEvents) Events(ctx context.Context, envID string) ([]envs.NodeEvent,
 	}
 }
 
+// dropEvents hands the log stream an events channel that the test can close, as the
+// feed does to a subscriber that fell behind.
+type dropEvents struct {
+	api.LogsSource
+	ch chan envs.NodeEvent
+}
+
+func (d *dropEvents) Events(ctx context.Context, envID string) ([]envs.NodeEvent, <-chan envs.NodeEvent, func()) {
+	backlog, _, cancel := d.LogsSource.Events(ctx, envID)
+	return backlog, d.ch, cancel
+}
+
+// WR-03: a stream whose event subscription was dropped ends, so the browser's reconnect
+// subscribes again, rather than carrying on deaf to the container's next start.
+func TestLogStreamEndsWhenItsEventSubscriptionIsDropped(t *testing.T) {
+	drop := &dropEvents{ch: make(chan envs.NodeEvent)}
+	f := newLogsFix(t, logsEngine(), func(f *envFix) {
+		f.logsWrap = func(src api.LogsSource) api.LogsSource { drop.LogsSource = src; return drop }
+	})
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "a"})
+	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
+	readLines(t, c, 1)
+	close(drop.ch)
+	select {
+	case <-c.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream stayed open after its event subscription was dropped")
+	}
+}
+
 func TestLogRestartCancelsItsEventSubscriptionWhenTheStreamEnds(t *testing.T) {
 	spy := &spyEvents{}
 	f := newLogsFix(t, logsEngine(), func(f *envFix) {
