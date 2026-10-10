@@ -303,7 +303,7 @@ describe("a first load that fails", () => {
     });
     expect(screen.getByText("Couldn't load logs.")).toBeTruthy();
     expect(screen.getByText("Check the connection and try again.")).toBeTruthy();
-    expect(screen.queryByRole("log")).toBeNull();
+    expect(screen.getByRole("log").querySelectorAll("[data-stream]")).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(FakeEventSource.instances).toHaveLength(2);
     const again = FakeEventSource.instances[1] as FakeEventSource;

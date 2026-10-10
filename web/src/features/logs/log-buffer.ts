@@ -25,8 +25,9 @@ export interface BufferedLine extends LogLineData {
   marker?: ContainerMarker;
 }
 
-// What a marker row says happened to the container (D-20).
-export type ContainerMarker = "restarted" | "stopped";
+// What a marker row says happened to the container (D-20), or to the stream that
+// follows it: it was cut and could not be resumed, so lines may be missing.
+export type ContainerMarker = "restarted" | "stopped" | "interrupted";
 
 type Listener = () => void;
 

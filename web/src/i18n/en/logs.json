@@ -7,6 +7,7 @@
     "accessLost": "Your access changed. Logs were closed.",
     "restarted": "Container restarted {{time}}",
     "stopped": "Container stopped {{time}}. Waiting for it to start.",
+    "interrupted": "Logs were interrupted. Some lines may be missing.",
     "toolbar": "Log view options",
     "show": {
       "label": "Show",

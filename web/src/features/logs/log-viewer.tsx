@@ -119,6 +119,11 @@ export function LogViewer({
   const [sid] = useState(makeViewerId);
   const [buffer] = useState(() => new LogBuffer());
   const [state, setState] = useState<LogStreamState>({ status: "connecting" });
+  // Whether the stream has been live: a failure before that is a failed load, with
+  // Retry; one after it is a drop, which the stream itself retries.
+  const everLive = useRef(false);
+  // Bumped by Retry to open the stream again for the same viewer.
+  const [openCount, setOpenCount] = useState(0);
   // Set when the engine cannot read this container's log back (D-25).
   const [unreadable, setUnreadable] = useState<UnreadableInfo | null>(null);
   const theme = useTheme();
@@ -154,6 +159,7 @@ export function LogViewer({
   // ---- the stream ----
   const [startReached, setStartReached] = useState(false);
   const [earlier, setEarlier] = useState<"idle" | "loading" | "error">("idle");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: openCount is the Retry trigger
   useEffect(() => {
     buffer.clear();
     following.current = true;
@@ -161,6 +167,7 @@ export function LogViewer({
     setStartReached(false);
     setEarlier("idle");
     setUnreadable(null);
+    everLive.current = false;
     const range = streamRange(parseShow(sinceKey || undefined), new Date());
     const stream = createLogStream({
       envId,
@@ -169,8 +176,16 @@ export function LogViewer({
       sid,
       ...range,
       onLines: (lines) => buffer.push(lines),
-      onState: setState,
+      onState: (next) => {
+        if (next.status === "live") everLive.current = true;
+        setState(next);
+      },
       onUnreadable: setUnreadable,
+      onInterrupted: () => {
+        // Told once: a stream that cannot be resumed closes.
+        if (buffer.last?.marker !== "interrupted")
+          buffer.pushMarker("interrupted", new Date().toISOString());
+      },
       onContainerState: ({ state: what, at }) => {
         // A reconnect to a stopped container is told again; the row is shown once.
         if (what === "stopped" && buffer.last?.marker !== "stopped")
@@ -179,7 +194,7 @@ export function LogViewer({
       },
     });
     return () => stream.close();
-  }, [buffer, envId, containerId, nodeId, sid, sinceKey]);
+  }, [buffer, envId, containerId, nodeId, sid, sinceKey, openCount]);
 
   // ---- search ----
   const [queryInput, setQueryInput] = useState(view.q ?? "");
@@ -392,7 +407,11 @@ export function LogViewer({
   );
   const announcement = useDebounced(counter, ANNOUNCE_DEBOUNCE_MS);
   const markerLabel = (line: BufferedLine) =>
-    t(line.marker === "stopped" ? "logs.stopped" : "logs.restarted", { time: clockTime(line.t) });
+    line.marker === "interrupted"
+      ? t("logs.interrupted")
+      : t(line.marker === "stopped" ? "logs.stopped" : "logs.restarted", {
+          time: clockTime(line.t),
+        });
   const timeLabel = utc ? t("logs.timeUtc") : t("logs.time");
   const dayLabel = (iso: string) =>
     new Date(iso).toLocaleDateString(undefined, {
@@ -401,6 +420,7 @@ export function LogViewer({
     });
 
   const connected = state.status === "live" || state.status === "reconnecting";
+  const loadFailed = state.status === "closed" && state.reason === "failed" && !everLive.current;
   const [downloadOpen, setDownloadOpen] = useState(false);
   const downloadTarget = { envId, containerId, nodeId };
   const onShowChange = (next: ShowRange) => change({ since: formatShow(next) });
@@ -523,7 +543,23 @@ export function LogViewer({
           onKeyDown={onKeyDown}
           className="h-[calc(100svh-20rem)] min-h-80 overflow-auto rounded-lg border bg-card focus-visible:ring-2 focus-visible:ring-accent-ink focus-visible:outline-none"
         >
-          {state.status === "connecting" ? (
+          {loadFailed ? (
+            <div
+              role="alert"
+              className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center"
+            >
+              <p className="font-medium">{t("logs.loadError.title")}</p>
+              <p className="text-sm text-muted-foreground">{t("logs.loadError.body")}</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setOpenCount((n) => n + 1)}
+              >
+                {t("logs.loadError.retry")}
+              </Button>
+            </div>
+          ) : state.status === "connecting" ? (
             <div className="flex flex-col gap-1.5 p-3">
               <span role="status" className="sr-only">
                 {t("logs.loading")}

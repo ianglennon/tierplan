@@ -382,17 +382,26 @@ func parseLogParams(req *http.Request) (logParams, error) {
 			p.tail = strconv.Itoa(min(n, maxLogTail))
 		}
 	}
-	after := q.Get("after")
-	if after == "" {
-		after = req.Header.Get("Last-Event-ID")
-	}
-	if after != "" {
-		t, err := time.Parse(time.RFC3339Nano, after)
+	// The stamp to resume after comes from the query (after) and from the header a
+	// browser sends when it reconnects an event stream (Last-Event-ID). When both are
+	// given the later one wins: whichever the client has seen further is where it is.
+	// A header that is not a time is ignored, since it is not the page's to get wrong.
+	var after time.Time
+	if v := q.Get("after"); v != "" {
+		t, err := time.Parse(time.RFC3339Nano, v)
 		if err != nil {
 			return p, errors.New("after must be an RFC 3339 time")
 		}
+		after = t.UTC()
+	}
+	if v := req.Header.Get("Last-Event-ID"); v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil && t.After(after) {
+			after = t.UTC()
+		}
+	}
+	if !after.IsZero() {
 		// A resume asks for everything since the last line, not the last lines.
-		p.after = t.UTC().Format(logTimeLayout)
+		p.after = after.Format(logTimeLayout)
 		p.since, p.tail = p.after, ""
 	}
 	return p, nil
