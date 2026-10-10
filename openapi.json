@@ -4932,6 +4932,104 @@
         ],
         "type": "object"
       },
+      "ShellOpenBody": {
+        "additionalProperties": false,
+        "properties": {
+          "cols": {
+            "default": 80,
+            "description": "The terminal's width in characters",
+            "format": "int64",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "command": {
+            "description": "With shell custom, the command to run, split into words the way a shell reads quotes and backslashes. It is never given to a shell, so nothing in it is expanded",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node the container is on: the nodeId of its row in the containers list. May be left out only on an environment of one node that is not a swarm (422 node_required)",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "rows": {
+            "default": 24,
+            "description": "The terminal's height in lines",
+            "format": "int64",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "shell": {
+            "default": "auto",
+            "description": "auto runs bash when the image has it and sh otherwise, in one exec. custom runs command",
+            "enum": [
+              "auto",
+              "bash",
+              "sh",
+              "ash",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "user": {
+            "description": "The user to run as, for example root, 0 or www-data. Empty means the container's own",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "workingDir": {
+            "description": "The working directory. Empty means the container's own",
+            "maxLength": 4096,
+            "type": "string"
+          }
+        },
+        "required": [
+          "shell",
+          "cols",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "ShellSessionBody": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "The command that was started",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sessionId": {
+            "description": "The session's ID, single use and bound to the caller's sign-in",
+            "type": "string"
+          },
+          "user": {
+            "description": "The user it runs as; empty means the container's own",
+            "type": "string"
+          },
+          "workingDir": {
+            "description": "Its working directory; empty means the container's own",
+            "type": "string"
+          },
+          "wsPath": {
+            "description": "The WebSocket to attach to within 30 seconds, as a path under the public URL's base path. Binary frames are the terminal's bytes; text frames are JSON control: resize from the browser, exit and closed from the server",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "wsPath",
+          "command",
+          "user",
+          "workingDir"
+        ],
+        "type": "object"
+      },
       "SourceBody": {
         "additionalProperties": false,
         "properties": {
@@ -8303,6 +8401,79 @@
           }
         },
         "summary": "A page of earlier log lines",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/containers/{containerId}/shell": {
+      "post": {
+        "description": "Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read, 409 host_read_only on a read-only host, 409 container_not_running, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).",
+        "operationId": "openShell",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The container ID or name",
+            "in": "path",
+            "name": "containerId",
+            "required": true,
+            "schema": {
+              "description": "The container ID or name",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShellOpenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellSessionBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Open a shell in a container",
         "tags": [
           "environments"
         ]

@@ -115,6 +115,14 @@ var phase4DetailKeys = map[string][]string{
 	// Opening a log stream records the container, its node, the viewer's random ID (sid)
 	// and what was asked for; never any line of the log (plan 04-19, D-23, D-24).
 	audit.ActionLogsViewed: {"container", "node", "sid", "since", "tail"},
+	// A browser shell records that a session began and how it ended, never what was
+	// typed or shown (plan 04-22, D-28): the container, its node, the session's ID
+	// (sid), the command as chosen, the user and working directory (empty for the
+	// container's own), then at the end the time it lasted, the exit code or that the
+	// process was still running, and why it ended. owner names whose session an admin
+	// ended (plan 04-25).
+	audit.ActionShellOpened: {"container", "node", "sid", "command", "user", "workdir"},
+	audit.ActionShellClosed: {"container", "node", "sid", "duration_ms", "exit_code", "still_running", "reason", "owner"},
 }
 
 func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -146,6 +154,7 @@ func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"network.connected": audit.ActionNetworkConnected, "network.disconnected": audit.ActionNetworkDisconnected,
 		"volume.created": audit.ActionVolumeCreated, "volume.removed": audit.ActionVolumeRemoved,
 		"logs.viewed": audit.ActionLogsViewed, "logs.downloaded": audit.ActionLogsDownloaded,
+		"shell.opened": audit.ActionShellOpened, "shell.closed": audit.ActionShellClosed,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

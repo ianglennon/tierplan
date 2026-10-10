@@ -186,6 +186,10 @@
       "logs": {
         "viewed": "Container logs viewed",
         "downloaded": "Container logs downloaded"
+      },
+      "shell": {
+        "opened": "Container shell opened",
+        "closed": "Container shell closed"
       }
     },
     "coalesced": {

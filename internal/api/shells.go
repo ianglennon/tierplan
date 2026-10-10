@@ -1,0 +1,389 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+package api
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/coder/websocket"
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/go-chi/chi/v5"
+
+	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/shells"
+	"github.com/ianglennon/bayplan/internal/tunnel"
+)
+
+// Problem types and limits of the browser shell.
+const (
+	problemShellSessionNotFound = "shell_session_not_found"
+	problemShellFailed          = "shell_failed"
+	problemShellUnavailable     = "shell_unavailable"
+	problemInvalidShell         = "invalid_shell"
+	problemContainerNotRunning  = "container_not_running"
+	problemNoShell              = "no_shell"
+
+	// shellStartTimeout bounds creating the exec and attaching to it.
+	shellStartTimeout = 30 * time.Second
+	// shellAuditTimeout bounds the write of the row that ends a session, which runs
+	// on whatever goroutine ended it.
+	shellAuditTimeout = 10 * time.Second
+)
+
+// ShellsSource is what the shell routes use of an environment: the aggregate, to find
+// the container's node and row, and the one write path to a node's engine. The exec
+// is created through WriteOnNode because starting a process in a container changes
+// the host (D-35): a read-only host refuses it, and the node's cached snapshot is
+// dropped. *envs.Aggregator implements it.
+type ShellsSource interface {
+	snapshotReader
+	WriteOnNode(ctx context.Context, envID, nodeID string, fn func(*dockerx.Client) error) error
+}
+
+// PublicOriginSource says where the browser reaches this instance, read on every
+// request. *instance.Instance implements it.
+type PublicOriginSource interface {
+	PublicOrigin() string
+}
+
+// ShellsDeps are the dependencies of the shell routes.
+type ShellsDeps struct {
+	Aggregator ShellsSource
+	// Registry holds the open sessions. Without one the routes answer 503.
+	Registry *shells.Registry
+	// Audit records the start and the end of each session, never its contents.
+	Audit *audit.Writer
+	// Checker is the permission checker; the routes themselves are judged by the
+	// route harness (containers.exec).
+	Checker *rbac.Checker
+	// Instance says which origin the WebSocket may be opened from.
+	Instance PublicOriginSource
+	// PendingTTL is how long a session waits for its browser. Zero means 30 s.
+	PendingTTL time.Duration
+	// Controls tune the byte bridge; tests shorten them.
+	Controls shells.Controls
+	// Log receives server-side failures. Nil means slog.Default(). It is never given
+	// a byte typed into or printed by a shell.
+	Log *slog.Logger
+}
+
+// ShellOpenInput is the path and body of POST .../containers/{containerId}/shell.
+type ShellOpenInput struct {
+	EnvironmentPathInput
+	ContainerID string `path:"containerId" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" maxLength:"128" doc:"The container ID or name"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      ShellOpenBody
+}
+
+// ShellOpenBody says what to start in the container and how big the terminal is.
+type ShellOpenBody struct {
+	NodeID     string `json:"nodeId,omitempty" maxLength:"128" doc:"The node the container is on: the nodeId of its row in the containers list. May be left out only on an environment of one node that is not a swarm (422 node_required)"`
+	Shell      string `json:"shell" enum:"auto,bash,sh,ash,custom" default:"auto" doc:"auto runs bash when the image has it and sh otherwise, in one exec. custom runs command"`
+	Command    string `json:"command,omitempty" maxLength:"4096" doc:"With shell custom, the command to run, split into words the way a shell reads quotes and backslashes. It is never given to a shell, so nothing in it is expanded"`
+	User       string `json:"user,omitempty" maxLength:"64" doc:"The user to run as, for example root, 0 or www-data. Empty means the container's own"`
+	WorkingDir string `json:"workingDir,omitempty" maxLength:"4096" doc:"The working directory. Empty means the container's own"`
+	Cols       int    `json:"cols" minimum:"1" maximum:"1000" default:"80" doc:"The terminal's width in characters"`
+	Rows       int    `json:"rows" minimum:"1" maximum:"1000" default:"24" doc:"The terminal's height in lines"`
+}
+
+// ShellSessionBody is a pending session the browser attaches to.
+type ShellSessionBody struct {
+	SessionID  string   `json:"sessionId" doc:"The session's ID, single use and bound to the caller's sign-in"`
+	WSPath     string   `json:"wsPath" doc:"The WebSocket to attach to within 30 seconds, as a path under the public URL's base path. Binary frames are the terminal's bytes; text frames are JSON control: resize from the browser, exit and closed from the server"`
+	Command    []string `json:"command" doc:"The command that was started"`
+	User       string   `json:"user" doc:"The user it runs as; empty means the container's own"`
+	WorkingDir string   `json:"workingDir" doc:"Its working directory; empty means the container's own"`
+}
+
+// ShellOpenOutput wraps ShellSessionBody for huma.
+type ShellOpenOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ShellSessionBody
+}
+
+// RegisterShells registers the browser shell: the POST that creates the exec and a
+// pending session, and the WebSocket that attaches to it (OBS-03, RESEARCH Pattern 5).
+//
+// Two steps, because a browser cannot put a CSRF header on a WebSocket and the router
+// checks Origin and the token only on mutating methods. The exec is made by the
+// POST, which passes both checks; the GET upgrade claims the session it made, once,
+// for the same user and the same sign-in, within 30 seconds, from the instance's own
+// origin (T-04-76).
+func RegisterShells(r *httpx.Router, d ShellsDeps) {
+	if d.Log == nil {
+		d.Log = slog.Default()
+	}
+	need := rbac.Requirement{Perm: rbac.PermContainersExec, Scope: rbac.ScopeEnvironment}
+	if d.Registry != nil && d.Audit != nil {
+		d.Registry.OnEnd(func(s *shells.Session, reason string, res shells.EndResult) {
+			auditShellClosed(d, s, reason, res)
+		})
+	}
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "openShell", Method: http.MethodPost, Path: "/api/env/{envId}/containers/{containerId}/shell",
+		Summary: "Open a shell in a container",
+		Description: "Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. " +
+			"The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. " +
+			"The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). " +
+			"422 invalid_shell when a custom command cannot be read, 409 host_read_only on a read-only host, 409 container_not_running, 409 no_shell when the engine cannot find the command, " +
+			"503 stream_busy when the host's agent serves as many logs and shells as it can. " +
+			"What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. " +
+			"Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).",
+		Tags: []string{"environments"}, DefaultStatus: http.StatusCreated,
+	}, need, func(ctx context.Context, in *ShellOpenInput) (*ShellOpenOutput, error) {
+		return openShell(ctx, d, in)
+	})
+
+	r.Guarded(http.MethodGet, "/api/env/{envId}/shell-sessions/{sessionId}/ws", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		serveShell(w, req, d)
+	}))
+}
+
+// userKey is the identity a session is bound to: the kind of principal and its ID.
+func userKey(p *rbac.Principal) string { return string(p.Type) + ":" + p.ID }
+
+// authKey is the sign-in a session is bound to: the hash of the session cookie, hex.
+// A principal with no cookie (a token) binds to the user alone.
+func authKey(p *rbac.Principal) string { return hex.EncodeToString(p.SessionIDHash) }
+
+// hasControl reports whether s holds a control character, which no user name or
+// directory has.
+func hasControl(s string) bool {
+	return strings.IndexFunc(s, unicode.IsControl) >= 0
+}
+
+// commandLabel is how the audit log names the command: the kind for the built-in
+// shells, and the words of a custom command.
+func commandLabel(kind string, argv []string) string {
+	if kind == "custom" {
+		return strings.Join(argv, " ")
+	}
+	return kind
+}
+
+func openShell(ctx context.Context, d ShellsDeps, in *ShellOpenInput) (*ShellOpenOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	if d.Registry == nil || d.Aggregator == nil || d.Audit == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemShellUnavailable, "Shells are not available on this server.")
+	}
+	b := in.Body
+	if hasControl(b.User) || hasControl(b.WorkingDir) {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemValidationFailed, "The user and the working directory cannot hold control characters.")
+	}
+	argv, err := dockerx.ShellCommand(b.Shell, b.Command)
+	if err != nil {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemInvalidShell, "That shell command cannot be run: "+err.Error()+".")
+	}
+	agg, nodeID, node, err := resolveContainerNode(ctx, d.Aggregator, d.Log, env.ID, b.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	fullID, name, image := shellContainerRow(agg, nodeID, in.ContainerID)
+
+	var exec *dockerx.ExecSession
+	startCtx, cancel := context.WithTimeout(ctx, shellStartTimeout)
+	defer cancel()
+	err = d.Aggregator.WriteOnNode(startCtx, env.ID, nodeID, func(c *dockerx.Client) error {
+		var e error
+		exec, e = c.StartExec(startCtx, in.ContainerID, dockerx.ExecOptions{
+			Cmd: argv, User: b.User, WorkingDir: b.WorkingDir, Cols: uint(b.Cols), Rows: uint(b.Rows),
+		})
+		return e
+	})
+	if err != nil {
+		return nil, shellStartProblem(d.Log, env.ID, err)
+	}
+
+	s := d.Registry.Create(&shells.Session{
+		UserID: userKey(p), AuthSession: authKey(p), Actor: p.AuditActor(),
+		IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+		EnvID: env.ID, NodeID: nodeID, Node: node.Name,
+		ContainerID: fullID, ContainerName: name, Image: image,
+		Command: argv, User: b.User, WorkingDir: b.WorkingDir,
+	}, exec, d.PendingTTL)
+	if s == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemShellUnavailable, "Bayplan is stopping, so it cannot open a shell now.")
+	}
+	// The row is written before the browser can attach. A shell the log does not know
+	// about is not allowed to run, so a failed write ends the session.
+	if err := d.Audit.Record(ctx, audit.Entry{
+		Actor: s.Actor, Action: audit.ActionShellOpened, TargetType: logTargetType, TargetID: fullID,
+		EnvID: env.ID, Result: audit.ResultSuccess, IP: s.IP, UserAgent: s.UserAgent,
+		Details: map[string]string{
+			"container": name, "node": nodeID, "sid": s.ID, "command": commandLabel(b.Shell, argv),
+			"user": b.User, "workdir": b.WorkingDir,
+		},
+	}); err != nil {
+		d.Log.Error("could not audit the opening of a shell; the session was ended", "container", fullID, "error", err)
+		d.Registry.End(s.ID, "audit_failed")
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	s.MarkOpened()
+	return &ShellOpenOutput{CacheControl: "no-store", Body: ShellSessionBody{
+		SessionID:  s.ID,
+		WSPath:     "/api/env/" + env.ID + "/shell-sessions/" + s.ID + "/ws",
+		Command:    argv,
+		User:       b.User,
+		WorkingDir: b.WorkingDir,
+	}}, nil
+}
+
+// shellContainerRow finds the container the route named in the aggregate, for its full
+// ID, name and image. Without a row the full ID and the name are what was asked.
+func shellContainerRow(agg envs.Aggregate, nodeID, containerID string) (fullID, name, image string) {
+	for _, row := range agg.Containers {
+		if row.NodeID == nodeID && (row.ID == containerID || (len(containerID) >= minSelfIDLen && strings.HasPrefix(row.ID, containerID)) || row.Name == containerID) {
+			return row.ID, row.Name, row.Image
+		}
+	}
+	return containerID, containerID, ""
+}
+
+// shellStartProblem maps the error of creating and attaching an exec to the problem to
+// answer. Nothing was registered and nothing is audited for these.
+func shellStartProblem(log *slog.Logger, envID string, err error) error {
+	var denied *envs.AgentPolicyDeniedError
+	switch {
+	case errors.Is(err, envs.ErrHostReadOnly):
+		return httpx.Problem(http.StatusConflict, codeHostReadOnly, "This host is read-only, so Bayplan cannot open a shell on it. Logs still work.")
+	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
+		return httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+	case errors.Is(err, tunnel.ErrBusy):
+		return httpx.Problem(http.StatusServiceUnavailable, problemStreamBusy,
+			"This host's agent is serving as many logs and shells as it can. Close one and try again.")
+	case errors.Is(err, dockerx.ErrNoShell):
+		return httpx.Problem(http.StatusConflict, problemNoShell, "The container has no such shell. If the image has one somewhere else, enter its path.")
+	case dockerx.IsNotFound(err):
+		return httpx.Problem(http.StatusNotFound, problemContainerNotFound, "This container does not exist on that node. It may have been removed.")
+	case dockerx.IsConflict(err):
+		return httpx.Problem(http.StatusConflict, problemContainerNotRunning, "The container is not running. Start it to open a shell.")
+	case errors.Is(err, envs.ErrOffline), errors.Is(err, envs.ErrUnsupported), errors.Is(err, tunnel.ErrAgentGone):
+		return httpx.Problem(http.StatusConflict, codeNodeUnreachable, "The node did not answer.")
+	case errors.As(envs.ClassifyDockerError(err), &denied):
+		log.Warn("an agent refused to start a shell", "environment", envID, "endpoint", denied.Endpoint)
+		return httpx.Problem(http.StatusBadGateway, problemAgentPolicyDenied, "The agent refused a request ("+denied.Endpoint+").")
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return httpx.Problem(http.StatusServiceUnavailable, "", "The node took too long to answer.")
+	}
+	log.Error("starting a shell failed", "environment", envID, "error", err)
+	return httpx.Problem(http.StatusBadGateway, problemShellFailed, "Docker could not open the shell.")
+}
+
+// escapePattern makes s a literal for the path.Match patterns of the WebSocket origin
+// check, which read brackets, stars and question marks as wildcards.
+func escapePattern(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`, `[`, `\[`).Replace(s)
+}
+
+// originPatterns are the origins a shell WebSocket may be opened from besides the
+// request's own host: the instance's public origin, scheme included, read on this
+// request so a change of the public URL applies at once (T-04-76). With no public URL
+// the request's own host is the only one allowed. The option that switches the origin
+// check off is never used.
+func originPatterns(in PublicOriginSource) []string {
+	if in == nil {
+		return nil
+	}
+	o := httpx.OriginOf(in.PublicOrigin())
+	if o == "" {
+		return nil
+	}
+	return []string{escapePattern(o)}
+}
+
+// serveShell attaches a browser to a pending session and carries bytes until one side
+// ends. The policy has run when it is called, so the principal and the environment are
+// on the context.
+func serveShell(w http.ResponseWriter, req *http.Request, d ShellsDeps) {
+	ctx := req.Context()
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		writeJSONProblem(w, http.StatusInternalServerError, "", "internal error")
+		return
+	}
+	if d.Registry == nil {
+		writeJSONProblem(w, http.StatusServiceUnavailable, problemShellUnavailable, "Shells are not available on this server.")
+		return
+	}
+	sid := chi.URLParam(req, "sessionId")
+	notFound := func() {
+		writeJSONProblem(w, http.StatusNotFound, problemShellSessionNotFound, "There is no such shell session. It may have expired or been used already; open a new one.")
+	}
+	// Asked before the upgrade, so a refusal is a plain 404, and a request that the
+	// origin check then refuses does not use the session up.
+	if err := d.Registry.Check(sid, env.ID, userKey(p), authKey(p)); err != nil {
+		notFound()
+		return
+	}
+
+	// The server's read timeout was set on the connection for the request; a shell
+	// lives for hours.
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Time{})
+
+	conn, err := websocket.Accept(w, req, &websocket.AcceptOptions{
+		OriginPatterns:  originPatterns(d.Instance),
+		CompressionMode: websocket.CompressionDisabled,
+	})
+	if err != nil {
+		return // Accept has answered the client (403 for another origin)
+	}
+	defer func() { _ = conn.CloseNow() }()
+
+	s, err := d.Registry.Claim(sid, userKey(p), authKey(p))
+	if err != nil {
+		// A second attach that raced the first.
+		_ = conn.Close(websocket.StatusPolicyViolation, "no such session")
+		return
+	}
+	reason := shells.Bridge(ctx, conn, s, d.Controls)
+	d.Registry.End(s.ID, reason)
+}
+
+// auditShellClosed writes the shell.closed row of a session that was opened: how long
+// it lasted, how its process ended or that it was left running, and why the session
+// ended. It runs on whichever goroutine ended the session.
+func auditShellClosed(d ShellsDeps, s *shells.Session, reason string, res shells.EndResult) {
+	if !s.Opened() {
+		return
+	}
+	details := map[string]string{
+		"container": s.ContainerName, "node": s.NodeID, "sid": s.ID,
+		"duration_ms": strconv.FormatInt(res.Duration.Milliseconds(), 10),
+		"reason":      reason,
+	}
+	if res.ExitCode != nil {
+		details["exit_code"] = strconv.Itoa(*res.ExitCode)
+	} else {
+		details["still_running"] = "true"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shellAuditTimeout)
+	defer cancel()
+	if err := d.Audit.Record(ctx, audit.Entry{
+		Actor: s.Actor, Action: audit.ActionShellClosed, TargetType: logTargetType, TargetID: s.ContainerID,
+		EnvID: s.EnvID, Result: audit.ResultSuccess, IP: s.IP, UserAgent: s.UserAgent, Details: details,
+	}); err != nil {
+		d.Log.Error("could not audit the end of a shell", "container", s.ContainerID, "error", err)
+	}
+}
+
+var _ ShellsSource = (*envs.Aggregator)(nil)

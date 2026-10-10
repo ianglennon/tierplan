@@ -32,6 +32,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/shells"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/vault"
@@ -104,6 +105,9 @@ type Server struct {
 	// broker turns agent connections and health changes into the global
 	// environments stream (plan 02-12).
 	broker *envs.Broker
+	// shells holds the browser shells that are open (plan 04-22). It is memory only,
+	// and the shutdown closes every one of them.
+	shells *shells.Registry
 	// tunnel holds the live agent connections; agents creates agent
 	// environments and enrols agents.
 	tunnel  *tunnel.Hub
@@ -150,6 +154,7 @@ type RouterDeps struct {
 	Volumes       api.VolumesDeps
 	Events        api.EventsDeps
 	Logs          api.LogsDeps
+	Shells        api.ShellsDeps
 	EnvStream     api.EnvStreamDeps
 	Recent        api.RecentDeps
 	Audit         api.AuditDeps
@@ -189,6 +194,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterVolumes(r, d.Volumes)
 	api.RegisterEvents(r, d.Events)
 	api.RegisterLogs(r, d.Logs)
+	api.RegisterShells(r, d.Shells)
 	api.RegisterEnvStream(r, d.EnvStream)
 	api.RegisterRecent(r, d.Recent)
 	api.RegisterAudit(r, d.Audit)
@@ -644,6 +650,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		InstanceName: inst.Name, PublicURL: inst.PublicURL,
 	}
 
+	shellRegistry := shells.NewRegistry(nil)
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -711,6 +718,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
+		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, Log: log},
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
@@ -754,6 +762,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		clusters:   clusters,
 		aggregator: aggregator,
 		broker:     broker,
+		shells:     shellRegistry,
 		tunnel:     tunnelHub,
 		agents:     agentSvc,
 		updater:    updater,
@@ -872,6 +881,8 @@ func (s *Server) Agents() *agents.Service { return s.agents }
 func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
+	// Before the database closes, so the end of each shell is still audited.
+	s.shells.CloseAll("server_shutdown")
 	s.broker.Close()
 	s.updater.Close()
 	s.tunnel.Close()
@@ -948,6 +959,10 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	srv.RegisterOnShutdown(s.hub.Close)
 	// The health stream is open as long as a tab is, so it ends the same way.
 	srv.RegisterOnShutdown(s.broker.Close)
+	// http.Server.Shutdown ignores hijacked connections, and every browser shell is
+	// one. Closing the registry tells each attached browser why and ends its process
+	// attach, so a shell does not outlive the shutdown.
+	srv.RegisterOnShutdown(func() { s.shells.CloseAll("server_shutdown") })
 	// http.Server.Shutdown ignores hijacked connections, and every agent
 	// tunnel is one. Closing the hub sends each a close frame so the agents
 	// reconnect with backoff instead of waiting on a dead session (Pitfall 5).

@@ -592,6 +592,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/containers/{containerId}/shell": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open a shell in a container
+         * @description Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read, 409 host_read_only on a read-only host, 409 container_not_running, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).
+         */
+        post: operations["openShell"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/events": {
         parameters: {
             query?: never;
@@ -3880,6 +3900,46 @@ export interface components {
             /** @description The lower-cased username */
             username: string;
         };
+        ShellOpenBody: {
+            /**
+             * Format: int64
+             * @description The terminal's width in characters
+             * @default 80
+             */
+            cols: number;
+            /** @description With shell custom, the command to run, split into words the way a shell reads quotes and backslashes. It is never given to a shell, so nothing in it is expanded */
+            command?: string;
+            /** @description The node the container is on: the nodeId of its row in the containers list. May be left out only on an environment of one node that is not a swarm (422 node_required) */
+            nodeId?: string;
+            /**
+             * Format: int64
+             * @description The terminal's height in lines
+             * @default 24
+             */
+            rows: number;
+            /**
+             * @description auto runs bash when the image has it and sh otherwise, in one exec. custom runs command
+             * @default auto
+             * @enum {string}
+             */
+            shell: "auto" | "bash" | "sh" | "ash" | "custom";
+            /** @description The user to run as, for example root, 0 or www-data. Empty means the container's own */
+            user?: string;
+            /** @description The working directory. Empty means the container's own */
+            workingDir?: string;
+        };
+        ShellSessionBody: {
+            /** @description The command that was started */
+            command: string[] | null;
+            /** @description The session's ID, single use and bound to the caller's sign-in */
+            sessionId: string;
+            /** @description The user it runs as; empty means the container's own */
+            user: string;
+            /** @description Its working directory; empty means the container's own */
+            workingDir: string;
+            /** @description The WebSocket to attach to within 30 seconds, as a path under the public URL's base path. Binary frames are the terminal's bytes; text frames are JSON control: resize from the browser, exit and closed from the server */
+            wsPath: string;
+        };
         SourceBody: {
             /**
              * @description Where the grant comes from: the instance-admin flag, an assignment to every environment, a team the user belongs to, or an assignment to the user on this environment
@@ -5616,6 +5676,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContainerLogsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    openShell: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShellOpenBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellSessionBody"];
                 };
             };
             /** @description Error */
