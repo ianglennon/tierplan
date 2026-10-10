@@ -143,3 +143,100 @@ func TestSwarmNetworks(t *testing.T) {
 		t.Errorf("a second delete = %d, want 404", code)
 	}
 }
+
+// TestSwarmNetworkConnect connects a standalone container on a worker to an attachable
+// overlay through the API on a real swarm of three managers and a worker with an agent on
+// every node (plan 04-15, RES-06, D-43, Pitfall 11, RESEARCH A5). A worker only learns an
+// overlay when a task of a service on it runs there, so the first connect may answer
+// network_unavailable_on_node with the engine's own words. The test records which way the
+// engine goes: if the worker refuses, it starts a task of a service on the overlay on the
+// worker and connects again, which must work; if it accepts, it says so. Either way the
+// alias is in the container's inspect on the worker and a disconnect removes the endpoint.
+func TestSwarmNetworkConnect(t *testing.T) {
+	f := startSwarmFix(t, 3, 1)
+	dockertest.LoadImage(t, "busybox", f.sw.Nodes()...)
+	f.install(t)
+	f.waitSwarmOnline(t, 4)
+	mgr, worker := f.sw.Managers[0], f.sw.Workers[0]
+	base := "/api/env/" + f.env.ID + "/networks"
+
+	var workerAgent string
+	for _, a := range f.srv.Agents(f.env.ID) {
+		if a.Node == worker.Hostname {
+			workerAgent = a.ID
+		}
+	}
+	if workerAgent == "" {
+		t.Fatalf("no agent for the worker %s", worker.Hostname)
+	}
+
+	// An attachable overlay made through the API, and a standalone container on the worker.
+	code, raw := f.srv.Do(http.MethodPost, base, map[string]any{"name": "bp-attach", "driver": "overlay", "attachable": true})
+	if code != http.StatusCreated {
+		t.Fatalf("create the overlay: %d %s", code, raw)
+	}
+	var made struct{ ID string }
+	if err := json.Unmarshal(raw, &made); err != nil || made.ID == "" {
+		t.Fatalf("create answer %s (%v)", raw, err)
+	}
+	sh(t, worker, "docker run -d --name bp-wk busybox sleep 600")
+	containerID := strings.TrimSpace(sh(t, worker, "docker inspect -f '{{.Id}}' bp-wk"))
+
+	// The list has to know the container, on its node, before the API can find it.
+	f.srv.WaitFor("the list to show the worker's container", 60*time.Second, func() (bool, string) {
+		code, raw := f.srv.Do(http.MethodGet, "/api/env/"+f.env.ID+"/containers", nil)
+		return code == http.StatusOK && strings.Contains(string(raw), containerID), string(raw)
+	})
+
+	endpoints := func() string {
+		return sh(t, worker, "docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}={{$v.Aliases}} {{end}}' bp-wk")
+	}
+	connect := func() (int, []byte) {
+		return f.srv.Do(http.MethodPost, base+"/"+made.ID+"/connect",
+			map[string]any{"containerId": containerID, "nodeId": workerAgent, "alias": "wk"})
+	}
+
+	code, raw = connect()
+	switch {
+	case code == http.StatusNoContent:
+		t.Logf("RESEARCH A5: the worker accepted a connect to an attachable overlay it had no task on")
+	case code == http.StatusConflict && strings.Contains(string(raw), "network_unavailable_on_node"):
+		t.Logf("RESEARCH A5: the worker answered network_unavailable_on_node before it had a task on the overlay: %s", raw)
+		sh(t, mgr, "docker service create --name bp-anchor --replicas 1 --constraint node.hostname=="+worker.Hostname+" --network bp-attach busybox sleep 600")
+		f.srv.WaitFor("a task of the service on the worker", 120*time.Second, func() (bool, string) {
+			out := sh(t, mgr, "docker service ps bp-anchor --filter desired-state=running --format '{{.Node}} {{.CurrentState}}'")
+			return strings.Contains(out, worker.Hostname) && strings.Contains(out, "Running"), out
+		})
+		f.srv.WaitFor("the connect to go through once the worker has a task on the overlay", 90*time.Second, func() (bool, string) {
+			code, raw := connect()
+			switch code {
+			case http.StatusNoContent:
+				return true, ""
+			case http.StatusConflict:
+				return false, string(raw)
+			}
+			t.Fatalf("connect after the task: %d %s", code, raw)
+			return false, ""
+		})
+		t.Logf("RESEARCH A5: the connect worked once a task of a service on the overlay ran on the worker")
+	default:
+		t.Fatalf("connect: %d %s, want 204 or 409 network_unavailable_on_node", code, raw)
+	}
+	if got := endpoints(); !strings.Contains(got, "bp-attach=[") || !strings.Contains(got, "wk") {
+		t.Fatalf("the container's endpoints on the worker = %q, want bp-attach with the alias wk", got)
+	}
+
+	// A second connect is the engine's, mapped refusal, and nothing is added.
+	if code, raw := connect(); code != http.StatusConflict || !strings.Contains(string(raw), "already_connected") {
+		t.Errorf("a second connect: %d %s, want 409 already_connected", code, raw)
+	}
+
+	// Disconnecting removes the endpoint.
+	code, raw = f.srv.Do(http.MethodPost, base+"/"+made.ID+"/disconnect", map[string]any{"containerId": containerID, "nodeId": workerAgent})
+	if code != http.StatusNoContent {
+		t.Fatalf("disconnect: %d %s", code, raw)
+	}
+	if got := endpoints(); strings.Contains(got, "bp-attach") {
+		t.Errorf("the container's endpoints after the disconnect = %q, want bp-attach gone", got)
+	}
+}
