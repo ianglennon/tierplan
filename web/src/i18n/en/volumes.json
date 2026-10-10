@@ -1,0 +1,61 @@
+{
+  "volumes": {
+    "list": {
+      "empty": {
+        "title": "No volumes",
+        "body": "Volumes keep data after a container is gone. Create one, or deploy a stack that uses them."
+      }
+    },
+    "create": {
+      "button": "Create volume",
+      "title": "Create volume",
+      "body": "A volume keeps data after its container is gone.",
+      "cancel": "Cancel",
+      "submit": "Create volume",
+      "pending": "Creating…",
+      "success": "Created volume {{name}}.",
+      "name": {
+        "label": "Name",
+        "helper": "Letters, numbers, dot, dash or underscore."
+      },
+      "node": {
+        "label": "Create on node",
+        "placeholder": "Choose a node",
+        "helper": "Volumes live on one node."
+      },
+      "driver": {
+        "label": "Driver"
+      },
+      "type": {
+        "label": "Type",
+        "none": "None"
+      },
+      "options": {
+        "label": "Driver options",
+        "add": "Add option",
+        "key": "Option name",
+        "value": "Option value",
+        "remove": "Remove option {{name}}",
+        "removeEmpty": "Remove option"
+      },
+      "labels": {
+        "label": "Labels",
+        "add": "Add label",
+        "key": "Label name",
+        "value": "Label value",
+        "remove": "Remove label {{name}}",
+        "removeEmpty": "Remove label"
+      }
+    },
+    "errors": {
+      "nameRequired": "Enter a name.",
+      "nameInvalid": "Use letters, numbers, dot, dash or underscore.",
+      "nameTaken": "A volume named {{name}} already exists.",
+      "nodeRequired": "Choose a node.",
+      "nodeUnreachable": "That node isn't reachable right now. Try again when it's back.",
+      "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening."
+    }
+  }
+}

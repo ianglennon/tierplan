@@ -793,7 +793,11 @@ export interface paths {
          */
         get: operations["listVolumes"];
         put?: never;
-        post?: never;
+        /**
+         * Create a volume
+         * @description Creates a volume on one node, once and never retried. Volumes are node-local: nodeId names the node (the nodeId of a row of a list) and may be left out only on an environment of one node that is not a swarm (else 422 node_required). The driver is local unless one is named. 409 name_taken when the node already has a volume of that name (the engine would silently reuse it), 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs volumes.create (Admin) on the environment. Every attempt is audited as volume.created, with result failure and the code when it was refused. The audit row carries the driver option names and values with any password-like part replaced.
+         */
+        post: operations["createVolume"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4167,6 +4171,28 @@ export interface components {
             /** @description Release version, or dev for an untagged build */
             version: string;
         };
+        VolumeCreateBody: {
+            /** @description The volume name */
+            name: string;
+            /** @description The ID of the node the volume was made on */
+            nodeId: string;
+        };
+        VolumeCreateRequest: {
+            /** @description The volume driver. Left out it is local */
+            driver?: string;
+            /** @description Driver options, at most 64. For the local driver: type, o and device. They can hold a share password, so they are never audited as they are */
+            driverOptions?: {
+                [key: string]: string;
+            };
+            /** @description Labels, at most 64 */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description The volume name */
+            name: string;
+            /** @description The node to create the volume on: the nodeId of a row of a list. Volumes are node-local. Left out only on an environment of one node that is not a swarm */
+            nodeId?: string;
+        };
         VolumeItem: {
             /** Format: date-time */
             created?: string;
@@ -5823,6 +5849,43 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    createVolume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VolumeCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
                 };
             };
         };

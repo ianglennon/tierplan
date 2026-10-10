@@ -107,6 +107,11 @@ var phase4DetailKeys = map[string][]string{
 	// for, the alias and addresses; disconnecting the first three.
 	audit.ActionNetworkConnected:    {"network", "container", "node", "alias", "ipv4", "ipv6", "code"},
 	audit.ActionNetworkDisconnected: {"network", "container", "node", "code"},
+	// A volume create records the name, node, driver and the driver options with any
+	// password-like part masked (redact.AuditOptions); the remove of plan 04-17 records
+	// the name, node, whether it was part of a bulk delete, and the code.
+	audit.ActionVolumeCreated: {"name", "node", "driver", "options", "code"},
+	audit.ActionVolumeRemoved: {"name", "node", "driver", "bulk", "code"},
 }
 
 func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -136,6 +141,7 @@ func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"container.removed": audit.ActionContainerRemoved,
 		"network.created":   audit.ActionNetworkCreated, "network.removed": audit.ActionNetworkRemoved,
 		"network.connected": audit.ActionNetworkConnected, "network.disconnected": audit.ActionNetworkDisconnected,
+		"volume.created": audit.ActionVolumeCreated, "volume.removed": audit.ActionVolumeRemoved,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

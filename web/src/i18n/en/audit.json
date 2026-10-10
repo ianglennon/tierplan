@@ -178,6 +178,10 @@
         "removed": "Network removed",
         "connected": "Container connected to network",
         "disconnected": "Container disconnected from network"
+      },
+      "volume": {
+        "created": "Volume created",
+        "removed": "Volume removed"
       }
     },
     "coalesced": {

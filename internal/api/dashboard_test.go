@@ -516,9 +516,9 @@ func TestAViewerReadsTheSummaryAndEveryListAndAUserWithoutAGrantGetsNotFound(t *
 func TestListRoutesAreReadOnly(t *testing.T) {
 	f, e := dashEnv(t, richEngine())
 	for _, what := range dataPaths {
-		if what == "networks" {
-			// The networks path is also where a network is created (plan 04-12); that
-			// route is tested on its own, with its permission.
+		if what == "networks" || what == "volumes" {
+			// The networks and volumes paths are also where one is created (plans 04-12
+			// and 04-16); those routes are tested on their own, with their permission.
 			continue
 		}
 		rec := f.req(t, http.MethodPost, "/api/env/"+e.ID+"/"+what, `{}`)

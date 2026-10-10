@@ -147,6 +147,7 @@ type RouterDeps struct {
 	Dashboard     api.DashboardDeps
 	Containers    api.ContainersDeps
 	Networks      api.NetworksDeps
+	Volumes       api.VolumesDeps
 	Events        api.EventsDeps
 	EnvStream     api.EnvStreamDeps
 	Recent        api.RecentDeps
@@ -184,6 +185,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterDashboard(r, d.Dashboard)
 	api.RegisterContainers(r, d.Containers)
 	api.RegisterNetworks(r, d.Networks)
+	api.RegisterVolumes(r, d.Volumes)
 	api.RegisterEvents(r, d.Events)
 	api.RegisterEnvStream(r, d.EnvStream)
 	api.RegisterRecent(r, d.Recent)
@@ -703,6 +705,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, SelfContainerID: selfID, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Log: log},
+		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},

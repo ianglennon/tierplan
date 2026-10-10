@@ -5755,6 +5755,66 @@
         ],
         "type": "object"
       },
+      "VolumeCreateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The volume name",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of the node the volume was made on",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "nodeId"
+        ],
+        "type": "object"
+      },
+      "VolumeCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "driver": {
+            "description": "The volume driver. Left out it is local",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$",
+            "type": "string"
+          },
+          "driverOptions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Driver options, at most 64. For the local driver: type, o and device. They can hold a share password, so they are never audited as they are",
+            "maxProperties": 64,
+            "type": "object"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels, at most 64",
+            "maxProperties": 64,
+            "type": "object"
+          },
+          "name": {
+            "description": "The volume name",
+            "maxLength": 255,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node to create the volume on: the nodeId of a row of a list. Volumes are node-local. Left out only on an environment of one node that is not a swarm",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "VolumeItem": {
         "additionalProperties": false,
         "properties": {
@@ -8537,6 +8597,65 @@
           }
         },
         "summary": "List the volumes of an environment",
+        "tags": [
+          "environments"
+        ]
+      },
+      "post": {
+        "description": "Creates a volume on one node, once and never retried. Volumes are node-local: nodeId names the node (the nodeId of a row of a list) and may be left out only on an environment of one node that is not a swarm (else 422 node_required). The driver is local unless one is named. 409 name_taken when the node already has a volume of that name (the engine would silently reuse it), 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs volumes.create (Admin) on the environment. Every attempt is audited as volume.created, with result failure and the code when it was refused. The audit row carries the driver option names and values with any password-like part replaced.",
+        "operationId": "createVolume",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VolumeCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VolumeCreateBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a volume",
         "tags": [
           "environments"
         ]

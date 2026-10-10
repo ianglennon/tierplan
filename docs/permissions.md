@@ -45,5 +45,6 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `settings.write` | global | no | no | no | yes | no | Change settings |
 | `teams.manage` | global | no | no | no | yes | no | Create teams and change their members |
 | `users.manage` | global | no | no | no | yes | no | Create, change, disable and delete users |
+| `volumes.create` | environment | no | no | yes | yes | no | Create volumes |
 | `volumes.delete` | environment | no | extra | yes | yes | yes | Delete volumes |
 | `volumes.read` | environment | yes | yes | yes | yes | no | View volumes |

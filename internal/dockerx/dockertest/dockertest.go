@@ -290,6 +290,8 @@ type FakeVolume struct {
 	Driver    string
 	CreatedAt string
 	Labels    map[string]string
+	// Options are the driver options the volume was created with.
+	Options map[string]string
 }
 
 // FakeNetwork is one entry of /networks.
@@ -366,6 +368,10 @@ type Fake struct {
 	netConnects    []network.ConnectRequest
 	netDisconnects []network.DisconnectRequest
 	epChanges      map[[2]string]*FakeEndpoint
+	// vols are the volumes created through the fake, and volCreates the bodies of those
+	// requests (fake_volumes.go).
+	vols       []FakeVolume
+	volCreates []volume.CreateRequest
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
@@ -488,7 +494,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -746,7 +752,7 @@ func (c FakeConfig) volumeList() volume.ListResponse {
 	out := volume.ListResponse{Volumes: make([]volume.Volume, 0, len(c.Volumes))}
 	for _, fv := range c.Volumes {
 		out.Volumes = append(out.Volumes, volume.Volume{
-			Name: fv.Name, Driver: fv.Driver, CreatedAt: fv.CreatedAt, Labels: fv.Labels,
+			Name: fv.Name, Driver: fv.Driver, CreatedAt: fv.CreatedAt, Labels: fv.Labels, Options: fv.Options,
 			Mountpoint: "/var/lib/docker/volumes/" + fv.Name + "/_data", Scope: "local",
 		})
 	}

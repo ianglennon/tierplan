@@ -436,11 +436,13 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // NetworkConnect (Phase 4, RES-06) takes a network ID, a container ID and an EndpointSpec of an
 // alias and two addresses; it cannot express links, driver options or a MAC address.
 // NetworkDisconnect (Phase 4, RES-06) takes a network ID and a container ID and is never forced.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec"}
+// VolumeCreate (Phase 4, RES-07) takes a typed spec of a name, a driver, driver options and labels;
+// it cannot express a cluster volume. VolumeExists (Phase 4, RES-07) is a read: one inspect by name.
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeExists"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
-var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove"}
+var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 

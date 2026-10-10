@@ -32,6 +32,7 @@ export const ENVIRONMENT_PERMISSIONS = [
   "networks.manage",
   "networks.read",
   "secrets.reveal",
+  "volumes.create",
   "volumes.delete",
   "volumes.read",
 ] as const;
@@ -91,6 +92,7 @@ export const PERMISSION_REQUIREMENTS: Record<PermissionName, PermissionRequireme
   "settings.write": { kind: "instance" },
   "teams.manage": { kind: "instance" },
   "users.manage": { kind: "instance" },
+  "volumes.create": { kind: "role", role: "admin" },
   "volumes.delete": { kind: "extra", role: "operator" },
   "volumes.read": { kind: "role", role: "viewer" },
 };
