@@ -3,6 +3,8 @@
 
 import { z } from "zod";
 
+import type { EventDTO } from "@/features/dashboard/events";
+
 // The types the Events page filters by. A row of Bayplan's own has no chip and
 // shows under "none selected" only.
 export const DOCKER_TYPES = [
@@ -59,3 +61,45 @@ export type EventsSearch = z.output<typeof eventsSearchSchema>;
 
 // A change to the search: a key set to undefined leaves the URL.
 export type EventsSearchPatch = { [K in keyof EventsSearch]?: EventsSearch[K] | undefined };
+
+export interface EventFilters {
+  // None selected means every type.
+  types?: readonly string[];
+  // None selected means every action.
+  actions?: readonly string[];
+  node?: string;
+  q?: string;
+  // Exactly this name: the chip a row's menu sets.
+  name?: string;
+}
+
+// applyEventFilters keeps the events that match every filter that is set. The
+// search text matches the name, the image and the value of any attribute, ignoring
+// case. A row of Bayplan's own has a type no chip names, so it shows only while no
+// type is chosen. The input is not changed.
+export function applyEventFilters(
+  events: readonly EventDTO[],
+  { types, actions, node, q, name }: EventFilters,
+): EventDTO[] {
+  const text = q?.trim().toLowerCase();
+  return events.filter((e) => {
+    if (types && types.length > 0 && !types.includes(e.type)) return false;
+    if (actions && actions.length > 0 && !actions.includes(e.action)) return false;
+    if (node !== undefined && e.node !== node) return false;
+    if (name !== undefined && e.name !== name) return false;
+    if (text) {
+      const inName = e.name.toLowerCase().includes(text);
+      const inAttributes = Object.values(e.attributes).some((v) => v.toLowerCase().includes(text));
+      if (!inName && !inAttributes) return false;
+    }
+    return true;
+  });
+}
+
+// The actions after which the resource is gone, so its page would be a 404 and
+// the name is plain text (UI-SPEC "Name cell").
+const GONE_ACTIONS: ReadonlySet<string> = new Set(["destroy", "remove", "delete"]);
+
+export function isGone(action: string): boolean {
+  return GONE_ACTIONS.has(action);
+}
