@@ -122,15 +122,15 @@ func actors(rows []dockerx.EventRow) []string {
 func TestHubFirstSubscriberGetsTheBackfillAsBacklogThenLiveEvents(t *testing.T) {
 	now := time.Now()
 	r := newHubRig(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
-		{Type: "container", Action: "die", ActorID: "too-old", TimeNano: now.Add(-2 * time.Hour).UnixNano()},
-		{Type: "container", Action: "start", ActorID: "c-a", TimeNano: now.Add(-30 * time.Minute).UnixNano()},
+		{Type: "container", Action: "die", ActorID: "too-old", TimeNano: now.Add(-30 * time.Hour).UnixNano()},
+		{Type: "container", Action: "start", ActorID: "c-a", TimeNano: now.Add(-20 * time.Hour).UnixNano()},
 		{Type: "container", Action: "stop", ActorID: "c-b", TimeNano: now.Add(-20 * time.Minute).UnixNano()},
 	}})
 	r.waitRecent(t, 2)
 
 	backlog, ch, _ := r.subscribe(t)
 	if got := actors(backlog); !slices.Equal(got, []string{"c-a", "c-b"}) {
-		t.Fatalf("backlog = %v, want the last hour's events oldest first, without the 2 hour old one", got)
+		t.Fatalf("backlog = %v, want the last 24 hours' events oldest first, without the 30 hour old one", got)
 	}
 	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: "c-live"})
 	if ev := recvEvent(t, ch); ev.ActorID != "c-live" {
@@ -141,8 +141,8 @@ func TestHubFirstSubscriberGetsTheBackfillAsBacklogThenLiveEvents(t *testing.T) 
 	if len(qs) != 1 {
 		t.Fatalf("%d /events requests, want 1", len(qs))
 	}
-	if since, want := qs[0].Get("since"), fmt.Sprint(now.Add(-time.Hour).Unix()); since < want || since > fmt.Sprint(time.Now().Add(-time.Hour).Unix()) {
-		t.Errorf("first since = %q, want about now minus one hour (%s)", since, want)
+	if since, want := qs[0].Get("since"), fmt.Sprint(now.Add(-24*time.Hour).Unix()); since < want || since > fmt.Sprint(time.Now().Add(-24*time.Hour).Unix()) {
+		t.Errorf("first since = %q, want about now minus 24 hours (%s)", since, want)
 	}
 }
 
@@ -172,25 +172,34 @@ func TestHubSecondSubscriberGetsTheSameBacklogWithoutASecondDaemonRequest(t *tes
 	}
 }
 
-func TestHubRingKeepsTheNewest200Events(t *testing.T) {
+func TestHubRingKeepsTheNewest1000EventsAndRemembersMoreIDsThanThat(t *testing.T) {
+	if ring, seen := ringSize, seenSize; ring != 1000 || seen != 4096 || seen <= ring {
+		t.Fatalf("ringSize = %d and seenSize = %d, want 1000 and 4096: the IDs remembered must outnumber the ring, or a replayed event that just left it would come back", ring, seen)
+	}
 	r := newHubRig(t, dockertest.FakeConfig{})
 	r.waitStreamOpen(t)
 	base := time.Now().UnixNano()
-	for i := range 250 {
-		r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: fmt.Sprintf("c%03d", i), TimeNano: base + int64(i)})
+	// In batches the fake's per-stream buffer can hold; a stream nobody reads fast
+	// enough is dropped, which is not what this test is about.
+	const total = 1100
+	for start := 0; start < total; start += 100 {
+		for i := start; i < start+100; i++ {
+			r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: fmt.Sprintf("c%04d", i), TimeNano: base + int64(i)})
+		}
+		last := fmt.Sprintf("c%04d", start+99)
+		eventually(t, "a batch to arrive", func() bool {
+			recent := r.hub.Recent(hubEnv, 1)
+			return len(recent) == 1 && recent[0].ActorID == last
+		})
 	}
-	eventually(t, "the newest event", func() bool {
-		recent := r.hub.Recent(hubEnv, 1)
-		return len(recent) == 1 && recent[0].ActorID == "c249"
-	})
 
-	all := r.hub.Recent(hubEnv, 1000)
-	if len(all) != 200 || all[0].ActorID != "c249" || all[199].ActorID != "c050" {
-		t.Fatalf("Recent holds %d events from %s to %s, want the newest 200, c249 down to c050", len(all), all[0].ActorID, all[len(all)-1].ActorID)
+	all := r.hub.Recent(hubEnv, 5000)
+	if len(all) != 1000 || all[0].ActorID != "c1099" || all[999].ActorID != "c0100" {
+		t.Fatalf("Recent holds %d events from %s to %s, want the newest 1000, c1099 down to c0100", len(all), all[0].ActorID, all[len(all)-1].ActorID)
 	}
 	backlog, _, _ := r.subscribe(t)
-	if len(backlog) != 200 || backlog[0].ActorID != "c050" || backlog[199].ActorID != "c249" {
-		t.Errorf("backlog holds %d events, oldest %s and newest %s, want c050 up to c249", len(backlog), backlog[0].ActorID, backlog[len(backlog)-1].ActorID)
+	if len(backlog) != 1000 || backlog[0].ActorID != "c0100" || backlog[999].ActorID != "c1099" {
+		t.Errorf("backlog holds %d events, oldest %s and newest %s, want c0100 up to c1099", len(backlog), backlog[0].ActorID, backlog[len(backlog)-1].ActorID)
 	}
 }
 
@@ -818,6 +827,42 @@ func TestMergedFeedInvalidateOnlyRowReachesSubscribersWithItsNodeButNeverTheRing
 	late := s.subscribeMerged(t)
 	if len(late.where(actor("sick"))) != 0 {
 		t.Error("a later subscriber's backlog holds the invalidate-only row")
+	}
+}
+
+func TestMergedFeedRecentSinceKeepsRowsAtOrAfterTheTimeNewestFirstAndAtMostN(t *testing.T) {
+	s := newMergedRig(t)
+	sink := s.subscribeMerged(t)
+	now := time.Now()
+	times := map[string]time.Duration{"old": -10 * time.Hour, "mid": -5 * time.Hour, "new": -time.Hour, "newest": -time.Minute}
+	for _, id := range []string{"old", "mid", "new", "newest"} {
+		s.m[2].fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: id, TimeNano: now.Add(times[id]).UnixNano()})
+	}
+	sentinels(t, sink, map[string]*agentConn{"mgr-3": s.m[2]})
+	ids := func(rows []NodeEvent) []string {
+		var out []string
+		for _, r := range rows {
+			if r.ActorID != "sentinel-mgr-3" {
+				out = append(out, r.ActorID)
+			}
+		}
+		return out
+	}
+	ctx := context.Background()
+	if got := ids(s.agg.RecentSince(ctx, s.env.ID, now.Add(-6*time.Hour), 100)); !slices.Equal(got, []string{"newest", "new", "mid"}) {
+		t.Errorf("since 6h ago = %v, want newest, new, mid", got)
+	}
+	if got := ids(s.agg.RecentSince(ctx, s.env.ID, time.Time{}, 100)); !slices.Equal(got, []string{"newest", "new", "mid", "old"}) {
+		t.Errorf("no bound = %v, want all four newest first", got)
+	}
+	if got := s.agg.RecentSince(ctx, s.env.ID, time.Time{}, 2); len(got) != 2 {
+		t.Errorf("n = 2 returned %d rows", len(got))
+	}
+	if got := s.agg.RecentSince(ctx, s.env.ID, now.Add(time.Hour), 100); len(got) != 0 {
+		t.Errorf("since the future = %v, want none", ids(got))
+	}
+	if got := s.agg.RecentSince(ctx, s.env.ID, time.Time{}, 0); len(got) != 0 {
+		t.Errorf("n = 0 returned %d rows", len(got))
 	}
 }
 

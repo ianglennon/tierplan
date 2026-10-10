@@ -19,17 +19,19 @@ import (
 const (
 	// ringSize is how many events the hub keeps per environment, newest last.
 	// Events live in memory only: they are never written to the database
-	// (D-57, Pattern 8).
-	ringSize = 200
+	// (D-48, D-57, Pattern 8).
+	ringSize = 1000
 	// seenSize is how many event IDs the hub remembers to drop an event the
 	// daemon sends twice. It is larger than the ring, so an event that has just
 	// left the ring is still recognised when a resume replays it.
-	seenSize = 1024
+	seenSize = 4096
 	// subscriberBuffer is how far a subscriber may fall behind before it is
 	// dropped instead of slowing the others down.
 	subscriberBuffer = 64
-	// backfill is how far back the first stream of an environment looks.
-	backfill = time.Hour
+	// backfill is how far back the first stream of an environment looks. The daemon
+	// answers with what it still buffers (about 256 events, none across its own
+	// restart), so this is a ceiling, not a promise (D-48, Pitfall 7).
+	backfill = 24 * time.Hour
 
 	defaultPoll     = time.Second
 	defaultRetryMin = 500 * time.Millisecond
@@ -41,7 +43,7 @@ const (
 var errNotOnline = errors.New("envs: the environment is not online")
 
 // Hub holds one Docker events stream per environment and fans it out to every
-// browser watching. It keeps the last 200 events of each environment in memory,
+// browser watching. It keeps the last 1000 events of each environment in memory,
 // fills them from the daemon's own buffer when it starts (best effort: Docker
 // keeps at most 256 events and none across a daemon restart, Pitfall 7), resumes
 // after a dropped stream from the last event it saw, and tells the snapshot
@@ -620,15 +622,31 @@ func (a *Aggregator) Events(ctx context.Context, envID string) (backlog []NodeEv
 // Recent returns up to n of the newest buffered rows of an environment's merged
 // feed, newest first.
 func (a *Aggregator) Recent(ctx context.Context, envID string, n int) []NodeEvent {
+	return a.RecentSince(ctx, envID, time.Time{}, n)
+}
+
+// RecentSince returns up to n of the newest buffered rows of an environment's
+// merged feed that happened at or after since, newest first. The zero time means
+// no lower bound. The feed holds at most ringSize rows, so an earlier time is not
+// recoverable here.
+func (a *Aggregator) RecentSince(ctx context.Context, envID string, since time.Time, n int) []NodeEvent {
 	f := a.feedFor(ctx, envID)
 	if f == nil || n <= 0 {
 		return nil
 	}
+	floor := int64(0)
+	if !since.IsZero() {
+		floor = since.UnixNano()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	n = min(n, len(f.ring))
-	out := make([]NodeEvent, 0, n)
-	for i := len(f.ring) - 1; i >= len(f.ring)-n; i-- {
+	out := make([]NodeEvent, 0, min(n, len(f.ring)))
+	for i := len(f.ring) - 1; i >= 0 && len(out) < n; i-- {
+		if f.ring[i].TimeNano < floor {
+			// The ring is in arrival order, which is time order but for a few
+			// out-of-order rows, so keep looking rather than stop at the first.
+			continue
+		}
 		out = append(out, f.ring[i])
 	}
 	return out

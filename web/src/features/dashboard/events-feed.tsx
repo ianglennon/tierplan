@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { Box, HardDrive, Layers, type LucideIcon, Network } from "lucide-react";
+import {
+  Box,
+  Boxes,
+  FileText,
+  HardDrive,
+  KeyRound,
+  Layers,
+  type LucideIcon,
+  Network,
+  Server,
+} from "lucide-react";
 import { useState } from "react";
 
 import { LiveChip } from "@/components/live-chip";
@@ -28,6 +38,10 @@ const ICONS: Record<DockerEventType, LucideIcon> = {
   image: Layers,
   network: Network,
   volume: HardDrive,
+  service: Boxes,
+  node: Server,
+  secret: KeyRound,
+  config: FileText,
 };
 
 // How many characters of an ID stand in for a name Docker did not give.

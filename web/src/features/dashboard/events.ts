@@ -88,19 +88,31 @@ export function mergeEvents(existing: EventDTO[], incoming: EventDTO[], cap: num
 }
 
 // invalidationKeys are the queries an event of this type makes stale: the
-// dashboard counts and the list the event is about (D-57).
+// dashboard counts, the list the event is about and the lists it changes the
+// columns of (D-57, RES-14). A container event also refreshes volumes and
+// networks (Used by, attached), a network event the containers list (its
+// networks). Detail queries share their list's key prefix, so they refresh with
+// it. A swarm object, or a row of Bayplan's own, has no list in this phase and
+// refreshes the summary only.
 export function invalidationKeys(type: EventType, envId: string): QueryKey[] {
-  if (type === "bayplan") {
-    // Bayplan's own row (a manager failover) is about the environment, not a list.
-    return [["env", envId, "summary"]];
+  const summary: QueryKey = ["env", envId, "summary"];
+  switch (type) {
+    case "container":
+      return [
+        summary,
+        [...listKey(envId, "containers")],
+        [...listKey(envId, "volumes")],
+        [...listKey(envId, "networks")],
+      ];
+    case "network":
+      return [summary, [...listKey(envId, "networks")], [...listKey(envId, "containers")]];
+    case "volume":
+      return [summary, [...listKey(envId, "volumes")]];
+    case "image":
+      return [summary, [...listKey(envId, "images")]];
+    default:
+      return [summary];
   }
-  const resource = {
-    container: "containers",
-    image: "images",
-    network: "networks",
-    volume: "volumes",
-  } as const;
-  return [["env", envId, "summary"], [...listKey(envId, resource[type])]];
 }
 
 // The connection.

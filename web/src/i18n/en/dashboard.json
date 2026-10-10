@@ -33,6 +33,10 @@
         "image": "Image",
         "network": "Network",
         "volume": "Volume",
+        "service": "Service",
+        "node": "Node",
+        "secret": "Secret",
+        "config": "Config",
         "bayplan": "Bayplan"
       },
       "live": "Live",

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -610,6 +611,58 @@ func TestEventRecentReturnsTheNewest50NewestFirstWithTheStreamFields(t *testing.
 	}
 	if _, ok := first.Attributes["secret"]; ok {
 		t.Errorf("attributes %v leak a label", first.Attributes)
+	}
+}
+
+func TestEventRecentTakesSinceAndLimitAndRefusesBadValues(t *testing.T) {
+	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
+	f.waitStream(t)
+	now := time.Now()
+	for _, e := range []struct {
+		id  string
+		ago time.Duration
+	}{{"ancient", 30 * time.Hour}, {"old", 2 * time.Hour}, {"recent", time.Minute}} {
+		f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: e.id, TimeNano: now.Add(-e.ago).UnixNano()})
+	}
+	f.waitBuffered(t, 3)
+
+	get := func(query string) (int, []string) {
+		t.Helper()
+		rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + f.env.ID + "/events" + query, cookie: f.cookie})
+		if rec.Code != http.StatusOK {
+			return rec.Code, nil
+		}
+		var body recentBody
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]string, 0, len(body.Items))
+		for _, it := range body.Items {
+			ids = append(ids, it.ActorID)
+		}
+		return rec.Code, ids
+	}
+	at := func(d time.Duration) string { return "?since=" + now.Add(-d).UTC().Format(time.RFC3339Nano) }
+
+	if code, ids := get(""); code != 200 || !slices.Equal(ids, []string{"recent", "old", "ancient"}) {
+		t.Errorf("no parameters = %d %v, want all three newest first", code, ids)
+	}
+	if code, ids := get(at(10 * time.Minute)); code != 200 || !slices.Equal(ids, []string{"recent"}) {
+		t.Errorf("since 10 minutes ago = %d %v, want recent only", code, ids)
+	}
+	if code, ids := get(at(48 * time.Hour)); code != 200 || !slices.Equal(ids, []string{"recent", "old"}) {
+		t.Errorf("since 48 hours ago = %d %v, want it clamped to 24 hours: recent and old", code, ids)
+	}
+	if code, ids := get("?limit=1"); code != 200 || !slices.Equal(ids, []string{"recent"}) {
+		t.Errorf("limit 1 = %d %v, want the newest only", code, ids)
+	}
+	if code, ids := get("?limit=1000"); code != 200 || len(ids) != 3 {
+		t.Errorf("limit 1000 = %d %v, want 200 and three rows", code, ids)
+	}
+	for _, q := range []string{"?limit=0", "?limit=1001", "?limit=-1", "?limit=abc", "?since=yesterday"} {
+		if code, _ := get(q); code != http.StatusUnprocessableEntity {
+			t.Errorf("%s answered %d, want 422", q, code)
+		}
 	}
 }
 

@@ -19,15 +19,15 @@ import (
 
 // EventRow is one Docker event as the feed shows it. It carries only what the
 // feed needs: Docker puts every container label and some environment details
-// into an event's attributes, and those can hold secrets (A12, T-01-88).
+// into an event's attributes, and those can hold secrets (A12, T-01-88, D-61).
 type EventRow struct {
 	// ID is a stable hash of TimeNano, Type, Action and ActorID. It serves as
 	// the SSE event id and as the key that drops an event the daemon sends twice.
 	ID       string
 	Time     time.Time
 	TimeNano int64
-	// Type is container, image, network or volume; Bayplan's own rows have the type
-	// bayplan.
+	// Type is container, image, network, volume, service, node, secret or config;
+	// Bayplan's own rows have the type bayplan.
 	Type string
 	// Scope is local for what happened on this node and swarm for what happened to
 	// the cluster, which every manager reports; empty for a row of Bayplan's own.
@@ -51,9 +51,11 @@ type EventRow struct {
 	InvalidateOnly bool
 }
 
-// eventTypes are the event types the feed shows (D-57). Swarm event types
-// (service, node, secret and the like) are left to a later phase.
-var eventTypes = []string{"container", "image", "network", "volume"}
+// eventTypes are the event types the feed shows (D-57, D-48). The swarm types
+// (service, node, secret, config) are only ever sent by a swarm manager; a
+// standalone engine or a worker accepts the filter and simply never sends them,
+// so one list serves every host.
+var eventTypes = []string{"container", "image", "network", "volume", "service", "node", "secret", "config"}
 
 // Actions that are noise in a feed meant for people (A12). exec_create,
 // exec_start and exec_die fire for every health check command and every
@@ -69,11 +71,25 @@ var (
 // become rows with InvalidateOnly set and no attributes (RES-14).
 var invalidateOnlyActionPrefixes = []string{"health_status"}
 
-// keptAttributes is the allowlist of event attributes that reach the feed.
-var keptAttributes = []string{"name", "image", "exitCode"}
+// keptAttributes is the allowlist of event attributes that reach a browser
+// (D-61, T-01-88, T-04-98). Docker puts every container label, and for some
+// events an environment value or a command line, into an event's attributes, and
+// those can hold secrets, so nothing is passed unless it is named here. The set is
+// the small, non-sensitive one the Events page and the dashboard need: what the
+// object is called (name, image), how a container ended (exitCode, signal), what
+// kind of network or volume it is and what it was attached to (type, container,
+// driver, destination, read/write, reason), and the two labels that group
+// containers by project (com.docker.compose.project, com.docker.stack.namespace).
+// No other label, no environment value and no free-form attribute is on it, and
+// nothing outside it is added without a new decision.
+var keptAttributes = []string{
+	"name", "image", "exitCode", "signal",
+	"type", "container", "driver", "reason", "destination", "read/write",
+	"com.docker.compose.project", "com.docker.stack.namespace",
+}
 
-// Events streams the engine's container, image, network and volume events as
-// they happen. The first stream starts at since, which replays what the daemon
+// Events streams the engine's container, image, network, volume and (on a swarm
+// manager) service, node, secret and config events as they happen. The first stream starts at since, which replays what the daemon
 // still buffers (at most its last 256 events, and nothing after a daemon
 // restart); the zero time means "from now". Resuming after a drop passes the
 // time of the last event seen, and the daemon then sends that event again, so

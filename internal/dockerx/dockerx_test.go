@@ -900,7 +900,7 @@ func TestEventsDropsAttachDetachResizeAndTopToo(t *testing.T) {
 	}
 }
 
-func TestEventsCopiesOnlyNameImageAndExitCode(t *testing.T) {
+func TestEventsCopyOnlyTheAllowlistedAttributes(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -908,13 +908,48 @@ func TestEventsCopiesOnlyNameImageAndExitCode(t *testing.T) {
 	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c1", Attributes: map[string]string{
-		"name": "web", "image": "nginx:1.27", "exitCode": "137",
-		"com.docker.compose.project": "shop", "API_TOKEN": "hunter2", "execID": "abc", "signal": "9",
+		"name": "web", "image": "nginx:1.27", "exitCode": "137", "signal": "9",
+		"com.docker.compose.project": "shop", "com.docker.stack.namespace": "prod",
+		"secret.token": "hunter2", "API_TOKEN": "hunter2", "execID": "abc", "com.example.owner": "ian",
+		"com.docker.compose.service": "web", "PASSWORD=hunter2": "", "traefik.http.routers.x.rule": "Host(`x`)",
 	}})
 	r := recvRow(t, rows)
-	want := map[string]string{"name": "web", "image": "nginx:1.27", "exitCode": "137"}
+	want := map[string]string{
+		"name": "web", "image": "nginx:1.27", "exitCode": "137", "signal": "9",
+		"com.docker.compose.project": "shop", "com.docker.stack.namespace": "prod",
+	}
 	if !reflect.DeepEqual(r.Attributes, want) {
-		t.Errorf("Attributes = %v, want only %v (T-01-88)", r.Attributes, want)
+		t.Errorf("Attributes = %v, want only %v (D-61, T-01-88)", r.Attributes, want)
+	}
+}
+
+func TestEventsDeliverSwarmServiceNodeSecretAndConfigEvents(t *testing.T) {
+	// D-48: a swarm manager's events are in the feed. The fake applies the type
+	// filter the client sent, so a type missing from the filter would never arrive.
+	base := time.Now().Add(-time.Minute).UnixNano()
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
+		{Type: "service", Action: "update", ActorID: "svc1", Scope: "swarm", TimeNano: base + 1, Attributes: map[string]string{"name": "web", "com.docker.stack.namespace": "prod", "updatestate.new": "updating"}},
+		{Type: "node", Action: "update", ActorID: "n1", Scope: "swarm", TimeNano: base + 2, Attributes: map[string]string{"name": "worker-1"}},
+		{Type: "secret", Action: "create", ActorID: "s1", Scope: "swarm", TimeNano: base + 3, Attributes: map[string]string{"name": "db-password"}},
+		{Type: "config", Action: "remove", ActorID: "cfg1", Scope: "swarm", TimeNano: base + 4, Attributes: map[string]string{"name": "nginx.conf"}},
+		{Type: "plugin", Action: "install", ActorID: "p1", TimeNano: base + 5},
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rows, _ := newClient(t, fake).Events(ctx, time.Now().Add(-time.Hour))
+	for i, want := range []struct{ typ, name string }{{"service", "web"}, {"node", "worker-1"}, {"secret", "db-password"}, {"config", "nginx.conf"}} {
+		r := recvRow(t, rows)
+		if r.Type != want.typ || r.Name != want.name || r.Scope != "swarm" {
+			t.Errorf("row %d = %+v, want a swarm %s named %s", i, r, want.typ, want.name)
+		}
+		if _, leaked := r.Attributes["updatestate.new"]; leaked {
+			t.Errorf("row %d leaks an attribute outside the allowlist: %v", i, r.Attributes)
+		}
+	}
+	select {
+	case r := <-rows:
+		t.Errorf("a plugin event arrived: %+v", r)
+	case <-time.After(150 * time.Millisecond):
 	}
 }
 
@@ -945,7 +980,7 @@ func TestEventsTurnAHealthStatusChangeIntoAnInvalidateOnlyRowWithoutAttributes(t
 	}
 }
 
-func TestEventsAskForTheFourTypesAndPassSinceAsSecondsOrSecondsAndNanoseconds(t *testing.T) {
+func TestEventsAskForTheEightTypesAndPassSinceAsSecondsOrSecondsAndNanoseconds(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	cli := newClient(t, fake)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -967,8 +1002,8 @@ func TestEventsAskForTheFourTypesAndPassSinceAsSecondsOrSecondsAndNanoseconds(t 
 	if err := json.Unmarshal([]byte(qs[0].Get("filters")), &f); err != nil {
 		t.Fatalf("filters %q: %v", qs[0].Get("filters"), err)
 	}
-	if !reflect.DeepEqual(f, map[string]map[string]bool{"type": {"container": true, "image": true, "network": true, "volume": true}}) {
-		t.Errorf("filters = %v, want the four types", f)
+	if !reflect.DeepEqual(f, map[string]map[string]bool{"type": {"container": true, "image": true, "network": true, "volume": true, "service": true, "node": true, "secret": true, "config": true}}) {
+		t.Errorf("filters = %v, want the four resource types and the four swarm ones", f)
 	}
 }
 

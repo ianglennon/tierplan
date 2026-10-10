@@ -132,16 +132,35 @@ describe("mergeEvents", () => {
 });
 
 describe("invalidationKeys", () => {
-  it("maps each event type to the summary and its own list", () => {
-    const summary = ["env", "e1", "summary"];
-    expect(invalidationKeys("container", "e1")).toEqual([summary, ["env", "e1", "containers"]]);
-    expect(invalidationKeys("image", "e1")).toEqual([summary, ["env", "e1", "images"]]);
-    expect(invalidationKeys("network", "e1")).toEqual([summary, ["env", "e1", "networks"]]);
-    expect(invalidationKeys("volume", "e1")).toEqual([summary, ["env", "e1", "volumes"]]);
+  const summary = ["env", "e1", "summary"];
+  const list = (resource: string) => ["env", "e1", resource];
+
+  it("maps a container event to the summary, containers, volumes and networks", () => {
+    expect(invalidationKeys("container", "e1")).toEqual([
+      summary,
+      list("containers"),
+      list("volumes"),
+      list("networks"),
+    ]);
   });
 
-  it("makes only the summary stale for a row of Bayplan's own, which has no list", () => {
-    expect(invalidationKeys("bayplan", "e1")).toEqual([["env", "e1", "summary"]]);
+  it("maps a network event to the summary, networks and containers", () => {
+    expect(invalidationKeys("network", "e1")).toEqual([
+      summary,
+      list("networks"),
+      list("containers"),
+    ]);
+  });
+
+  it("maps a volume event to the summary and volumes, and an image event to the summary and images", () => {
+    expect(invalidationKeys("volume", "e1")).toEqual([summary, list("volumes")]);
+    expect(invalidationKeys("image", "e1")).toEqual([summary, list("images")]);
+  });
+
+  it("makes only the summary stale for swarm objects and for a row of Bayplan's own", () => {
+    for (const type of ["service", "node", "secret", "config", "bayplan"] as const) {
+      expect(invalidationKeys(type, "e1")).toEqual([summary]);
+    }
   });
 });
 
@@ -276,6 +295,8 @@ describe("createEventsConnection", () => {
     expect(c.invalidated).toEqual([
       ["env", "e1", "summary"],
       ["env", "e1", "containers"],
+      ["env", "e1", "volumes"],
+      ["env", "e1", "networks"],
     ]);
 
     // A burst inside the second collapses into one trailing refetch.
@@ -306,6 +327,8 @@ describe("createEventsConnection", () => {
     expect(c.invalidated).toEqual([
       ["env", "e1", "summary"],
       ["env", "e1", "containers"],
+      ["env", "e1", "volumes"],
+      ["env", "e1", "networks"],
     ]);
     expect(c.last().events).toEqual(before.events);
     expect(c.last().events).toHaveLength(0);

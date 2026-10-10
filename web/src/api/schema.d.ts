@@ -661,7 +661,7 @@ export interface paths {
         };
         /**
          * The recent Docker events of an environment
-         * @description The newest 50 container, image, network and volume events Bayplan has seen on this environment, newest first, for clients that cannot hold a stream open. Events are kept in memory only: the list is empty after a restart until Docker reports something, apart from what the daemon still remembers from the last hour. The live version of this list is a server-sent events stream with the same event data.
+         * @description The newest container, image, network, volume and (from a swarm manager) service, node, secret and config events Bayplan has seen on this environment, newest first, for clients that cannot hold a stream open and for the Events page. since keeps only events at or after that time, at most 24 hours back; limit is 1 to 1000 and defaults to 50. Events are kept in memory only: the list is empty after a restart until Docker reports something, apart from what the daemon still remembers (about its last 256 events, and none across its own restart). The live version of this list is a server-sent events stream with the same event data.
          */
         get: operations["listRecentEvents"];
         put?: never;
@@ -3170,15 +3170,15 @@ export interface components {
         EventDTO: {
             /** @description What happened, for example start, die, pull, connect or create */
             action: string;
-            /** @description The ID of the container, image, network or volume */
+            /** @description The ID of the container, image, network, volume, service, node, secret or config */
             actorId: string;
-            /** @description Only name, image and exitCode, when the event had them */
+            /** @description Only these attributes, when the event had them: name, image, exitCode, signal, type, container, driver, reason, destination, read/write, com.docker.compose.project and com.docker.stack.namespace. Every other label, environment value and free-form attribute is left out */
             attributes: {
                 [key: string]: string;
             };
             /** @description A stable ID for the event; the SSE frame id, and what a repeated event is recognised by */
             id: string;
-            /** @description The container, image, network or volume name; empty when Docker gave none */
+            /** @description The object's name; empty when Docker gave none */
             name: string;
             /** @description The node the event happened on; for a row of Bayplan's own, the node it concerns, such as the manager that took over */
             node: string;
@@ -3188,13 +3188,13 @@ export interface components {
              */
             time: string;
             /**
-             * @description What kind of object it is about. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event
+             * @description What kind of object it is about. service, node, secret and config come from a swarm manager only. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event
              * @enum {string}
              */
-            type: "container" | "image" | "network" | "volume" | "bayplan";
+            type: "container" | "image" | "network" | "volume" | "service" | "node" | "secret" | "config" | "bayplan";
         };
         EventListBody: {
-            /** @description At most 50 events, newest first */
+            /** @description At most limit events (50 unless asked otherwise, never more than 1000), newest first */
             items: components["schemas"]["EventDTO"][] | null;
         };
         ExportBackupInputBody: {
@@ -5982,7 +5982,12 @@ export interface operations {
     };
     listRecentEvents: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only events at or after this time (RFC 3339). Anything earlier than 24 hours ago is read as 24 hours ago */
+                since?: string;
+                /** @description At most this many events; 50 by default */
+                limit?: number;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */

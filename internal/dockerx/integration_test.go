@@ -355,7 +355,7 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 				continue
 			}
 			for k := range ev.Attributes {
-				if k != "name" && k != "image" && k != "exitCode" {
+				if k != "name" && k != "image" && k != "exitCode" && k != "signal" && k != "com.docker.compose.project" && k != "com.docker.stack.namespace" {
 					t.Errorf("attribute %q passed the allowlist", k)
 				}
 			}
@@ -365,6 +365,82 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 			return
 		case <-timeout:
 			t.Fatal("no container start event within 5 seconds")
+		}
+	}
+}
+
+// TestEventsSwarmTypesOnStandalone checks, against whichever engine major CI runs
+// (plan 04-26, D-48, RESEARCH A6), that the events stream filtered with the
+// widened types (service, node, secret and config as well) opens on a standalone
+// engine that has no swarm, is not ended by it, and still delivers a container
+// start with only the allowlisted attributes: the compose project label passes
+// (D-61) and a secret-looking label does not.
+func TestEventsSwarmTypesOnStandalone(t *testing.T) {
+	host := dockertest.DockerHost(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	raw := dockertest.RawClient(t, host)
+	if res, err := raw.Info(ctx, client.InfoOptions{}); err != nil {
+		t.Fatalf("info: %v", err)
+	} else if res.Info.Swarm.LocalNodeState != swarm.LocalNodeStateInactive {
+		t.Fatalf("the engine is in a swarm (%q); this test is about a standalone engine", res.Info.Swarm.LocalNodeState)
+	}
+
+	pull, err := raw.ImagePull(ctx, "alpine:3", client.ImagePullOptions{})
+	if err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+	if err := pull.Wait(ctx); err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+
+	cli, err := dockerx.New(dockertest.TCPTransportFor(host))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	sctx, scancel := context.WithCancel(ctx)
+	defer scancel()
+	rows, errc := cli.Events(sctx, time.Time{})
+
+	name := "bp-evt-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: name,
+		Config: &container.Config{Image: "alpine:3", Cmd: []string{"sleep", "60"}, Labels: map[string]string{
+			"bayplan.test.secret": "hunter2", "com.docker.compose.project": "bp-test",
+		}},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() {
+		c, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _ = raw.ContainerRemove(c, name, client.ContainerRemoveOptions{Force: true})
+	})
+	if _, err := raw.ContainerStart(ctx, name, client.ContainerStartOptions{}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	timeout := time.After(10 * time.Second)
+	for {
+		select {
+		case row, ok := <-rows:
+			if !ok {
+				t.Fatalf("the events stream ended instead of delivering the start: %v", <-errc)
+			}
+			t.Logf("event: %s %s %s %v", row.Type, row.Action, row.Name, row.Attributes)
+			if row.Type != "container" || row.Action != "start" || row.Name != name {
+				continue
+			}
+			if row.Attributes["com.docker.compose.project"] != "bp-test" {
+				t.Errorf("the compose project label did not pass: %v", row.Attributes)
+			}
+			if _, leaked := row.Attributes["bayplan.test.secret"]; leaked {
+				t.Errorf("a label outside the allowlist reached the row: %v", row.Attributes)
+			}
+			return
+		case <-timeout:
+			t.Fatal("no container start event within 10 seconds")
 		}
 	}
 }
