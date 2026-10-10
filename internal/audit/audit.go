@@ -146,6 +146,7 @@ const (
 	ActionVolumeCreated              = "volume.created"
 	ActionVolumeRemoved              = "volume.removed"
 	ActionLogsViewed                 = "logs.viewed"
+	ActionLogsDownloaded             = "logs.downloaded"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

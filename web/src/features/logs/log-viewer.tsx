@@ -15,8 +15,10 @@ import {
 } from "react";
 
 import { Button } from "@/components/ui/button";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Theme } from "@/features/logs/ansi";
+import { DownloadDialog, DownloadPopover } from "@/features/logs/download-popover";
 import { type BufferedLine, clockTime, LogBuffer, stampDay } from "@/features/logs/log-buffer";
 import { DayDividerRow, LINE_HEIGHT_PX, LogLineRow } from "@/features/logs/log-line";
 import {
@@ -65,8 +67,8 @@ export interface LogViewerProps {
   // address owns them; without it the viewer keeps them itself.
   params?: LogViewParams;
   onParamsChange?: (params: LogViewParams) => void;
-  // Controls at the right of the toolbar's second row, and the items of the More menu
-  // that stand in for them on a narrow screen.
+  // Controls after Download… at the right of the toolbar's second row, and the items of
+  // the More menu that stand in for them on a narrow screen.
   actions?: ReactNode;
   moreItems?: ReactNode;
 }
@@ -399,6 +401,8 @@ export function LogViewer({
     });
 
   const connected = state.status === "live" || state.status === "reconnecting";
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const downloadTarget = { envId, containerId, nodeId };
   const onShowChange = (next: ShowRange) => change({ since: formatShow(next) });
 
   const renderRow = (index: number) => {
@@ -484,8 +488,27 @@ export function LogViewer({
         utc={utc}
         onUtcChange={(on) => setView({ utc: on })}
         live={connected ? (state.status === "live" ? "live" : "reconnecting") : undefined}
-        actions={actions}
-        moreItems={moreItems}
+        actions={
+          <>
+            <DownloadPopover target={downloadTarget} show={show} timestamps={timestamps} />
+            {actions}
+          </>
+        }
+        moreItems={
+          <>
+            <DropdownMenuItem onSelect={() => setDownloadOpen(true)}>
+              {t("logs.download.trigger")}
+            </DropdownMenuItem>
+            {moreItems}
+          </>
+        }
+      />
+      <DownloadDialog
+        open={downloadOpen}
+        onOpenChange={setDownloadOpen}
+        target={downloadTarget}
+        show={show}
+        timestamps={timestamps}
       />
       <div className="relative">
         <div

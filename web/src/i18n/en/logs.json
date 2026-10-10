@@ -57,6 +57,19 @@
       "body": "Check the connection and try again.",
       "retry": "Retry"
     },
+    "download": {
+      "trigger": "Download…",
+      "title": "Download logs",
+      "from": "From",
+      "to": "To",
+      "empty": "Leave a field empty to start at the beginning of the log or to run to the end.",
+      "timestamps": "Include timestamps",
+      "note": "Downloads come straight from Docker, so they aren't limited to what's loaded here. Times are in UTC.",
+      "cancel": "Cancel",
+      "submit": "Download logs",
+      "starting": "Starting the download",
+      "error": "Couldn't start the download. Try again."
+    },
     "unreadable": {
       "title": "Docker can't read these logs back",
       "body": "This container sends its logs to {{driver}}, so Docker has none to show.",

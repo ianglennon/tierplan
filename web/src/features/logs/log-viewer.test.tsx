@@ -903,3 +903,31 @@ describe("a log Docker cannot read back", () => {
     expect(screen.queryByText("Driver options")).toBeNull();
   });
 });
+
+describe("downloading", () => {
+  it("offers Download… in the toolbar, opening on the viewer's range and Timestamps choice", async () => {
+    renderViewer({ params: { since: "1h", ts: true }, onParamsChange: vi.fn() });
+    await connect();
+    fireEvent.click(screen.getByRole("button", { name: "Download…" }));
+    const from = screen.getByLabelText("From") as HTMLInputElement;
+    expect(from.value).not.toBe("");
+    expect(
+      screen.getByRole("checkbox", { name: "Include timestamps" }).getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("puts Download… in the More menu under 768px, opening the same form as a dialog", async () => {
+    const width = window.innerWidth;
+    window.innerWidth = 500;
+    try {
+      renderViewer();
+      await connect();
+      expect(screen.queryByRole("button", { name: "Download…" })).toBeNull();
+      fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "Enter" });
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Download…" }));
+      expect(await screen.findByRole("dialog", { name: "Download logs" })).toBeTruthy();
+    } finally {
+      window.innerWidth = width;
+    }
+  });
+});

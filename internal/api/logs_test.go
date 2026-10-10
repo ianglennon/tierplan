@@ -4,18 +4,22 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
@@ -986,5 +990,373 @@ func TestLogPageOfAContainerTheEngineCannotReadIs409LogsUnreadable(t *testing.T)
 	rec := f.req(t, http.MethodGet, f.pagePath(quietID, "sid="+sidA+"&tail=5"), "")
 	if rec.code != http.StatusConflict || rec.ptyp != "logs_unreadable" {
 		t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+}
+
+// The log download (plan 04-21, OBS-01, D-18, D-24, T-04-71..73). The response is a
+// file streamed from the engine, so it is read through a writer that counts what is
+// written to it and can hold a write back.
+
+// dlWriter is an http.ResponseWriter that counts the writes made to it.
+type dlWriter struct {
+	mu     sync.Mutex
+	header http.Header
+	status int
+	// maxWrite is the largest single Write; total all bytes; newlines the lines.
+	maxWrite, total, newlines int
+	// keep, when set, holds the whole body.
+	keep    bool
+	body    bytes.Buffer
+	deadlns []time.Time
+	// gate, when not nil, holds every Write until it is closed.
+	gate    chan struct{}
+	wrote   chan struct{}
+	wroteOn sync.Once
+}
+
+func newDLWriter(keep bool) *dlWriter {
+	return &dlWriter{header: http.Header{}, keep: keep, wrote: make(chan struct{})}
+}
+
+func (w *dlWriter) Header() http.Header { return w.header }
+
+func (w *dlWriter) WriteHeader(code int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.status == 0 {
+		w.status = code
+	}
+}
+
+func (w *dlWriter) Write(b []byte) (int, error) {
+	w.WriteHeader(http.StatusOK)
+	w.wroteOn.Do(func() { close(w.wrote) })
+	if w.gate != nil {
+		<-w.gate
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.maxWrite = max(w.maxWrite, len(b))
+	w.total += len(b)
+	w.newlines += bytes.Count(b, []byte{'\n'})
+	if w.keep {
+		w.body.Write(b)
+	}
+	return len(b), nil
+}
+
+func (w *dlWriter) Flush() {}
+
+func (w *dlWriter) SetWriteDeadline(t time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.deadlns = append(w.deadlns, t)
+	return nil
+}
+
+func (w *dlWriter) code() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.status
+}
+
+func (f *logsFix) downloadPath(container, query string) string {
+	return "/api/env/" + f.env.ID + "/containers/" + container + "/logs/download?" + query
+}
+
+// startDownload runs a download as the signed-in admin and returns a channel closed
+// when the handler has returned.
+func (f *logsFix) startDownload(cookie, container, query string, w http.ResponseWriter) <-chan struct{} {
+	req := httptest.NewRequest(http.MethodGet, f.downloadPath(container, query), nil)
+	req.Header.Set("User-Agent", authUA)
+	req.RemoteAddr = authIP + ":40000"
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.h.ServeHTTP(w, req)
+	}()
+	return done
+}
+
+func (f *logsFix) download(t *testing.T, container, query string) *dlWriter {
+	t.Helper()
+	w := newDLWriter(true)
+	select {
+	case <-f.startDownload(f.cookie, container, query, w):
+	case <-time.After(20 * time.Second):
+		t.Fatal("the download never finished")
+	}
+	return w
+}
+
+func (f *logsFix) downloadAudits(t *testing.T) []logAuditRow {
+	t.Helper()
+	rows, err := f.st.Read.Query(`SELECT actor_id, target_id, COALESCE(env_id, ''), result, COALESCE(details, '{}')
+		FROM audit_log WHERE action = ? ORDER BY seq`, audit.ActionLogsDownloaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []logAuditRow
+	for rows.Next() {
+		var r logAuditRow
+		var details string
+		if err := rows.Scan(&r.Actor, &r.Target, &r.Env, &r.Result, &details); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(details), &r.Details); err != nil {
+			t.Fatalf("details %q: %v", details, err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestLogDownloadAnswersATextFileNamedByContainerAndUTCMinuteWithBothStreamsInOrder(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	at := time.Date(2026, 10, 9, 12, 58, 0, 123456789, time.UTC)
+	f.fake.AppendLogs("web",
+		dockertest.FakeLogLine{Text: "a", Time: at},
+		dockertest.FakeLogLine{Stream: "stderr", Text: "b", Time: at.Add(time.Second)},
+		dockertest.FakeLogLine{Text: "c", Time: at.Add(2 * time.Second)})
+
+	w := f.download(t, webID, "")
+	if w.code() != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.code(), w.body.String())
+	}
+	if got := w.header.Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got, want := w.header.Get("Content-Disposition"), `attachment; filename="web-20260101-0000.log"`; got != want {
+		t.Errorf("Content-Disposition = %q, want %q", got, want)
+	}
+	if got := w.header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q", got)
+	}
+	if got := w.body.String(); got != "a\nb\nc\n" {
+		t.Errorf("body = %q, want the lines of both streams in order and no timestamps", got)
+	}
+	if len(w.deadlns) == 0 || !w.deadlns[0].IsZero() {
+		t.Errorf("write deadlines = %v, want the server's write timeout lifted for a long copy", w.deadlns)
+	}
+	if n := f.fake.LogFollows(); n != 0 {
+		t.Errorf("%d engine follows open: a download never follows", n)
+	}
+	last := f.fake.LogQueries()
+	if q := last[len(last)-1]; q.Get("follow") == "1" || q.Get("tail") != "" {
+		t.Errorf("the engine was asked %v, want no follow and no tail", q)
+	}
+}
+
+func TestLogDownloadPrefixesDockersRawUTCTimestampWhenAskedAndReadsTheRangeFromTheEngine(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	at := time.Date(2026, 10, 9, 12, 58, 0, 123456789, time.UTC)
+	for i := range 5 {
+		f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: fmt.Sprintf("n%d", i), Time: at.Add(time.Duration(i) * time.Minute)})
+	}
+	since, until := at.Add(time.Minute), at.Add(3*time.Minute)
+	q := "timestamps=1&since=" + since.Format(time.RFC3339Nano) + "&until=" + until.Format(time.RFC3339Nano)
+	w := f.download(t, webID, q)
+	if w.code() != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.code(), w.body.String())
+	}
+	want := "2026-10-09T12:59:00.123456789Z n1\n2026-10-09T13:00:00.123456789Z n2\n2026-10-09T13:01:00.123456789Z n3\n"
+	if got := w.body.String(); got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+	qs := f.fake.LogQueries()
+	got := qs[len(qs)-1]
+	if got.Get("since") == "" || got.Get("until") == "" || got.Get("tail") != "" {
+		t.Errorf("the engine was asked %v, want the whole range by since and until and no tail", got)
+	}
+}
+
+func TestLogDownloadOfSeventyMiBStreamsInBoundedWritesWithoutHoldingItInMemory(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	const lineLen, count = 200 << 10, 360 // 70.3 MiB
+	text := strings.Repeat("x", lineLen)
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	lines := make([]dockertest.FakeLogLine, count)
+	for i := range lines {
+		lines[i] = dockertest.FakeLogLine{Text: text, Time: at.Add(time.Duration(i) * time.Millisecond)}
+	}
+	f.fake.AppendLogs("web", lines...)
+
+	w := newDLWriter(false)
+	select {
+	case <-f.startDownload(f.cookie, webID, "", w):
+	case <-time.After(60 * time.Second):
+		t.Fatal("the download never finished")
+	}
+	if w.code() != http.StatusOK {
+		t.Fatalf("status = %d", w.code())
+	}
+	if want := count * (lineLen + 1); w.total != want {
+		t.Errorf("wrote %d bytes, want %d", w.total, want)
+	}
+	if w.newlines != count {
+		t.Errorf("wrote %d lines, want %d", w.newlines, count)
+	}
+	// A write is at most one line: far below the size of the log.
+	if w.maxWrite > 2*lineLen {
+		t.Errorf("the largest write was %d bytes, want it bounded by a line (%d)", w.maxWrite, lineLen)
+	}
+}
+
+func TestLogDownloadAllowsTwoAtOnceAndRefusesTheThirdWith429(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	text := strings.Repeat("y", 60<<10)
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: text}, dockertest.FakeLogLine{Text: text})
+
+	gate := make(chan struct{})
+	var dones []<-chan struct{}
+	for range 2 {
+		w := newDLWriter(false)
+		w.gate = gate
+		dones = append(dones, f.startDownload(f.cookie, webID, "", w))
+		select {
+		case <-w.wrote:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a download never started writing")
+		}
+	}
+	third := newDLWriter(true)
+	select {
+	case <-f.startDownload(f.cookie, webID, "", third):
+	case <-time.After(5 * time.Second):
+		t.Fatal("the third download was not answered")
+	}
+	if third.code() != http.StatusTooManyRequests || !strings.Contains(third.body.String(), `"type":"rate_limited"`) {
+		t.Fatalf("the third download = %d %s, want 429 rate_limited", third.code(), third.body.String())
+	}
+	if n := len(f.downloadAudits(t)); n != 2 {
+		t.Errorf("%d audit rows, want 2: a refused download is not a download", n)
+	}
+	close(gate)
+	for _, d := range dones {
+		<-d
+	}
+	if w := f.download(t, webID, ""); w.code() != http.StatusOK {
+		t.Errorf("a download after the others finished = %d, want 200", w.code())
+	}
+}
+
+func TestLogDownloadIsAuditedOncePerDownloadWithItsRangeAndNeverALineOfTheLog(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	const secret = "DOWNLOADED-LINE-THAT-MUST-NOT-BE-KEPT-77c1" //nolint:gosec // a marker, not a credential
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: secret})
+
+	f.download(t, webID, "timestamps=1&since=2025-01-01T00:00:00Z&until=2027-01-01T00:00:00Z")
+	f.download(t, webID, "")
+	rows := f.downloadAudits(t)
+	if len(rows) != 2 {
+		t.Fatalf("%d rows for two downloads: %+v", len(rows), rows)
+	}
+	r := rows[0]
+	if r.Actor != "id-admin" || r.Target != webID || r.Env != f.env.ID || r.Result != "success" {
+		t.Errorf("row = %+v", r)
+	}
+	d := r.Details
+	if d["container"] != "web" || d["node"] != f.env.ID || d["since"] != "2025-01-01T00:00:00Z" || d["until"] != "2027-01-01T00:00:00Z" || d["timestamps"] != "true" {
+		t.Errorf("details = %v, want container, node, since, until and timestamps", d)
+	}
+	d = rows[1].Details
+	if d["timestamps"] != "false" || d["since"] != "" || d["until"] != "2026-01-01T00:00:00Z" {
+		t.Errorf("details of a download without a range = %v, want no since, until now and timestamps false", d)
+	}
+	var stored int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE details LIKE ? OR reason LIKE ?`, "%"+secret+"%", "%"+secret+"%").Scan(&stored); err != nil || stored != 0 {
+		t.Errorf("the audit log holds %d rows with a log line (%v)", stored, err)
+	}
+	if strings.Contains(f.logs.String(), secret) {
+		t.Error("a line of the log was written to the server's own log")
+	}
+}
+
+func TestLogDownloadNameKeepsOnlySafeCharacters(t *testing.T) {
+	cfg := logsEngine()
+	cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
+		ID: "eeeeeeeeeeee55555555555555555555555555555555555555555555555555", Names: []string{`/we"b;../x y`}, Image: "alpine", State: "running", Status: "Up 1 hour"})
+	f := newLogsFix(t, cfg, nil)
+	w := f.download(t, "eeeeeeeeeeee55555555555555555555555555555555555555555555555555", "")
+	if w.code() != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.code(), w.body.String())
+	}
+	cd := w.header.Get("Content-Disposition")
+	if cd != `attachment; filename="we_b_.._x_y-20260101-0000.log"` {
+		t.Errorf("Content-Disposition = %q, want the name reduced to letters, digits, underscore, dot and dash", cd)
+	}
+}
+
+func TestLogDownloadRefusalsAreAnsweredBeforeAnythingIsSentAndAreNotAudited(t *testing.T) {
+	f := newLogsFix(t, unreadableEngine(), nil)
+	for name, tc := range map[string]struct {
+		container, query string
+		status           int
+		typ              string
+	}{
+		"a bad since":         {webID, "since=yesterday", http.StatusUnprocessableEntity, "validation_failed"},
+		"a bad until":         {webID, "until=soon", http.StatusUnprocessableEntity, "validation_failed"},
+		"an empty range":      {webID, "since=2026-02-01T00:00:00Z&until=2026-01-01T00:00:00Z", http.StatusUnprocessableEntity, "validation_failed"},
+		"a bad timestamps":    {webID, "timestamps=maybe", http.StatusUnprocessableEntity, "validation_failed"},
+		"a missing container": {"nope", "", http.StatusNotFound, "container_not_found"},
+		"an unreadable log":   {quietID, "", http.StatusConflict, "logs_unreadable"},
+	} {
+		w := f.download(t, tc.container, tc.query)
+		if w.code() != tc.status || !strings.Contains(w.body.String(), `"type":"`+tc.typ+`"`) {
+			t.Errorf("%s = %d %s, want %d %s", name, w.code(), w.body.String(), tc.status, tc.typ)
+		}
+		if w.header.Get("Content-Disposition") != "" {
+			t.Errorf("%s: a refusal must not be a download", name)
+		}
+	}
+	if n := len(f.downloadAudits(t)); n != 0 {
+		t.Errorf("%d audit rows for refused downloads", n)
+	}
+}
+
+func TestLogDownloadNeedsContainersRead(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	f.addUser(t, "nobody", false)
+	cookie, _ := f.signIn(t, "nobody", false)
+	w := newDLWriter(true)
+	<-f.startDownload(cookie, webID, "", w)
+	if w.code() != http.StatusForbidden && w.code() != http.StatusNotFound {
+		t.Errorf("status = %d, want a refusal", w.code())
+	}
+}
+
+func TestLogDownloadStopsReadingTheEngineWhenTheBrowserLeaves(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	text := strings.Repeat("z", 60<<10)
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: text}, dockertest.FakeLogLine{Text: text})
+	gate := make(chan struct{})
+	w := newDLWriter(false)
+	w.gate = gate
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, f.downloadPath(webID, ""), nil).WithContext(ctx)
+	req.Header.Set("User-Agent", authUA)
+	req.RemoteAddr = authIP + ":40000"
+	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: f.cookie}) //nolint:gosec // a request cookie as a browser sends it
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.h.ServeHTTP(w, req)
+	}()
+	select {
+	case <-w.wrote:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the download never started writing")
+	}
+	cancel()
+	close(gate)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the download kept running after the browser left")
 	}
 }

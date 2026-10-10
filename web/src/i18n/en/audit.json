@@ -184,7 +184,8 @@
         "removed": "Volume removed"
       },
       "logs": {
-        "viewed": "Container logs viewed"
+        "viewed": "Container logs viewed",
+        "downloaded": "Container logs downloaded"
       }
     },
     "coalesced": {

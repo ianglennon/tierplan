@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,13 @@ const (
 	maxLogTail     = 50_000
 	// logOpenTimeout bounds how long opening the engine's log may take.
 	logOpenTimeout = 30 * time.Second
+
+	// maxLogDownloads is how many downloads of logs one user may run at once; each
+	// holds a stream open to the engine for as long as the log takes to copy.
+	maxLogDownloads = 2
+	// downloadBuffer is the size of the buffer a download is written with, so a log of
+	// any size crosses in writes this big and the handler holds no more than this.
+	downloadBuffer = 32 << 10
 
 	problemStreamBusy     = "stream_busy"
 	problemLogsUnreadable = "logs_unreadable"
@@ -124,6 +132,11 @@ func RegisterLogs(r *httpx.Router, d LogsDeps) {
 	mem := newLogAuditMemory(logAuditTTL, logAuditMax, d.Now)
 	r.Guarded(http.MethodGet, "/api/env/{envId}/containers/{containerId}/logs/stream", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		serveLogStream(w, req, d, lim, mem)
+	}))
+
+	dl := &streamLimiter{max: maxLogDownloads, open: map[string]int{}}
+	r.Guarded(http.MethodGet, "/api/env/{envId}/containers/{containerId}/logs/download", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		serveLogDownload(w, req, d, dl)
 	}))
 
 	httpx.Register(r, huma.Operation{
@@ -594,6 +607,180 @@ func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *s
 	}
 }
 
+// logFileName is the name a downloaded log is saved under: the container's name and
+// the minute of the download in UTC. Only letters, digits, underscore, dot and dash
+// are kept, so the name can neither leave its quotes nor name a path (T-04-71).
+func logFileName(container string, at time.Time) string {
+	var b strings.Builder
+	for _, r := range container {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '.', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+		if b.Len() >= 100 {
+			break
+		}
+	}
+	name := strings.Trim(b.String(), ".")
+	if name == "" {
+		name = "container"
+	}
+	return name + "-" + at.UTC().Format("20060102-1504") + ".log"
+}
+
+// logDownloadParams are the validated query of a download.
+type logDownloadParams struct {
+	nodeID             string
+	since, until       time.Time
+	hasSince, hasUntil bool
+	timestamps         bool
+}
+
+func parseLogDownloadParams(req *http.Request) (logDownloadParams, error) {
+	q := req.URL.Query()
+	var p logDownloadParams
+	p.nodeID = q.Get("nodeId")
+	if len(p.nodeID) > 128 {
+		return p, errors.New("nodeId is too long")
+	}
+	for name, dst := range map[string]struct {
+		t   *time.Time
+		has *bool
+	}{"since": {&p.since, &p.hasSince}, "until": {&p.until, &p.hasUntil}} {
+		v := q.Get(name)
+		if v == "" {
+			continue
+		}
+		t, err := parseLogBound(v)
+		if err != nil {
+			return p, fmt.Errorf("%s must be an RFC 3339 time or Unix seconds", name)
+		}
+		*dst.t, *dst.has = t, true
+	}
+	if p.hasSince && p.hasUntil && !p.until.After(p.since) {
+		return p, errors.New("until must be after since")
+	}
+	switch q.Get("timestamps") {
+	case "", "0", "false":
+	case "1", "true":
+		p.timestamps = true
+	default:
+		return p, errors.New("timestamps must be 1 or 0")
+	}
+	return p, nil
+}
+
+// serveLogDownload streams a container's log for a range as a text file (D-18). The
+// engine's answer is copied through fixed buffers line by line as it arrives, so a log
+// of any size costs the handler no more than one buffer and one line, and the browser
+// saves it to disk as it comes. It never follows the log: the range ends at until, or
+// now. Each line is the text as written, with the engine's own RFC 3339 UTC timestamp
+// in front when timestamps are asked for; stdout and stderr share the file in the order
+// the engine gave them.
+//
+// One logs.downloaded row is written when the response starts; the text of the log is
+// never audited or logged (D-23, D-24). A user runs at most two at once.
+func serveLogDownload(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *streamLimiter) {
+	ctx := req.Context()
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		writeJSONProblem(w, http.StatusInternalServerError, "", "internal error")
+		return
+	}
+	dp, err := parseLogDownloadParams(req)
+	if err != nil {
+		writeJSONProblem(w, http.StatusUnprocessableEntity, problemValidationFailed, err.Error())
+		return
+	}
+	containerID := chi.URLParam(req, "containerId")
+	release, ok := lim.acquire(string(p.Type) + ":" + p.ID)
+	if !ok {
+		writeJSONProblem(w, http.StatusTooManyRequests, problemRateLimited,
+			fmt.Sprintf("You already have %d log downloads running. Wait for one to finish and try again.", lim.max))
+		return
+	}
+	defer release()
+
+	agg, nodeID, _, err := resolveContainerNode(ctx, d.Aggregator, d.Log, env.ID, dp.nodeID)
+	if err != nil {
+		writeProblemError(w, err)
+		return
+	}
+	params := logParams{nodeID: nodeID}
+	if dp.hasSince {
+		params.since = dp.since.Format(logTimeLayout)
+	}
+	if dp.hasUntil {
+		params.until = dp.until.Format(logTimeLayout)
+	}
+	// The read ends with the request, and closing the reader is what interrupts a copy
+	// that is waiting on the engine.
+	dlCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	rc, tty, err := openLogs(dlCtx, d, env.ID, nodeID, containerID, params)
+	if errors.Is(err, dockerx.ErrLogsUnreadable) {
+		writeJSONProblem(w, http.StatusConflict, problemLogsUnreadable, "Docker can't read this container's logs back.")
+		return
+	}
+	if err != nil {
+		writeProblemError(w, err)
+		return
+	}
+	defer func() { _ = rc.Close() }()
+	stop := context.AfterFunc(dlCtx, func() { _ = rc.Close() })
+	defer stop()
+
+	fullID, name := logContainerRow(agg, nodeID, containerID)
+	now := time.Now()
+	if d.Now != nil {
+		now = d.Now()
+	}
+	until := now.UTC()
+	if dp.hasUntil {
+		until = dp.until
+	}
+	auditLogsDownloaded(ctx, d, p, env.ID, fullID, name, nodeID, dp, until, req.UserAgent())
+
+	// A download lasts as long as the log takes to copy, so the server's other timeouts
+	// must not cut it.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	h := w.Header()
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("Content-Disposition", `attachment; filename="`+logFileName(name, now)+`"`)
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+
+	out := bufio.NewWriterSize(w, downloadBuffer)
+	var werr error
+	_ = pumpLogs(dlCtx, rc, tty, func(l LogLine) {
+		if werr != nil {
+			return
+		}
+		if dp.timestamps && l.T != "" {
+			_, werr = out.WriteString(l.T)
+			if werr == nil {
+				werr = out.WriteByte(' ')
+			}
+		}
+		if werr == nil {
+			_, werr = out.WriteString(l.M)
+		}
+		if werr == nil {
+			werr = out.WriteByte('\n')
+		}
+		if werr != nil {
+			// The browser left: stop reading the engine.
+			cancel()
+		}
+	})
+	if werr == nil {
+		_ = out.Flush()
+	}
+}
+
 // eventIsFor says whether the actor of a container event is the container a stream
 // follows: its full ID, or the unambiguous prefix the route was asked with.
 func eventIsFor(actor, fullID, asked string) bool {
@@ -789,5 +976,30 @@ func auditLogsViewed(ctx context.Context, d LogsDeps, mem *logAuditMemory, p *rb
 	}); err != nil {
 		// The viewer must still get the log; the lost row is the server's fault.
 		d.Log.Error("could not audit a log stream", "container", containerID, "error", err)
+	}
+}
+
+// auditLogsDownloaded writes the logs.downloaded row of a download: what was asked
+// for, never what the log held.
+func auditLogsDownloaded(ctx context.Context, d LogsDeps, p *rbac.Principal, envID, containerID, name, nodeID string, dp logDownloadParams, until time.Time, userAgent string) {
+	if d.Audit == nil {
+		return
+	}
+	details := map[string]string{
+		"container":  name,
+		"node":       nodeID,
+		"until":      until.UTC().Format(time.RFC3339Nano),
+		"timestamps": strconv.FormatBool(dp.timestamps),
+	}
+	if dp.hasSince {
+		details["since"] = dp.since.UTC().Format(time.RFC3339Nano)
+	}
+	if err := d.Audit.Record(ctx, audit.Entry{
+		Actor: p.AuditActor(), Action: audit.ActionLogsDownloaded, TargetType: logTargetType, TargetID: containerID,
+		EnvID: envID, Result: audit.ResultSuccess,
+		IP: httpx.ClientIP(ctx), UserAgent: userAgent,
+		Details: details,
+	}); err != nil {
+		d.Log.Error("could not audit a log download", "container", containerID, "error", err)
 	}
 }

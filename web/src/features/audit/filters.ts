@@ -101,6 +101,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "volume.created",
   "volume.removed",
   "logs.viewed",
+  "logs.downloaded",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
