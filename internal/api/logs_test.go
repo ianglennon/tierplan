@@ -684,3 +684,169 @@ func TestLogRestartCancelsItsEventSubscriptionWhenTheStreamEnds(t *testing.T) {
 	c.close()
 	waitFor(t, "the subscription to be cancelled", func() bool { return spy.open.Load() == 0 })
 }
+
+// The page of earlier lines behind "Load earlier lines" (plan 04-20, D-15, Pitfall 12).
+
+type logPage struct {
+	Lines       []logLine `json:"lines"`
+	StartOfLogs bool      `json:"startOfLogs"`
+}
+
+func (f *logsFix) pagePath(container, query string) string {
+	return "/api/env/" + f.env.ID + "/containers/" + container + "/logs?" + query
+}
+
+func (f *logsFix) page(t *testing.T, container, query string) logPage {
+	t.Helper()
+	rec := f.req(t, http.MethodGet, f.pagePath(container, query), "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d (%s): %s", rec.code, rec.ptyp, rec.body)
+	}
+	var out logPage
+	if err := json.Unmarshal(rec.body, &out); err != nil {
+		t.Fatalf("page %s: %v", rec.body, err)
+	}
+	return out
+}
+
+func numberedLines(f *logsFix, n int, at time.Time) {
+	for i := range n {
+		f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: fmt.Sprintf("n%02d", i), Time: at.Add(time.Duration(i) * time.Second)})
+	}
+}
+
+func TestLogPageAnswersTheLinesBeforeUntilOldestFirstAndSaysWhenThereAreMore(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	numberedLines(f, 10, at)
+
+	until := at.Add(6 * time.Second).Format(time.RFC3339Nano) // n00..n05 are before it
+	got := f.page(t, webID, "sid="+sidA+"&tail=4&until="+until)
+	if len(got.Lines) != 4 || got.Lines[0].M != "n02" || got.Lines[3].M != "n05" {
+		t.Fatalf("lines = %+v, want n02..n05", got.Lines)
+	}
+	if got.StartOfLogs {
+		t.Error("startOfLogs is true though four of six earlier lines came back")
+	}
+	if got.Lines[0].T != "2026-10-09T12:00:02.000000000Z" || got.Lines[0].S != "o" {
+		t.Errorf("first line = %+v", got.Lines[0])
+	}
+
+	all := f.page(t, webID, "sid="+sidA+"&tail=50&until="+until)
+	if len(all.Lines) != 6 || !all.StartOfLogs {
+		t.Fatalf("page = %d lines, startOfLogs %v, want the 6 earlier lines and the start", len(all.Lines), all.StartOfLogs)
+	}
+	qs := f.fake.LogQueries()
+	last := qs[len(qs)-1]
+	if last.Get("follow") != "0" && last.Get("follow") != "" {
+		t.Errorf("a page followed the log: %v", last)
+	}
+	if last.Get("tail") != "50" {
+		t.Errorf("tail = %q, want 50", last.Get("tail"))
+	}
+}
+
+func TestLogPageIsEmptyAndTheStartWhenNothingIsEarlier(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	numberedLines(f, 3, at)
+	got := f.page(t, webID, "sid="+sidA+"&tail=10&until="+at.Format(time.RFC3339Nano))
+	if len(got.Lines) != 0 || !got.StartOfLogs {
+		t.Errorf("page = %+v, want no lines and the start of logs", got)
+	}
+}
+
+func TestLogPageKeepsTwoLinesThatShareAStampOnEitherSideOfThePageBoundary(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	at := time.Date(2026, 10, 9, 12, 0, 0, 5, time.UTC)
+	// Three lines written at one nanosecond, then one a second later.
+	f.fake.AppendLogs("web",
+		dockertest.FakeLogLine{Text: "x1", Time: at},
+		dockertest.FakeLogLine{Text: "x2", Time: at},
+		dockertest.FakeLogLine{Text: "x3", Time: at},
+		dockertest.FakeLogLine{Text: "y", Time: at.Add(time.Second)})
+	// The viewer holds x3 and y. To page past x3 without losing x1 and x2 it asks for
+	// everything up to one nanosecond after x3's stamp and drops the x3 it already has.
+	until := at.Add(time.Nanosecond).Format(logTimeLayoutTest)
+	got := f.page(t, webID, "sid="+sidA+"&tail=2&until="+until)
+	texts := []string{}
+	for _, l := range got.Lines {
+		texts = append(texts, l.M)
+	}
+	if len(texts) != 2 || texts[0] != "x2" || texts[1] != "x3" {
+		t.Fatalf("lines = %v, want the last two of the three at the stamp", texts)
+	}
+	if got.StartOfLogs {
+		t.Error("x1 is still earlier, so this is not the start")
+	}
+}
+
+const logTimeLayoutTest = "2006-01-02T15:04:05.000000000Z"
+
+func TestLogPageSharesTheViewersAuditMemoryAndWritesNoRowForTheSameViewer(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	numberedLines(f, 3, time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC))
+	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
+	nextEvent(t, c, "ready", 5*time.Second)
+	if n := len(f.logAudits(t)); n != 1 {
+		t.Fatalf("%d audit rows after the stream opened, want 1", n)
+	}
+	f.page(t, webID, "sid="+sidA+"&tail=5&until=2026-10-09T12:00:02Z")
+	f.page(t, webID, "sid="+sidA+"&tail=5&until=2026-10-09T12:00:01Z")
+	if n := len(f.logAudits(t)); n != 1 {
+		t.Errorf("%d audit rows after two pages of the same viewer, want still 1", n)
+	}
+	// Another viewer reading a page is another viewer.
+	f.page(t, webID, "sid="+sidB+"&tail=5&until=2026-10-09T12:00:02Z")
+	if n := len(f.logAudits(t)); n != 2 {
+		t.Errorf("%d audit rows after a second viewer's page, want 2", n)
+	}
+}
+
+func TestLogPageRefusesWhatIsNotAPage(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	for _, query := range []string{
+		"", "sid=short&tail=5", "sid=" + sidA + "&tail=0", "sid=" + sidA + "&tail=2001",
+		"sid=" + sidA + "&until=yesterday", "sid=" + sidA + "&since=nope",
+	} {
+		rec := f.req(t, http.MethodGet, f.pagePath(webID, query), "")
+		if rec.code != http.StatusUnprocessableEntity {
+			t.Errorf("%q: status = %d, want 422: %s", query, rec.code, rec.body)
+		}
+	}
+	rec := f.req(t, http.MethodGet, f.pagePath("nope", "sid="+sidA+"&tail=5"), "")
+	if rec.code != http.StatusNotFound || rec.ptyp != "container_not_found" {
+		t.Errorf("unknown container: status = %d, type %q", rec.code, rec.ptyp)
+	}
+	if n := len(f.logAudits(t)); n != 0 {
+		t.Errorf("%d audit rows for pages that read nothing", n)
+	}
+}
+
+func TestLogPageNeedsContainersRead(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	f.addUser(t, "nobody", false)
+	cookie, _ := f.signIn(t, "nobody", false)
+	rec := f.call(t, authReq{method: http.MethodGet, path: f.pagePath(webID, "sid="+sidA+"&tail=5"), cookie: cookie})
+	if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want a refusal", rec.Code)
+	}
+}
+
+func TestLogPageKeepsTheNewestLinesWhenThePageIsOverItsByteBudget(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsMaxPageBytes = 100 })
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	for i := range 10 {
+		f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: fmt.Sprintf("%02d-%s", i, strings.Repeat("z", 37)), Time: at.Add(time.Duration(i) * time.Second)})
+	}
+	got := f.page(t, webID, "sid="+sidA+"&tail=10&until=2026-10-09T13:00:00Z")
+	if len(got.Lines) == 0 || len(got.Lines) >= 10 {
+		t.Fatalf("%d lines, want some but fewer than all ten within 100 bytes", len(got.Lines))
+	}
+	if last := got.Lines[len(got.Lines)-1]; !strings.HasPrefix(last.M, "09-") {
+		t.Errorf("last line = %q, want the newest kept", last.M)
+	}
+	if got.StartOfLogs {
+		t.Error("lines were left out for size, so this is not the start of the logs")
+	}
+}

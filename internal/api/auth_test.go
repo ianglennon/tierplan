@@ -104,6 +104,8 @@ type authFixture struct {
 	logsMaxStreams  int
 	logsMaxLifetime time.Duration
 	logsWrap        func(api.LogsSource) api.LogsSource
+	// logsMaxPageBytes shortens how much one page of earlier lines may hold (plan 04-20).
+	logsMaxPageBytes int
 	// volumeSizesTimeout shortens the per-node time limit of the volume sizes route.
 	volumeSizesTimeout time.Duration
 	// brk, when set with envSvc, is the health broker behind GET
@@ -256,7 +258,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		}
 		api.RegisterLogs(r, api.LogsDeps{
 			Aggregator: logsSrc, Audit: f.aud, Heartbeat: f.logsHeartbeat, MaxStreamsPerUser: f.logsMaxStreams,
-			MaxLifetime: f.logsMaxLifetime, Now: f.clk.now, Log: log,
+			MaxLifetime: f.logsMaxLifetime, MaxPageBytes: f.logsMaxPageBytes, Now: f.clk.now, Log: log,
 		})
 	}
 	if f.envSvc != nil && f.agg != nil && f.hub != nil {

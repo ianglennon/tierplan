@@ -77,6 +77,9 @@ type LogsDeps struct {
 	// MaxLifetime is the longest one stream stays open. Zero means one hour; tests
 	// shorten it.
 	MaxLifetime time.Duration
+	// MaxPageBytes is the most one page of earlier lines holds, in bytes of log text.
+	// Zero means 8 MiB; tests shorten it.
+	MaxPageBytes int
 	// Now is the clock of the audit memory. Nil means the wall clock.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default(). It is never given a
