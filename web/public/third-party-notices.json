@@ -645,6 +645,26 @@
     "licence": "MIT"
   },
   {
+    "name": "@xterm/addon-fit",
+    "version": "0.11.0",
+    "licence": "MIT"
+  },
+  {
+    "name": "@xterm/addon-search",
+    "version": "0.16.0",
+    "licence": "MIT"
+  },
+  {
+    "name": "@xterm/addon-webgl",
+    "version": "0.19.0",
+    "licence": "MIT"
+  },
+  {
+    "name": "@xterm/xterm",
+    "version": "6.0.0",
+    "licence": "MIT"
+  },
+  {
     "name": "accepts",
     "version": "2.0.0",
     "licence": "MIT"
