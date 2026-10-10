@@ -20,6 +20,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/shells"
+	"github.com/ianglennon/bayplan/proto/wire"
 )
 
 // The browser shell (plan 04-22, OBS-03, RESEARCH Pattern 5). Docker is a FakeDaemon
@@ -47,7 +48,13 @@ func shellEngine() dockertest.FakeConfig {
 // shell knobs of the fixture before the router is built.
 func newShellFix(t *testing.T, tune func(*envFix)) *shellFix {
 	t.Helper()
-	f := newEnvFix(t, shellEngine())
+	return newShellFixOn(t, shellEngine(), tune)
+}
+
+// newShellFixOn is newShellFix on an engine of the caller's.
+func newShellFixOn(t *testing.T, cfg dockertest.FakeConfig, tune func(*envFix)) *shellFix {
+	t.Helper()
+	f := newEnvFix(t, cfg)
 	if tune != nil {
 		tune(f)
 	}
@@ -619,4 +626,150 @@ func TestShellIdleAShellForgottenForTheInstancesLimitIsWarnedAndClosedAndTheEndA
 		t.Errorf("closed row = %+v, want reason idle", rows[1])
 	}
 	waitFor(t, "the session to leave the registry", func() bool { return len(f.shellsReg.List(shells.Filter{})) == 0 })
+}
+
+// The refusals (plan 04-23, D-31, D-34, D-35, D-36, P3 D-10): each one answers before any
+// exec is made, writes no shell.opened row and holds no session.
+
+const openBody = `{"shell":"auto","cols":80,"rows":24}`
+
+// refusedNothingStarted fails the test unless the engine made no exec and the audit log
+// and the registry are empty.
+func (f *shellFix) refusedNothingStarted(t *testing.T) {
+	t.Helper()
+	if n := len(f.fake.ExecCreateBodies()); n != 0 {
+		t.Errorf("%d execs were created, want none", n)
+	}
+	if rows := f.shellAudits(t); len(rows) != 0 {
+		t.Errorf("shell rows = %+v, want none", rows)
+	}
+	if got := f.shellsReg.List(shells.Filter{}); len(got) != 0 {
+		t.Errorf("registry = %+v, want empty", got)
+	}
+}
+
+func TestShellRefusesAStoppedContainerWithContainerNotRunningAndMakesNoExec(t *testing.T) {
+	f := newShellFix(t, nil)
+	rec := f.open(t, "db", openBody)
+	if rec.code != http.StatusConflict || rec.ptyp != "container_not_running" {
+		t.Fatalf("%d %q, want 409 container_not_running: %s", rec.code, rec.ptyp, rec.body)
+	}
+	f.refusedNothingStarted(t)
+}
+
+func TestShellRefusesBayplansOwnServerAndAnAgentContainerWithOwnContainerFromAFreshInspect(t *testing.T) {
+	f := newShellFixOn(t, actionEngine(), nil)
+	// By name, by full ID and by the short ID the server knows itself by: the rule reads
+	// the container from the engine, so how it was named does not matter.
+	for _, ref := range []string{"bayplan", selfCtr, selfID, "bayplan-agent", agentID} {
+		rec := f.open(t, ref, openBody)
+		if rec.code != http.StatusConflict || rec.ptyp != "own_container" {
+			t.Errorf("%s: %d %q, want 409 own_container: %s", ref, rec.code, rec.ptyp, rec.body)
+		}
+	}
+	f.refusedNothingStarted(t)
+	// An ordinary container on the same engine still opens.
+	if rec := f.open(t, "web", openBody); rec.code != http.StatusCreated {
+		t.Fatalf("web: %d %s", rec.code, rec.body)
+	}
+}
+
+func TestShellRefusesTheNextOpenOverThePerUserCapWith429AndTheLimit(t *testing.T) {
+	f := newShellFix(t, func(f *envFix) { f.inst.ApplyShellLimits(30, 2) })
+	f.session(t)
+	f.session(t)
+	execs := len(f.fake.ExecCreateBodies())
+	rec := f.open(t, "web", openBody)
+	if rec.code != http.StatusTooManyRequests || rec.ptyp != "shell_limit_reached" {
+		t.Fatalf("%d %q, want 429 shell_limit_reached: %s", rec.code, rec.ptyp, rec.body)
+	}
+	var p struct {
+		Detail string `json:"detail"`
+		Errors []struct {
+			Location string `json:"location"`
+			Message  string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.body, &p); err != nil || len(p.Errors) != 1 || p.Errors[0].Location != "limit" || p.Errors[0].Message != "2" {
+		t.Errorf("body = %s (%v), want the limit, 2, among the errors", rec.body, err)
+	}
+	if n := len(f.fake.ExecCreateBodies()); n != execs {
+		t.Errorf("%d execs after the refusal, want the %d from before it", n, execs)
+	}
+	if got := f.shellsReg.List(shells.Filter{}); len(got) != 2 {
+		t.Errorf("registry holds %d sessions, want the 2 that were open", len(got))
+	}
+	// Ending one makes room, and the cap is read from the instance on every open.
+	f.shellsReg.End(f.shellsReg.List(shells.Filter{})[0].ID, "ended")
+	if rec := f.open(t, "web", openBody); rec.code != http.StatusCreated {
+		t.Fatalf("after one ended: %d %s", rec.code, rec.body)
+	}
+	f.inst.ApplyShellLimits(30, 3)
+	if rec := f.open(t, "web", openBody); rec.code != http.StatusTooManyRequests {
+		t.Fatalf("at 2 of 3 plus this one it is %d, want 429 again: %s", rec.code, rec.body)
+	}
+	f.inst.ApplyShellLimits(30, 4)
+	if rec := f.open(t, "web", openBody); rec.code != http.StatusCreated {
+		t.Fatalf("after the cap was raised: %d %s", rec.code, rec.body)
+	}
+}
+
+func TestShellRefusesAReadOnlyHostWithHostReadOnlyAndSendsNothing(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Locked")
+	a := f.connect(t, env, shellEngine(), &wire.Facts{
+		EngineID: "ENG:ro", Hostname: "node-1", EngineReachable: true, Policy: wire.PolicyFacts{ReadOnly: true},
+	})
+	f.whenState(t, env.ID, "online")
+
+	rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/containers/web/shell", openBody)
+	if rec.code != http.StatusConflict || rec.ptyp != "host_read_only" {
+		t.Fatalf("%d %q, want 409 host_read_only: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if w := a.fake.Writes(); len(w) != 0 {
+		t.Errorf("a read-only host received %v", w)
+	}
+	if n := len(a.fake.ExecCreateBodies()); n != 0 {
+		t.Errorf("%d execs were created on a read-only host", n)
+	}
+	if got := f.shellsReg.List(shells.Filter{}); len(got) != 0 {
+		t.Errorf("registry = %+v, want empty", got)
+	}
+}
+
+func TestShellRefusesAnAgentThatRefusesByPolicyWithAgentPolicyDenied(t *testing.T) {
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Old agent")
+	cfg := shellEngine()
+	cfg.PolicyDeny = true
+	a := f.connect(t, env, cfg, nil)
+	f.whenState(t, env.ID, "online")
+
+	rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/containers/web/shell", openBody)
+	if rec.code != http.StatusBadGateway || rec.ptyp != "agent_policy_denied" {
+		t.Fatalf("%d %q, want 502 agent_policy_denied: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if n := len(a.fake.ExecCreateBodies()); n != 0 {
+		t.Errorf("%d execs were created by an agent that refused", n)
+	}
+	if got := f.shellsReg.List(shells.Filter{}); len(got) != 0 {
+		t.Errorf("registry = %+v, want empty", got)
+	}
+}
+
+func TestShellRefusesAnImageWithNoShellByClosingWithNoShell(t *testing.T) {
+	cfg := shellEngine()
+	cfg.MissingExecutables = []string{"/bin/sh"}
+	f := newShellFixOn(t, cfg, nil)
+	s := f.session(t)
+	c := f.attach(t, s)
+	ctl := readControl(t, c, "closed")
+	if ctl.Reason != "no_shell" {
+		t.Errorf("closed frame = %+v, want reason no_shell", ctl)
+	}
+	drain(t, c)
+	rows := f.waitShellRows(t, 2)
+	if rows[1].Details["reason"] != "no_shell" {
+		t.Errorf("closed row = %+v, want reason no_shell", rows[1])
+	}
 }

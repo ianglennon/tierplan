@@ -442,3 +442,31 @@ func TestEndMarksTheSessionDoneBeforeItClosesTheProcess(t *testing.T) {
 		t.Errorf("at the moment the process was closed Done was closed = %v and the reason was %q, want true and server_shutdown", doneAtClose, reasonAtClose)
 	}
 }
+
+func TestCountForUserCountsPendingAndAttachedSessionsAcrossEnvironmentsOfThatUserOnly(t *testing.T) {
+	r := NewRegistry(newFakeClock())
+	mk := func(user, env string) *Session {
+		s := newSession(user)
+		s.EnvID = env
+		return r.Create(s, newFakeExec(), 0)
+	}
+	a1 := mk("ann", "env1")
+	mk("ann", "env2")
+	mk("bob", "env1")
+	if _, err := r.Claim(a1.ID, "user:ann", "sign-in-ann"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.CountForUser("user:ann"); got != 2 {
+		t.Errorf("ann holds %d, want 2: one attached and one pending, in two environments", got)
+	}
+	if got := r.CountForUser("user:bob"); got != 1 {
+		t.Errorf("bob holds %d, want 1", got)
+	}
+	if got := r.CountForUser("user:cy"); got != 0 {
+		t.Errorf("cy holds %d, want 0", got)
+	}
+	r.End(a1.ID, "exited")
+	if got := r.CountForUser("user:ann"); got != 1 {
+		t.Errorf("ann holds %d after one ended, want 1", got)
+	}
+}
