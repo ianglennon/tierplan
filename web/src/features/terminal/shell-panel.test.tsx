@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,6 +25,7 @@ const term = vi.hoisted(() => ({
   unmounts: 0,
   written: [] as Uint8Array[],
   focused: 0,
+  searchOpened: 0,
   props: null as TerminalProps | null,
   // When set, the stand-in registers only when told to, to test output that arrives first.
   holdRegister: false,
@@ -40,6 +41,9 @@ vi.mock("@/features/terminal/terminal", () => ({
         write: (b) => term.written.push(b),
         focus: () => {
           term.focused += 1;
+        },
+        openSearch: () => {
+          term.searchOpened += 1;
         },
       };
       term.registerNow = () => props.register(api);
@@ -103,6 +107,7 @@ beforeEach(() => {
   term.unmounts = 0;
   term.written = [];
   term.focused = 0;
+  term.searchOpened = 0;
   term.props = null;
   term.holdRegister = false;
   term.registerNow = null;
@@ -905,5 +910,186 @@ describe("a session the server ended (plan 04-23, D-29, P3 D-10)", () => {
     await waitFor(() => expect(document.activeElement).toBe(button));
     expect(screen.getByLabelText("Terminal in web").getAttribute("data-readonly")).toBe("true");
     expect(term.written.map(text).join("")).toContain("before the stop");
+  });
+});
+
+describe("the toolbar (plan 04-24, D-33)", () => {
+  async function connected(props: Partial<React.ComponentProps<typeof ShellPanel>> = {}) {
+    renderPanel(props);
+    const ws = await openShell();
+    act(() => ws.open());
+    await screen.findByRole("toolbar", { name: "Terminal controls" });
+    await waitFor(() => expect(term.props).not.toBeNull());
+    return ws;
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("shows Connected, what runs and the tools, with End session as an outline button", async () => {
+    await connected();
+    const bar = screen.getByRole("toolbar", { name: "Terminal controls" });
+    expect(within(bar).getByText("Connected")).toBeTruthy();
+    expect(within(bar).getByText("bash or sh as default user in default directory")).toBeTruthy();
+    expect(within(bar).getByRole("combobox", { name: "Font size" }).textContent).toBe("14");
+    const search = within(bar).getByRole("button", { name: /Search/ });
+    expect(search.textContent).toContain("Ctrl+Shift+F");
+    expect(within(bar).getByRole("button", { name: "Keyboard" })).toBeTruthy();
+    expect(within(bar).getByRole("button", { name: "Open in new window" })).toBeTruthy();
+    const end = within(bar).getByRole("button", { name: "End session" });
+    expect(end.getAttribute("data-variant")).toBe("outline");
+  });
+
+  it("says Connecting… until the socket is open", async () => {
+    renderPanel();
+    await openShell();
+    const bar = await screen.findByRole("toolbar", { name: "Terminal controls" });
+    expect(within(bar).getByText("Connecting…")).toBeTruthy();
+  });
+
+  it("summarises the shell, user and directory the server started it with, truncated with a tooltip", async () => {
+    openAnswer = () =>
+      Response.json(
+        {
+          sessionId: "SID1",
+          wsPath: `/api/env/${ENV}/shell-sessions/SID1/ws`,
+          command: ["/bin/sh"],
+          user: "www-data",
+          workingDir: "/var/www/html",
+        },
+        { status: 201 },
+      );
+    await connected();
+    const summary = screen.getByText("bash or sh as www-data in /var/www/html");
+    expect(summary.className).toContain("truncate");
+    expect(summary.getAttribute("tabindex")).toBe("0");
+  });
+
+  it("changes the font size: the terminal gets it and the choice is kept for this browser", async () => {
+    await connected();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Font size" }), { key: "Enter" });
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([
+      "12",
+      "14",
+      "16",
+    ]);
+    fireEvent.click(screen.getByRole("option", { name: "16" }));
+    await waitFor(() => expect(term.props?.fontSize).toBe(16));
+    expect(localStorage.getItem("bayplan-terminal-font-size")).toBe("16");
+
+    // The next terminal in this browser starts there.
+    cleanup();
+    await connected();
+    expect(term.props?.fontSize).toBe(16);
+    expect(screen.getByRole("combobox", { name: "Font size" }).textContent).toBe("16");
+  });
+
+  it("starts at 14 when the stored size is not one of the three", async () => {
+    localStorage.setItem("bayplan-terminal-font-size", "40");
+    await connected();
+    expect(term.props?.fontSize).toBe(14);
+  });
+
+  it("lists the keyboard shortcuts and says copy on select is off", async () => {
+    await connected();
+    fireEvent.click(screen.getByRole("button", { name: "Keyboard" }));
+    const rows = await screen.findAllByRole("term");
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "Copy",
+      "Paste",
+      "Search",
+      "Leave the terminal",
+    ]);
+    const keys = screen.getAllByRole("definition").map((d) => d.textContent);
+    expect(keys).toEqual(["Ctrl+Shift+C", "Ctrl+Shift+V", "Ctrl+Shift+F", "Ctrl+Shift+Home"]);
+    expect(screen.getByText("Copy on select is off.")).toBeTruthy();
+  });
+
+  it("shows ⌘C and ⌘V on a Mac", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X)",
+    );
+    await connected();
+    fireEvent.click(screen.getByRole("button", { name: "Keyboard" }));
+    const keys = (await screen.findAllByRole("definition")).map((d) => d.textContent);
+    expect(keys.slice(0, 2)).toEqual(["⌘C", "⌘V"]);
+  });
+
+  it("turns screen reader support on from the Keyboard popover and keeps the choice", async () => {
+    await connected();
+    expect(term.props?.screenReader).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Keyboard" }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Screen reader support" }));
+    await waitFor(() => expect(term.props?.screenReader).toBe(true));
+    expect(localStorage.getItem("bayplan-terminal-screen-reader")).toBe("true");
+  });
+
+  it("opens the terminal's search from the Search button", async () => {
+    await connected();
+    fireEvent.click(within(screen.getByRole("toolbar")).getByRole("button", { name: /Search/ }));
+    expect(term.searchOpened).toBe(1);
+  });
+
+  it("moves focus to the first toolbar control when the terminal asks to be left", async () => {
+    await connected();
+    act(() => term.props?.onLeave());
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Font size" }));
+  });
+
+  it("opens the shell in a new window without moving this tab's session", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    const ws = await connected();
+    fireEvent.click(screen.getByRole("button", { name: "Open in new window" }));
+    expect(opened).toHaveBeenCalledTimes(1);
+    const [url, target, features] = opened.mock.calls[0] ?? [];
+    expect(String(url)).toBe("/popout/e1/containers/web-id/shell?node=n1");
+    expect(target).toBe("_blank");
+    expect(String(features)).toContain("noopener");
+    expect(ws.closedByPage).toBe(false);
+    expect(screen.getByLabelText("Terminal in web")).toBeTruthy();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("has no Open in new window in the pop-out itself", async () => {
+    await connected({ popout: true });
+    expect(screen.queryByRole("button", { name: "Open in new window" })).toBeNull();
+  });
+
+  it("End session closes the socket, which ends the shell, and shows the launcher again", async () => {
+    const ws = await connected();
+    fireEvent.click(screen.getByRole("button", { name: "End session" }));
+    expect(ws.closedByPage).toBe(true);
+    expect(await screen.findByRole("heading", { name: "Open a shell in web" })).toBeTruthy();
+    expect(screen.queryByLabelText("Terminal in web")).toBeNull();
+    expect(screen.queryByRole("toolbar")).toBeNull();
+  });
+
+  it("keeps the tools but drops the status and End session once the session is over", async () => {
+    const ws = await connected();
+    act(() => {
+      ws.control({ type: "exit", code: 0 });
+      ws.drop();
+    });
+    await screen.findByText("Session ended (exit code 0).");
+    const bar = screen.getByRole("toolbar", { name: "Terminal controls" });
+    expect(within(bar).queryByText("Connected")).toBeNull();
+    expect(within(bar).queryByRole("button", { name: "End session" })).toBeNull();
+    expect(within(bar).getByRole("button", { name: /Search/ })).toBeTruthy();
+  });
+
+  it("stores only the font size and the screen reader choice, never what is typed or shown", async () => {
+    const set = vi.spyOn(Storage.prototype, "setItem");
+    const ws = await connected();
+    act(() => {
+      term.props?.onInput(new TextEncoder().encode("export TOKEN=hunter2\n"));
+      ws.output("hunter2\r\n");
+    });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Font size" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "12" }));
+    await waitFor(() => expect(set).toHaveBeenCalled());
+    expect(set.mock.calls.map((c) => c[0])).toEqual(["bayplan-terminal-font-size"]);
+    expect(JSON.stringify(set.mock.calls)).not.toContain("hunter2");
+    expect(sessionStorage.length).toBe(0);
   });
 });
