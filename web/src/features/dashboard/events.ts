@@ -330,8 +330,16 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
       }
       source.addEventListener("open", () => {
         if (closed || link === "polling") return;
+        const interrupted = link === "reconnecting";
         link = "live";
         publish();
+        // The stream was down and is back: changes made in the gap produced no
+        // event we saw (the server replays the feed, but not the health and other
+        // invalidate-only changes), so refetch everything of the environment once.
+        // A first connect has nothing to catch up on. The prefix covers every list
+        // and detail query of the environment, and the throttle keeps a flapping
+        // connection to one refetch a second (T-04-100).
+        if (interrupted) throttled(["env", envId]);
       });
       source.addEventListener("error", onError);
       source.addEventListener("docker", onDocker);

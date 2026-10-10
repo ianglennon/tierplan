@@ -362,6 +362,93 @@ describe("createEventsConnection", () => {
     expect(c.invalidated).toEqual([]);
   });
 
+  it("refetches everything of the environment once when the stream comes back after a drop", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+    expect(c.invalidated).toEqual([]);
+
+    source.fail();
+    expect(c.states()).toContain("reconnecting");
+    expect(c.invalidated).toEqual([]);
+    source.open();
+    expect(c.invalidated).toEqual([["env", "e1"]]);
+    expect(c.last().state).toBe("live");
+
+    // An open that was not a recovery does not refetch again.
+    source.open();
+    expect(c.invalidated).toEqual([["env", "e1"]]);
+  });
+
+  it("does not refetch on the first connect", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    (c.source() as FakeEventSource).open();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(c.invalidated).toEqual([]);
+  });
+
+  it("refetches once per recovery, and a flapping connection is held to one refetch a second", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+
+    for (let i = 0; i < 2; i++) {
+      source.fail();
+      source.open();
+    }
+    // The first recovery ran at once; the second waits for the end of the window.
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(2);
+    // Long enough that the earlier errors no longer count towards giving up.
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(2);
+
+    // A later, separate drop refetches again.
+    source.fail();
+    source.open();
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(3);
+  });
+
+  it("does not refetch when the stream gave up for polling", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+    source.fail(true);
+    expect(c.last().state).toBe("polling");
+    // The browser's source is closed; a late open event changes nothing.
+    source.open();
+    expect(c.last().state).toBe("polling");
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(0);
+  });
+
+  it("invalidates once for an event delivered twice, as a resume after a reconnect replays it", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+    const same = ev("r1", "2026-10-02T10:00:01Z", { type: "network" });
+    source.send(same);
+    source.fail();
+    source.open();
+    source.send(same);
+    await vi.advanceTimersByTimeAsync(5_000);
+    // One set of keys for the network event, plus the one reconnect refetch.
+    expect(c.invalidated.filter((k) => k[2] === "networks")).toHaveLength(1);
+    expect(c.invalidated.filter((k) => k[2] === "summary")).toHaveLength(1);
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(1);
+    expect(c.last().events.map((e) => e.id)).toEqual(["r1"]);
+  });
+
   it("does not invalidate for an event it already has", async () => {
     const known = ev("k", "2026-10-02T10:00:01Z");
     const c = connect(() => Promise.resolve([known]));

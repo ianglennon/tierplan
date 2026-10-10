@@ -93,6 +93,62 @@ describe("EventsFeed", () => {
     expect(within(row).getByText("1 min ago")).toBeTruthy();
   });
 
+  it("labels the swarm types Service, Node, Secret and Config and shows each under All with its name", async () => {
+    recent = async () =>
+      Response.json({
+        items: [
+          ev("1", { type: "service", action: "update", name: "web", time: "2026-10-02T10:00:04Z" }),
+          ev("2", {
+            type: "node",
+            action: "update",
+            name: "worker-1",
+            time: "2026-10-02T10:00:03Z",
+          }),
+          ev("3", {
+            type: "secret",
+            action: "create",
+            name: "db-password",
+            time: "2026-10-02T10:00:02Z",
+          }),
+          ev("4", {
+            type: "config",
+            action: "remove",
+            name: "nginx.conf",
+            time: "2026-10-02T10:00:01Z",
+          }),
+        ],
+      });
+    show();
+    const items = await screen.findAllByRole("listitem");
+    expect(items).toHaveLength(4);
+    expect(within(items[0] as HTMLElement).getByText("Service update")).toBeTruthy();
+    expect(within(items[1] as HTMLElement).getByText("Node update")).toBeTruthy();
+    expect(within(items[2] as HTMLElement).getByText("Secret create")).toBeTruthy();
+    expect(within(items[3] as HTMLElement).getByText("Config remove")).toBeTruthy();
+    expect(within(items[2] as HTMLElement).getByText("db-password")).toBeTruthy();
+  });
+
+  it("keeps showing 50 events at most when swarm events arrive", async () => {
+    show();
+    await screen.findByText("No events in the last hour");
+    act(() => {
+      stream().open();
+      for (let i = 0; i < 60; i++) {
+        stream().send(
+          ev(`s${i}`, {
+            type: "service",
+            action: "update",
+            name: `svc-${i}`,
+            time: new Date(Date.now() + i * 1000).toISOString(),
+          }),
+        );
+      }
+    });
+    expect(rows()).toHaveLength(50);
+    expect(screen.getByText("svc-59")).toBeTruthy();
+    expect(screen.queryByText("svc-9")).toBeNull();
+  });
+
   it("shows a row of Bayplan's own with a Bayplan label and its message, under All only", async () => {
     recent = async () =>
       Response.json({
