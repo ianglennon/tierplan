@@ -30,6 +30,9 @@ import (
 const (
 	volumeTargetType = "volume"
 
+	// problemVolumeNotFound is the problem type of a volume page whose volume is not there.
+	problemVolumeNotFound = "volume_not_found"
+
 	// codeVolumeInUse is the result of a delete of a volume a container or a service
 	// still mounts, found by the check or refused by the engine. It is also the problem
 	// type the SPA words.
@@ -178,6 +181,52 @@ type VolumeSizesOutput struct {
 	Body         VolumeSizesBody
 }
 
+// VolumeDetailInput is the path and query of the volume detail and inspect routes.
+type VolumeDetailInput struct {
+	EnvironmentPathInput
+	VolumeName string `path:"volumeName" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$" maxLength:"255" doc:"The volume name"`
+	NodeID     string `query:"nodeId" maxLength:"128" doc:"The node the volume is on: the nodeId of its row in the volumes list. Volumes are node-local, so it is required on a swarm and may be left out only on an environment of one node"`
+}
+
+// VolumeUsedByBody is one container or service that mounts the volume.
+type VolumeUsedByBody struct {
+	Kind      string `json:"kind" enum:"container,service" doc:"container: on the volume's node, running or not. service: a swarm service whose spec mounts a volume of this name, even with no running task"`
+	ID        string `json:"id" doc:"The container ID or the service ID"`
+	Name      string `json:"name" doc:"The container or service name"`
+	Node      string `json:"node" doc:"The display name of the node a container is on; empty for a service, which can run on any node"`
+	NodeID    string `json:"nodeId" doc:"The ID of that node; empty for a service"`
+	MountedAt string `json:"mountedAt" doc:"Where the volume appears inside the container; empty when not known"`
+	ReadOnly  bool   `json:"readOnly" doc:"True when it is mounted read-only"`
+	State     string `json:"state" doc:"A container's state (running, exited ...). For a service: running when any task runs, stopped when it is scaled to zero, starting otherwise; empty when the cluster read does not have it"`
+}
+
+// VolumeDetailBody is one volume as its detail page shows it.
+type VolumeDetailBody struct {
+	Name       string `json:"name" doc:"The volume name"`
+	Driver     string `json:"driver"`
+	Mountpoint string `json:"mountpoint" doc:"Where the engine keeps the volume's data on the node"`
+	Scope      string `json:"scope" doc:"local, or global for a volume a cluster driver shares"`
+	Node       string `json:"node" doc:"The display name of the node that holds the volume"`
+	NodeID     string `json:"nodeId" doc:"The ID of that node"`
+	Created    string `json:"created,omitempty" format:"date-time"`
+	Anonymous  bool   `json:"anonymous" doc:"True for a volume Docker made for a container without a name"`
+	// Options can hold a share's credentials: their values are withheld on the server from
+	// a caller without secrets.reveal.
+	Options []redact.OptionVar `json:"options" doc:"The driver options the volume was created with, by name. The values can be credentials: a caller without secrets.reveal on the environment gets each with masked true and no value"`
+	Labels  map[string]string  `json:"labels" doc:"Every label of the volume"`
+
+	UsedBy           []VolumeUsedByBody `json:"usedBy" doc:"Every container on the volume's node, running or not, and every swarm service whose spec mounts a volume of this name. Containers first, by name, then services, by name"`
+	UsedByContainers int                `json:"usedByContainers" doc:"How many entries of usedBy are containers"`
+	UsedByServices   int                `json:"usedByServices" doc:"How many entries of usedBy are services"`
+	NotReporting     []string           `json:"notReporting" doc:"Nodes that should have answered and did not, so usedBy may be incomplete"`
+}
+
+// VolumeDetailOutput wraps VolumeDetailBody for huma.
+type VolumeDetailOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         VolumeDetailBody
+}
+
 // RegisterVolumes registers the volume routes. A write goes to one node, is never
 // retried (P2 D-42), and every attempt is audited.
 func RegisterVolumes(r *httpx.Router, d VolumesDeps) {
@@ -204,6 +253,29 @@ func RegisterVolumes(r *httpx.Router, d VolumesDeps) {
 				return nil, err
 			}
 			return &VolumeSizesOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getVolume", Method: http.MethodGet, Path: "/api/env/{envId}/volumes/{volumeName}",
+		Summary: "One volume: its details, options and what uses it",
+		Description: "Everything the volume detail page shows, read live from the volume's node: driver, mount point, scope, creation time, driver options and labels, " +
+			"and what mounts it: every container on that node, running or not, with where and how it is mounted, and on a swarm every service whose spec mounts a volume of that name, even with no running task. " +
+			"The volume lives on one node, named by nodeId (the nodeId of its row in the volumes list); it may be left out only on an environment of one node that is not a swarm (else 422 node_required). " +
+			"The option values can be credentials of a remote share: they are withheld on the server and sent only to a caller who holds secrets.reveal on the environment; the others get each option's name with masked true and no value. " +
+			"404 volume_not_found when the node has no such volume (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. " +
+			"The name sizes is the sizes route, not a volume of that name. Needs volumes.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermVolumesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *VolumeDetailInput) (*VolumeDetailOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := getVolume(ctx, d, env.ID, redact.CanReveal(ctx, d.Checker, p, env.ID), in)
+			if err != nil {
+				return nil, err
+			}
+			return &VolumeDetailOutput{CacheControl: "no-store", Body: body}, nil
 		})
 
 	httpx.Register(r, huma.Operation{
@@ -308,6 +380,146 @@ func sizesError(err error) string {
 	}
 	_, detail := actionError(err)
 	return detail
+}
+
+// readVolume finds the node the volume is on and reads the volume live from its engine. The
+// errors are already problems: 422 node_required, 404 volume_not_found, 503 node_unavailable,
+// or the environment's own.
+func readVolume(ctx context.Context, d VolumesDeps, envID string, in *VolumeDetailInput) (agg envs.Aggregate, node envs.NodeRef, detail dockerx.VolumeDetail, raw []byte, err error) {
+	agg, _, err = d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return agg, node, detail, nil, snapshotProblem(d.Log, envID, err)
+	}
+	nodeID := in.NodeID
+	if nodeID == "" {
+		// Without a node only an environment of one node that is not a swarm has an
+		// answer: anywhere else the volume could be any of several.
+		swarm := agg.Target.Probe.Type == dockerx.TypeSwarmManager || agg.Target.Probe.Type == dockerx.TypeSwarmWorker
+		if swarm || len(agg.Nodes) != 1 {
+			return agg, node, detail, nil, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
+				"A volume lives on one node. Say which one (nodeId).")
+		}
+		nodeID = agg.Nodes[0].ID
+	}
+	for _, n := range agg.Nodes {
+		if n.ID == nodeID {
+			node = n
+		}
+	}
+	readCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
+	err = d.Aggregator.OnNode(readCtx, envID, nodeID, func(c *dockerx.Client) error {
+		var e error
+		detail, raw, e = c.VolumeDetail(readCtx, in.VolumeName)
+		return e
+	})
+	switch {
+	case err == nil:
+		return agg, node, detail, raw, nil
+	case dockerx.IsNotFound(err):
+		return agg, node, detail, nil, httpx.Problem(http.StatusNotFound, problemVolumeNotFound, "This volume does not exist on that node. It may have been removed.")
+	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
+		return agg, node, detail, nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+	}
+	return agg, node, detail, nil, snapshotProblem(d.Log, envID, err)
+}
+
+// getVolume builds the detail page's answer: the volume read live, the containers of its node
+// that mount it from the node's list, and the services whose specs mount a volume of that name
+// from the cluster read. The option values go through the redact package here, the one place
+// they can leave the server (T-04-59).
+func getVolume(ctx context.Context, d VolumesDeps, envID string, reveal bool, in *VolumeDetailInput) (VolumeDetailBody, error) {
+	agg, node, detail, _, err := readVolume(ctx, d, envID, in)
+	if err != nil {
+		return VolumeDetailBody{}, err
+	}
+	body := VolumeDetailBody{
+		Name: detail.Name, Driver: detail.Driver, Mountpoint: detail.Mountpoint, Scope: detail.Scope,
+		Node: node.Name, NodeID: node.ID, Created: rfc3339(detail.Created),
+		Anonymous:    dockerx.IsAnonymousVolume(detail.Name, detail.Labels),
+		Options:      redact.Options(detail.Options, reveal),
+		Labels:       detail.Labels,
+		UsedBy:       []VolumeUsedByBody{},
+		NotReporting: agg.NotReporting,
+	}
+	body.UsedBy = append(body.UsedBy, volumeContainerUsers(agg, node.ID, detail.Name)...)
+	body.UsedByContainers = len(body.UsedBy)
+	services := d.volumeServiceUsers(ctx, envID, agg, detail.Name)
+	body.UsedByServices = len(services)
+	body.UsedBy = append(body.UsedBy, services...)
+	return body, nil
+}
+
+// volumeContainerUsers are the containers of one node, running or not, that mount the named
+// volume, by name. A bind mount spelled like the name is not a use, and a container that
+// mounts the volume twice is listed once, at its first mount.
+func volumeContainerUsers(agg envs.Aggregate, nodeID, name string) []VolumeUsedByBody {
+	out := []VolumeUsedByBody{}
+	for _, c := range agg.Containers {
+		if c.NodeID != nodeID {
+			continue
+		}
+		for _, m := range c.Mounts {
+			if m.Type != mountTypeVolume || m.Name != name {
+				continue
+			}
+			out = append(out, VolumeUsedByBody{
+				Kind: "container", ID: c.ID, Name: c.Name, Node: c.Node, NodeID: c.NodeID,
+				MountedAt: m.Destination, ReadOnly: !m.RW, State: c.State,
+			})
+			break
+		}
+	}
+	slices.SortFunc(out, func(a, b VolumeUsedByBody) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
+	})
+	return out
+}
+
+// volumeServiceUsers are the swarm services whose specs mount a volume of that name, by name,
+// from the cluster read. Off a swarm there are none.
+func (d VolumesDeps) volumeServiceUsers(ctx context.Context, envID string, agg envs.Aggregate, name string) []VolumeUsedByBody {
+	out := []VolumeUsedByBody{}
+	if d.Clusters == nil || agg.Target.Probe.Type != dockerx.TypeSwarmManager {
+		return out
+	}
+	// A failed read leaves what the last good one held.
+	st, _ := d.Clusters.State(ctx, envID)
+	rows := map[string]dockerx.ServiceRow{}
+	for _, row := range st.Read.Services {
+		rows[row.ID] = row
+	}
+	for _, ref := range st.ServiceRefs {
+		for _, m := range ref.VolumeMounts {
+			if m.Source != name {
+				continue
+			}
+			out = append(out, VolumeUsedByBody{
+				Kind: "service", ID: ref.ID, Name: ref.Name, MountedAt: m.Target, ReadOnly: m.ReadOnly,
+				State: serviceState(rows[ref.ID], rows[ref.ID].ID != ""),
+			})
+			break
+		}
+	}
+	slices.SortFunc(out, func(a, b VolumeUsedByBody) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
+	})
+	return out
+}
+
+// serviceState words a service's state from its task counts: running when any task runs,
+// stopped when it is scaled to zero, starting otherwise. Empty when the cluster read did
+// not have the service.
+func serviceState(row dockerx.ServiceRow, known bool) string {
+	switch {
+	case !known:
+		return ""
+	case row.Running > 0:
+		return "running"
+	case row.Desired == 0:
+		return "stopped"
+	}
+	return "starting"
 }
 
 // createVolume checks the request, finds the node the volume belongs on, checks that the

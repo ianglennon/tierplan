@@ -13,6 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Overview } from "@/features/container-detail/overview";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { TestRouter } from "@/test-router";
 
 // The Overview tab of a container (plan 04-10, RES-01, D-04, P3 D-15a).
 
@@ -103,10 +104,12 @@ afterEach(() => {
 function mount() {
   return render(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <Overview envId={ENV} containerId="web-id" node="n1" />
-        <Toaster />
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <Overview envId={ENV} containerId="web-id" node="n1" />
+          <Toaster />
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>,
   );
 }
@@ -284,6 +287,10 @@ describe("Overview: the other cards", () => {
       ["volume", "data", "/data", "Read-write"],
       ["bind", "/srv/site", "/usr/share/nginx/html", "Read-only, z"],
     ]);
+    // A volume's name opens its page on this container's node; a bind mount is only a path.
+    const link = within(card).getByRole("link", { name: "data" });
+    expect(link.getAttribute("href")).toBe("/env/e1/volumes/data?node=n1");
+    expect(within(card).queryByRole("link", { name: "/srv/site" })).toBeNull();
     cleanup();
     client.clear();
     answer = () => Response.json(detail());

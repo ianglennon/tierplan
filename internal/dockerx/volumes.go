@@ -6,7 +6,9 @@ package dockerx
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
+	"time"
 
 	"github.com/moby/moby/client"
 )
@@ -118,4 +120,39 @@ func (c *Client) VolumeSizes(ctx context.Context) (map[string]VolumeUsage, error
 		out[v.Name] = u
 	}
 	return out, nil
+}
+
+// VolumeDetail is one volume as its page shows it. Options can hold a share's credentials,
+// so a caller sends them to a browser only through the redaction package.
+type VolumeDetail struct {
+	Name       string
+	Driver     string
+	Mountpoint string
+	Scope      string
+	// Created is zero when the engine does not say.
+	Created time.Time
+	// Options are the driver options the volume was created with, Labels its labels. Both are
+	// never nil.
+	Options map[string]string
+	Labels  map[string]string
+}
+
+// VolumeDetail reads one volume by name, with the raw inspect document for the Inspect tab.
+// A name the engine does not have is an error IsNotFound reports.
+func (c *Client) VolumeDetail(ctx context.Context, name string) (VolumeDetail, []byte, error) {
+	res, err := c.cur().VolumeInspect(ctx, name, client.VolumeInspectOptions{})
+	if err != nil {
+		return VolumeDetail{}, nil, fmt.Errorf("inspect volume on %s: %w", c.t.Describe(), err)
+	}
+	v := res.Volume
+	d := VolumeDetail{
+		Name: v.Name, Driver: v.Driver, Mountpoint: v.Mountpoint, Scope: v.Scope,
+		Options: map[string]string{}, Labels: map[string]string{},
+	}
+	maps.Copy(d.Options, v.Options)
+	maps.Copy(d.Labels, v.Labels)
+	if t, err := time.Parse(time.RFC3339Nano, v.CreatedAt); err == nil {
+		d.Created = t
+	}
+	return d, res.Raw, nil
 }

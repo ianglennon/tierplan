@@ -84,6 +84,15 @@ type ServiceRef struct {
 	// Volumes are the sources of the service's volume mounts. Bind, tmpfs and other
 	// mounts are not volumes. Never nil.
 	Volumes []string
+	// VolumeMounts are those volume mounts with where and how each is mounted. Never nil.
+	VolumeMounts []ServiceVolumeMount
+}
+
+// ServiceVolumeMount is one volume mount of a service's container spec.
+type ServiceVolumeMount struct {
+	// Source is the volume's name, Target where it appears in the container.
+	Source, Target string
+	ReadOnly       bool
 }
 
 // ClusterRead is what one manager says about the cluster.
@@ -267,7 +276,7 @@ func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services
 	}
 	refs := make([]ServiceRef, 0, len(services))
 	for _, s := range services {
-		ref := ServiceRef{ID: s.ID, Name: s.Spec.Name, Networks: []string{}, Volumes: []string{}}
+		ref := ServiceRef{ID: s.ID, Name: s.Spec.Name, Networks: []string{}, Volumes: []string{}, VolumeMounts: []ServiceVolumeMount{}}
 		for _, a := range s.Spec.TaskTemplate.Networks {
 			target := a.Target
 			if id, ok := idOf[target]; ok {
@@ -279,9 +288,13 @@ func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services
 		}
 		if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {
 			for _, m := range cs.Mounts {
-				if m.Type == mount.TypeVolume && m.Source != "" && !slices.Contains(ref.Volumes, m.Source) {
+				if m.Type != mount.TypeVolume || m.Source == "" {
+					continue
+				}
+				if !slices.Contains(ref.Volumes, m.Source) {
 					ref.Volumes = append(ref.Volumes, m.Source)
 				}
+				ref.VolumeMounts = append(ref.VolumeMounts, ServiceVolumeMount{Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
 			}
 		}
 		refs = append(refs, ref)

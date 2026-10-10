@@ -207,3 +207,42 @@ func TestVolumeSizesAnEngineThatCannotWalkItsVolumesIsAnError(t *testing.T) {
 		t.Fatal("VolumeSizes = nil error, want the engine's refusal")
 	}
 }
+
+// One volume's detail (plan 04-18 task 2).
+
+func TestVolumeDetailReadsTheVolumeWithItsOptionsLabelsAndTheRawDocument(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Volumes: []dockertest.FakeVolume{
+		{Name: "share", Driver: "local", CreatedAt: "2026-09-01T10:00:00Z",
+			Labels:  map[string]string{"app": "x"},
+			Options: map[string]string{"type": "nfs", "device": ":/export"}},
+		{Name: "plain", Driver: "local"},
+	}})
+	c := newClient(t, fake)
+	d, raw, err := c.VolumeDetail(context.Background(), "share")
+	if err != nil {
+		t.Fatalf("VolumeDetail: %v", err)
+	}
+	if d.Name != "share" || d.Driver != "local" || d.Scope != "local" || d.Mountpoint != "/var/lib/docker/volumes/share/_data" ||
+		d.Created.UTC().Format("2006-01-02T15:04:05Z") != "2026-09-01T10:00:00Z" ||
+		d.Labels["app"] != "x" || d.Options["type"] != "nfs" || d.Options["device"] != ":/export" {
+		t.Errorf("detail = %+v", d)
+	}
+	if !strings.Contains(string(raw), `"Mountpoint"`) || !strings.Contains(string(raw), `"device"`) {
+		t.Errorf("raw = %s, want the engine's own document", raw)
+	}
+	p, _, err := c.VolumeDetail(context.Background(), "plain")
+	if err != nil || p.Options == nil || p.Labels == nil || !p.Created.IsZero() {
+		t.Errorf("a volume with none: %+v, %v; want empty maps (never nil) and no created time", p, err)
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Errorf("a read wrote: %v", w)
+	}
+}
+
+func TestVolumeDetailAVolumeTheEngineLacksIsNotFound(t *testing.T) {
+	c, _ := volumeFake(t)
+	_, _, err := c.VolumeDetail(context.Background(), "ghost")
+	if !dockerx.IsNotFound(err) {
+		t.Fatalf("VolumeDetail(ghost) = %v, want a not-found error", err)
+	}
+}

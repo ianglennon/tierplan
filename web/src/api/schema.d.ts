@@ -844,6 +844,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/volumes/{volumeName}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One volume: its details, options and what uses it
+         * @description Everything the volume detail page shows, read live from the volume's node: driver, mount point, scope, creation time, driver options and labels, and what mounts it: every container on that node, running or not, with where and how it is mounted, and on a swarm every service whose spec mounts a volume of that name, even with no running task. The volume lives on one node, named by nodeId (the nodeId of its row in the volumes list); it may be left out only on an environment of one node that is not a swarm (else 422 node_required). The option values can be credentials of a remote share: they are withheld on the server and sent only to a caller who holds secrets.reveal on the environment; the others get each option's name with masked true and no value. 404 volume_not_found when the node has no such volume (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. The name sizes is the sizes route, not a volume of that name. Needs volumes.read (Viewer) on the environment.
+         */
+        get: operations["getVolume"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments": {
         parameters: {
             query?: never;
@@ -4274,6 +4294,43 @@ export interface components {
             /** @description The node the volume is on: the nodeId of its row in the volumes list. Never the display name */
             nodeId: string;
         };
+        VolumeDetailBody: {
+            /** @description True for a volume Docker made for a container without a name */
+            anonymous: boolean;
+            /** Format: date-time */
+            created?: string;
+            driver: string;
+            /** @description Every label of the volume */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description Where the engine keeps the volume's data on the node */
+            mountpoint: string;
+            /** @description The volume name */
+            name: string;
+            /** @description The display name of the node that holds the volume */
+            node: string;
+            /** @description The ID of that node */
+            nodeId: string;
+            /** @description Nodes that should have answered and did not, so usedBy may be incomplete */
+            notReporting: string[] | null;
+            /** @description The driver options the volume was created with, by name. The values can be credentials: a caller without secrets.reveal on the environment gets each with masked true and no value */
+            options: components["schemas"]["OptionVar"][] | null;
+            /** @description local, or global for a volume a cluster driver shares */
+            scope: string;
+            /** @description Every container on the volume's node, running or not, and every swarm service whose spec mounts a volume of this name. Containers first, by name, then services, by name */
+            usedBy: components["schemas"]["VolumeUsedByBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many entries of usedBy are containers
+             */
+            usedByContainers: number;
+            /**
+             * Format: int64
+             * @description How many entries of usedBy are services
+             */
+            usedByServices: number;
+        };
         VolumeItem: {
             /** @description True for a volume Docker made for a container without a name: it has the com.docker.volume.anonymous label, or on an engine without it a name of 64 hexadecimal characters */
             anonymous: boolean;
@@ -4344,6 +4401,27 @@ export interface components {
             ok: boolean;
             /** @description The node's volumes with their sizes, sorted by name */
             sizes: components["schemas"]["VolumeSizeEntry"][] | null;
+        };
+        VolumeUsedByBody: {
+            /** @description The container ID or the service ID */
+            id: string;
+            /**
+             * @description container: on the volume's node, running or not. service: a swarm service whose spec mounts a volume of this name, even with no running task
+             * @enum {string}
+             */
+            kind: "container" | "service";
+            /** @description Where the volume appears inside the container; empty when not known */
+            mountedAt: string;
+            /** @description The container or service name */
+            name: string;
+            /** @description The display name of the node a container is on; empty for a service, which can run on any node */
+            node: string;
+            /** @description The ID of that node; empty for a service */
+            nodeId: string;
+            /** @description True when it is mounted read-only */
+            readOnly: boolean;
+            /** @description A container's state (running, exited ...). For a service: running when any task runs, stopped when it is scaled to zero, starting otherwise; empty when the cluster read does not have it */
+            state: string;
         };
         WarningBody: {
             /**
@@ -6081,6 +6159,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VolumeSizesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getVolume: {
+        parameters: {
+            query?: {
+                /** @description The node the volume is on: the nodeId of its row in the volumes list. Volumes are node-local, so it is required on a swarm and may be left out only on an environment of one node */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The volume name */
+                volumeName: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeDetailBody"];
                 };
             };
             /** @description Error */

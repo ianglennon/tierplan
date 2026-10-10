@@ -215,7 +215,7 @@ func refsManager() dockertest.FakeConfig {
 		ServiceRows: []dockertest.FakeService{
 			{ID: "s2", Name: "web", Mode: "replicated", Running: 1, Desired: 1,
 				Networks: []string{"ovl-id-1"},
-				Mounts:   []dockertest.FakeServiceMount{{Type: "volume", Source: "data"}, {Type: "bind", Source: "/srv/x"}, {Type: "tmpfs"}}},
+				Mounts:   []dockertest.FakeServiceMount{{Type: "volume", Source: "data", Target: "/var/lib/data", ReadOnly: true}, {Type: "bind", Source: "/srv/x"}, {Type: "tmpfs"}}},
 			// Named by name in the spec, and scaled to zero: it still mentions the network.
 			{ID: "s1", Name: "idle", Mode: "replicated", Running: 0, Desired: 0, Networks: []string{"other"}},
 			{ID: "s3", Name: "plain", Mode: "global", Running: 3, Desired: 3},
@@ -230,9 +230,10 @@ func TestServiceRefsListsEachServicesNetworksAndVolumeMountsByIDWhateverItsTasks
 		t.Fatalf("ServiceRefs: %v", err)
 	}
 	want := []dockerx.ServiceRef{
-		{ID: "s1", Name: "idle", Networks: []string{"ovl-id-2"}, Volumes: []string{}},
-		{ID: "s3", Name: "plain", Networks: []string{}, Volumes: []string{}},
-		{ID: "s2", Name: "web", Networks: []string{"ovl-id-1"}, Volumes: []string{"data"}},
+		{ID: "s1", Name: "idle", Networks: []string{"ovl-id-2"}, Volumes: []string{}, VolumeMounts: []dockerx.ServiceVolumeMount{}},
+		{ID: "s3", Name: "plain", Networks: []string{}, Volumes: []string{}, VolumeMounts: []dockerx.ServiceVolumeMount{}},
+		{ID: "s2", Name: "web", Networks: []string{"ovl-id-1"}, Volumes: []string{"data"},
+			VolumeMounts: []dockerx.ServiceVolumeMount{{Source: "data", Target: "/var/lib/data", ReadOnly: true}}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ServiceRefs = %+v, want %+v (sorted by name, names resolved to IDs, only volume mounts)", got, want)

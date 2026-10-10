@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { type QueryClient, useMutation, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
+import { DETAIL_REFETCH_MS, detailRetry } from "@/api/container-detail";
 import { BULK_CHUNK } from "@/api/containers";
 import { readProblem } from "@/api/problem";
 import { listKey } from "@/api/resources";
@@ -208,5 +209,57 @@ export function useVolumeSizes(envId: string) {
   return useMutation<VolumeSizes, Error, string | undefined>({
     mutationFn: (nodeId) => readVolumeSizes(envId, nodeId),
     retry: false,
+  });
+}
+
+export type VolumeDetail = components["schemas"]["VolumeDetailBody"];
+export type VolumeUsedBy = components["schemas"]["VolumeUsedByBody"];
+
+// VolumeLoadError is a detail read the server refused or could not answer. The status and
+// the problem type tell a volume that no longer exists (404 volume_not_found) from every
+// other failure.
+export class VolumeLoadError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`GET volume failed (${status})`);
+    this.name = "VolumeLoadError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// isVolumeGone says whether the error is the server answering that the node has no such
+// volume: it was removed, or a deploy replaced it.
+export function isVolumeGone(error: unknown): boolean {
+  return (
+    error instanceof VolumeLoadError && error.status === 404 && error.type === "volume_not_found"
+  );
+}
+
+// The key of one volume's detail. It extends the volumes list key, so the events feed and
+// every write, which refresh that key, refresh an open detail page too. A name repeats per
+// node, so the node is part of it.
+export function volumeDetailKey(envId: string, name: string, nodeId: string | undefined) {
+  return [...listKey(envId, "volumes"), "detail", nodeId ?? "", name] as const;
+}
+
+// One volume, with what uses it. nodeId names the node it is on.
+export function volumeDetailQuery(envId: string, name: string, nodeId?: string) {
+  return queryOptions({
+    queryKey: volumeDetailKey(envId, name, nodeId),
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/volumes/{volumeName}", {
+        params: { path: { envId, volumeName: name }, query: nodeId ? { nodeId } : undefined },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new VolumeLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    // A volume that does not exist will not exist on a second try.
+    retry: (count, error) => !isVolumeGone(error) && count < detailRetry.attempts,
+    refetchInterval: DETAIL_REFETCH_MS,
   });
 }

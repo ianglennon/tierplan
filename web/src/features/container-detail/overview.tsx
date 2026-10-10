@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 
 import { type ContainerDetail, containerDetailQuery } from "@/api/container-detail";
@@ -208,7 +209,7 @@ function PortsCard({ detail }: { detail: ContainerDetail }) {
   );
 }
 
-function MountsCard({ detail }: { detail: ContainerDetail }) {
+function MountsCard({ envId, detail }: { envId: string; detail: ContainerDetail }) {
   const t = useT();
   const missing = useMissing();
   return (
@@ -220,11 +221,24 @@ function MountsCard({ detail }: { detail: ContainerDetail }) {
         rowKey={(m, i) => `${i}|${m.destination}`}
         columns={[
           { header: t("containerdetail.mounts.type"), cell: (m) => m.type },
-          // A volume is named; where the engine keeps it is not what a person looks for.
-          // Plan 04-18 makes the name a link to the volume.
+          // A volume is named; where the engine keeps it is not what a person looks for. Its
+          // name opens the volume's page on this container's node, since a name repeats per
+          // node.
           {
             header: t("containerdetail.mounts.source"),
-            cell: (m) => m.name || m.source || missing,
+            cell: (m) =>
+              m.type === "volume" && m.name ? (
+                <Link
+                  to="/env/$envId/volumes/$volumeName"
+                  params={{ envId, volumeName: m.name }}
+                  search={{ node: detail.nodeId }}
+                  className="rounded-sm text-accent-ink hover:underline"
+                >
+                  {m.name}
+                </Link>
+              ) : (
+                m.source || missing
+              ),
           },
           { header: t("containerdetail.mounts.destination"), cell: (m) => m.destination },
           {
@@ -405,7 +419,7 @@ export function Overview({ envId, containerId, node }: OverviewProps) {
         <ImageCard detail={data} />
         <RestartCard detail={data} />
         <PortsCard detail={data} />
-        <MountsCard detail={data} />
+        <MountsCard envId={envId} detail={data} />
       </div>
       <div className="flex min-w-0 flex-col gap-4">
         <NetworksCard envId={envId} detail={data} />

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { ChevronsDownUp, ChevronsUpDown, HardDrive, Plus } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { z } from "zod";
@@ -335,7 +336,14 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
       className: "min-w-[200px]",
       cell: (v) => (
         <span className="flex items-center gap-2">
-          <TruncatedText mono>{v.name}</TruncatedText>
+          <Link
+            to="/env/$envId/volumes/$volumeName"
+            params={{ envId, volumeName: v.name }}
+            search={{ node: v.nodeId }}
+            className="block min-w-0 rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <TruncatedText mono>{v.name}</TruncatedText>
+          </Link>
           {v.anonymous ? <Badge variant="secondary">{t("volumes.list.anonymous")}</Badge> : null}
         </span>
       ),
@@ -371,17 +379,29 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
       header: <span className="sr-only">{t("actions.column")}</span>,
       className: "w-px px-1 text-end",
       cell: (v) => (
-        <NeedsTooltip reason={deleteReason(v)}>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="max-md:h-11"
-            aria-label={t("volumes.delete.label", { name: v.name })}
-            onClick={deleteReason(v) ? undefined : () => setDeleting({ rows: [v], open: true })}
-          >
-            {t("volumes.delete.action")}
+        <span className="flex items-center justify-end gap-1">
+          <Button asChild variant="ghost" size="sm" className="max-md:h-11">
+            <Link
+              to="/env/$envId/volumes/$volumeName"
+              params={{ envId, volumeName: v.name }}
+              search={{ node: v.nodeId }}
+              aria-label={t("volumes.list.openLabel", { name: v.name })}
+            >
+              {t("volumes.list.open")}
+            </Link>
           </Button>
-        </NeedsTooltip>
+          <NeedsTooltip reason={deleteReason(v)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="max-md:h-11"
+              aria-label={t("volumes.delete.label", { name: v.name })}
+              onClick={deleteReason(v) ? undefined : () => setDeleting({ rows: [v], open: true })}
+            >
+              {t("volumes.delete.action")}
+            </Button>
+          </NeedsTooltip>
+        </span>
       ),
     },
   ];

@@ -42,9 +42,11 @@
         "both": "{{containers}}, {{services}}",
         "and": "{{first}} and {{second}}"
       },
-      "inUseBy": "In use by {{what}}. Remove what uses it first.",
+      "inUseBy": "In use by {{what}}. Open it to see what uses it.",
       "anonymous": "Anonymous",
-      "bulkDelete": "Delete…"
+      "bulkDelete": "Delete…",
+      "open": "Open",
+      "openLabel": "Open volume {{name}}"
     },
     "create": {
       "button": "Create volume",
@@ -166,6 +168,77 @@
       "done": "Sizes updated.",
       "error": "Couldn't calculate sizes. Try again.",
       "failedOn": "Couldn't calculate on {{node}}."
+    },
+    "detail": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "volumes": "Volumes"
+      },
+      "tabs": {
+        "label": "Volume sections",
+        "overview": "Overview",
+        "inspect": "Inspect"
+      },
+      "error": {
+        "loadFailed": "Couldn't load {{name}}. Docker may be unreachable. Try again.",
+        "retry": "Retry"
+      },
+      "gone": {
+        "heading": "This volume is gone",
+        "body": "It was removed, or a deploy replaced it. Go back to the list to find it.",
+        "back": "Back to volumes"
+      },
+      "inUse": {
+        "title": "{{name}} is in use",
+        "body": "Stopped containers and swarm services that mount it count. Remove them first.",
+        "reason": "In use by {{what}}. Remove what uses it first."
+      },
+      "overview": {
+        "loading": "Loading the volume",
+        "details": {
+          "title": "Details",
+          "name": "Name",
+          "driver": "Driver",
+          "node": "Node",
+          "mountpoint": "Mount point",
+          "mountpointLabel": "the mount point",
+          "scope": "Scope",
+          "created": "Created",
+          "size": "Size",
+          "calculate": "Calculate size",
+          "calculating": "Calculating…"
+        },
+        "usedBy": {
+          "title": "Used by",
+          "empty": "Nothing uses this volume.",
+          "columns": {
+            "name": "Name",
+            "type": "Type",
+            "node": "Node",
+            "mountedAt": "Mounted at",
+            "mode": "Mode",
+            "state": "State"
+          },
+          "type": {
+            "container": "Container",
+            "service": "Service"
+          },
+          "readWrite": "Read-write",
+          "readOnly": "Read-only",
+          "openContainer": "Open container {{name}}"
+        },
+        "options": {
+          "title": "Options",
+          "label": "Driver options",
+          "empty": "No options.",
+          "masked": "Option values are hidden. Needs the reveal secrets permission to show them."
+        },
+        "labels": {
+          "title": "Labels",
+          "label": "Labels",
+          "empty": "No labels."
+        }
+      }
     }
   }
 }

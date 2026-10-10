@@ -145,6 +145,22 @@ describe("VolumeList usage", () => {
   });
 });
 
+describe("VolumeList links", () => {
+  it("links a volume's name and its Open button to its page on its own node", async () => {
+    mount();
+    const r = await row("logs");
+    const name = within(r).getByRole("link", { name: "logs" });
+    expect(name.getAttribute("href")).toBe(`/env/${ENV}/volumes/logs?node=node-2-id`);
+    const open = within(r).getByRole("link", { name: "Open volume logs" });
+    expect(open.getAttribute("href")).toBe(`/env/${ENV}/volumes/logs?node=node-2-id`);
+    expect(
+      within(await row("appdata"))
+        .getByRole("link", { name: "Open volume appdata" })
+        .getAttribute("href"),
+    ).toBe(`/env/${ENV}/volumes/appdata?node=node-1-id`);
+  });
+});
+
 describe("VolumeList filters", () => {
   it("offers All, In use and Unused and puts the choice in the URL", async () => {
     mount();
@@ -288,7 +304,7 @@ describe("VolumeList selection", () => {
     expect(button.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(button);
     expect(
-      await screen.findByText("In use by 2 containers. Remove what uses it first."),
+      await screen.findByText("In use by 2 containers. Open it to see what uses it."),
     ).toBeTruthy();
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });

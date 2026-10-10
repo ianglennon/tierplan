@@ -440,11 +440,12 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // it cannot express a cluster volume. VolumeExists (Phase 4, RES-07) is a read: one inspect by name.
 // VolumeDriver (Phase 4, RES-07) is a read: the same inspect, answering the driver.
 // VolumeUsers (Phase 4, RES-07) is a read: the names of the containers that mount one volume.
+// VolumeDetail (Phase 4, RES-07) is a read: one inspect by name, with the raw document.
 // VolumeSizes (Phase 4, RES-07) is a read: the engine's disk usage of its volumes, which takes no
 // options, so the caller can ask for nothing else.
 // VolumeRemove (Phase 4, RES-07) removes one volume by name, once; it takes no options, so force
 // is never sent, and the API refuses a volume that is in use before it is called.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
