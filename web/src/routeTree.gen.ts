@@ -42,6 +42,7 @@ import { Route as AppSettingsAccessUsersUserIdRouteImport } from './routes/_app/
 import { Route as AppSettingsEnvironmentsEnvIdIndexRouteImport } from './routes/_app/settings/environments_.$envId.index'
 import { Route as AppSettingsEnvironmentsEnvIdAccessRouteImport } from './routes/_app/settings/environments_.$envId.access'
 import { Route as PopoutEnvIdContainersContainerIdLogsRouteImport } from './routes/popout.$envId.containers.$containerId.logs'
+import { Route as PopoutEnvIdContainersContainerIdShellRouteImport } from './routes/popout.$envId.containers.$containerId.shell'
 import { Route as AppEnvEnvIdContainersContainerIdIndexRouteImport } from './routes/_app/env/$envId/containers_.$containerId.index'
 import { Route as AppEnvEnvIdContainersContainerIdInspectRouteImport } from './routes/_app/env/$envId/containers_.$containerId.inspect'
 import { Route as AppEnvEnvIdContainersContainerIdLogsRouteImport } from './routes/_app/env/$envId/containers_.$containerId.logs'
@@ -225,6 +226,12 @@ const PopoutEnvIdContainersContainerIdLogsRoute =
     path: '/popout/$envId/containers/$containerId/logs',
     getParentRoute: () => rootRouteImport,
   } as any)
+const PopoutEnvIdContainersContainerIdShellRoute =
+  PopoutEnvIdContainersContainerIdShellRouteImport.update({
+    id: '/popout/$envId/containers/$containerId/shell',
+    path: '/popout/$envId/containers/$containerId/shell',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AppEnvEnvIdContainersContainerIdIndexRoute =
   AppEnvEnvIdContainersContainerIdIndexRouteImport.update({
     id: '/',
@@ -312,6 +319,7 @@ export interface FileRoutesByFullPath {
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
   '/popout/$envId/containers/$containerId/logs': typeof PopoutEnvIdContainersContainerIdLogsRoute
+  '/popout/$envId/containers/$containerId/shell': typeof PopoutEnvIdContainersContainerIdShellRoute
   '/settings/environments/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/containers/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
@@ -348,6 +356,7 @@ export interface FileRoutesByTo {
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
   '/popout/$envId/containers/$containerId/logs': typeof PopoutEnvIdContainersContainerIdLogsRoute
+  '/popout/$envId/containers/$containerId/shell': typeof PopoutEnvIdContainersContainerIdShellRoute
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/containers/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
@@ -393,6 +402,7 @@ export interface FileRoutesById {
   '/_app/settings/access/users_/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/_app/settings/environments_/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
   '/popout/$envId/containers/$containerId/logs': typeof PopoutEnvIdContainersContainerIdLogsRoute
+  '/popout/$envId/containers/$containerId/shell': typeof PopoutEnvIdContainersContainerIdShellRoute
   '/_app/settings/environments_/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/_app/env/$envId/containers_/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/_app/env/$envId/containers_/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
@@ -438,6 +448,7 @@ export interface FileRouteTypes {
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
     | '/popout/$envId/containers/$containerId/logs'
+    | '/popout/$envId/containers/$containerId/shell'
     | '/settings/environments/$envId/'
     | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/containers/$containerId/logs'
@@ -474,6 +485,7 @@ export interface FileRouteTypes {
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
     | '/popout/$envId/containers/$containerId/logs'
+    | '/popout/$envId/containers/$containerId/shell'
     | '/settings/environments/$envId'
     | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/containers/$containerId/logs'
@@ -518,6 +530,7 @@ export interface FileRouteTypes {
     | '/_app/settings/access/users_/$userId'
     | '/_app/settings/environments_/$envId/access'
     | '/popout/$envId/containers/$containerId/logs'
+    | '/popout/$envId/containers/$containerId/shell'
     | '/_app/settings/environments_/$envId/'
     | '/_app/env/$envId/containers_/$containerId/inspect'
     | '/_app/env/$envId/containers_/$containerId/logs'
@@ -537,6 +550,7 @@ export interface RootRouteChildren {
   SetupRoute: typeof SetupRoute
   WelcomeRoute: typeof WelcomeRoute
   PopoutEnvIdContainersContainerIdLogsRoute: typeof PopoutEnvIdContainersContainerIdLogsRoute
+  PopoutEnvIdContainersContainerIdShellRoute: typeof PopoutEnvIdContainersContainerIdShellRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -770,6 +784,13 @@ declare module '@tanstack/react-router' {
       path: '/popout/$envId/containers/$containerId/logs'
       fullPath: '/popout/$envId/containers/$containerId/logs'
       preLoaderRoute: typeof PopoutEnvIdContainersContainerIdLogsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/popout/$envId/containers/$containerId/shell': {
+      id: '/popout/$envId/containers/$containerId/shell'
+      path: '/popout/$envId/containers/$containerId/shell'
+      fullPath: '/popout/$envId/containers/$containerId/shell'
+      preLoaderRoute: typeof PopoutEnvIdContainersContainerIdShellRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/env/$envId/containers_/$containerId/': {
@@ -1018,6 +1039,8 @@ const rootRouteChildren: RootRouteChildren = {
   WelcomeRoute: WelcomeRoute,
   PopoutEnvIdContainersContainerIdLogsRoute:
     PopoutEnvIdContainersContainerIdLogsRoute,
+  PopoutEnvIdContainersContainerIdShellRoute:
+    PopoutEnvIdContainersContainerIdShellRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

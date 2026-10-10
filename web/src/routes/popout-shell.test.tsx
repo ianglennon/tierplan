@@ -183,7 +183,7 @@ describe("the shell pop-out", () => {
     });
     expect(
       new URLSearchParams(sent.find((s) => s.path === "/api/env/e1/containers/c1")?.query).get(
-        "node",
+        "nodeId",
       ),
     ).toBe("n7");
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
