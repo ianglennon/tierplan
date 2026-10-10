@@ -405,7 +405,9 @@ export function EventsTable({ envId, events, swarm, canOpen, onFilterName }: Eve
   const filter = useCallback((name: string) => filterName.current(name), []);
 
   return (
-    <Table aria-label={t("events.table.label")}>
+    // Under 768px the columns keep their width and the card scrolls sideways,
+    // instead of squeezing every cell to a few letters.
+    <Table aria-label={t("events.table.label")} className="min-w-[48rem]">
       <TableHeader>
         <TableRow>
           <TableHead className="w-11">

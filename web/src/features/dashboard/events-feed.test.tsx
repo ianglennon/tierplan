@@ -10,6 +10,7 @@ import { EnvEventsProvider, type EventDTO } from "@/features/dashboard/events";
 import { EventsFeed } from "@/features/dashboard/events-feed";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import "@/i18n";
+import { TestRouter } from "@/test-router";
 
 function ev(id: string, over: Partial<EventDTO> = {}): EventDTO {
   return {
@@ -27,14 +28,16 @@ function ev(id: string, over: Partial<EventDTO> = {}): EventDTO {
 
 let recent: () => Promise<Response>;
 
-function show(showNode = false) {
+function show(showNode = false, envId?: string) {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <TooltipProvider>
-        <EnvEventsProvider envId="e1">
-          <EventsFeed showNode={showNode} />
-        </EnvEventsProvider>
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <EnvEventsProvider envId="e1">
+            <EventsFeed envId={envId} showNode={showNode} />
+          </EnvEventsProvider>
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>,
   );
 }
@@ -388,5 +391,28 @@ describe("EventsFeed on a swarm", () => {
     show(true);
     await screen.findByText(evil);
     expect(document.querySelector("img[src='x']")).toBeNull();
+  });
+
+  it("has a View all events link to the same environment's Events page, and changes nothing else", async () => {
+    recent = async () => Response.json({ items: [ev("1", { name: "web-1" })] });
+    show(false, "e1");
+    const link = await screen.findByRole("link", { name: "View all events" });
+    expect(link.getAttribute("href")).toBe("/env/e1/events");
+    expect(screen.getByText("Recent events")).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "Filter events by type" })).toBeTruthy();
+    expect(await screen.findByText("web-1")).toBeTruthy();
+    expect(rows()).toHaveLength(1);
+  });
+
+  it("shows the link while the feed is loading or empty, and not without an environment", async () => {
+    recent = async () => Response.json({ items: [] });
+    show(false, "e1");
+    expect(screen.getByRole("link", { name: "View all events" })).toBeTruthy();
+    await screen.findByText("No events in the last hour");
+    expect(screen.getByRole("link", { name: "View all events" })).toBeTruthy();
+    cleanup();
+    show();
+    await screen.findByText("No events in the last hour");
+    expect(screen.queryByRole("link", { name: "View all events" })).toBeNull();
   });
 });

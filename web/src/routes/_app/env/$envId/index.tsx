@@ -204,7 +204,7 @@ function Dashboard() {
           agents={listed?.agents}
           agentVersion={listed?.agentVersion}
         />
-        <EventsFeed showNode={swarm} />
+        <EventsFeed envId={envId} showNode={swarm} />
       </div>
     </div>
   );

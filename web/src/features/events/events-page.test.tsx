@@ -539,3 +539,59 @@ describe("EventsPage rows", () => {
     expect(screen.queryByText("Showing the newest 1000 events.")).toBeNull();
   });
 });
+
+// jsdom has no layout, so the narrow-width rules are checked as the classes that
+// carry them; the 375px look is the held-out visual test (UI-SPEC backstop).
+describe("EventsPage under 768px", () => {
+  it("wraps the filters, scrolls the table sideways in its card and makes every target 44px", async () => {
+    recent = async () => Response.json({ items: [ev("1", { name: "web" })] });
+    mount();
+    await screen.findByText("web");
+    act(() => stream().open());
+    const classes = (el: HTMLElement) => el.className;
+
+    const toolbar = screen.getByRole("toolbar", { name: "Filter events by type" })
+      .parentElement as HTMLElement;
+    expect(classes(toolbar)).toContain("flex-wrap");
+    expect(classes(screen.getByRole("toolbar", { name: "Filter events by type" }))).toContain(
+      "flex-wrap",
+    );
+    expect(classes(screen.getByRole("table", { name: "Docker events, newest first" }))).toContain(
+      "min-w-[48rem]",
+    );
+    expect((document.querySelector(".overflow-auto") as HTMLElement).className).toContain(
+      "overflow-auto",
+    );
+
+    const targets = [
+      screen.getByRole("button", { name: "Show attributes for web" }),
+      screen.getByRole("button", { name: "Actions for web" }),
+    ];
+    for (const el of targets) expect(classes(el)).toContain("max-md:size-11");
+    for (const name of ["Pause", "Action", "Container"]) {
+      expect(classes(screen.getByRole("button", { name }))).toMatch(/max-md:(h|min-h)-11/);
+    }
+    expect(classes(screen.getByRole("combobox", { name: "Show events from" }))).toContain(
+      "max-md:h-11",
+    );
+    expect(
+      classes(
+        screen.getByRole("searchbox", { name: "Search events" }).parentElement as HTMLElement,
+      ),
+    ).toContain("max-md:h-11");
+  });
+
+  it("keeps the pill 44px tall and sticky over the table", async () => {
+    recent = async () => Response.json({ items: [ev("1", { name: "web" })] });
+    mount();
+    await screen.findByText("web");
+    act(() => stream().open());
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    act(() => stream().send(ev("2", { name: "later", time: new Date().toISOString() })));
+    const pill = screen.getByRole("button", { name: "1 new event" });
+    expect(pill.className).toContain("max-md:h-11");
+    expect(((pill.parentElement as HTMLElement).parentElement as HTMLElement).className).toContain(
+      "sticky",
+    );
+  });
+});

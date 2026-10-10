@@ -77,6 +77,7 @@
     "noMatch": {
       "title": "No events match these filters.",
       "action": "Clear filters"
-    }
+    },
+    "viewAll": "View all events"
   }
 }
