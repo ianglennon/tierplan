@@ -3,9 +3,12 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { type NetworkAttachment, networkDetailQuery } from "@/api/networks";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -15,7 +18,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ConnectDialog } from "@/features/networks/connect-dialog";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
 interface AttachmentsProps {
@@ -42,6 +47,8 @@ export function Attachments({ envId, networkId, node }: AttachmentsProps) {
   const t = useT();
   const swarm = useEnvIsSwarm(envId);
   const { data } = useQuery(networkDetailQuery(envId, networkId, node));
+  const connect = useNeeds("networks.connect", envId);
+  const [connecting, setConnecting] = useState(false);
   const missing = t("networks.detail.missing");
   const key = "networks.detail.attachments";
 
@@ -56,12 +63,49 @@ export function Attachments({ envId, networkId, node }: AttachmentsProps) {
     );
   }
   const rows = data.attachments ?? [];
+  // Connect container sits above the table, and above the empty line too: an empty
+  // network is where a container is most often put.
+  const header = (
+    <div className="flex justify-end">
+      <NeedsTooltip reason={connect.reason}>
+        <Button
+          type="button"
+          variant="outline"
+          className="max-md:h-11"
+          onClick={connect.allowed ? () => setConnecting(true) : undefined}
+        >
+          {t("networks.connect.action")}
+        </Button>
+      </NeedsTooltip>
+      {connect.allowed ? (
+        <ConnectDialog
+          envId={envId}
+          open={connecting}
+          onOpenChange={setConnecting}
+          network={{
+            id: data.id,
+            name: data.name,
+            scope: data.scope,
+            nodeId: data.nodeId,
+            attachable: data.attachable,
+            node,
+          }}
+        />
+      ) : null}
+    </div>
+  );
   if (rows.length === 0) {
-    return <p className="text-sm text-muted-foreground">{t(`${key}.empty`)}</p>;
+    return (
+      <div className="flex flex-col gap-3">
+        {header}
+        <p className="text-sm text-muted-foreground">{t(`${key}.empty`)}</p>
+      </div>
+    );
   }
 
   return (
     <div className="flex flex-col gap-3">
+      {header}
       {data.aliasesTruncated ? (
         <p className="text-sm text-muted-foreground">{t(`${key}.truncated`, { count: 50 })}</p>
       ) : null}

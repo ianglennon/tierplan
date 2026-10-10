@@ -1148,3 +1148,230 @@ func TestGetNetworkOnASwarmListsEveryServiceThatMentionsAnOverlayEvenAtZeroRepli
 		t.Errorf("a read wrote: %v", w)
 	}
 }
+
+// Connecting a container to a network (plan 04-15, RES-06, D-43, D-51, P2 D-42, Pitfall 11):
+// the validation, the routing to the container's node, and the audit rows.
+
+func connectEngine() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Networks: []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+			{ID: "app0", Name: "app-net", Driver: "bridge", Scope: "local", Subnets: []string{"10.20.0.0/24"}},
+		},
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/web"}, State: "running"},
+			{ID: "c2", Names: []string{"/db"}, State: "exited", Networks: map[string]dockertest.FakeEndpoint{
+				"app-net": {NetworkID: "app0", IPv4: "10.20.0.3"}}},
+		},
+	}
+}
+
+// connectNet posts a connect as the signed-in admin, after the monitor's first probe.
+func (f *envFix) connectNet(t *testing.T, e envBody, networkID, body string) *envRec {
+	t.Helper()
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/networks/"+networkID+"/connect", body)
+}
+
+func TestConnectContainerAsAnOperatorSendsTheEndpointOnceToTheContainersNodeAndAuditsIt(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	f.addUser(t, "operator", false)
+	f.addEnvRole(t, "operator", e.ID, "operator")
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	cookie, csrf := f.signIn(t, "operator", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/networks/app0/connect",
+		body:   `{"containerId":"c1","alias":"api","ipv4":"10.20.0.5","ipv6":"fd00:20::5"}`,
+		cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /networks/app0/connect"}) {
+		t.Fatalf("writes = %v, want one connect", w)
+	}
+	got := f.fake.NetworkConnects()
+	if len(got) != 1 || got[0].Container != "c1" || got[0].EndpointConfig == nil ||
+		!slices.Equal(got[0].EndpointConfig.Aliases, []string{"api"}) ||
+		got[0].EndpointConfig.IPAMConfig.IPv4Address.String() != "10.20.0.5" || got[0].EndpointConfig.IPAMConfig.IPv6Address.String() != "fd00:20::5" {
+		t.Fatalf("the engine saw %+v", got)
+	}
+
+	rows := f.networkAudits(t)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %+v, want one", rows)
+	}
+	r := rows[0]
+	if r.Action != audit.ActionNetworkConnected || r.Result != string(audit.ResultSuccess) || r.TargetType != "network" || r.TargetID != "app0" || r.EnvID != e.ID {
+		t.Errorf("audit row = %+v", r)
+	}
+	for k, want := range map[string]string{"network": "app-net", "container": "web", "node": e.ID, "alias": "api", "ipv4": "10.20.0.5", "ipv6": "fd00:20::5", "code": "connected"} {
+		if r.Details[k] != want {
+			t.Errorf("detail %s = %q, want %q (%+v)", k, r.Details[k], want, r.Details)
+		}
+	}
+}
+
+func TestConnectContainerAViewerIsRefusedAndNothingIsSent(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	cookie, csrf := f.signIn(t, "viewer", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/networks/app0/connect",
+		body: `{"containerId":"c1"}`, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a refused caller reached the engine: %v", w)
+	}
+	if rows := f.networkAudits(t); len(rows) != 0 {
+		t.Fatalf("network audit rows = %+v, want none", rows)
+	}
+}
+
+func TestConnectContainerRefusalsAreNamedAuditedAndNeverReachTheEngine(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	for _, c := range []struct {
+		name, network, body, status string
+		code                        int
+	}{
+		{"an IPv4 that is not one", "app0", `{"containerId":"c1","ipv4":"nope"}`, "address_invalid", 422},
+		{"an IPv6 where IPv4 goes", "app0", `{"containerId":"c1","ipv4":"fd00::1"}`, "address_invalid", 422},
+		{"an IPv4 where IPv6 goes", "app0", `{"containerId":"c1","ipv6":"10.0.0.1"}`, "address_invalid", 422},
+		{"a container already on it", "app0", `{"containerId":"c2"}`, "already_connected", 409},
+	} {
+		rec := f.connectNet(t, e, c.network, c.body)
+		if rec.code != c.code || rec.ptyp != c.status {
+			t.Errorf("%s: %d %q, want %d %s: %s", c.name, rec.code, rec.ptyp, c.code, c.status, rec.body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a refusal reached the engine: %v", w)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 4 {
+		t.Fatalf("audit rows = %+v, want one failure per refusal", rows)
+	}
+	for i, want := range []string{"address_invalid", "address_invalid", "address_invalid", "already_connected"} {
+		if rows[i].Result != string(audit.ResultFailure) || rows[i].Reason != want || rows[i].Details["code"] != want {
+			t.Errorf("row %d = %+v, want a failure named %s", i, rows[i], want)
+		}
+	}
+}
+
+func TestConnectContainerTheSchemaRefusesABadAliasAndAnEmptyContainerBeforeAnyLookup(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	for name, body := range map[string]string{
+		"an alias with a space":   `{"containerId":"c1","alias":"my alias"}`,
+		"an alias past 253":       fmt.Sprintf(`{"containerId":"c1","alias":%q}`, strings.Repeat("a", 254)),
+		"no container":            `{"alias":"api"}`,
+		"an empty container":      `{"containerId":""}`,
+		"a field of its own kind": `{"containerId":"c1","links":["x"]}`,
+	} {
+		rec := f.req(t, http.MethodPost, "/api/env/"+e.ID+"/networks/app0/connect", body)
+		if rec.code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status = %d, want 422: %s", name, rec.code, rec.body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a refused body reached the engine: %v", w)
+	}
+}
+
+func TestConnectContainerAnUnknownNetworkContainerOrEnvironmentIs404(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	rec := f.connectNet(t, e, "nope", `{"containerId":"c1"}`)
+	if rec.code != http.StatusNotFound || rec.ptyp != "network_not_found" {
+		t.Errorf("network: %d %q, want 404 network_not_found", rec.code, rec.ptyp)
+	}
+	rec = f.connectNet(t, e, "app0", `{"containerId":"ghost"}`)
+	if rec.code != http.StatusNotFound || rec.ptyp != "container_not_found" {
+		t.Errorf("container: %d %q, want 404 container_not_found", rec.code, rec.ptyp)
+	}
+	rec = f.req(t, http.MethodPost, "/api/env/nope/networks/app0/connect", `{"containerId":"c1"}`)
+	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Errorf("environment: %d %q, want 404 environment_not_found", rec.code, rec.ptyp)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a lookup that failed reached the engine: %v", w)
+	}
+}
+
+func TestConnectContainerTheEnginesOwnAlreadyConnectedRefusalIsAlreadyConnectedWhenTheListIsStale(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	// The list does not know c1 is on app-net yet; the engine does, and says so.
+	cfg := connectEngine()
+	cfg.Containers[0].Networks = map[string]dockertest.FakeEndpoint{"app-net": {NetworkID: "app0"}}
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	_ = f.get(t, e, "networks") // the list is read and cached while c1 is on nothing
+	f.fake.Reconfigure(cfg)
+	rec := f.connectNet(t, e, "app0", `{"containerId":"c1"}`)
+	if rec.code != http.StatusConflict || rec.ptyp != "already_connected" {
+		t.Fatalf("%d %q, want 409 already_connected from the engine's own refusal: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /networks/app0/connect"}) {
+		t.Fatalf("writes = %v, want the one connect the engine refused (the list was stale)", w)
+	}
+	rows := f.networkAudits(t)
+	if last := rows[len(rows)-1]; last.Result != string(audit.ResultFailure) || last.Reason != "already_connected" {
+		t.Fatalf("last audit row = %+v", last)
+	}
+}
+
+func TestConnectContainerOnASwarmAnOverlayMustBeAttachableAndALocalNetworkTakesOnlyItsOwnNodesContainers(t *testing.T) {
+	s := newSwarmFix(t)
+	connect := func(network, container, node string) *envRec {
+		return s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/networks/"+network+"/connect",
+			fmt.Sprintf(`{"containerId":%q,"nodeId":%q}`, container, node))
+	}
+	// ovl is not attachable.
+	if rec := connect("ovl", "w001", s.w.id); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "network_not_attachable" {
+		t.Errorf("a non-attachable overlay: %d %q, want 422 network_not_attachable: %s", rec.code, rec.ptyp, rec.body)
+	}
+	// brw is the worker's bridge; m1 is a container of the first manager.
+	if rec := connect("brw", "m1", s.m1.id); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "node_mismatch" {
+		t.Errorf("another node's bridge: %d %q, want 422 node_mismatch: %s", rec.code, rec.ptyp, rec.body)
+	}
+	for name, a := range map[string]*agentConn{"m1": s.m1, "m2": s.m2, "w": s.w} {
+		if w := a.fake.Writes(); len(w) != 0 {
+			t.Errorf("%s: a refusal reached the engine: %v", name, w)
+		}
+	}
+	// The worker's own bridge takes the worker's container, on the worker only.
+	if rec := connect("brw", "w001", s.w.id); rec.code != http.StatusNoContent {
+		t.Fatalf("the worker's bridge: %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if got := s.w.fake.NetworkConnects(); len(got) != 1 || got[0].Container != "w001" {
+		t.Errorf("the worker saw %+v", got)
+	}
+	if len(s.m1.fake.Writes())+len(s.m2.fake.Writes()) != 0 {
+		t.Error("the connect reached a manager")
+	}
+}
+
+func TestConnectContainerAWorkerThatHasNotLearnedTheOverlayAnswersNetworkUnavailableOnNodeWithTheEnginesWords(t *testing.T) {
+	s := newSwarmFix(t)
+	made := s.post(t, `{"name":"new-ovl","driver":"overlay","attachable":true}`)
+	if made.code != http.StatusCreated {
+		t.Fatalf("create: %d %s", made.code, made.body)
+	}
+	ovl := decode[networkCreated](t, made)
+	rec := s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/networks/"+ovl.ID+"/connect",
+		fmt.Sprintf(`{"containerId":"w001","nodeId":%q}`, s.w.id))
+	if rec.code != http.StatusConflict || rec.ptyp != "network_unavailable_on_node" {
+		t.Fatalf("%d %q, want 409 network_unavailable_on_node: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "not found") {
+		t.Errorf("the problem does not carry the engine's words: %s", rec.body)
+	}
+	rows := s.networkAudits(t)
+	if last := rows[len(rows)-1]; last.Action != audit.ActionNetworkConnected || last.Result != string(audit.ResultFailure) || last.Reason != "network_unavailable_on_node" {
+		t.Errorf("last audit row = %+v", last)
+	}
+	// Nothing was retried on another node.
+	if got := len(s.w.fake.Writes()); got != 1 {
+		t.Errorf("the worker served %d writes, want the one connect", got)
+	}
+}

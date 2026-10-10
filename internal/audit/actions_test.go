@@ -103,6 +103,10 @@ var phase4DetailKeys = map[string][]string{
 	// 04-13 records the name, node and scope, and the code of a refusal.
 	audit.ActionNetworkCreated: {"name", "node", "driver", "scope", "subnet", "gateway", "internal", "attachable", "code"},
 	audit.ActionNetworkRemoved: {"name", "node", "driver", "scope", "code"},
+	// Connecting a container records the network, the container, its node and, when asked
+	// for, the alias and addresses; disconnecting the first three.
+	audit.ActionNetworkConnected:    {"network", "container", "node", "alias", "ipv4", "ipv6", "code"},
+	audit.ActionNetworkDisconnected: {"network", "container", "node", "code"},
 }
 
 func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -131,6 +135,7 @@ func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"container.paused": audit.ActionContainerPaused, "container.unpaused": audit.ActionContainerUnpaused,
 		"container.removed": audit.ActionContainerRemoved,
 		"network.created":   audit.ActionNetworkCreated, "network.removed": audit.ActionNetworkRemoved,
+		"network.connected": audit.ActionNetworkConnected, "network.disconnected": audit.ActionNetworkDisconnected,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

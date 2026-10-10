@@ -96,6 +96,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "container.removed",
   "network.created",
   "network.removed",
+  "network.connected",
+  "network.disconnected",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped

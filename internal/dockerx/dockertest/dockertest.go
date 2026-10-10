@@ -360,6 +360,12 @@ type Fake struct {
 	// netGone are the IDs of networks removed through the fake; withoutNetworks
 	// leaves them out of every list.
 	netGone map[string]bool
+	// netConnects and netDisconnects are the bodies of the connects and disconnects the
+	// fake accepted, and epChanges the attachments they left, by container ID and
+	// network name: a nil endpoint is a disconnect (fake_networks.go).
+	netConnects    []network.ConnectRequest
+	netDisconnects []network.DisconnectRequest
+	epChanges      map[[2]string]*FakeEndpoint
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
@@ -482,7 +488,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

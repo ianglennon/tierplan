@@ -175,7 +175,9 @@
       },
       "network": {
         "created": "Network created",
-        "removed": "Network removed"
+        "removed": "Network removed",
+        "connected": "Container connected to network",
+        "disconnected": "Container disconnected from network"
       }
     },
     "coalesced": {

@@ -105,6 +105,53 @@
       "inUse": "{{name}} is still in use. Disconnect or remove what uses it, then try again.",
       "label": "Delete network {{name}}"
     },
+    "connect": {
+      "action": "Connect container",
+      "actionContainer": "Connect to network",
+      "title": "Connect a container to {{network}}",
+      "titleContainer": "Connect {{container}} to a network",
+      "body": "The container is on the network straight away.",
+      "notAttachable": "{{name}} isn't attachable, so standalone containers can't join it. Only swarm services can.",
+      "container": {
+        "label": "Container",
+        "placeholder": "Find a container…",
+        "empty": "Every container is already on this network.",
+        "noMatch": "No container matches.",
+        "loading": "Loading containers"
+      },
+      "network": {
+        "label": "Network",
+        "placeholder": "Find a network…",
+        "empty": "This container is on every network it can join.",
+        "noMatch": "No network matches.",
+        "loading": "Loading networks"
+      },
+      "alias": {
+        "label": "Alias (optional)",
+        "helper": "Another name other containers can use."
+      },
+      "ipv4": {
+        "label": "IPv4 address (optional)"
+      },
+      "ipv6": {
+        "label": "IPv6 address (optional)"
+      },
+      "cancel": "Cancel",
+      "submit": "Connect container",
+      "pending": "Connecting…",
+      "success": "Connected {{container}} to {{network}}.",
+      "errors": {
+        "ipv4": "Enter an address like 10.20.0.5.",
+        "ipv6": "Enter an address like fd00:20::5.",
+        "addressInvalid": "The network didn't accept that address. Enter one inside the network's subnet, like 10.20.0.5.",
+        "nodeMismatch": "{{network}} is local to one node, and {{container}} is on another. A container can only join a local network of its own node.",
+        "notAttachable": "{{network}} isn't attachable, so standalone containers can't join it. Only swarm services can.",
+        "alreadyConnected": "{{container}} is already on {{network}}.",
+        "unavailableOnNode": "That node doesn't know {{network}} yet, so {{container}} can't join it from there. Try again once a service that uses the network is running on that node.",
+        "networkGone": "{{network}} no longer exists. It may have been removed.",
+        "containerGone": "{{container}} no longer exists. It may have been removed."
+      }
+    },
     "usedBy": {
       "container": "{{name}} on {{node}}",
       "service": "Service {{name}}"

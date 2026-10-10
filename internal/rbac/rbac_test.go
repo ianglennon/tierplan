@@ -59,6 +59,7 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 		"containers.control":     e(rbac.RoleOperator),
 		"containers.remove":      e(rbac.RoleOperator),
 		"networks.manage":        e(rbac.RoleAdmin),
+		"networks.connect":       e(rbac.RoleOperator),
 		"audit.read":             g(false),
 		"settings.read":          g(false),
 		"settings.write":         g(false),

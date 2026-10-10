@@ -141,6 +141,8 @@ const (
 	ActionContainerRemoved           = "container.removed"
 	ActionNetworkCreated             = "network.created"
 	ActionNetworkRemoved             = "network.removed"
+	ActionNetworkConnected           = "network.connected"
+	ActionNetworkDisconnected        = "network.disconnected"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

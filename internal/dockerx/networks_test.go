@@ -339,3 +339,99 @@ func TestNetworkDetailOfAnUnknownNetworkIsNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want not found", err)
 	}
 }
+
+// Connecting a container to a network (plan 04-15 task 1, D-43, T-04-49): the endpoint
+// body carries an alias and addresses and nothing else, once and never retried.
+
+func connectFake(t *testing.T) (*dockerx.Client, *dockertest.Fake) {
+	t.Helper()
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		Networks: []dockertest.FakeNetwork{
+			{ID: "app0", Name: "app-net", Driver: "bridge", Scope: "local", Subnets: []string{"10.20.0.0/24"}},
+			{ID: "ovl0", Name: "ovl", Driver: "overlay", Scope: "swarm"},
+		},
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/web"}, State: "running"},
+			{ID: "c2", Names: []string{"/db"}, State: "running", Networks: map[string]dockertest.FakeEndpoint{"app-net": {NetworkID: "app0"}}},
+		},
+	})
+	return newClient(t, fake), fake
+}
+
+func TestNetworkConnectSendsTheAliasAndAddressesOnceAndTheContainerIsOnTheNetwork(t *testing.T) {
+	c, fake := connectFake(t)
+	err := c.NetworkConnect(context.Background(), "app0", "c1", dockerx.EndpointSpec{Alias: "api", IPv4: "10.20.0.5", IPv6: "fd00:20::5"})
+	if err != nil {
+		t.Fatalf("NetworkConnect = %v", err)
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"POST /networks/app0/connect"}) {
+		t.Fatalf("writes = %v, want one connect and no retry", got)
+	}
+	got := fake.NetworkConnects()
+	if len(got) != 1 || got[0].Container != "c1" || got[0].EndpointConfig == nil {
+		t.Fatalf("connects = %+v", got)
+	}
+	ep := got[0].EndpointConfig
+	if !slices.Equal(ep.Aliases, []string{"api"}) || ep.IPAMConfig == nil ||
+		ep.IPAMConfig.IPv4Address.String() != "10.20.0.5" || ep.IPAMConfig.IPv6Address.String() != "fd00:20::5" {
+		t.Errorf("endpoint = %+v", ep)
+	}
+	if len(ep.Links) != 0 || len(ep.DriverOpts) != 0 || ep.MacAddress.String() != "" {
+		t.Errorf("an endpoint may carry no links, driver options or MAC: %+v", ep)
+	}
+	detail, _, err := c.ContainerDetail(context.Background(), "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Networks) != 1 || detail.Networks[0].Name != "app-net" || detail.Networks[0].IPv4 != "10.20.0.5" ||
+		!slices.Contains(detail.Networks[0].Aliases, "api") {
+		t.Errorf("container networks = %+v, want app-net with the alias and address", detail.Networks)
+	}
+}
+
+func TestNetworkConnectWithNothingToSayAboutTheEndpointSendsNoEndpointConfig(t *testing.T) {
+	c, fake := connectFake(t)
+	if err := c.NetworkConnect(context.Background(), "app0", "c1", dockerx.EndpointSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.NetworkConnects(); len(got) != 1 || got[0].EndpointConfig != nil {
+		t.Errorf("connects = %+v, want no endpoint config", got)
+	}
+}
+
+func TestNetworkConnectRefusesAnAddressOfTheWrongFamilyBeforeAnyCall(t *testing.T) {
+	c, fake := connectFake(t)
+	for name, ep := range map[string]dockerx.EndpointSpec{
+		"text as IPv4":     {IPv4: "nope"},
+		"an IPv6 as IPv4":  {IPv4: "fd00::1"},
+		"an IPv4 as IPv6":  {IPv6: "10.0.0.1"},
+		"a mapped as IPv6": {IPv6: "::ffff:10.0.0.1"},
+		"a prefix as IPv4": {IPv4: "10.0.0.0/24"},
+		"a padded as IPv4": {IPv4: " 10.0.0.1"},
+		"text as IPv6":     {IPv6: "nope"},
+	} {
+		if err := c.NetworkConnect(context.Background(), "app0", "c1", ep); !errors.Is(err, dockerx.ErrAddressing) {
+			t.Errorf("%s: err = %v, want ErrAddressing", name, err)
+		}
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Fatalf("a refused address reached the engine: %v", w)
+	}
+}
+
+func TestNetworkConnectAContainerAlreadyOnItAnUnknownOneAndANonAttachableOverlayAreTheEnginesRefusals(t *testing.T) {
+	c, _ := connectFake(t)
+	ctx := context.Background()
+	if err := c.NetworkConnect(ctx, "app0", "c2", dockerx.EndpointSpec{}); err == nil || !strings.Contains(err.Error(), "already exists in network") {
+		t.Errorf("already connected: %v", err)
+	}
+	if err := c.NetworkConnect(ctx, "nope", "c1", dockerx.EndpointSpec{}); !dockerx.IsNotFound(err) {
+		t.Errorf("unknown network: %v, want not found", err)
+	}
+	if err := c.NetworkConnect(ctx, "app0", "ghost", dockerx.EndpointSpec{}); !dockerx.IsNotFound(err) {
+		t.Errorf("unknown container: %v, want not found", err)
+	}
+	if err := c.NetworkConnect(ctx, "ovl0", "c1", dockerx.EndpointSpec{}); err == nil || !strings.Contains(err.Error(), "not manually attachable") {
+		t.Errorf("non-attachable overlay: %v", err)
+	}
+}

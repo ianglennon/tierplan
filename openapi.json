@@ -3562,6 +3562,42 @@
         ],
         "type": "object"
       },
+      "NetworkConnectRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Another name other containers on the network can use to reach this one",
+            "maxLength": 253,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+            "type": "string"
+          },
+          "containerId": {
+            "description": "The container ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "ipv4": {
+            "description": "An IPv4 address to give the container on the network, inside one of its subnets",
+            "maxLength": 45,
+            "type": "string"
+          },
+          "ipv6": {
+            "description": "An IPv6 address to give the container on the network, inside one of its subnets",
+            "maxLength": 45,
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "containerId"
+        ],
+        "type": "object"
+      },
       "NetworkCreateBody": {
         "additionalProperties": false,
         "properties": {
@@ -8037,6 +8073,64 @@
           }
         },
         "summary": "One network: its configuration and what is attached to it",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/networks/{networkId}/connect": {
+      "post": {
+        "description": "Connects one container to one network, once and never retried, with an optional alias and fixed addresses. The call goes to the node the container is on, named by nodeId. A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. 404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.",
+        "operationId": "connectContainer",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The network ID: the id of a row of the networks list",
+            "in": "path",
+            "name": "networkId",
+            "required": true,
+            "schema": {
+              "description": "The network ID: the id of a row of the networks list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetworkConnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Connect a container to a network",
         "tags": [
           "environments"
         ]

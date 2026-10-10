@@ -10,6 +10,7 @@ import { listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
 
 export type NetworkCreateRequest = components["schemas"]["NetworkCreateRequest"];
+export type NetworkConnectRequest = components["schemas"]["NetworkConnectRequest"];
 export type NetworkCreated = components["schemas"]["NetworkCreateBody"];
 
 // How long after an answer the list is read once more, in case the Docker event
@@ -69,6 +70,55 @@ export function useCreateNetwork(envId: string) {
     mutationFn: (body) => postNetwork(envId, body),
     retry: false,
     onSettled: () => refreshLists(queryClient, envId),
+  });
+}
+
+// refreshAttachments is refreshLists for a connect or a disconnect, which change what a
+// container is attached to as well: the containers list and every open container page
+// (their keys extend the containers key) are read again too. An open network page is
+// under the networks key, so it follows.
+function refreshAttachments(queryClient: QueryClient, envId: string) {
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: listKey(envId, "containers") });
+  };
+  refreshLists(queryClient, envId);
+  refresh();
+  setTimeout(refresh, SETTLE_RECHECK_MS);
+}
+
+// What a connect is aimed at: the network, and the body naming the container, its node
+// and the optional alias and addresses.
+export interface ConnectTarget {
+  networkId: string;
+  body: NetworkConnectRequest;
+}
+
+// connectToNetwork attaches one container to one network. It never retries: a connect
+// whose answer was lost may have happened (P2 D-42), and the next read says which.
+export async function connectToNetwork(envId: string, target: ConnectTarget): Promise<void> {
+  try {
+    const res = await api.POST("/api/env/{envId}/networks/{networkId}/connect", {
+      params: { path: { envId, networkId: target.networkId } },
+      body: target.body,
+    });
+    if (!res.response.ok) {
+      const problem = readProblem(res.error, res.response);
+      throw new NetworkRequestError(problem.status, problem.type);
+    }
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof NetworkRequestError ? e : new NetworkRequestError(0);
+  }
+}
+
+// useConnectContainer is the mutation behind the connect dialog. It does not retry, and
+// reads the lists again whatever the answer.
+export function useConnectContainer(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, NetworkRequestError, ConnectTarget>({
+    mutationFn: (target) => connectToNetwork(envId, target),
+    retry: false,
+    onSettled: () => refreshAttachments(queryClient, envId),
   });
 }
 

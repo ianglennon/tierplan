@@ -508,3 +508,29 @@ describe("service rows", () => {
     expect(within(table).getByText("0 tasks")).toBeTruthy();
   });
 });
+
+describe("Connect container", () => {
+  it("is disabled for a Viewer with 'Needs Operator' and opens nothing", async () => {
+    answer = () => Response.json(detail({ attachments: [attachment("web")] }));
+    renderAt(ATTACHMENTS);
+    const button = await screen.findByRole("button", { name: "Connect container" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("aria-describedby")).toBeTruthy();
+    expect(screen.getByText("Needs Operator")).toBeTruthy();
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens the connect dialog for an Operator, also when nothing is attached yet", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    answer = () => Response.json(detail());
+    renderAt(ATTACHMENTS);
+    expect(await screen.findByText("Nothing is attached to this network.")).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Connect container" });
+    expect(button.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(button);
+    expect(
+      await screen.findByRole("dialog", { name: "Connect a container to app-net" }),
+    ).toBeTruthy();
+  });
+});

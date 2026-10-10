@@ -148,6 +148,72 @@ func (c *Client) NetworkRemove(ctx context.Context, id string) error {
 	return nil
 }
 
+// EndpointSpec is how a container joins a network: an extra DNS name and, optionally,
+// fixed addresses. Anything else about an endpoint (links, driver options, MAC address)
+// is not expressible, so it can never be sent (T-04-49).
+type EndpointSpec struct {
+	// Alias is another name other containers on the network can use; empty adds none.
+	Alias string
+	// IPv4 and IPv6 are addresses to give the container on the network; empty lets the
+	// network choose.
+	IPv4, IPv6 string
+}
+
+// NetworkConnect connects the container to the network once and never retries: a
+// connect whose answer was lost may have happened (P2 D-42). Addresses are parsed
+// before anything is sent: an IPv4 field must hold an IPv4 address and an IPv6 field an
+// IPv6 one (ErrAddressing).
+func (c *Client) NetworkConnect(ctx context.Context, networkID, containerID string, ep EndpointSpec) error {
+	var cfg *network.EndpointSettings
+	if ep.Alias != "" || ep.IPv4 != "" || ep.IPv6 != "" {
+		cfg = &network.EndpointSettings{}
+		if ep.Alias != "" {
+			cfg.Aliases = []string{ep.Alias}
+		}
+		if ep.IPv4 != "" || ep.IPv6 != "" {
+			ipam := &network.EndpointIPAMConfig{}
+			if ep.IPv4 != "" {
+				a, err := netip.ParseAddr(ep.IPv4)
+				if err != nil || !a.Is4() {
+					return fmt.Errorf("%w: IPv4 address %q", ErrAddressing, ep.IPv4)
+				}
+				ipam.IPv4Address = a
+			}
+			if ep.IPv6 != "" {
+				a, err := netip.ParseAddr(ep.IPv6)
+				if err != nil || !a.Is6() || a.Is4In6() {
+					return fmt.Errorf("%w: IPv6 address %q", ErrAddressing, ep.IPv6)
+				}
+				ipam.IPv6Address = a
+			}
+			cfg.IPAMConfig = ipam
+		}
+	}
+	if _, err := c.cur().NetworkConnect(ctx, networkID, client.NetworkConnectOptions{Container: containerID, EndpointConfig: cfg}); err != nil {
+		return fmt.Errorf("connect to network on %s: %w", c.t.Describe(), err)
+	}
+	return nil
+}
+
+// IsRefusal reports whether err is the engine itself answering that it will not do what
+// was asked (a bad parameter, a refusal, a missing object or a conflicting state), as
+// opposed to a connection that failed. The words are DaemonText.
+func IsRefusal(err error) bool {
+	return cerrdefs.IsInvalidArgument(err) || cerrdefs.IsPermissionDenied(err) || cerrdefs.IsConflict(err) ||
+		cerrdefs.IsNotFound(err) || cerrdefs.IsFailedPrecondition(err)
+}
+
+// DaemonText is the engine's own sentence in err, without the client's wrapping: what
+// follows "Error response from daemon: ". An error without that marker is returned whole.
+func DaemonText(err error) string {
+	const marker = "Error response from daemon: "
+	msg := err.Error()
+	if i := strings.LastIndex(msg, marker); i >= 0 {
+		return strings.TrimSpace(msg[i+len(marker):])
+	}
+	return strings.TrimSpace(msg)
+}
+
 // IsNetworkInUse reports whether err is the engine refusing to remove a network that
 // something still uses. Older engines answer 409 and newer ones 403 with the words
 // "has active endpoints"; a swarm manager says the network is in use by a service. A

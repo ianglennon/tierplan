@@ -433,7 +433,9 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // NetworkDetail (Phase 4, RES-06) is a read: one network inspect by ID, typed, with the raw document.
 // NetworkRemove (Phase 4, RES-06) removes one network by ID, once; it takes no path and
 // no options, and the API refuses a built-in or an in-use network before it is called.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkCreate", "NetworkDetail", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec"}
+// NetworkConnect (Phase 4, RES-06) takes a network ID, a container ID and an EndpointSpec of an
+// alias and two addresses; it cannot express links, driver options or a MAC address.
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.

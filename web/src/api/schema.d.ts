@@ -660,6 +660,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/networks/{networkId}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect a container to a network
+         * @description Connects one container to one network, once and never retried, with an optional alias and fixed addresses. The call goes to the node the container is on, named by nodeId. A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. 404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.
+         */
+        post: operations["connectContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/networks/{networkId}/inspect": {
         parameters: {
             query?: never;
@@ -3199,6 +3219,18 @@ export interface components {
              */
             tasks: number;
         };
+        NetworkConnectRequest: {
+            /** @description Another name other containers on the network can use to reach this one */
+            alias?: string;
+            /** @description The container ID */
+            containerId: string;
+            /** @description An IPv4 address to give the container on the network, inside one of its subnets */
+            ipv4?: string;
+            /** @description An IPv6 address to give the container on the network, inside one of its subnets */
+            ipv6?: string;
+            /** @description The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node */
+            nodeId?: string;
+        };
         NetworkCreateBody: {
             /** @description The ID of the network the engine made */
             id: string;
@@ -5469,6 +5501,42 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    connectContainer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the id of a row of the networks list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkConnectRequest"];
+            };
+        };
         responses: {
             /** @description No Content */
             204: {

@@ -6,6 +6,7 @@ package dockertest
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -19,6 +20,7 @@ import (
 var _ = registerFakeHandler((*Fake).serveNetworkCreate)
 var _ = registerFakeHandler((*Fake).serveNetworkRemove)
 var _ = registerFakeHandler((*Fake).serveNetworkInspect)
+var _ = registerFakeHandler((*Fake).serveNetworkConnect)
 
 // serveNetworkCreate answers POST /networks/create. A name the daemon already has is
 // the 409 a real one gives. The network joins the lists the daemon answers, with the
@@ -55,7 +57,10 @@ func (f *Fake) serveNetworkCreate(w http.ResponseWriter, r *http.Request, p stri
 	f.mu.Lock()
 	seq := len(cfg.Networks) + len(f.netGone)
 	f.mu.Unlock()
-	fn := FakeNetwork{ID: newFakeNetworkID(seq), Name: req.Name, Driver: req.Driver, Scope: scope, Created: time.Now().UTC()}
+	fn := FakeNetwork{
+		ID: newFakeNetworkID(seq), Name: req.Name, Driver: req.Driver, Scope: scope, Created: time.Now().UTC(),
+		Attachable: req.Attachable, Internal: req.Internal, Labels: req.Labels, Options: req.Options,
+	}
 	if req.IPAM != nil {
 		for _, c := range req.IPAM.Config {
 			if c.Subnet.IsValid() {
@@ -254,4 +259,120 @@ func firstOf(names []string, fallback string) string {
 		return names[0]
 	}
 	return fallback
+}
+
+// networkConnectPath matches POST /networks/{id}/connect.
+var networkConnectPath = regexp.MustCompile(`^/networks/([^/]+)/connect$`)
+
+// serveNetworkConnect answers POST /networks/{id}/connect. An unknown network or
+// container is the 404 a real daemon gives; a swarm-scoped network that is not
+// attachable is the 403 "not manually attachable" refusal; a container already on the
+// network is the 403 "endpoint ... already exists" one. Otherwise the container is
+// attached, with the addresses and the alias the body asked for, and every list and
+// inspect shows it from then on. The body is kept for NetworkConnects and the write is
+// recorded whatever the answer.
+func (f *Fake) serveNetworkConnect(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	m := networkConnectPath.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	var req network.ConnectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body: " + err.Error()})
+		return true
+	}
+	fn, ok := cfg.resolveNetwork(m[1])
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "network " + m[1] + " not found"})
+		return true
+	}
+	fc, ok := cfg.resolveContainer(req.Container)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + req.Container})
+		return true
+	}
+	if fn.Scope == "swarm" && !fn.Attachable {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "Could not attach to network " + fn.ID + ": rpc error: code = PermissionDenied desc = network " + fn.Name + " not manually attachable"})
+		return true
+	}
+	if ep, on := fc.Networks[fn.Name]; on && (ep.NetworkID == "" || ep.NetworkID == fn.ID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "endpoint with name " + strings.TrimPrefix(firstOf(fc.Names, fc.ID), "/") + " already exists in network " + fn.Name})
+		return true
+	}
+	ep := FakeEndpoint{NetworkID: fn.ID, IPv4: "10.99.0.2"}
+	if req.EndpointConfig != nil {
+		ep.Aliases = slices.Clone(req.EndpointConfig.Aliases)
+		if ipam := req.EndpointConfig.IPAMConfig; ipam != nil {
+			if ipam.IPv4Address.IsValid() {
+				ep.IPv4 = ipam.IPv4Address.String()
+			}
+			if ipam.IPv6Address.IsValid() {
+				ep.IPv6 = ipam.IPv6Address.String()
+			}
+		}
+	}
+	f.mu.Lock()
+	if f.epChanges == nil {
+		f.epChanges = map[[2]string]*FakeEndpoint{}
+	}
+	f.epChanges[[2]string{fc.ID, fn.Name}] = &ep
+	f.netConnects = append(f.netConnects, req)
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusOK)
+	return true
+}
+
+// NetworkConnects returns the body of every network connect the daemon accepted, in
+// order, as the daemon decoded it.
+func (f *Fake) NetworkConnects() []network.ConnectRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.netConnects)
+}
+
+// withEndpoints returns c with the attachments the connects and disconnects left: a
+// connected container has the endpoint in its networks, a disconnected one lacks it.
+// The containers and their maps are copied, so the Fake's own configuration is not
+// touched.
+func (c FakeConfig) withEndpoints(changes map[[2]string]*FakeEndpoint) FakeConfig {
+	if len(changes) == 0 || len(c.Containers) == 0 {
+		return c
+	}
+	cs := make([]FakeContainer, 0, len(c.Containers))
+	for _, fc := range c.Containers {
+		nets := maps.Clone(fc.Networks)
+		changed := false
+		for key, ep := range changes {
+			if key[0] != fc.ID {
+				continue
+			}
+			if nets == nil {
+				nets = map[string]FakeEndpoint{}
+			}
+			changed = true
+			if ep == nil {
+				delete(nets, key[1])
+			} else {
+				nets[key[1]] = *ep
+			}
+		}
+		if changed {
+			fc.Networks = nets
+		}
+		cs = append(cs, fc)
+	}
+	c.Containers = cs
+	return c
 }

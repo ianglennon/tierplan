@@ -40,6 +40,14 @@ const (
 	problemNetworkNotFound = "network_not_found"
 	problemNodeUnreachable = codeNodeUnreachable
 	codeRemoved            = "removed"
+
+	problemNodeMismatch             = "node_mismatch"
+	problemNetworkNotAttachable     = "network_not_attachable"
+	problemAddressInvalid           = "address_invalid"
+	problemAlreadyConnected         = "already_connected"
+	problemNetworkUnavailableOnNode = "network_unavailable_on_node"
+	codeConnected                   = "connected"
+	codeDisconnected                = "disconnected"
 )
 
 // NetworksDeps are the dependencies of the network routes.
@@ -90,6 +98,24 @@ type NetworkDeleteInput struct {
 	NodeID    string `query:"nodeId" maxLength:"128" doc:"The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster"`
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// NetworkConnectRequest is the body of POST /api/env/{envId}/networks/{networkId}/connect.
+type NetworkConnectRequest struct {
+	NodeID      string `json:"nodeId,omitempty" maxLength:"128" doc:"The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node"`
+	ContainerID string `json:"containerId" minLength:"1" maxLength:"128" doc:"The container ID"`
+	Alias       string `json:"alias,omitempty" maxLength:"253" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]*$" doc:"Another name other containers on the network can use to reach this one"`
+	IPv4        string `json:"ipv4,omitempty" maxLength:"45" doc:"An IPv4 address to give the container on the network, inside one of its subnets"`
+	IPv6        string `json:"ipv6,omitempty" maxLength:"45" doc:"An IPv6 address to give the container on the network, inside one of its subnets"`
+}
+
+// NetworkConnectInput is the path and body of the connect route.
+type NetworkConnectInput struct {
+	EnvironmentPathInput
+	NetworkID string `path:"networkId" maxLength:"128" doc:"The network ID: the id of a row of the networks list"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      NetworkConnectRequest
 }
 
 // NetworkDetailInput is the path and query of the network detail and inspect routes.
@@ -245,6 +271,26 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
 			return &NetworkInspectOutput{CacheControl: "no-store", Body: NetworkInspectBody{Inspect: doc}}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "connectContainer", Method: http.MethodPost, Path: "/api/env/{envId}/networks/{networkId}/connect",
+		Summary: "Connect a container to a network",
+		Description: "Connects one container to one network, once and never retried, with an optional alias and fixed addresses. " +
+			"The call goes to the node the container is on, named by nodeId. " +
+			"A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); " +
+			"an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. " +
+			"A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. " +
+			"404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. " +
+			"Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.",
+		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
+	}, rbac.Requirement{Perm: rbac.PermNetworksConnect, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *NetworkConnectInput) (*struct{}, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			return nil, connectContainer(ctx, d, p, env.ID, in)
 		})
 
 	httpx.Register(r, huma.Operation{
@@ -878,4 +924,150 @@ func (d NetworksDeps) attachedServices(ctx context.Context, envID string, agg en
 		}
 	}
 	return out
+}
+
+// endpointTarget finds the container and the network of a connect or a disconnect in the
+// environment's aggregate. The container is named by its ID and node (the node may be
+// left out only when the ID is on one node); a swarm-scoped network is found by its ID, a
+// local one on the container's node first and, failing that, anywhere, so a network of
+// another node is told apart from one that does not exist. The errors are already
+// problems.
+func endpointTarget(agg envs.Aggregate, networkID, nodeID, containerID string) (ct envs.ContainerRow, row envs.NetworkRow, err error) {
+	var found []envs.ContainerRow
+	for _, c := range agg.Containers {
+		if c.ID == containerID && (nodeID == "" || c.NodeID == nodeID) {
+			found = append(found, c)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return ct, row, missingProblem(agg, problemContainerNotFound, "This container does not exist on that node. It may have been removed.")
+	case 1:
+		ct = found[0]
+	default:
+		return ct, row, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
+			"More than one node has a container with this ID. Say which one (nodeId).")
+	}
+	row, err = findNetwork(agg, networkID, ct.NodeID)
+	if errors.Is(err, errNoSuchNetwork) {
+		row, err = findNetwork(agg, networkID, "")
+		if errors.Is(err, errNoSuchNetwork) {
+			return ct, row, missingProblem(agg, problemNetworkNotFound, "This network does not exist. It may have been removed.")
+		}
+	}
+	return ct, row, err
+}
+
+// missingProblem is the answer for something the lists do not have: a 404, or when a
+// node did not answer and may hold it, a 409 node_unreachable.
+func missingProblem(agg envs.Aggregate, code, detail string) error {
+	if len(agg.NotReporting) > 0 {
+		return httpx.Problem(http.StatusConflict, problemNodeUnreachable,
+			"Can't find it: "+joinMore(agg.NotReporting, 3)+" didn't answer. Try again when it's back.")
+	}
+	return httpx.Problem(http.StatusNotFound, code, detail)
+}
+
+// recordEndpoint audits one connect or disconnect attempt: the network, the container,
+// the container's node and, for a connect, the alias and addresses that were asked for.
+func recordEndpoint(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent, action string, row envs.NetworkRow, ct envs.ContainerRow, ep dockerx.EndpointSpec, code string) {
+	details := map[string]string{"network": row.Name, "container": ct.Name, "node": ct.NodeID, "code": code}
+	for k, v := range map[string]string{"alias": ep.Alias, "ipv4": ep.IPv4, "ipv6": ep.IPv6} {
+		if v != "" {
+			details[k] = v
+		}
+	}
+	rec := code
+	if code == codeConnected || code == codeDisconnected {
+		rec = codeCreated
+	}
+	recordNetwork(ctx, d, p, envID, userAgent, action, row.ID, row.Name, rec, details)
+}
+
+// connectContainer attaches a container to a network. Everything the lists can say is
+// checked before anything is sent: the addresses, the node (a local network takes only
+// its own node's containers), attachability, and whether the container is on it already.
+// The write goes to the container's node, once and never retried, and every attempt on a
+// container and a network that exist is audited.
+func connectContainer(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID string, in *NetworkConnectInput) error {
+	body := in.Body
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return snapshotProblem(d.Log, envID, err)
+	}
+	ct, row, err := endpointTarget(agg, in.NetworkID, body.NodeID, body.ContainerID)
+	if err != nil {
+		return err
+	}
+	ep := dockerx.EndpointSpec{Alias: body.Alias, IPv4: body.IPv4, IPv6: body.IPv6}
+	audited := func(code string) {
+		recordEndpoint(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkConnected, row, ct, ep, code)
+	}
+	refuse := func(status int, code, detail string) error {
+		audited(code)
+		return httpx.Problem(status, code, detail)
+	}
+	if a, err := netip.ParseAddr(ep.IPv4); ep.IPv4 != "" && (err != nil || !a.Is4()) {
+		return refuse(http.StatusUnprocessableEntity, problemAddressInvalid, "Enter an IPv4 address like 10.20.0.5.")
+	}
+	if a, err := netip.ParseAddr(ep.IPv6); ep.IPv6 != "" && (err != nil || !a.Is6() || a.Is4In6()) {
+		return refuse(http.StatusUnprocessableEntity, problemAddressInvalid, "Enter an IPv6 address like fd00:20::5.")
+	}
+	if row.Scope != dockerx.ScopeSwarm && row.NodeID != ct.NodeID {
+		return refuse(http.StatusUnprocessableEntity, problemNodeMismatch,
+			row.Name+" is local to "+row.Node+", and "+ct.Name+" is on "+ct.Node+". A container can only join a local network of its own node.")
+	}
+	if row.Scope == dockerx.ScopeSwarm && !row.Attachable {
+		return refuse(http.StatusUnprocessableEntity, problemNetworkNotAttachable,
+			row.Name+" is not attachable, so standalone containers can't join it. Only services can.")
+	}
+	if slices.ContainsFunc(ct.Networks, func(cn dockerx.ContainerNet) bool { return cn.NetworkID == row.ID }) {
+		return refuse(http.StatusConflict, problemAlreadyConnected, ct.Name+" is already on "+row.Name+".")
+	}
+
+	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	err = d.Aggregator.WriteOnNode(writeCtx, envID, ct.NodeID, func(c *dockerx.Client) error {
+		return c.NetworkConnect(writeCtx, row.ID, ct.ID, ep)
+	})
+	if err != nil {
+		code, problem := networkConnectProblem(d.Log, envID, row, ct, err)
+		audited(code)
+		return problem
+	}
+	audited(codeConnected)
+	return nil
+}
+
+// networkConnectProblem turns the error of a connect into the audit code and the problem
+// the SPA understands. The engine's own words are kept for the refusals the person can
+// act on: an overlay a worker has not learned about yet (Pitfall 11), an address the
+// network does not accept, and any other refusal.
+func networkConnectProblem(log *slog.Logger, envID string, row envs.NetworkRow, ct envs.ContainerRow, err error) (string, error) {
+	text := dockerx.DaemonText(err)
+	lower := strings.ToLower(text)
+	var denied *envs.AgentPolicyDeniedError
+	switch {
+	case errors.Is(err, dockerx.ErrAddressing):
+		return problemAddressInvalid, httpx.Problem(http.StatusUnprocessableEntity, problemAddressInvalid, "Enter an address like 10.20.0.5.")
+	case errors.Is(err, envs.ErrHostReadOnly), errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound),
+		errors.As(envs.ClassifyDockerError(err), &denied):
+		return networkWriteProblem(log, envID, err)
+	case !dockerx.IsRefusal(err):
+		return networkWriteProblem(log, envID, err)
+	case dockerx.IsNotFound(err) && strings.Contains(lower, "no such container"):
+		return problemContainerNotFound, httpx.Problem(http.StatusNotFound, problemContainerNotFound, ct.Name+" is already gone.")
+	case dockerx.IsNotFound(err) && row.Scope == dockerx.ScopeSwarm:
+		return problemNetworkUnavailableOnNode, httpx.Problem(http.StatusConflict, problemNetworkUnavailableOnNode, text)
+	case dockerx.IsNotFound(err):
+		return problemNetworkNotFound, httpx.Problem(http.StatusNotFound, problemNetworkNotFound, row.Name+" is already gone.")
+	case strings.Contains(lower, "already exists in network"):
+		return problemAlreadyConnected, httpx.Problem(http.StatusConflict, problemAlreadyConnected, ct.Name+" is already on "+row.Name+".")
+	case strings.Contains(lower, "not manually attachable"):
+		return problemNetworkNotAttachable, httpx.Problem(http.StatusUnprocessableEntity, problemNetworkNotAttachable,
+			row.Name+" is not attachable, so standalone containers can't join it. Only services can.")
+	case strings.Contains(lower, "address") || strings.Contains(lower, "ipv4") || strings.Contains(lower, "ipv6") || strings.Contains(lower, "subnet"):
+		return problemAddressInvalid, httpx.Problem(http.StatusUnprocessableEntity, problemAddressInvalid, clipDetail(text))
+	}
+	return codeActionFailed, httpx.Problem(http.StatusConflict, codeActionFailed, clipDetail(text))
 }
