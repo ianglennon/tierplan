@@ -1,6 +1,6 @@
-# Bayplan threat model (Phases 1 to 3)
+# Bayplan threat model (Phases 1 to 4)
 
-This describes what Bayplan protects against in its first three builds (install, sign-in and a read-only view of the local Docker host in Phase 1; remote hosts and swarms through agents in Phase 2; users, teams, roles, encrypted backups, restore and key rotation in Phase 3), what it does not, and the risks that remain. Threat IDs (T-01-nn, T-02-nn, T-03-nn) refer to the plans in which each mitigation was designed and tested.
+This describes what Bayplan protects against in its first four builds (install, sign-in and a read-only view of the local Docker host in Phase 1; remote hosts and swarms through agents in Phase 2; users, teams, roles, encrypted backups, restore and key rotation in Phase 3; changes to containers, networks and volumes, logs and shells in Phase 4), what it does not, and the risks that remain. Threat IDs (T-01-nn to T-04-nn) refer to the plans in which each mitigation was designed and tested.
 
 Phase 4 widens what an agent forwards: container actions, logs, shells, and network and volume changes. This revision covers the agent boundary (the agent section and residual risk 10) and Bayplan's own Docker access ("Docker access is narrow and typed"), with their rows in the boundary table. The browser shell and the rest of Phase 4 are described here when that phase is complete.
 
