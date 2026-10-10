@@ -3,13 +3,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { type ShellOpenError, shellSocketUrl, useOpenShell } from "@/api/shells";
+import type { ContainerRow } from "@/api/resources";
+import { ShellOpenError, shellSocketUrl, useOpenShell } from "@/api/shells";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { IdleBanner } from "@/features/terminal/idle-banner";
+import { type Refusal, RefusalPanel } from "@/features/terminal/refusal-panels";
 import { Terminal, type TerminalApi } from "@/features/terminal/terminal";
 import {
   createTerminalSocket,
@@ -31,6 +33,10 @@ export interface ShellPanelProps {
   node?: string;
   // Whether the container runs; undefined until it has loaded.
   running?: boolean;
+  // The container as the list knows it: whether it is one of Bayplan's own, whether its
+  // host is read-only, and what the Not running panel starts. Undefined until it has
+  // loaded.
+  row?: ContainerRow;
   // The real WebSocket unless a test supplies one.
   createSocket?: (url: string) => WebSocketLike;
 }
@@ -66,19 +72,26 @@ const CLOSED_REASONS = new Set(["idle"]);
 // fitted its box and the socket is open.
 const START_SIZE = { cols: 80, rows: 24 } as const;
 
-function failureCopyKey(e: ShellOpenError): string {
-  switch (e.type) {
+// The refusals that have a panel of their own, by the problem type the server named
+// (D-34, D-35, D-36). The rest are a line in the launcher.
+function refusalOf(e: ShellOpenError | undefined): Refusal | null {
+  switch (e?.type) {
     case "host_read_only":
-      return "terminal.error.hostReadOnly";
+      return "readOnly";
     case "container_not_running":
-      return "terminal.error.notRunning";
-    case "stream_busy":
-      return "terminal.error.busy";
+      return "notRunning";
+    case "own_container":
+      return "ownContainer";
     case "no_shell":
-      return "terminal.error.noShell";
-    default:
-      return "terminal.error.failed";
+      return "noShell";
+    case "agent_policy_denied":
+      return "agentTooOld";
   }
+  return null;
+}
+
+function failureCopyKey(e: ShellOpenError): string {
+  return e.type === "stream_busy" ? "terminal.error.busy" : "terminal.error.failed";
 }
 
 // ShellPanel is the Shell tab of a container: the launcher before a session, then
@@ -93,6 +106,7 @@ export function ShellPanel({
   name,
   node,
   running,
+  row,
   createSocket,
 }: ShellPanelProps) {
   const t = useT();
@@ -122,6 +136,18 @@ export function ShellPanel({
     };
   }, [drop]);
 
+  // The server's word that the container is not running holds until the page's own
+  // reading of it changes, so a stale reading cannot hide the refusal, and a fresh one
+  // clears it.
+  const lastRunning = useRef(running);
+  useEffect(() => {
+    if (lastRunning.current === running) return;
+    lastRunning.current = running;
+    setState((s) =>
+      s.failure?.type === "container_not_running" ? { ...s, failure: undefined } : s,
+    );
+  }, [running]);
+
   // A message that says the session is over takes focus to its button.
   const phase = state.phase;
   useEffect(() => {
@@ -131,65 +157,82 @@ export function ShellPanel({
     }
   }, [phase]);
 
-  const start = useCallback(async () => {
-    if (!needs.allowed) return;
-    drop();
-    held.current = [];
-    setWarned(false);
-    setState({ phase: "opening" });
-    let sessionId: string;
-    try {
-      const session = await open.mutateAsync({
-        envId,
-        containerId,
-        body: { nodeId, shell: "auto", cols: size.current.cols, rows: size.current.rows },
-      });
-      sessionId = session.sessionId;
-    } catch (e) {
-      if (mounted.current) {
-        setState({ phase: "launcher", failure: e as ShellOpenError });
+  // command is the custom command the No shell panel asks for; without it the shell is
+  // the automatic one.
+  const start = useCallback(
+    async (command?: string) => {
+      if (!needs.allowed) return;
+      drop();
+      held.current = [];
+      setWarned(false);
+      setState({ phase: "opening" });
+      let sessionId: string;
+      try {
+        const session = await open.mutateAsync({
+          envId,
+          containerId,
+          body: {
+            nodeId,
+            ...(command ? { shell: "custom", command } : { shell: "auto" }),
+            cols: size.current.cols,
+            rows: size.current.rows,
+          },
+        });
+        sessionId = session.sessionId;
+      } catch (e) {
+        if (mounted.current) {
+          setState({ phase: "launcher", failure: e as ShellOpenError });
+        }
+        return;
       }
-      return;
-    }
-    // The page was left while the server was starting the shell; the session expires
-    // by itself if nobody attaches.
-    if (!mounted.current) return;
+      // The page was left while the server was starting the shell; the session expires
+      // by itself if nobody attaches.
+      if (!mounted.current) return;
 
-    const onControl = (c: TerminalControl) => {
-      if (c.type === "exit") {
-        setState((s) => ({ ...s, phase: "ended", exitCode: c.code }));
-      } else if (c.type === "idle_warning") {
-        setWarned(true);
-      } else if (c.type === "closed") {
-        setState((s) =>
-          CLOSED_REASONS.has(c.reason)
-            ? { ...s, phase: "closed", closed: { reason: c.reason, minutes: c.minutes } }
-            : { ...s, phase: "disconnected" },
-        );
-      }
-    };
-    const sock = createTerminalSocket({
-      url: shellSocketUrl(envId, sessionId),
-      createSocket,
-      onOpen: () => {
-        setState((s) => (s.phase === "connecting" ? { ...s, phase: "connected" } : s));
-        sock.sendResize(size.current.cols, size.current.rows);
-      },
-      onData: (bytes) => {
-        setWarned(false);
-        if (terminal.current) terminal.current.write(bytes);
-        else held.current.push(bytes);
-      },
-      onControl,
-      onClose: () => {
-        setState((s) =>
-          s.phase === "connecting" || s.phase === "connected" ? { ...s, phase: "disconnected" } : s,
-        );
-      },
-    });
-    socket.current = sock;
-    setState({ phase: "connecting", sessionId });
-  }, [needs.allowed, drop, open, envId, containerId, nodeId, createSocket]);
+      const onControl = (c: TerminalControl) => {
+        if (c.type === "exit") {
+          setState((s) => ({ ...s, phase: "ended", exitCode: c.code }));
+        } else if (c.type === "idle_warning") {
+          setWarned(true);
+        } else if (c.type === "closed" && c.reason === "no_shell") {
+          // The image has no shell where Bayplan looked: the panel for that replaces the
+          // terminal, which never had anything to show.
+          drop();
+          setState({ phase: "launcher", failure: new ShellOpenError(409, "no_shell") });
+        } else if (c.type === "closed") {
+          setState((s) =>
+            CLOSED_REASONS.has(c.reason)
+              ? { ...s, phase: "closed", closed: { reason: c.reason, minutes: c.minutes } }
+              : { ...s, phase: "disconnected" },
+          );
+        }
+      };
+      const sock = createTerminalSocket({
+        url: shellSocketUrl(envId, sessionId),
+        createSocket,
+        onOpen: () => {
+          setState((s) => (s.phase === "connecting" ? { ...s, phase: "connected" } : s));
+          sock.sendResize(size.current.cols, size.current.rows);
+        },
+        onData: (bytes) => {
+          setWarned(false);
+          if (terminal.current) terminal.current.write(bytes);
+          else held.current.push(bytes);
+        },
+        onControl,
+        onClose: () => {
+          setState((s) =>
+            s.phase === "connecting" || s.phase === "connected"
+              ? { ...s, phase: "disconnected" }
+              : s,
+          );
+        },
+      });
+      socket.current = sock;
+      setState({ phase: "connecting", sessionId });
+    },
+    [needs.allowed, drop, open, envId, containerId, nodeId, createSocket],
+  );
 
   const register = useCallback((api: TerminalApi | null) => {
     terminal.current = api;
@@ -268,16 +311,23 @@ export function ShellPanel({
     );
   }
 
-  if (running === false && phase === "launcher") {
+  // What stands in the launcher's place, if anything. Facts about the container come
+  // first, then what the server last refused.
+  const failure = state.failure;
+  let refusal: Refusal | null = null;
+  if (row?.selfKind) refusal = "ownContainer";
+  else if (row?.readOnly) refusal = "readOnly";
+  else if (running === false) refusal = "notRunning";
+  else refusal = refusalOf(failure);
+  if (refusal) {
     return (
-      <Card className="max-w-[480px]">
-        <CardHeader>
-          <CardTitle>
-            <h2>{t("terminal.notRunning.heading")}</h2>
-          </CardTitle>
-          <CardDescription>{t("terminal.notRunning.body")}</CardDescription>
-        </CardHeader>
-      </Card>
+      <RefusalPanel
+        kind={refusal}
+        envId={envId}
+        row={row}
+        opening={phase === "opening"}
+        onOpenCommand={(command) => void start(command)}
+      />
     );
   }
 
@@ -293,9 +343,15 @@ export function ShellPanel({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        {state.failure ? (
+        {failure?.type === "shell_limit_reached" && failure.limit ? (
           <Alert variant="destructive">
-            <AlertDescription>{t(failureCopyKey(state.failure))}</AlertDescription>
+            <AlertDescription>
+              {t("terminal.refusal.limit", { count: failure.limit })}
+            </AlertDescription>
+          </Alert>
+        ) : failure ? (
+          <Alert variant="destructive">
+            <AlertDescription>{t(failureCopyKey(failure))}</AlertDescription>
           </Alert>
         ) : null}
         <div>

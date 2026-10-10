@@ -12,17 +12,26 @@ export type ShellSession = components["schemas"]["ShellSessionBody"];
 export type ShellOpenRequest = components["schemas"]["ShellOpenBody"];
 
 // ShellOpenError is a shell the server would not open, with the problem type it
-// named (host_read_only, container_not_running, no_shell, stream_busy ...), or
-// status 0 when the server could not be reached.
+// named (host_read_only, container_not_running, own_container, shell_limit_reached,
+// no_shell, agent_policy_denied, stream_busy ...), or status 0 when the server could not
+// be reached. For shell_limit_reached, limit is the most shells one person may hold.
 export class ShellOpenError extends Error {
   readonly status: number;
   readonly type?: string;
-  constructor(status: number, type?: string) {
+  readonly limit?: number;
+  constructor(status: number, type?: string, limit?: number) {
     super(`POST containers/shell failed (${status})`);
     this.name = "ShellOpenError";
     this.status = status;
     this.type = type;
+    this.limit = limit;
   }
+}
+
+// limitOf reads the cap a shell_limit_reached problem names among its errors.
+function limitOf(fields: { location: string; message: string }[]): number | undefined {
+  const n = Number(fields.find((f) => f.location === "limit")?.message);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
 export interface OpenShellVariables {
@@ -46,7 +55,11 @@ export async function openShell({
     });
     if (!res.data) {
       const problem = readProblem(res.error, res.response);
-      throw new ShellOpenError(problem.status, problem.type);
+      throw new ShellOpenError(
+        problem.status,
+        problem.type,
+        problem.type === "shell_limit_reached" ? limitOf(problem.fields) : undefined,
+      );
     }
     return res.data;
   } catch (e) {

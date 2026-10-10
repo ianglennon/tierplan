@@ -10,7 +10,9 @@
     },
     "notRunning": {
       "heading": "Start the container to open a shell",
-      "body": "A shell needs a running container."
+      "body": "A shell needs a running container.",
+      "start": "Start container",
+      "starting": "Starting…"
     },
     "status": {
       "connecting": "Connecting…",
@@ -38,6 +40,24 @@
       "notRunning": "Start the container to open a shell.",
       "busy": "This host's agent is serving as many logs and shells as it can. Close one and try again.",
       "noShell": "Bayplan couldn't find bash or sh in this container."
+    },
+    "refusal": {
+      "readOnly": {
+        "heading": "Shells are off on this host",
+        "body": "This host is read-only (set on the host). Logs still work."
+      },
+      "ownContainer": "Bayplan doesn't open shells in its own containers.",
+      "noShell": {
+        "heading": "No shell in this image",
+        "body": "Bayplan couldn't find bash or sh in this container. If the image has one somewhere else, enter its path.",
+        "command": {
+          "label": "Command",
+          "helper": "The command to run, for example /bin/zsh."
+        },
+        "open": "Open shell"
+      },
+      "limit_one": "You already have {{count}} shell open, which is the most allowed. Close one to open another.",
+      "limit_other": "You already have {{count}} shells open, which is the most allowed. Close one to open another."
     }
   }
 }

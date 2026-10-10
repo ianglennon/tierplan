@@ -149,6 +149,16 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
     );
   }
 
+  // A tab never hides: when it cannot be used it is shown unavailable, with why. The
+  // Shell tab needs the container shell permission, and is never for Bayplan's own server
+  // or an agent's container (D-36).
+  const unavailableReason = (tab: ContainerTab): string | undefined => {
+    if (tab.needs !== "containers.exec") return undefined;
+    if (!shellNeeds.allowed) return shellNeeds.reason;
+    if (data?.selfKind) return t("terminal.refusal.ownContainer");
+    return undefined;
+  };
+
   const line = data ? belongsTo(t, data) : "";
   return (
     <div className="flex flex-col gap-6">
@@ -199,14 +209,7 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
           className="h-9 max-md:h-11"
         >
           {CONTAINER_TABS.map((tab) => (
-            <NeedsTooltip
-              key={tab.id}
-              reason={
-                (tab as ContainerTab).needs === "containers.exec" && !shellNeeds.allowed
-                  ? shellNeeds.reason
-                  : undefined
-              }
-            >
+            <NeedsTooltip key={tab.id} reason={unavailableReason(tab as ContainerTab)}>
               <TabsTrigger
                 value={tab.id}
                 asChild

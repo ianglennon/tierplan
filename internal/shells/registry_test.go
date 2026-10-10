@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -468,5 +469,56 @@ func TestCountForUserCountsPendingAndAttachedSessionsAcrossEnvironmentsOfThatUse
 	r.End(a1.ID, "exited")
 	if got := r.CountForUser("user:ann"); got != 1 {
 		t.Errorf("ann holds %d after one ended, want 1", got)
+	}
+}
+
+func TestCreateLimitedRefusesAtTheCapClosesTheProcessAndRegistersNothing(t *testing.T) {
+	r := NewRegistry(newFakeClock())
+	for range 2 {
+		if s, err := r.CreateLimited(newSession("ann"), newFakeExec(), 0, 2); s == nil || err != nil {
+			t.Fatalf("under the cap: %v, %v", s, err)
+		}
+	}
+	x := newFakeExec()
+	s, err := r.CreateLimited(newSession("ann"), x, 0, 2)
+	if s != nil || !errors.Is(err, ErrLimit) {
+		t.Fatalf("at the cap: %v, %v, want ErrLimit and no session", s, err)
+	}
+	if x.closeCount() != 1 {
+		t.Errorf("the refused process was closed %d times, want once", x.closeCount())
+	}
+	if got := r.CountForUser("user:ann"); got != 2 {
+		t.Errorf("ann holds %d, want the 2 from before", got)
+	}
+	// Another person is not held to ann's count, and a cap of zero means no cap.
+	if s, err := r.CreateLimited(newSession("bob"), newFakeExec(), 0, 2); s == nil || err != nil {
+		t.Errorf("bob: %v, %v", s, err)
+	}
+	if s, err := r.CreateLimited(newSession("ann"), newFakeExec(), 0, 0); s == nil || err != nil {
+		t.Errorf("no cap: %v, %v", s, err)
+	}
+}
+
+func TestOpensAtTheSameTimeCannotSlipUnderTheCap(t *testing.T) {
+	r := NewRegistry(newFakeClock())
+	const limit, tries = 3, 40
+	var wg sync.WaitGroup
+	var made, refused atomic.Int32
+	for range tries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := r.CreateLimited(newSession("ann"), newFakeExec(), 0, limit)
+			switch {
+			case s != nil:
+				made.Add(1)
+			case errors.Is(err, ErrLimit):
+				refused.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if made.Load() != limit || refused.Load() != tries-limit || r.CountForUser("user:ann") != limit {
+		t.Fatalf("made %d, refused %d, held %d; want %d, %d, %d", made.Load(), refused.Load(), r.CountForUser("user:ann"), limit, tries-limit, limit)
 	}
 }

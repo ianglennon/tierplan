@@ -35,6 +35,7 @@ const (
 	problemInvalidShell         = "invalid_shell"
 	problemContainerNotRunning  = "container_not_running"
 	problemNoShell              = "no_shell"
+	problemShellLimitReached    = "shell_limit_reached"
 
 	// shellStartTimeout bounds creating the exec and attaching to it.
 	shellStartTimeout = 30 * time.Second
@@ -44,12 +45,14 @@ const (
 )
 
 // ShellsSource is what the shell routes use of an environment: the aggregate, to find
-// the container's node and row, and the one write path to a node's engine. The exec
+// the container's node and row, a read of the container from its engine (the fresh
+// inspect that decides what may be opened), and the one write path to a node's engine. The exec
 // is created through WriteOnNode because starting a process in a container changes
 // the host (D-35): a read-only host refuses it, and the node's cached snapshot is
 // dropped. *envs.Aggregator implements it.
 type ShellsSource interface {
 	snapshotReader
+	OnNode(ctx context.Context, envID, nodeID string, fn func(*dockerx.Client) error) error
 	WriteOnNode(ctx context.Context, envID, nodeID string, fn func(*dockerx.Client) error) error
 }
 
@@ -78,6 +81,9 @@ type ShellsDeps struct {
 	// Checker is the permission checker; the routes themselves are judged by the
 	// route harness (containers.exec).
 	Checker *rbac.Checker
+	// SelfContainerID is Bayplan's own container ID; empty when it cannot tell. A shell
+	// is never opened in that container, nor in an agent's (D-36).
+	SelfContainerID string
 	// Instance says which origin the WebSocket may be opened from, and the idle limit
 	// and the per-person cap.
 	Instance ShellInstance
@@ -150,7 +156,9 @@ func RegisterShells(r *httpx.Router, d ShellsDeps) {
 		Description: "Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. " +
 			"The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. " +
 			"The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). " +
-			"422 invalid_shell when a custom command cannot be read, 409 host_read_only on a read-only host, 409 container_not_running, 409 no_shell when the engine cannot find the command, " +
+			"422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), " +
+			"409 host_read_only on a read-only host, 409 own_container for Bayplan's own server or an agent's container (decided from a fresh inspect), 409 container_not_running, " +
+			"502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, " +
 			"503 stream_busy when the host's agent serves as many logs and shells as it can. " +
 			"What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. " +
 			"Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).",
@@ -202,18 +210,61 @@ func openShell(ctx context.Context, d ShellsDeps, in *ShellOpenInput) (*ShellOpe
 	if err != nil {
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemInvalidShell, "That shell command cannot be run: "+err.Error()+".")
 	}
+	// The per-person cap is asked first, before anything is read from the engine; the
+	// registry asks again, under its lock, when the session is made (D-31).
+	userID := userKey(p)
+	limit := 0
+	if d.Instance != nil {
+		limit = d.Instance.ShellCap()
+	}
+	if limit > 0 && d.Registry.CountForUser(userID) >= limit {
+		return nil, shellLimitProblem(limit)
+	}
 	agg, nodeID, node, err := resolveContainerNode(ctx, d.Aggregator, d.Log, env.ID, b.NodeID)
 	if err != nil {
 		return nil, err
 	}
+	// A host whose owner set it read-only is refused from what is known of it, before
+	// anything is sent (D-35). WriteOnNode refuses it again below.
+	if node.ReadOnly {
+		return nil, shellStartProblem(d.Log, env.ID, envs.ErrHostReadOnly)
+	}
 	fullID, name, image := shellContainerRow(agg, nodeID, in.ContainerID)
+
+	// Bayplan's own server and agent containers are refused from a fresh inspect: the
+	// list can be seconds old and the label can be set by anyone, so neither decides
+	// (D-36, T-04-84). A container that is not running is refused here too.
+	var own dockerx.ContainerOwnership
+	inspectCtx, cancelInspect := context.WithTimeout(ctx, inspectTimeout)
+	err = d.Aggregator.OnNode(inspectCtx, env.ID, nodeID, func(c *dockerx.Client) error {
+		var e error
+		own, e = c.ContainerOwnership(inspectCtx, in.ContainerID)
+		return e
+	})
+	cancelInspect()
+	if err != nil {
+		return nil, shellStartProblem(d.Log, env.ID, err)
+	}
+	if own.ID != "" {
+		fullID = own.ID
+	}
+	if own.Name != "" {
+		name = own.Name
+	}
+	if (len(d.SelfContainerID) >= minSelfIDLen && strings.HasPrefix(own.ID, d.SelfContainerID)) ||
+		own.Labels[ownerLabelAgent] == ownerLabelAgentValue {
+		return nil, httpx.Problem(http.StatusConflict, codeOwnContainer, "Bayplan doesn't open shells in its own containers.")
+	}
+	if !own.Running {
+		return nil, httpx.Problem(http.StatusConflict, problemContainerNotRunning, "The container is not running. Start it to open a shell.")
+	}
 
 	var exec *dockerx.ExecSession
 	startCtx, cancel := context.WithTimeout(ctx, shellStartTimeout)
 	defer cancel()
 	err = d.Aggregator.WriteOnNode(startCtx, env.ID, nodeID, func(c *dockerx.Client) error {
 		var e error
-		exec, e = c.StartExec(startCtx, in.ContainerID, dockerx.ExecOptions{
+		exec, e = c.StartExec(startCtx, fullID, dockerx.ExecOptions{
 			Cmd: argv, User: b.User, WorkingDir: b.WorkingDir, Cols: uint(b.Cols), Rows: uint(b.Rows),
 		})
 		return e
@@ -222,13 +273,16 @@ func openShell(ctx context.Context, d ShellsDeps, in *ShellOpenInput) (*ShellOpe
 		return nil, shellStartProblem(d.Log, env.ID, err)
 	}
 
-	s := d.Registry.Create(&shells.Session{
-		UserID: userKey(p), AuthSession: authKey(p), Actor: p.AuditActor(),
+	s, err := d.Registry.CreateLimited(&shells.Session{
+		UserID: userID, AuthSession: authKey(p), Actor: p.AuditActor(),
 		IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
 		EnvID: env.ID, NodeID: nodeID, Node: node.Name,
 		ContainerID: fullID, ContainerName: name, Image: image,
 		Command: argv, User: b.User, WorkingDir: b.WorkingDir,
-	}, exec, d.PendingTTL)
+	}, exec, d.PendingTTL, limit)
+	if errors.Is(err, shells.ErrLimit) {
+		return nil, shellLimitProblem(limit)
+	}
 	if s == nil {
 		return nil, httpx.Problem(http.StatusServiceUnavailable, problemShellUnavailable, "Bayplan is stopping, so it cannot open a shell now.")
 	}
@@ -254,6 +308,16 @@ func openShell(ctx context.Context, d ShellsDeps, in *ShellOpenInput) (*ShellOpe
 		User:       b.User,
 		WorkingDir: b.WorkingDir,
 	}}, nil
+}
+
+// shellLimitProblem is the 429 for a person who holds as many shells as allowed. The limit
+// is among the errors, as location "limit", for the page to say it.
+func shellLimitProblem(limit int) error {
+	return &huma.ErrorModel{
+		Type: problemShellLimitReached, Title: http.StatusText(http.StatusTooManyRequests), Status: http.StatusTooManyRequests,
+		Detail: "You already have " + strconv.Itoa(limit) + " shells open, which is the most allowed. Close one to open another.",
+		Errors: []*huma.ErrorDetail{{Location: "limit", Message: strconv.Itoa(limit)}},
+	}
 }
 
 // shellContainerRow finds the container the route named in the aggregate, for its full

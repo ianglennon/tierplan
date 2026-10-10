@@ -24,7 +24,7 @@ import { useT } from "@/i18n/use-t";
 // rowOf is the container as the list's actions know it, so the same eligibility
 // rules, dialogs and requests serve the page and the list. The fields the actions
 // do not read are left empty.
-function rowOf(d: ContainerDetail): ContainerRow {
+export function rowOf(d: ContainerDetail): ContainerRow {
   return {
     node: d.node ?? "",
     nodeId: d.nodeId,

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
+import type { ContainerRow } from "@/api/resources";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeWebSocket } from "@/features/terminal/fake-web-socket";
 import { ShellPanel } from "@/features/terminal/shell-panel";
@@ -54,6 +55,12 @@ vi.mock("@/features/terminal/terminal", () => ({
   },
 }));
 
+vi.mock("@/components/agent-update-notice", () => ({
+  AgentUpdateNotice: ({ envId }: { envId: string }) => (
+    <div role="alert">The agent on {envId} needs an update</div>
+  ),
+}));
+
 const ENV = "e1";
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
 
@@ -65,6 +72,7 @@ interface Sent {
 let sent: Sent[];
 let me: ReturnType<typeof makeMe>;
 let openAnswer: () => Response | Promise<Response>;
+let actionAnswer: () => Response | Promise<Response>;
 let sessionCount: number;
 
 function session() {
@@ -86,6 +94,11 @@ beforeEach(() => {
   sessionCount = 0;
   me = makeMe({ envs: { [ENV]: "operator" }, extras: { [ENV]: ["containers.exec"] } });
   openAnswer = session;
+  actionAnswer = () =>
+    Response.json({
+      bulkId: "b1",
+      results: [{ nodeId: "n1", id: "web-id", name: "web", result: "done" }],
+    });
   term.mounts = 0;
   term.unmounts = 0;
   term.written = [];
@@ -110,6 +123,7 @@ beforeEach(() => {
       sent.push({ method: req.method, path: url.pathname, body });
       if (url.pathname === "/api/me") return Response.json(me);
       if (url.pathname === `/api/env/${ENV}/containers/web-id/shell`) return openAnswer();
+      if (url.pathname === `/api/env/${ENV}/containers/actions`) return actionAnswer();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -289,12 +303,12 @@ describe("opening a shell", () => {
 
   it("says why when the server would not open it, and leaves the launcher to try again", async () => {
     openAnswer = () =>
-      Response.json({ type: "host_read_only", title: "x", status: 409 }, { status: 409 });
+      Response.json({ type: "stream_busy", title: "x", status: 503 }, { status: 503 });
     renderPanel();
     await clickOpen();
     expect(
       await screen.findByText(
-        "This host is read-only (set on the host). Logs still work.",
+        "This host's agent is serving as many logs and shells as it can. Close one and try again.",
         {},
         { timeout: 4000 },
       ),
@@ -562,5 +576,272 @@ describe("a shell nobody is using (plan 04-23, D-29)", () => {
     expect(posts()).toHaveLength(2);
     await screen.findByText("Connecting…");
     expect(screen.queryByText(WARNING)).toBeNull();
+  });
+});
+
+// The refusals (plan 04-23, D-31, D-34, D-35, D-36): each has a panel of its own, and the
+// tab never hides.
+
+const rowFixture = (over: Partial<ContainerRow> = {}): ContainerRow => ({
+  id: "web-id",
+  name: "web",
+  node: "node-1",
+  nodeId: "n1",
+  image: "nginx:1.27",
+  state: "running",
+  status: "Up 2 hours",
+  health: "none",
+  isSelf: false,
+  selfKind: "",
+  readOnly: false,
+  ports: [],
+  project: "",
+  stack: "",
+  service: "",
+  ...over,
+});
+
+function refusal(type: string, status: number, errors?: { location: string; message: string }[]) {
+  return () => Response.json({ type, title: "x", status, errors }, { status });
+}
+
+describe("a stopped container (D-34)", () => {
+  it("up front: says to start it, with Start container as the accent button, and offers no shell", async () => {
+    renderPanel({ running: false, row: rowFixture({ state: "exited" }) });
+    expect(
+      await screen.findByRole("heading", { name: "Start the container to open a shell" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open shell" })).toBeNull();
+    const start = screen.getByRole("button", { name: "Start container" });
+    expect(start.getAttribute("data-variant")).toBe("default");
+  });
+
+  it("starts the container with the same request the list uses, and shows the launcher once it runs", async () => {
+    const view = renderPanel({ running: false, row: rowFixture({ state: "exited" }) });
+    const start = await screen.findByRole("button", { name: "Start container" });
+    await permissionsLoaded();
+    fireEvent.click(start);
+    await waitFor(() =>
+      expect(posts().some((p) => p.path.endsWith("/containers/actions"))).toBe(true),
+    );
+    const action = posts().find((p) => p.path.endsWith("/containers/actions"));
+    expect(action?.body).toMatchObject({
+      action: "start",
+      targets: [{ nodeId: "n1", id: "web-id" }],
+    });
+
+    // The page reads the container again and passes the new state down.
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ShellPanel
+            envId={ENV}
+            containerId="web-id"
+            nodeId="n1"
+            name="web"
+            running
+            row={rowFixture()}
+            createSocket={(url) => new FakeWebSocket(url)}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole("button", { name: "Open shell" })).toBeTruthy();
+  });
+
+  it("is unavailable with the reason for someone who may not start containers", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    renderPanel({ running: false, row: rowFixture({ state: "exited" }) });
+    await screen.findByRole("button", { name: "Start container" });
+    await permissionsLoaded();
+    const start = screen.getByRole("button", { name: "Start container" });
+    expect(start.getAttribute("aria-disabled")).toBe("true");
+    expect(document.body.textContent).toContain("Needs Operator");
+    fireEvent.click(start);
+    await act(async () => {});
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("when the server says it is not running, the same panel replaces the launcher, and gives way when the page sees it run", async () => {
+    openAnswer = refusal("container_not_running", 409);
+    const view = renderPanel({ row: rowFixture() });
+    await clickOpen();
+    expect(
+      await screen.findByRole(
+        "heading",
+        { name: "Start the container to open a shell" },
+        { timeout: 4000 },
+      ),
+    ).toBeTruthy();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    // The page's reading was stale: it said running. It now says stopped, then running.
+    for (const running of [false, true]) {
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <ShellPanel
+              envId={ENV}
+              containerId="web-id"
+              nodeId="n1"
+              name="web"
+              running={running}
+              row={rowFixture()}
+              createSocket={(url) => new FakeWebSocket(url)}
+            />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    }
+    expect(await screen.findByRole("button", { name: "Open shell" })).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Start the container to open a shell" }),
+    ).toBeNull();
+  });
+});
+
+describe("an image with no shell (D-34)", () => {
+  it("answered by the server: the panel with the custom command field, focused", async () => {
+    openAnswer = refusal("no_shell", 409);
+    renderPanel({ row: rowFixture() });
+    await clickOpen();
+    expect(
+      await screen.findByRole("heading", { name: "No shell in this image" }, { timeout: 4000 }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Bayplan couldn't find bash or sh in this container. If the image has one somewhere else, enter its path.",
+      ),
+    ).toBeTruthy();
+    const field = screen.getByLabelText("Command");
+    expect(screen.getByText("The command to run, for example /bin/zsh.")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
+  it("found out after attaching: the panel replaces the terminal, and a command opens a custom shell", async () => {
+    renderPanel({ row: rowFixture() });
+    const first = await openShell();
+    act(() => first.open());
+    await screen.findByText("Connected");
+    act(() => {
+      first.control({ type: "closed", reason: "no_shell" });
+      first.drop();
+    });
+    const field = await screen.findByLabelText("Command");
+    expect(screen.queryByLabelText("Terminal in web")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect(screen.queryByText("Disconnected")).toBeNull();
+
+    const open = screen.getByRole("button", { name: "Open shell" });
+    expect(open.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(field, { target: { value: "/opt/bin/zsh -l" } });
+    expect(open.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(open);
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    expect(posts()[1]?.body).toEqual({
+      nodeId: "n1",
+      shell: "custom",
+      command: "/opt/bin/zsh -l",
+      cols: 80,
+      rows: 24,
+    });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    expect(await screen.findByLabelText("Terminal in web")).toBeTruthy();
+  });
+});
+
+describe("a read-only host (D-35)", () => {
+  it("up front: Shells are off on this host, with no way to open one", async () => {
+    renderPanel({ row: rowFixture({ readOnly: true }) });
+    expect(
+      await screen.findByRole("heading", { name: "Shells are off on this host" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("This host is read-only (set on the host). Logs still work."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open shell" })).toBeNull();
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("when the server refuses with host_read_only, the same panel replaces the launcher", async () => {
+    openAnswer = refusal("host_read_only", 409);
+    renderPanel({ row: rowFixture() });
+    await clickOpen();
+    expect(
+      await screen.findByRole(
+        "heading",
+        { name: "Shells are off on this host" },
+        { timeout: 4000 },
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open shell" })).toBeNull();
+  });
+});
+
+describe("Bayplan's own containers (D-36)", () => {
+  it("says Bayplan does not open shells in them, for the server and for an agent, with no way to open one", async () => {
+    for (const kind of ["server", "agent"] as const) {
+      const view = renderPanel({ row: rowFixture({ selfKind: kind }) });
+      expect(
+        await screen.findByText("Bayplan doesn't open shells in its own containers."),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Open shell" })).toBeNull();
+      view.unmount();
+    }
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("when the server refuses with own_container, says so", async () => {
+    openAnswer = refusal("own_container", 409);
+    renderPanel({ row: rowFixture() });
+    await clickOpen();
+    expect(
+      await screen.findByText(
+        "Bayplan doesn't open shells in its own containers.",
+        {},
+        { timeout: 4000 },
+      ),
+    ).toBeTruthy();
+  });
+});
+
+describe("the per-person cap (D-31)", () => {
+  it("says how many shells are open and that it is the most allowed, in the launcher, which stays", async () => {
+    openAnswer = refusal("shell_limit_reached", 429, [{ location: "limit", message: "3" }]);
+    renderPanel({ row: rowFixture() });
+    await clickOpen();
+    expect(
+      await screen.findByText(
+        "You already have 3 shells open, which is the most allowed. Close one to open another.",
+        {},
+        { timeout: 4000 },
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open shell" }).hasAttribute("disabled")).toBe(false);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("reads right at the smallest cap, one shell", async () => {
+    openAnswer = refusal("shell_limit_reached", 429, [{ location: "limit", message: "1" }]);
+    renderPanel({ row: rowFixture() });
+    await clickOpen();
+    expect(
+      await screen.findByText(
+        "You already have 1 shell open, which is the most allowed. Close one to open another.",
+        {},
+        { timeout: 4000 },
+      ),
+    ).toBeTruthy();
+  });
+});
+
+describe("an agent that is too old (Pitfall 13)", () => {
+  it("shows the agent update notice in place of the launcher", async () => {
+    openAnswer = refusal("agent_policy_denied", 502);
+    renderPanel({ row: rowFixture() });
+    await clickOpen();
+    expect(
+      await screen.findByText("The agent on e1 needs an update", {}, { timeout: 4000 }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open shell" })).toBeNull();
   });
 });

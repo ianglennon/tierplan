@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { containerDetailQuery } from "@/api/container-detail";
+import { rowOf } from "@/features/container-detail/header-actions";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { ShellPanel } from "@/features/terminal/shell-panel";
 
@@ -26,6 +27,7 @@ function ContainerShellRoute() {
       name={detail.data?.name ?? containerId}
       node={isSwarm ? (detail.data?.node ?? undefined) : undefined}
       running={detail.data ? detail.data.state === "running" : undefined}
+      row={detail.data ? rowOf(detail.data) : undefined}
     />
   );
 }

@@ -484,6 +484,33 @@ describe("the Shell tab", () => {
   });
 });
 
+describe("the Shell tab on Bayplan's own containers (plan 04-23, D-36)", () => {
+  it.each(["server", "agent"] as const)(
+    "is unavailable for %s containers, with the reason, and still shown",
+    async (kind) => {
+      me = makeMe({ envs: { [ENV]: "operator" }, extras: { [ENV]: ["containers.exec"] } });
+      answer = () =>
+        Response.json(detail({ name: "bayplan", selfKind: kind, isSelf: kind === "server" }));
+      renderAt();
+      await screen.findByRole("heading", { name: "bayplan" });
+      const tab = await screen.findByRole("tab", { name: "Shell" });
+      await waitFor(() => expect(tab.getAttribute("aria-disabled")).toBe("true"));
+      expect(tab.textContent).toBe("Shell");
+      expect(document.body.textContent).toContain(
+        "Bayplan doesn't open shells in its own containers.",
+      );
+    },
+  );
+
+  it("stays available for an ordinary container", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" }, extras: { [ENV]: ["containers.exec"] } });
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    expect(screen.getByRole("tab", { name: "Shell" }).getAttribute("aria-disabled")).toBeNull();
+    expect(document.body.textContent).not.toContain("Bayplan doesn't open shells");
+  });
+});
+
 describe("the Inspect tab", () => {
   it("is the last tab and keeps the node in its address", async () => {
     renderAt();

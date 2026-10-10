@@ -37,6 +37,10 @@ const PendingTTL = 30 * time.Second
 // are not theirs.
 var ErrNotFound = errors.New("shells: no such session")
 
+// ErrLimit is CreateLimited's refusal: the user already holds as many sessions as the
+// cap allows.
+var ErrLimit = errors.New("shells: the user holds as many shells as allowed")
+
 // State is where a session is in its life.
 type State int
 
@@ -239,6 +243,16 @@ func (r *Registry) OnEnd(f func(s *Session, reason string, res EndResult)) {
 // the runtime state, and returns s. After CloseAll it returns nil and closes exec,
 // since the server is stopping.
 func (r *Registry) Create(s *Session, exec Exec, pendingTTL time.Duration) *Session {
+	s, _ = r.CreateLimited(s, exec, pendingTTL, 0)
+	return s
+}
+
+// CreateLimited is Create with a cap: when maxPerUser is above zero and the session's
+// user already holds that many, pending or attached, in any environment, nothing is
+// registered, exec is closed and the error is ErrLimit. The count and the registering
+// happen under one lock, so two opens at once cannot both slip under the cap (D-31). After
+// CloseAll it returns a nil session and a nil error, as Create does.
+func (r *Registry) CreateLimited(s *Session, exec Exec, pendingTTL time.Duration, maxPerUser int) (*Session, error) {
 	if pendingTTL <= 0 {
 		pendingTTL = PendingTTL
 	}
@@ -252,7 +266,20 @@ func (r *Registry) Create(s *Session, exec Exec, pendingTTL time.Duration) *Sess
 	if r.closed {
 		r.mu.Unlock()
 		_ = exec.Close()
-		return nil
+		return nil, nil
+	}
+	if maxPerUser > 0 {
+		held := 0
+		for _, other := range r.byID {
+			if other.UserID == s.UserID {
+				held++
+			}
+		}
+		if held >= maxPerUser {
+			r.mu.Unlock()
+			_ = exec.Close()
+			return nil, ErrLimit
+		}
 	}
 	for {
 		s.ID = newID()
@@ -264,7 +291,7 @@ func (r *Registry) Create(s *Session, exec Exec, pendingTTL time.Duration) *Sess
 	id := s.ID
 	s.pendingStop = r.clock.AfterFunc(pendingTTL, func() { r.expire(id) })
 	r.mu.Unlock()
-	return s
+	return s, nil
 }
 
 // newID makes a session ID.

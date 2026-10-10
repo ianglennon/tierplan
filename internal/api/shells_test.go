@@ -704,13 +704,19 @@ func TestShellRefusesTheNextOpenOverThePerUserCapWith429AndTheLimit(t *testing.T
 	if rec := f.open(t, "web", openBody); rec.code != http.StatusCreated {
 		t.Fatalf("after one ended: %d %s", rec.code, rec.body)
 	}
-	f.inst.ApplyShellLimits(30, 3)
 	if rec := f.open(t, "web", openBody); rec.code != http.StatusTooManyRequests {
-		t.Fatalf("at 2 of 3 plus this one it is %d, want 429 again: %s", rec.code, rec.body)
+		t.Fatalf("at 2 of 2 again it is %d, want 429: %s", rec.code, rec.body)
 	}
-	f.inst.ApplyShellLimits(30, 4)
+	f.inst.ApplyShellLimits(30, 3)
 	if rec := f.open(t, "web", openBody); rec.code != http.StatusCreated {
-		t.Fatalf("after the cap was raised: %d %s", rec.code, rec.body)
+		t.Fatalf("after the cap was raised to 3: %d %s", rec.code, rec.body)
+	}
+	if rec := f.open(t, "web", openBody); rec.code != http.StatusTooManyRequests {
+		t.Fatalf("at 3 of 3 it is %d, want 429: %s", rec.code, rec.body)
+	}
+	f.inst.ApplyShellLimits(30, 2) // lowered under what is open: no new shell, none is ended
+	if got := len(f.shellsReg.List(shells.Filter{})); got != 3 {
+		t.Fatalf("%d sessions after the cap was lowered, want the 3 open ones kept", got)
 	}
 }
 
