@@ -13,7 +13,9 @@
       "action": "Action",
       "name": "Name",
       "node": "Node",
-      "details": "Details"
+      "details": "Details",
+      "expand": "Attributes",
+      "menu": "Actions"
     },
     "types": {
       "container": "Container",
@@ -24,10 +26,17 @@
       "node": "Node",
       "secret": "Secret",
       "config": "Config",
-      "bayplan": "Bayplan"
+      "bayplan": "Bayplan",
+      "label": "Filter events by type"
     },
     "row": {
-      "exitCode": "exit code {{code}}"
+      "exitCode": "exit code {{code}}",
+      "expand": "Show attributes for {{name}}",
+      "menu": "Actions for {{name}}",
+      "filterByName": "Filter by this name",
+      "noAttributes": "Docker gave no attributes for this event.",
+      "attributesLabel": "Attributes of {{name}}",
+      "openFailed": "Couldn't open that page. Try again."
     },
     "empty": {
       "title": "No events in this range",
@@ -37,6 +46,37 @@
       "title": "Couldn't load events.",
       "body": "Check the connection and try again.",
       "retry": "Retry"
+    },
+    "range": {
+      "label": "Show events from",
+      "5m": "Last 5 minutes",
+      "1h": "Last hour",
+      "24h": "Last 24 hours"
+    },
+    "action": {
+      "label": "Action",
+      "withCount": "Action ({{count}})",
+      "search": "Search actions",
+      "none": "No actions seen yet."
+    },
+    "search": {
+      "label": "Search events",
+      "placeholder": "Search by name, image or attribute",
+      "clear": "Clear search"
+    },
+    "nameChip": {
+      "label": "Name: {{name}}",
+      "remove": "Remove name filter"
+    },
+    "paused": "Paused",
+    "pause": "Pause",
+    "resume": "Resume",
+    "newCount_one": "{{count}} new event",
+    "newCount_other": "{{count}} new events",
+    "jump": "Jump to latest ({{count}} new)",
+    "noMatch": {
+      "title": "No events match these filters.",
+      "action": "Clear filters"
     }
   }
 }
