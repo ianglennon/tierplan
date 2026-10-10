@@ -16,6 +16,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/redact"
 )
 
 const volumeTargetType = "volume"
@@ -152,6 +153,11 @@ func volumeCreateProblem(log *slog.Logger, envID, name string, err error) (strin
 // is logged: the volume has been made or refused, and the caller must still be told which.
 func auditVolume(ctx context.Context, d VolumesDeps, p *rbac.Principal, envID, userAgent, nodeID string, spec dockerx.VolumeCreateSpec, code string) {
 	details := map[string]string{"name": spec.Name, "node": nodeID, "driver": spec.Driver, "code": code}
+	// The options can hold a share's password: the row carries them with any
+	// password-like part replaced (T-04-55).
+	if opts := redact.AuditOptions(spec.DriverOpts); opts != "" {
+		details["options"] = opts
+	}
 	result, reason := audit.ResultSuccess, ""
 	if code != codeCreated {
 		result, reason = audit.ResultFailure, code

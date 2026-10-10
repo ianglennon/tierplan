@@ -18,6 +18,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ianglennon/bayplan/internal/rbac"
 )
@@ -147,4 +148,79 @@ func MaskContainerInspect(raw []byte, reveal bool) (out []byte, masked bool, err
 		return nil, false, fmt.Errorf("encode container inspect: %w", err)
 	}
 	return bytes.TrimRight(buf.Bytes(), "\n"), masked, nil
+}
+
+// auditOptionsMax caps the text AuditOptions returns, under the audit log's own limit
+// on a detail value.
+const auditOptionsMax = 500
+
+// secretWords are the parts of an option name that mark its value as a secret.
+var secretWords = []string{"pass", "secret", "credentials", "token"}
+
+// secretName reports whether an option name says its value is a secret: a password
+// (password, passwd, pass), a secret, a credentials file or a token, in any case.
+func secretName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, w := range secretWords {
+		if strings.Contains(lower, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// AuditOptions renders the driver options of a volume for an audit row: the "name=value"
+// pairs sorted by name and joined with "; ", so the row says what was asked for without
+// holding a share's password (T-04-55). The value of an option whose name looks like a
+// secret is replaced by Placeholder, and so is that part of a comma-separated value such
+// as the local driver's o: "addr=h,username=u,password=p" becomes
+// "addr=h,username=u,password=<hidden>". The rest of a password that holds a comma (a
+// doubled comma is how cifs spells one) would otherwise stay behind, so the pieces with
+// no "=" that follow a secret are dropped with it; a plain flag after a password, such as
+// rw, is lost from the row for the same reason. The text is cut at 500 bytes without
+// splitting a character, after the masking, so a cut can never reveal a value.
+func AuditOptions(opts map[string]string) string {
+	if len(opts) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(opts))
+	for _, name := range slices.Sorted(maps.Keys(opts)) {
+		value := opts[name]
+		if secretName(name) {
+			value = Placeholder
+		} else {
+			value = maskSegments(value)
+		}
+		parts = append(parts, name+"="+value)
+	}
+	out := strings.Join(parts, "; ")
+	if len(out) <= auditOptionsMax {
+		return out
+	}
+	cut := auditOptionsMax
+	for cut > 0 && !utf8.RuneStart(out[cut]) {
+		cut--
+	}
+	return out[:cut]
+}
+
+// maskSegments masks the secret segments of a comma-separated option value.
+func maskSegments(value string) string {
+	segments := strings.Split(value, ",")
+	out := make([]string, 0, len(segments))
+	afterSecret := false
+	for _, seg := range segments {
+		name, _, hasValue := strings.Cut(seg, "=")
+		switch {
+		case hasValue && secretName(name):
+			out = append(out, name+"="+Placeholder)
+			afterSecret = true
+		case !hasValue && afterSecret:
+			// What is left of a password that held a comma.
+		default:
+			out = append(out, seg)
+			afterSecret = false
+		}
+	}
+	return strings.Join(out, ",")
 }

@@ -28,7 +28,10 @@
       },
       "type": {
         "label": "Type",
-        "none": "None"
+        "none": "None",
+        "nfs": "NFS share",
+        "smb": "SMB (CIFS) share",
+        "host": "Host folder"
       },
       "options": {
         "label": "Driver options",
@@ -45,6 +48,33 @@
         "value": "Label value",
         "remove": "Remove label {{name}}",
         "removeEmpty": "Remove label"
+      },
+      "server": {
+        "label": "Server address"
+      },
+      "nfsPath": {
+        "label": "Exported path"
+      },
+      "mountOptions": {
+        "label": "Mount options"
+      },
+      "share": {
+        "label": "Share name"
+      },
+      "username": {
+        "label": "Username"
+      },
+      "password": {
+        "label": "Password"
+      },
+      "folder": {
+        "label": "Folder on the host",
+        "helperHost": "The folder must already exist on the host.",
+        "helperNode": "The folder must already exist on {{node}}."
+      },
+      "smbWarning": "Docker stores this password in the volume's options, where anyone who can inspect the volume can read it. Use a credentials file if you can.",
+      "generated": {
+        "label": "Driver options that will be sent"
       }
     },
     "errors": {
@@ -55,7 +85,10 @@
       "nodeUnreachable": "That node isn't reachable right now. Try again when it's back.",
       "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
       "permission": "You no longer have permission to do that. Your access may have changed.",
-      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening."
+      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+      "serverRequired": "Enter a server address.",
+      "pathInvalid": "Enter a path that starts with /.",
+      "shareRequired": "Enter a share name."
     }
   }
 }

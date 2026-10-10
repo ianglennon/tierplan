@@ -375,3 +375,10 @@ func TestAuditOptionsIsCappedAtFiveHundredBytesWithoutSplittingACharacter(t *tes
 		t.Fatalf("a cap must never reveal a password: %q", got)
 	}
 }
+
+func TestAuditOptionsMasksALoneSecretSegmentWithNoCommaToo(t *testing.T) {
+	got := redact.AuditOptions(map[string]string{"o": "password=hunter2", "type": "cifs"})
+	if got != "o=password=<hidden>; type=cifs" {
+		t.Fatalf("AuditOptions = %q", got)
+	}
+}

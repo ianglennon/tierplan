@@ -465,6 +465,21 @@ describe("CreateVolumeDialog (presets)", () => {
     expect(posts()).toEqual([]);
   });
 
+  it("shows a typed SMB password as dots in the generated rows, never in the clear", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await chooseType(dialog, "SMB (CIFS) share");
+    fill(dialog, "Server address", "nas.lan");
+    fill(dialog, "Share name", "media");
+    fill(dialog, "Username", "bob");
+    fill(dialog, "Password", "s3cret");
+    const generated = within(dialog).getByRole("group", {
+      name: "Driver options that will be sent",
+    });
+    expect(generated.textContent).toContain("username=bob,password=");
+    expect(generated.textContent).not.toContain("s3cret");
+  });
+
   it("shows the host folder field with its helper and posts a bind", async () => {
     mount();
     const dialog = await screen.findByRole("dialog");

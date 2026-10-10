@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import { TriangleAlert } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
@@ -30,12 +31,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  generatedRows,
+  type PresetFields,
+  type PresetType,
+  presetOptions,
+} from "@/features/volumes/presets";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 // The kinds of volume the Type select offers. None is a plain volume of the driver.
-export const TYPES = ["none"] as const;
+export const TYPES = ["none", "nfs", "smb", "host"] as const satisfies readonly PresetType[];
 export type VolumeType = (typeof TYPES)[number];
 
 // The server's own limit on a name; the pattern is the engine's.
@@ -56,10 +63,29 @@ function makeSchema(needsNode: boolean) {
       nodeId: z.string(),
       driver: z.string().trim(),
       type: z.enum(TYPES),
+      // The preset fields. Only the ones of the chosen Type are checked and sent.
+      server: z.string().trim(),
+      path: z.string().trim(),
+      nfsOptions: z.string().trim(),
+      share: z.string().trim(),
+      username: z.string().trim(),
+      password: z.string(),
+      smbOptions: z.string().trim(),
+      folder: z.string().trim(),
     })
     .superRefine((v, ctx) => {
-      if (needsNode && v.nodeId === "") {
-        ctx.addIssue({ code: "custom", path: ["nodeId"], message: "volumes.errors.nodeRequired" });
+      const issue = (path: keyof typeof v, message: string) =>
+        ctx.addIssue({ code: "custom", path: [path], message });
+      if (needsNode && v.nodeId === "") issue("nodeId", "volumes.errors.nodeRequired");
+      if ((v.type === "nfs" || v.type === "smb") && v.server === "") {
+        issue("server", "volumes.errors.serverRequired");
+      }
+      if (v.type === "nfs" && !v.path.startsWith("/")) issue("path", "volumes.errors.pathInvalid");
+      if (v.type === "smb" && v.share.replace(/^\/+/, "") === "") {
+        issue("share", "volumes.errors.shareRequired");
+      }
+      if (v.type === "host" && !v.folder.startsWith("/")) {
+        issue("folder", "volumes.errors.pathInvalid");
       }
     });
 }
@@ -156,7 +182,20 @@ function CreateVolumeForm({ envId, swarm, networks, volumes, onClose }: FormProp
   const schema = useMemo(() => makeSchema(swarm), [swarm]);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
-    defaultValues: { name: "", nodeId: "", driver: DEFAULT_DRIVER, type: "none" },
+    defaultValues: {
+      name: "",
+      nodeId: "",
+      driver: DEFAULT_DRIVER,
+      type: "none",
+      server: "",
+      path: "",
+      nfsOptions: "rw",
+      share: "",
+      username: "",
+      password: "",
+      smbOptions: "",
+      folder: "",
+    },
     mode: "onSubmit",
   });
   const errors = form.formState.errors;
@@ -174,6 +213,34 @@ function CreateVolumeForm({ envId, swarm, networks, volumes, onClose }: FormProp
         : undefined;
   const nodeKey = messageOf("nodeId");
   const nodeError = nodeKey ? t(nodeKey) : undefined;
+  const errorOf = (field: keyof Values) => {
+    const key = messageOf(field);
+    return key ? t(key) : undefined;
+  };
+
+  const type = form.watch("type");
+  const watched = form.watch();
+  const chosenNode = nodes.find((n) => n.id === watched.nodeId);
+  // The preset's fields as typed, for the options that will be sent and the rows that
+  // show them.
+  const fieldsOf = (password: string): PresetFields => ({
+    server: watched.server,
+    path: watched.path,
+    share: watched.share,
+    username: watched.username,
+    password,
+    options: type === "smb" ? watched.smbOptions : watched.nfsOptions,
+    folder: watched.folder,
+  });
+  // The rows under a preset show a typed password as dots, so the screen never holds it
+  // in the clear; what is sent is built from the real one.
+  const shown = generatedRows(presetOptions(type, fieldsOf(watched.password ? "••••••••" : "")));
+  const primary = {
+    nfs: watched.server || watched.path,
+    smb: watched.server || watched.share,
+    host: watched.folder,
+    none: "",
+  }[type];
 
   function refusalOf(err: VolumeRequestError): Refusal | null {
     switch (err.type) {
@@ -199,7 +266,18 @@ function CreateVolumeForm({ envId, swarm, networks, volumes, onClose }: FormProp
     if (create.isPending) return;
     setRefusal(null);
     const labelMap = entriesOf(labels);
-    const optionMap = entriesOf(options);
+    const optionMap =
+      values.type === "none"
+        ? entriesOf(options)
+        : presetOptions(values.type, {
+            server: values.server,
+            path: values.path,
+            share: values.share,
+            username: values.username,
+            password: values.password,
+            options: values.type === "smb" ? values.smbOptions : values.nfsOptions,
+            folder: values.folder,
+          });
     create.mutate(
       {
         name: values.name,
@@ -303,7 +381,16 @@ function CreateVolumeForm({ envId, swarm, networks, volumes, onClose }: FormProp
               control={form.control}
               name="type"
               render={({ field }) => (
-                <Select value={field.value} onValueChange={field.onChange}>
+                <Select
+                  value={field.value}
+                  onValueChange={(next) => {
+                    field.onChange(next);
+                    // The password is not kept once its preset is left, and the errors of
+                    // the fields that are gone go with them.
+                    form.setValue("password", "");
+                    form.clearErrors(["server", "path", "share", "folder"]);
+                  }}
+                >
                   <SelectTrigger id={`${ids}-type`} className="w-full max-md:h-11">
                     <SelectValue />
                   </SelectTrigger>
@@ -319,22 +406,178 @@ function CreateVolumeForm({ envId, swarm, networks, volumes, onClose }: FormProp
             />
           </Field>
 
-          <Field>
-            <FieldLabel>{t("volumes.create.options.label")}</FieldLabel>
-            <KeyValueEditor
-              value={options}
-              onChange={setOptions}
-              labels={{
-                add: t("volumes.create.options.add"),
-                key: t("volumes.create.options.key"),
-                value: t("volumes.create.options.value"),
-                remove: (key) =>
-                  key
-                    ? t("volumes.create.options.remove", { name: key })
-                    : t("volumes.create.options.removeEmpty"),
-              }}
-            />
-          </Field>
+          {type === "nfs" || type === "smb" ? (
+            <Field data-invalid={errorOf("server") ? true : undefined}>
+              <FieldLabel htmlFor={`${ids}-server`}>{t("volumes.create.server.label")}</FieldLabel>
+              <Input
+                id={`${ids}-server`}
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-invalid={Boolean(errorOf("server"))}
+                className={cn("font-mono", TOUCH_HEIGHT)}
+                {...form.register("server")}
+              />
+              {errorOf("server") ? <FieldError>{errorOf("server")}</FieldError> : null}
+            </Field>
+          ) : null}
+
+          {type === "nfs" ? (
+            <>
+              <Field data-invalid={errorOf("path") ? true : undefined}>
+                <FieldLabel htmlFor={`${ids}-path`}>{t("volumes.create.nfsPath.label")}</FieldLabel>
+                <Input
+                  id={`${ids}-path`}
+                  placeholder="/srv/data"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  aria-invalid={Boolean(errorOf("path"))}
+                  className={cn("font-mono", TOUCH_HEIGHT)}
+                  {...form.register("path")}
+                />
+                {errorOf("path") ? <FieldError>{errorOf("path")}</FieldError> : null}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor={`${ids}-nfs-options`}>
+                  {t("volumes.create.mountOptions.label")}
+                </FieldLabel>
+                <Input
+                  id={`${ids}-nfs-options`}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className={cn("font-mono", TOUCH_HEIGHT)}
+                  {...form.register("nfsOptions")}
+                />
+              </Field>
+            </>
+          ) : null}
+
+          {type === "smb" ? (
+            <>
+              <Field data-invalid={errorOf("share") ? true : undefined}>
+                <FieldLabel htmlFor={`${ids}-share`}>{t("volumes.create.share.label")}</FieldLabel>
+                <Input
+                  id={`${ids}-share`}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  aria-invalid={Boolean(errorOf("share"))}
+                  className={cn("font-mono", TOUCH_HEIGHT)}
+                  {...form.register("share")}
+                />
+                {errorOf("share") ? <FieldError>{errorOf("share")}</FieldError> : null}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor={`${ids}-username`}>
+                  {t("volumes.create.username.label")}
+                </FieldLabel>
+                <Input
+                  id={`${ids}-username`}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className={cn("font-mono", TOUCH_HEIGHT)}
+                  {...form.register("username")}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor={`${ids}-password`}>
+                  {t("volumes.create.password.label")}
+                </FieldLabel>
+                <Input
+                  id={`${ids}-password`}
+                  type="password"
+                  autoComplete="new-password"
+                  className={TOUCH_HEIGHT}
+                  {...form.register("password")}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor={`${ids}-smb-options`}>
+                  {t("volumes.create.mountOptions.label")}
+                </FieldLabel>
+                <Input
+                  id={`${ids}-smb-options`}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className={cn("font-mono", TOUCH_HEIGHT)}
+                  {...form.register("smbOptions")}
+                />
+              </Field>
+              <Alert variant="warning" role="status">
+                <TriangleAlert aria-hidden="true" />
+                <AlertDescription className="break-words text-foreground">
+                  {t("volumes.create.smbWarning")}
+                </AlertDescription>
+              </Alert>
+            </>
+          ) : null}
+
+          {type === "host" ? (
+            <Field data-invalid={errorOf("folder") ? true : undefined}>
+              <FieldLabel htmlFor={`${ids}-folder`}>{t("volumes.create.folder.label")}</FieldLabel>
+              <Input
+                id={`${ids}-folder`}
+                placeholder="/srv/data"
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-invalid={Boolean(errorOf("folder"))}
+                aria-describedby={`${ids}-folder-helper`}
+                className={cn("font-mono", TOUCH_HEIGHT)}
+                {...form.register("folder")}
+              />
+              <FieldDescription id={`${ids}-folder-helper`}>
+                {swarm && chosenNode
+                  ? t("volumes.create.folder.helperNode", { node: chosenNode.name })
+                  : t("volumes.create.folder.helperHost")}
+              </FieldDescription>
+              {errorOf("folder") ? <FieldError>{errorOf("folder")}</FieldError> : null}
+            </Field>
+          ) : null}
+
+          {type === "none" ? (
+            <Field>
+              <FieldLabel>{t("volumes.create.options.label")}</FieldLabel>
+              <KeyValueEditor
+                value={options}
+                onChange={setOptions}
+                labels={{
+                  add: t("volumes.create.options.add"),
+                  key: t("volumes.create.options.key"),
+                  value: t("volumes.create.options.value"),
+                  remove: (key) =>
+                    key
+                      ? t("volumes.create.options.remove", { name: key })
+                      : t("volumes.create.options.removeEmpty"),
+                }}
+              />
+            </Field>
+          ) : primary ? (
+            <fieldset className="flex min-w-0 flex-col gap-1 rounded-md border bg-muted/40 p-3">
+              <legend className="px-1 text-xs font-medium text-muted-foreground">
+                {t("volumes.create.generated.label")}
+              </legend>
+              <dl className="flex flex-col gap-1 text-sm">
+                {shown.map((row) => (
+                  <div key={row.name} className="flex flex-wrap gap-x-2">
+                    <dt className="font-mono text-muted-foreground">{row.name}</dt>
+                    <dd className="min-w-0 font-mono break-all">{row.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </fieldset>
+          ) : null}
 
           <Field>
             <FieldLabel>{t("volumes.create.labels.label")}</FieldLabel>
