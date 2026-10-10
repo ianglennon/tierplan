@@ -100,6 +100,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "network.disconnected",
   "volume.created",
   "volume.removed",
+  "logs.viewed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -118,6 +119,7 @@ const ENV_SCOPED_PREFIXES = [
   "container.",
   "network.",
   "volume.",
+  "logs.",
 ];
 export const ENV_SCOPED_ACTIONS: readonly string[] = KNOWN_ACTIONS.filter(
   (key) => key === "permission.denied" || ENV_SCOPED_PREFIXES.some((p) => key.startsWith(p)),

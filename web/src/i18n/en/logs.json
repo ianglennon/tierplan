@@ -1,0 +1,8 @@
+{
+  "logs": {
+    "surface": "Logs for {{name}}",
+    "stderr": "stderr",
+    "empty": "No log output yet",
+    "loading": "Loading logs"
+  }
+}

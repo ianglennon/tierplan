@@ -112,6 +112,9 @@ var phase4DetailKeys = map[string][]string{
 	// the name, node, whether it was part of a bulk delete, and the code.
 	audit.ActionVolumeCreated: {"name", "node", "driver", "options", "code"},
 	audit.ActionVolumeRemoved: {"name", "node", "driver", "bulk", "code"},
+	// Opening a log stream records the container, its node, the viewer's random ID (sid)
+	// and what was asked for; never any line of the log (plan 04-19, D-23, D-24).
+	audit.ActionLogsViewed: {"container", "node", "sid", "since", "tail"},
 }
 
 func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -142,6 +145,7 @@ func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"network.created":   audit.ActionNetworkCreated, "network.removed": audit.ActionNetworkRemoved,
 		"network.connected": audit.ActionNetworkConnected, "network.disconnected": audit.ActionNetworkDisconnected,
 		"volume.created": audit.ActionVolumeCreated, "volume.removed": audit.ActionVolumeRemoved,
+		"logs.viewed": audit.ActionLogsViewed,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

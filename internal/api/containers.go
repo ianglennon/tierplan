@@ -459,14 +459,21 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 		})
 }
 
-// inspectOnNode resolves the node a container is on and reads its inspect there: the
-// typed detail and the raw document. Without a node only an environment of one node
-// that is not a swarm has an answer (422 node_required). The errors are already
-// problems: 404 container_not_found, 503 node_unavailable, or the environment's own.
-func inspectOnNode(ctx context.Context, d ContainersDeps, envID, wantNode, containerID string) (detail dockerx.ContainerDetail, raw []byte, nodeID string, node envs.NodeRef, err error) {
-	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+// snapshotReader is what resolveContainerNode reads: the aggregate of an environment.
+// *envs.Aggregator implements it.
+type snapshotReader interface {
+	Snapshot(ctx context.Context, envID string) (envs.Aggregate, envs.Health, error)
+}
+
+// resolveContainerNode finds the node a container route is about. Without a node only
+// an environment of one node that is not a swarm has an answer (422 node_required). A
+// node the environment does not have is not an error here: the call that follows says
+// 503 node_unavailable. The aggregate is returned for callers that look up the
+// container's row in it.
+func resolveContainerNode(ctx context.Context, src snapshotReader, log *slog.Logger, envID, wantNode string) (agg envs.Aggregate, nodeID string, node envs.NodeRef, err error) {
+	agg, _, err = src.Snapshot(ctx, envID)
 	if err != nil {
-		return detail, nil, "", node, snapshotProblem(d.Log, envID, err)
+		return agg, "", node, snapshotProblem(log, envID, err)
 	}
 	nodeID = wantNode
 	if nodeID == "" {
@@ -474,7 +481,7 @@ func inspectOnNode(ctx context.Context, d ContainersDeps, envID, wantNode, conta
 		// an answer: anywhere else the container could be on any of several.
 		swarmType := agg.Target.Probe.Type == dockerx.TypeSwarmManager || agg.Target.Probe.Type == dockerx.TypeSwarmWorker
 		if len(agg.Nodes) != 1 || swarmType {
-			return detail, nil, "", node, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
+			return agg, "", node, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
 				"This environment has more than one node. Say which one the container is on (nodeId).")
 		}
 		nodeID = agg.Nodes[0].ID
@@ -483,6 +490,18 @@ func inspectOnNode(ctx context.Context, d ContainersDeps, envID, wantNode, conta
 		if n.ID == nodeID {
 			node = n
 		}
+	}
+	return agg, nodeID, node, nil
+}
+
+// inspectOnNode resolves the node a container is on and reads its inspect there: the
+// typed detail and the raw document. Without a node only an environment of one node
+// that is not a swarm has an answer (422 node_required). The errors are already
+// problems: 404 container_not_found, 503 node_unavailable, or the environment's own.
+func inspectOnNode(ctx context.Context, d ContainersDeps, envID, wantNode, containerID string) (detail dockerx.ContainerDetail, raw []byte, nodeID string, node envs.NodeRef, err error) {
+	_, nodeID, node, err = resolveContainerNode(ctx, d.Aggregator, d.Log, envID, wantNode)
+	if err != nil {
+		return detail, nil, "", node, err
 	}
 
 	inspectCtx, cancel := context.WithTimeout(ctx, inspectTimeout)

@@ -370,6 +370,8 @@ type Fake struct {
 	inflight, maxInflight int
 	// execs is the exec state (fake_exec.go).
 	execs fakeExecs
+	// logs is the container log state (fake_logs.go).
+	logs fakeLogs
 	// nets are the networks created through the fake, and netCreates the bodies of
 	// those requests (fake_networks.go).
 	nets       []FakeNetwork

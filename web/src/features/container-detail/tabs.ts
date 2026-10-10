@@ -8,7 +8,10 @@ export interface ContainerTab {
   id: string;
   // The route the tab links to: the page's own address for the Overview, a child
   // of it for every other tab.
-  to: "/env/$envId/containers/$containerId" | "/env/$envId/containers/$containerId/inspect";
+  to:
+    | "/env/$envId/containers/$containerId"
+    | "/env/$envId/containers/$containerId/logs"
+    | "/env/$envId/containers/$containerId/inspect";
   // The i18n key of the tab's label.
   labelKey: string;
   // True when only the tab's own path is the tab, as for the Overview, whose
@@ -22,6 +25,12 @@ export const CONTAINER_TABS = [
     to: "/env/$envId/containers/$containerId",
     labelKey: "containerdetail.tabs.overview",
     exact: true,
+  },
+  {
+    id: "logs",
+    to: "/env/$envId/containers/$containerId/logs",
+    labelKey: "containerdetail.tabs.logs",
+    exact: false,
   },
   {
     id: "inspect",

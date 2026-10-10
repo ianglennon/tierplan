@@ -445,7 +445,9 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // options, so the caller can ask for nothing else.
 // VolumeRemove (Phase 4, RES-07) removes one volume by name, once; it takes no options, so force
 // is never sent, and the API refuses a volume that is in use before it is called.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+// ContainerLogs (Phase 4, OBS-01) is a read: one inspect, then the engine's log of the container
+// with stdout, stderr and timestamps always on; it takes only the time range, the tail and follow.
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.

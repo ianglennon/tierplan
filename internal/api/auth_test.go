@@ -97,6 +97,13 @@ type authFixture struct {
 	eventsMaxStreams int
 	// eventsMaxLifetime caps how long one stream may live; zero is the default.
 	eventsMaxLifetime time.Duration
+	// logsHeartbeat, logsMaxStreams and logsMaxLifetime tune the container log stream
+	// (plan 04-19); zero is the default. logsWrap, when set, wraps the aggregator the
+	// stream reads through, so a test can make the node refuse as a busy agent does.
+	logsHeartbeat   time.Duration
+	logsMaxStreams  int
+	logsMaxLifetime time.Duration
+	logsWrap        func(api.LogsSource) api.LogsSource
 	// volumeSizesTimeout shortens the per-node time limit of the volume sizes route.
 	volumeSizesTimeout time.Duration
 	// brk, when set with envSvc, is the health broker behind GET
@@ -243,6 +250,14 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Log: log})
 		api.RegisterVolumes(r, api.VolumesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SizesTimeout: f.volumeSizesTimeout, Log: log})
+		var logsSrc api.LogsSource = f.agg
+		if f.logsWrap != nil {
+			logsSrc = f.logsWrap(logsSrc)
+		}
+		api.RegisterLogs(r, api.LogsDeps{
+			Aggregator: logsSrc, Audit: f.aud, Heartbeat: f.logsHeartbeat, MaxStreamsPerUser: f.logsMaxStreams,
+			MaxLifetime: f.logsMaxLifetime, Now: f.clk.now, Log: log,
+		})
 	}
 	if f.envSvc != nil && f.agg != nil && f.hub != nil {
 		api.RegisterEvents(r, api.EventsDeps{Aggregator: f.agg, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, MaxLifetime: f.eventsMaxLifetime, Log: log})

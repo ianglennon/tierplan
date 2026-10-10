@@ -411,12 +411,37 @@ describe("a container that fails to load or is gone", () => {
   });
 });
 
+describe("the Logs tab", () => {
+  it("sits between Overview and Inspect and keeps the node in its address", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
+    expect(tabs).toEqual(["Overview", "Logs", "Inspect"]);
+    expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("href")).toBe(
+      "/env/e1/containers/web-id/logs?node=n1",
+    );
+  });
+
+  it("opens the live log of the container on its node, named for it", async () => {
+    renderAt(`/env/${ENV}/containers/web-id/logs?node=n1`);
+    const surface = await screen.findByRole("log", { name: "Logs for web" });
+    expect(surface).toBeTruthy();
+    const source = FakeEventSource.instances.find((i) => i.url.includes("/logs/stream"));
+    expect(source?.url).toContain("/api/env/e1/containers/web-id/logs/stream?");
+    expect(source?.url).toContain("nodeId=n1");
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("data-active")).toBeTruthy(),
+    );
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("data-active")).toBeNull();
+  });
+});
+
 describe("the Inspect tab", () => {
   it("is the last tab and keeps the node in its address", async () => {
     renderAt();
     await screen.findByRole("heading", { name: "web" });
     const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
-    expect(tabs).toEqual(["Overview", "Inspect"]);
+    expect(tabs).toEqual(["Overview", "Logs", "Inspect"]);
     expect(screen.getByRole("tab", { name: "Inspect" }).getAttribute("href")).toBe(
       "/env/e1/containers/web-id/inspect?node=n1",
     );

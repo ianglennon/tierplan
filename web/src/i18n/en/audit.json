@@ -182,6 +182,9 @@
       "volume": {
         "created": "Volume created",
         "removed": "Volume removed"
+      },
+      "logs": {
+        "viewed": "Container logs viewed"
       }
     },
     "coalesced": {
