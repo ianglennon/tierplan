@@ -18,6 +18,7 @@
       "images": "Images",
       "volumes": "Volumes",
       "networks": "Networks",
+      "events": "Events",
       "audit": "Audit",
       "settings": "Settings"
     },

@@ -124,10 +124,23 @@ export interface EventSourceLike {
   close(): void;
 }
 
+// What a read of the recent list asks for: the oldest time to look back to (an
+// RFC 3339 time, which the server clamps to 24 hours) and how many events.
+export interface RecentQuery {
+  since?: string;
+  limit: number;
+}
+
 export interface EventsConnectionOptions {
   envId: string;
   // GET /api/env/{envId}/events, newest first. A rejection is a failed read.
-  fetchRecent: () => Promise<EventDTO[]>;
+  fetchRecent: (query: RecentQuery) => Promise<EventDTO[]>;
+  // How many events are kept, newest first. The dashboard's feed keeps FEED_CAP;
+  // the Events page keeps 1000.
+  cap?: number;
+  // Reads of the list ask for events from this time on (RFC 3339). Without it the
+  // server decides, which for the dashboard is the recent past.
+  since?: string;
   // The real EventSource unless a test supplies one.
   createSource?: (url: string) => EventSourceLike;
   // Called with a query key that an event made stale; already throttled.
@@ -162,6 +175,8 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
   const {
     envId,
     fetchRecent,
+    cap = FEED_CAP,
+    since,
     invalidate,
     onChange,
     pollMs = 30_000,
@@ -180,6 +195,8 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let errors: number[] = [];
   const seen = new Set<string>();
+  // Room to remember every event that is kept, and some that have left.
+  const seenLimit = Math.max(SEEN_LIMIT, cap * 2);
   const throttles = new Map<
     string,
     { last: number; timer?: ReturnType<typeof setTimeout>; key: QueryKey }
@@ -209,7 +226,7 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
     }
     // A Set iterates in insertion order, so this forgets the oldest ids.
     for (const id of seen) {
-      if (seen.size <= SEEN_LIMIT) break;
+      if (seen.size <= seenLimit) break;
       seen.delete(id);
     }
     return fresh;
@@ -243,7 +260,7 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
   // invalidating anything: they are repeats, or history from before we looked.
   function take(incoming: EventDTO[], live: boolean): void {
     const fresh = remember(incoming);
-    events = mergeEvents(events, incoming, FEED_CAP);
+    events = mergeEvents(events, incoming, cap);
     if (live) {
       for (const e of fresh) for (const key of invalidationKeys(e.type, envId)) throttled(key);
     }
@@ -252,7 +269,7 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
 
   async function read(live: boolean): Promise<void> {
     try {
-      const recent = await fetchRecent();
+      const recent = await fetchRecent({ since, limit: cap });
       if (closed) return;
       loaded = true;
       loadFailed = false;
@@ -367,8 +384,13 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
 
 // The provider and the hook.
 
-export async function fetchRecentEvents(envId: string): Promise<EventDTO[]> {
-  const { data } = await api.GET("/api/env/{envId}/events", { params: { path: { envId } } });
+export async function fetchRecentEvents(
+  envId: string,
+  query: Partial<RecentQuery> = {},
+): Promise<EventDTO[]> {
+  const { data } = await api.GET("/api/env/{envId}/events", {
+    params: { path: { envId }, query },
+  });
   if (!data) throw new Error("GET events failed");
   return data.items ?? [];
 }
@@ -403,7 +425,7 @@ export function EnvEventsProvider({ envId, enabled = true, children }: EnvEvents
     if (!enabled) return;
     const next = createEventsConnection({
       envId,
-      fetchRecent: () => fetchRecentEvents(envId),
+      fetchRecent: (query) => fetchRecentEvents(envId, query),
       invalidate: (key) => void queryClient.invalidateQueries({ queryKey: key }),
       onChange: setSnapshot,
     });

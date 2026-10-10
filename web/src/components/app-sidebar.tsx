@@ -3,6 +3,7 @@
 
 import { Link, useParams } from "@tanstack/react-router";
 import {
+  Activity,
   Container,
   HardDrive,
   Layers,
@@ -40,13 +41,16 @@ import { useT } from "@/i18n/use-t";
 // The version footer is in the sidebar only while the sidebar is expanded or
 // its mobile drawer is open. Otherwise the app layout renders it at the bottom
 // of the page, so exactly one is visible at every size and state (PLAT-05).
-// The Resources group (D-56, UI-SPEC interpretation 2): the four read-only
-// lists of the selected environment, each shown only to a user who may read it.
+// The Resources group (D-56, UI-SPEC interpretation 2): the read-only
+// lists of the selected environment and its event feed, each shown only to a user
+// who may read it.
 const RESOURCE_ITEMS = [
   { key: "containers", perm: "containers.read", to: "/env/$envId/containers", icon: Container },
   { key: "images", perm: "images.read", to: "/env/$envId/images", icon: Layers },
   { key: "volumes", perm: "volumes.read", to: "/env/$envId/volumes", icon: HardDrive },
   { key: "networks", perm: "networks.read", to: "/env/$envId/networks", icon: Network },
+  // The events stream already needs environments.read, so no new permission (D-51).
+  { key: "events", perm: "environments.read", to: "/env/$envId/events", icon: Activity },
 ] as const;
 
 function ResourceItem({ envId, item }: { envId: string; item: (typeof RESOURCE_ITEMS)[number] }) {

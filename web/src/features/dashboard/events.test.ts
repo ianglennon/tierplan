@@ -10,6 +10,7 @@ import {
   type FeedState,
   invalidationKeys,
   mergeEvents,
+  type RecentQuery,
 } from "@/features/dashboard/events";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { resetBasePathForTests } from "@/lib/base-path";
@@ -44,13 +45,17 @@ function announceBase(base: string | null): void {
 
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
-function connect(fetchRecent: () => Promise<EventDTO[]>) {
+function connect(
+  fetchRecent: (query: RecentQuery) => Promise<EventDTO[]>,
+  extra: { cap?: number; since?: string } = {},
+) {
   FakeEventSource.instances = [];
   const snapshots: EventsSnapshot[] = [];
   const invalidated: Array<readonly unknown[]> = [];
   const connection = createEventsConnection({
     envId: "e1",
     fetchRecent,
+    ...extra,
     createSource: (url) => new FakeEventSource(url),
     invalidate: (key) => invalidated.push(key),
     onChange: (s) => snapshots.push(s),
@@ -526,5 +531,39 @@ describe("createEventsConnection", () => {
     resolve([ev("a", "2026-10-02T10:00:01Z")]);
     await flush();
     expect(c.snapshots.length).toBe(n);
+  });
+
+  it("asks for the feed's own 50 events and no start time unless told otherwise", async () => {
+    const fetchRecent = vi.fn((_: RecentQuery) => Promise.resolve([] as EventDTO[]));
+    const c = connect(fetchRecent);
+    c.connection.start();
+    await flush();
+    expect(fetchRecent).toHaveBeenCalledWith({ since: undefined, limit: 50 });
+  });
+
+  it("keeps the cap it is given and asks for that many events from the time it is given", async () => {
+    const since = "2026-10-02T09:00:00.000Z";
+    const history = Array.from({ length: 1200 }, (_, i) =>
+      ev(`h${i}`, new Date(Date.parse("2026-10-02T10:00:00Z") + i * 1000).toISOString()),
+    );
+    const fetchRecent = vi.fn((_: RecentQuery) =>
+      Promise.resolve([...history].reverse().slice(0, 1000)),
+    );
+    const c = connect(fetchRecent, { cap: 1000, since });
+    c.connection.start();
+    await flush();
+    expect(fetchRecent).toHaveBeenCalledWith({ since, limit: 1000 });
+    expect(c.last().events).toHaveLength(1000);
+    expect(c.last().events[0]?.id).toBe("h1199");
+
+    (c.source() as FakeEventSource).open();
+    (c.source() as FakeEventSource).send(ev("live", "2026-10-02T11:00:00Z"));
+    expect(c.last().events).toHaveLength(1000);
+    expect(c.last().events[0]?.id).toBe("live");
+    // The same window is read again when the stream gives way to polling.
+    (c.source() as FakeEventSource).fail(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchRecent).toHaveBeenLastCalledWith({ since, limit: 1000 });
+    expect(c.last().events).toHaveLength(1000);
   });
 });

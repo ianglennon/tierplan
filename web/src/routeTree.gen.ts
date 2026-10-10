@@ -27,6 +27,7 @@ import { Route as AppSettingsEnvironmentsRouteImport } from './routes/_app/setti
 import { Route as AppSettingsGeneralRouteImport } from './routes/_app/settings/general'
 import { Route as AppEnvEnvIdIndexRouteImport } from './routes/_app/env/$envId/index'
 import { Route as AppEnvEnvIdContainersRouteImport } from './routes/_app/env/$envId/containers'
+import { Route as AppEnvEnvIdEventsRouteImport } from './routes/_app/env/$envId/events'
 import { Route as AppEnvEnvIdImagesRouteImport } from './routes/_app/env/$envId/images'
 import { Route as AppEnvEnvIdNetworksRouteImport } from './routes/_app/env/$envId/networks'
 import { Route as AppEnvEnvIdVolumesRouteImport } from './routes/_app/env/$envId/volumes'
@@ -141,6 +142,11 @@ const AppEnvEnvIdIndexRoute = AppEnvEnvIdIndexRouteImport.update({
 const AppEnvEnvIdContainersRoute = AppEnvEnvIdContainersRouteImport.update({
   id: '/containers',
   path: '/containers',
+  getParentRoute: () => AppEnvEnvIdRoute,
+} as any)
+const AppEnvEnvIdEventsRoute = AppEnvEnvIdEventsRouteImport.update({
+  id: '/events',
+  path: '/events',
   getParentRoute: () => AppEnvEnvIdRoute,
 } as any)
 const AppEnvEnvIdImagesRoute = AppEnvEnvIdImagesRouteImport.update({
@@ -311,6 +317,7 @@ export interface FileRoutesByFullPath {
   '/settings/general': typeof AppSettingsGeneralRoute
   '/settings/': typeof AppSettingsIndexRoute
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
+  '/env/$envId/events': typeof AppEnvEnvIdEventsRoute
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
@@ -353,6 +360,7 @@ export interface FileRoutesByTo {
   '/settings/general': typeof AppSettingsGeneralRoute
   '/settings': typeof AppSettingsIndexRoute
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
+  '/env/$envId/events': typeof AppEnvEnvIdEventsRoute
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
@@ -396,6 +404,7 @@ export interface FileRoutesById {
   '/_app/settings/general': typeof AppSettingsGeneralRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
+  '/_app/env/$envId/events': typeof AppEnvEnvIdEventsRoute
   '/_app/env/$envId/images': typeof AppEnvEnvIdImagesRoute
   '/_app/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/_app/env/$envId/volumes': typeof AppEnvEnvIdVolumesRoute
@@ -443,6 +452,7 @@ export interface FileRouteTypes {
     | '/settings/general'
     | '/settings/'
     | '/env/$envId/containers'
+    | '/env/$envId/events'
     | '/env/$envId/images'
     | '/env/$envId/networks'
     | '/env/$envId/volumes'
@@ -485,6 +495,7 @@ export interface FileRouteTypes {
     | '/settings/general'
     | '/settings'
     | '/env/$envId/containers'
+    | '/env/$envId/events'
     | '/env/$envId/images'
     | '/env/$envId/networks'
     | '/env/$envId/volumes'
@@ -527,6 +538,7 @@ export interface FileRouteTypes {
     | '/_app/settings/general'
     | '/_app/settings/'
     | '/_app/env/$envId/containers'
+    | '/_app/env/$envId/events'
     | '/_app/env/$envId/images'
     | '/_app/env/$envId/networks'
     | '/_app/env/$envId/volumes'
@@ -692,6 +704,13 @@ declare module '@tanstack/react-router' {
       path: '/containers'
       fullPath: '/env/$envId/containers'
       preLoaderRoute: typeof AppEnvEnvIdContainersRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
+    '/_app/env/$envId/events': {
+      id: '/_app/env/$envId/events'
+      path: '/events'
+      fullPath: '/env/$envId/events'
+      preLoaderRoute: typeof AppEnvEnvIdEventsRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
     '/_app/env/$envId/images': {
@@ -1009,6 +1028,7 @@ const AppEnvEnvIdVolumesVolumeNameRouteWithChildren =
 
 interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdContainersRoute: typeof AppEnvEnvIdContainersRoute
+  AppEnvEnvIdEventsRoute: typeof AppEnvEnvIdEventsRoute
   AppEnvEnvIdImagesRoute: typeof AppEnvEnvIdImagesRoute
   AppEnvEnvIdNetworksRoute: typeof AppEnvEnvIdNetworksRoute
   AppEnvEnvIdVolumesRoute: typeof AppEnvEnvIdVolumesRoute
@@ -1020,6 +1040,7 @@ interface AppEnvEnvIdRouteChildren {
 
 const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
   AppEnvEnvIdContainersRoute: AppEnvEnvIdContainersRoute,
+  AppEnvEnvIdEventsRoute: AppEnvEnvIdEventsRoute,
   AppEnvEnvIdImagesRoute: AppEnvEnvIdImagesRoute,
   AppEnvEnvIdNetworksRoute: AppEnvEnvIdNetworksRoute,
   AppEnvEnvIdVolumesRoute: AppEnvEnvIdVolumesRoute,

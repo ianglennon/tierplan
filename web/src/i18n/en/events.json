@@ -1,0 +1,42 @@
+{
+  "events": {
+    "title": "Events",
+    "caption": "What Docker reports on {{name}}, as it happens.",
+    "info": "Docker keeps only a short history of events, so older ones may be missing.",
+    "bufferNote": "Showing the newest 1000 events.",
+    "table": {
+      "label": "Docker events, newest first"
+    },
+    "columns": {
+      "time": "Time",
+      "type": "Type",
+      "action": "Action",
+      "name": "Name",
+      "node": "Node",
+      "details": "Details"
+    },
+    "types": {
+      "container": "Container",
+      "image": "Image",
+      "network": "Network",
+      "volume": "Volume",
+      "service": "Service",
+      "node": "Node",
+      "secret": "Secret",
+      "config": "Config",
+      "bayplan": "Bayplan"
+    },
+    "row": {
+      "exitCode": "exit code {{code}}"
+    },
+    "empty": {
+      "title": "No events in this range",
+      "body": "New events appear here as they happen."
+    },
+    "error": {
+      "title": "Couldn't load events.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry"
+    }
+  }
+}

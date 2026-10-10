@@ -153,6 +153,43 @@ describe("Audit in the sidebar", () => {
   });
 });
 
+describe("Events in the sidebar", () => {
+  const sidebar = () => document.querySelector("[data-slot=sidebar]") as HTMLElement;
+  const hrefs = () =>
+    within(sidebar())
+      .getAllByRole("link")
+      .filter((l) => l.getAttribute("href")?.startsWith("/env/e1/"))
+      .map((l) => [l.textContent, l.getAttribute("href")]);
+
+  it("lists Events last in Resources for anyone who holds environments.read (D-51)", async () => {
+    account = makeMe({
+      permissions: {
+        global: [],
+        environments: { e1: ["environments.read", "containers.read", "networks.read"] },
+      },
+    });
+    renderAt("/env/e1");
+    await screen.findByRole("link", { name: "Events" });
+    expect(hrefs()).toEqual([
+      ["Containers", "/env/e1/containers"],
+      ["Networks", "/env/e1/networks"],
+      ["Events", "/env/e1/events"],
+    ]);
+  });
+
+  it("leaves Events out for someone who cannot read the environment itself", async () => {
+    account = makeMe({
+      permissions: {
+        global: [],
+        environments: { e1: ["containers.read"], other: ["environments.read"] },
+      },
+    });
+    renderAt("/env/e1");
+    await screen.findByRole("link", { name: "Containers" });
+    expect(within(sidebar()).queryByRole("link", { name: "Events" })).toBeNull();
+  });
+});
+
 describe("app shell", () => {
   it("shows the no-environments landing with the UI-SPEC copy", async () => {
     renderAt("/");
