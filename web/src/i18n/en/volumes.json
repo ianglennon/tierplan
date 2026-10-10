@@ -238,6 +238,12 @@
           "label": "Labels",
           "empty": "No labels."
         }
+      },
+      "inspect": {
+        "loading": "Loading the inspect output",
+        "loadFailed": "Couldn't load the inspect output of {{name}}.",
+        "retry": "Retry",
+        "masked": "Option values are hidden. Needs the reveal secrets permission to show them."
       }
     }
   }

@@ -79,6 +79,7 @@ let sent: Sent[];
 let me: ReturnType<typeof makeMe>;
 let answer: () => Response | Promise<Response>;
 let deleteAnswer: () => Response;
+let inspectAnswer: () => Response | Promise<Response>;
 const defaults = queryClient.getDefaultOptions();
 
 beforeEach(() => {
@@ -87,6 +88,11 @@ beforeEach(() => {
   answer = () => Response.json(detail());
   deleteAnswer = () =>
     Response.json({ results: [{ nodeId: "n1", name: "appdata", result: "done" }] });
+  inspectAnswer = () =>
+    Response.json({
+      masked: true,
+      inspect: { Name: "appdata", Driver: "local", Options: { o: "<hidden>" } },
+    });
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   detailRetry.attempts = 0;
   setCsrfToken(null);
@@ -156,6 +162,8 @@ beforeEach(() => {
           });
         case `/api/env/${ENV}/volumes/appdata`:
           return answer();
+        case `/api/env/${ENV}/volumes/appdata/inspect`:
+          return inspectAnswer();
         case `/api/env/${ENV}/volumes/delete`:
           return deleteAnswer();
         case `/api/env/${ENV}/volumes`:
@@ -301,5 +309,53 @@ describe("volume page states", () => {
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("heading", { level: 2, name: "appdata" })).toBeTruthy();
+  });
+});
+
+describe("volume Inspect tab", () => {
+  it("is a tab beside Overview and shows the document with the volume's masked notice", async () => {
+    const router = renderAt();
+    const tab = await screen.findByRole("tab", { name: "Inspect" });
+    expect(screen.getByRole("tab", { name: "Overview" })).toBeTruthy();
+    fireEvent.click(tab);
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(`/env/${ENV}/volumes/appdata/inspect`),
+    );
+    expect(router.state.location.search).toMatchObject({ node: "n1" });
+    const doc = await screen.findByRole("region", { name: /appdata/i });
+    expect(doc.textContent).toContain('"Driver": "local"');
+    expect(doc.textContent).toContain("<hidden>");
+    expect(
+      screen.getByText(
+        "Option values are hidden. Needs the reveal secrets permission to show them.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy JSON" })).toBeTruthy();
+    expect(sent.some((s) => s.path === `/api/env/${ENV}/volumes/appdata/inspect`)).toBe(true);
+  });
+
+  it("shows no notice when nothing was masked", async () => {
+    inspectAnswer = () =>
+      Response.json({ masked: false, inspect: { Name: "appdata", Options: { o: "x" } } });
+    renderAt(`/env/${ENV}/volumes/appdata/inspect?node=n1`);
+    expect((await screen.findByRole("region", { name: /appdata/i })).textContent).toContain(
+      '"o": "x"',
+    );
+    expect(screen.queryByText(/Option values are hidden/)).toBeNull();
+  });
+
+  it("says it could not load the inspect output, with Retry", async () => {
+    let fail = true;
+    inspectAnswer = () =>
+      fail
+        ? Response.json({ title: "x", status: 502 }, { status: 502 })
+        : Response.json({ masked: false, inspect: { Name: "appdata" } });
+    renderAt(`/env/${ENV}/volumes/appdata/inspect?node=n1`);
+    expect(await screen.findByText("Couldn't load the inspect output of appdata.")).toBeTruthy();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect((await screen.findByRole("region", { name: /appdata/i })).textContent).toContain(
+      '"Name": "appdata"',
+    );
   });
 });

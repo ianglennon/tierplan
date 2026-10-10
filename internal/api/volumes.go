@@ -227,6 +227,18 @@ type VolumeDetailOutput struct {
 	Body         VolumeDetailBody
 }
 
+// VolumeInspectBody is the raw inspect document of one volume.
+type VolumeInspectBody struct {
+	Masked  bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
+	Inspect map[string]any `json:"inspect" doc:"The engine's inspect document, with the values of Options replaced by <hidden> unless the caller holds secrets.reveal"`
+}
+
+// VolumeInspectOutput wraps VolumeInspectBody for huma.
+type VolumeInspectOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         VolumeInspectBody
+}
+
 // RegisterVolumes registers the volume routes. A write goes to one node, is never
 // retried (P2 D-42), and every attempt is audited.
 func RegisterVolumes(r *httpx.Router, d VolumesDeps) {
@@ -276,6 +288,37 @@ func RegisterVolumes(r *httpx.Router, d VolumesDeps) {
 				return nil, err
 			}
 			return &VolumeDetailOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "inspectVolume", Method: http.MethodGet, Path: "/api/env/{envId}/volumes/{volumeName}/inspect",
+		Summary: "One volume's raw inspect document",
+		Description: "The engine's inspect document of the volume as it is, for the Inspect tab. " +
+			"The volume is named as the detail route names it, with the same rules and problems (422 node_required, 404 volume_not_found, 503 node_unavailable). " +
+			"The driver option values can be credentials of a remote share: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. " +
+			"Needs volumes.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermVolumesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *VolumeDetailInput) (*VolumeInspectOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			_, _, _, raw, err := readVolume(ctx, d, env.ID, in)
+			if err != nil {
+				return nil, err
+			}
+			shown, masked, err := redact.MaskVolumeInspect(raw, redact.CanReveal(ctx, d.Checker, p, env.ID))
+			if err != nil {
+				d.Log.Error("masking a volume inspect failed", "environment", env.ID, "error", err)
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			doc, err := decodeInspect(shown)
+			if err != nil {
+				d.Log.Error("reading a volume inspect failed", "environment", env.ID, "error", err)
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			return &VolumeInspectOutput{CacheControl: "no-store", Body: VolumeInspectBody{Masked: masked, Inspect: doc}}, nil
 		})
 
 	httpx.Register(r, huma.Operation{

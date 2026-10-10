@@ -248,3 +248,59 @@ func TestVolumeAnonymous(t *testing.T) {
 		t.Fatalf("VolumeUsers of the anonymous volume = %v, %v, want %s", users, err, ctr)
 	}
 }
+
+// TestVolumeSizes proves against the engine BAYPLAN_TEST_ENGINE names (29, which answers
+// the new disk usage shape, and 24, which answers the legacy one) that VolumeSizes reports a
+// real, non-zero size for a volume a container wrote 1 MiB into, none for an empty one, and
+// the container count of each (plan 04-18, RES-07, D-47).
+func TestVolumeSizes(t *testing.T) {
+	host := dockertest.DockerHost(t)
+	cli, err := dockerx.New(dockertest.TCPTransportFor(host))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	raw := dockertest.RawClient(t, host)
+	pullImage(t, ctx, raw, "busybox:1")
+
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	full, empty := "bp-sized-"+suffix, "bp-unsized-"+suffix
+	for _, name := range []string{full, empty} {
+		if err := cli.VolumeCreate(ctx, dockerx.VolumeCreateSpec{Name: name}); err != nil {
+			t.Fatalf("VolumeCreate %s: %v", name, err)
+		}
+		t.Cleanup(func() {
+			c, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			_, _ = raw.VolumeRemove(c, name, client.VolumeRemoveOptions{Force: true})
+		})
+	}
+	// A container writes 1 MiB into one volume and exits; it stays, so it is counted.
+	if code := runToExit(t, ctx, raw, []string{full + ":/data"}, "dd if=/dev/zero of=/data/blob bs=1024 count=1024"); code != 0 {
+		t.Fatalf("writing into the volume exited %d", code)
+	}
+
+	sizes, err := cli.VolumeSizes(ctx)
+	if err != nil {
+		t.Fatalf("VolumeSizes: %v", err)
+	}
+	got, ok := sizes[full]
+	if !ok {
+		t.Fatalf("VolumeSizes has no entry for %s: %v", full, sizes)
+	}
+	if got.Size < 1<<20 {
+		t.Errorf("size of %s = %d, want at least 1 MiB", full, got.Size)
+	}
+	if got.RefCount != 1 {
+		t.Errorf("refCount of %s = %d, want the one container that wrote to it", full, got.RefCount)
+	}
+	e, ok := sizes[empty]
+	if !ok {
+		t.Fatalf("VolumeSizes has no entry for %s: %v", empty, sizes)
+	}
+	if e.Size < 0 || e.Size >= 1<<20 || e.RefCount != 0 {
+		t.Errorf("%s = %+v, want a size under 1 MiB and no container", empty, e)
+	}
+}

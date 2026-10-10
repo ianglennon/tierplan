@@ -45,6 +45,12 @@ const TABS = [
     labelKey: "volumes.detail.tabs.overview",
     exact: true,
   },
+  {
+    id: "inspect",
+    to: "/env/$envId/volumes/$volumeName/inspect",
+    labelKey: "volumes.detail.tabs.inspect",
+    exact: false,
+  },
 ] as const;
 
 function Breadcrumb({ envId, name }: { envId: string; name: string | undefined }) {

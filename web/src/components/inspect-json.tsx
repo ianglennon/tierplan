@@ -22,6 +22,8 @@ interface InspectJsonProps {
   value: unknown;
   // True when the server withheld a value, so a notice says why some are missing.
   masked: boolean;
+  // The notice, when it is not the container's: a volume's says which values are hidden.
+  maskedNotice?: string;
 }
 
 // fileName makes a name safe to save as: a container name is already plain, but a
@@ -35,7 +37,7 @@ function fileName(name: string): string {
 // block that scrolls both ways, with Copy JSON (through the clipboard fallback chain
 // that works on plain HTTP) and Download JSON (a Blob saved in the browser, no
 // request). It draws text only: no syntax highlighter, nothing read as markup.
-export function InspectJson({ name, value, masked }: InspectJsonProps) {
+export function InspectJson({ name, value, masked, maskedNotice }: InspectJsonProps) {
   const t = useT();
   const text = useMemo(() => JSON.stringify(value, null, 2), [value]);
   const [copied, setCopied] = useState(false);
@@ -83,7 +85,9 @@ export function InspectJson({ name, value, masked }: InspectJsonProps) {
         {masked ? (
           <Alert className="min-w-0 flex-1 basis-80">
             <Info aria-hidden="true" />
-            <AlertDescription>{t("containerdetail.inspect.masked")}</AlertDescription>
+            <AlertDescription>
+              {maskedNotice ?? t("containerdetail.inspect.masked")}
+            </AlertDescription>
           </Alert>
         ) : (
           <span className="flex-1" />

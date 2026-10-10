@@ -100,17 +100,9 @@ func MaskContainerInspect(raw []byte, reveal bool) (out []byte, masked bool, err
 	if reveal {
 		return raw, false, nil
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var doc map[string]any
-	if err := dec.Decode(&doc); err != nil {
-		return nil, false, fmt.Errorf("container inspect is not a JSON object: %w", err)
-	}
-	if doc == nil {
-		return nil, false, fmt.Errorf("container inspect is not a JSON object")
-	}
-	if _, err := dec.Token(); err == nil {
-		return nil, false, fmt.Errorf("container inspect has data after the JSON object")
+	doc, err := decodeObject(raw, "container inspect")
+	if err != nil {
+		return nil, false, err
 	}
 	if cfg, ok := doc["Config"].(map[string]any); ok {
 		if env, ok := cfg["Env"].([]any); ok {
@@ -140,14 +132,70 @@ func MaskContainerInspect(raw []byte, reveal bool) (out []byte, masked bool, err
 			}
 		}
 	}
+	out, err = encodeObject(doc, "container inspect")
+	return out, masked, err
+}
+
+// MaskVolumeInspect prepares the raw inspect document of a volume for a browser. With
+// reveal true the document is returned as it is and masked is false. Otherwise the value of
+// every entry of Options (the driver options, which for a remote share can hold its
+// password) is replaced by Placeholder, the names are kept and the rest of the document is
+// as it was, re-encoded with two-space indentation. masked is true when anything was
+// replaced. A document that is not a JSON object is an error, never passed through.
+func MaskVolumeInspect(raw []byte, reveal bool) (out []byte, masked bool, err error) {
+	if reveal {
+		return raw, false, nil
+	}
+	doc, err := decodeObject(raw, "volume inspect")
+	if err != nil {
+		return nil, false, err
+	}
+	switch opts := doc["Options"].(type) {
+	case map[string]any:
+		for name := range opts {
+			opts[name] = Placeholder
+			masked = true
+		}
+	case nil:
+	default:
+		// Options that are not a map of text are not a shape the engine sends: withhold
+		// them whole rather than pass something unknown through.
+		doc["Options"] = Placeholder
+		masked = true
+	}
+	out, err = encodeObject(doc, "volume inspect")
+	return out, masked, err
+}
+
+// decodeObject reads raw as one JSON object, keeping every number with its exact digits. Text
+// after the object, or anything but an object, is an error.
+func decodeObject(raw []byte, what string) (map[string]any, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("%s is not a JSON object: %w", what, err)
+	}
+	if doc == nil {
+		return nil, fmt.Errorf("%s is not a JSON object", what)
+	}
+	if _, err := dec.Token(); err == nil {
+		return nil, fmt.Errorf("%s has data after the JSON object", what)
+	}
+	return doc, nil
+}
+
+// encodeObject writes doc with two-space indentation, without escaping HTML and without a
+// trailing newline.
+func encodeObject(doc map[string]any, what string) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(doc); err != nil {
-		return nil, false, fmt.Errorf("encode container inspect: %w", err)
+		return nil, fmt.Errorf("encode %s: %w", what, err)
 	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), masked, nil
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 // auditOptionsMax caps the text AuditOptions returns, under the audit log's own limit

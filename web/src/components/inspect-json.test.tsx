@@ -54,6 +54,12 @@ describe("InspectJson", () => {
     expect(document.querySelector("img")).toBeNull();
   });
 
+  it("says what its caller tells it when values are withheld, in place of the container's wording", () => {
+    render(<InspectJson name="data" value={DOC} masked maskedNotice="Option values are hidden." />);
+    expect(screen.getByText("Option values are hidden.")).toBeTruthy();
+    expect(screen.queryByText(NOTICE)).toBeNull();
+  });
+
   it("explains hidden values only when the server withheld some, and shows its placeholder as sent", () => {
     const { rerender } = render(<InspectJson name="web" value={DOC} masked={false} />);
     expect(screen.queryByText(NOTICE)).toBeNull();

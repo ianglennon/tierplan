@@ -864,6 +864,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/volumes/{volumeName}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One volume's raw inspect document
+         * @description The engine's inspect document of the volume as it is, for the Inspect tab. The volume is named as the detail route names it, with the same rules and problems (422 node_required, 404 volume_not_found, 503 node_unavailable). The driver option values can be credentials of a remote share: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. Needs volumes.read (Viewer) on the environment.
+         */
+        get: operations["inspectVolume"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments": {
         parameters: {
             query?: never;
@@ -4331,6 +4351,14 @@ export interface components {
              */
             usedByServices: number;
         };
+        VolumeInspectBody: {
+            /** @description The engine's inspect document, with the values of Options replaced by <hidden> unless the caller holds secrets.reveal */
+            inspect: {
+                [key: string]: unknown;
+            };
+            /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked: boolean;
+        };
         VolumeItem: {
             /** @description True for a volume Docker made for a container without a name: it has the com.docker.volume.anonymous label, or on an engine without it a name of 64 hexadecimal characters */
             anonymous: boolean;
@@ -6197,6 +6225,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VolumeDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectVolume: {
+        parameters: {
+            query?: {
+                /** @description The node the volume is on: the nodeId of its row in the volumes list. Volumes are node-local, so it is required on a swarm and may be left out only on an environment of one node */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The volume name */
+                volumeName: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeInspectBody"];
                 };
             };
             /** @description Error */

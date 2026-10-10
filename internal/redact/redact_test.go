@@ -382,3 +382,78 @@ func TestAuditOptionsMasksALoneSecretSegmentWithNoCommaToo(t *testing.T) {
 		t.Fatalf("AuditOptions = %q", got)
 	}
 }
+
+// A volume's Options can hold a remote share's password, so its inspect document goes to a
+// browser with them withheld unless the caller holds secrets.reveal (plan 04-18, T-04-59).
+
+const volumeInspectFixture = `{"CreatedAt":"2026-09-01T10:00:00Z","Driver":"local","Labels":{"app":"x"},"Mountpoint":"/var/lib/docker/volumes/share/_data","Name":"share","Options":{"device":"//10.0.0.9/data","o":"username=bob,password=hunter2","type":"cifs"},"Scope":"local","Big":12345678901234567890}`
+
+func TestMaskVolumeInspectReplacesEveryOptionValueKeepsTheNamesAndTheRestOfTheDocument(t *testing.T) {
+	out, masked, err := redact.MaskVolumeInspect([]byte(volumeInspectFixture), false)
+	if err != nil {
+		t.Fatalf("MaskVolumeInspect: %v", err)
+	}
+	if !masked {
+		t.Error("masked = false, want true")
+	}
+	for _, leak := range []string{"hunter2", "10.0.0.9", "cifs", "bob"} {
+		if strings.Contains(string(out), leak) {
+			t.Errorf("output carries %q: %s", leak, out)
+		}
+	}
+	var got struct {
+		Name    string
+		Driver  string
+		Labels  map[string]string
+		Options map[string]string
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if got.Name != "share" || got.Driver != "local" || got.Labels["app"] != "x" {
+		t.Errorf("the rest of the document changed: %+v", got)
+	}
+	if len(got.Options) != 3 || got.Options["device"] != redact.Placeholder || got.Options["o"] != redact.Placeholder || got.Options["type"] != redact.Placeholder {
+		t.Errorf("Options = %v, want the three names with the placeholder", got.Options)
+	}
+	// A number keeps its exact digits.
+	if !strings.Contains(string(out), "12345678901234567890") {
+		t.Errorf("a number lost digits: %s", out)
+	}
+	// Two-space indentation, like the container's.
+	if !strings.Contains(string(out), "\n  \"Driver\": \"local\"") {
+		t.Errorf("not indented by two spaces: %s", out)
+	}
+}
+
+func TestMaskVolumeInspectWithRevealReturnsTheInputAndReportsNothingMasked(t *testing.T) {
+	out, masked, err := redact.MaskVolumeInspect([]byte(volumeInspectFixture), true)
+	if err != nil || masked || string(out) != volumeInspectFixture {
+		t.Fatalf("reveal = %q masked=%v err=%v", out, masked, err)
+	}
+}
+
+func TestMaskVolumeInspectOfADocumentWithNoOptionsIsNotMasked(t *testing.T) {
+	for _, raw := range []string{`{"Name":"v"}`, `{"Name":"v","Options":null}`, `{"Name":"v","Options":{}}`} {
+		out, masked, err := redact.MaskVolumeInspect([]byte(raw), false)
+		if err != nil || masked || !strings.Contains(string(out), `"Name": "v"`) {
+			t.Errorf("%s: out=%q masked=%v err=%v", raw, out, masked, err)
+		}
+	}
+}
+
+func TestMaskVolumeInspectWithholdsOptionsOfAShapeTheEngineDoesNotSendRatherThanPassingThemThrough(t *testing.T) {
+	out, masked, err := redact.MaskVolumeInspect([]byte(`{"Name":"v","Options":["o=password=secret"]}`), false)
+	if err != nil || !masked || strings.Contains(string(out), "secret") {
+		t.Fatalf("out=%q masked=%v err=%v", out, masked, err)
+	}
+}
+
+func TestMaskVolumeInspectOfAnythingThatIsNotAJSONObjectIsAnErrorNeverAPassthrough(t *testing.T) {
+	for _, raw := range []string{``, `{"Options":{"o":"password=secret"}`, `not json`, `null`, `[]`, `"o=secret"`, `{"a":1} {"Options":{"o":"password=secret"}}`} {
+		out, masked, err := redact.MaskVolumeInspect([]byte(raw), false)
+		if err == nil || out != nil || masked {
+			t.Errorf("MaskVolumeInspect(%q) = %q, %v, %v; want an error and no output", raw, out, masked, err)
+		}
+	}
+}
