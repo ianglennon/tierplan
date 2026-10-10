@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -43,7 +45,9 @@ type NetworksDeps struct {
 	// Aggregator reaches an engine: a write to one node goes through WriteOnNode, a
 	// cluster-scoped one through WriteOnManager.
 	Aggregator *envs.Aggregator
-	Audit      *audit.Writer
+	// Clusters reads the services of a swarm live before a delete.
+	Clusters *envs.Clusters
+	Audit    *audit.Writer
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -336,6 +340,8 @@ func deleteNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	}
 	row, err := findNetwork(agg, in.NetworkID, in.NodeID)
 	if err != nil {
+		// A node that did not answer may be the one that holds it: it is not gone then,
+		// it is out of reach.
 		return err
 	}
 	node := ""
@@ -391,4 +397,76 @@ func recordRemoved(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 		details["node"] = node
 	}
 	recordNetwork(ctx, d, p, envID, userAgent, audit.ActionNetworkRemoved, row.ID, row.Name, code, details)
+}
+
+// networkOwner is the stack or compose project a network belongs to, from its labels: a
+// stack wins when both are set. Both empty is no owner.
+func networkOwner(labels map[string]string) (owner, kind string) {
+	if v := labels[labelStack]; v != "" {
+		return v, "stack"
+	}
+	if v := labels[labelProject]; v != "" {
+		return v, "project"
+	}
+	return "", ""
+}
+
+// filterNetworks keeps the networks whose name, driver, any subnet or owner contains q,
+// ignoring case. An empty q keeps them all.
+func filterNetworks(rows []envs.NetworkRow, q string) []envs.NetworkRow {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return rows
+	}
+	has := func(s string) bool { return strings.Contains(strings.ToLower(s), q) }
+	out := make([]envs.NetworkRow, 0, len(rows))
+	for _, n := range rows {
+		owner, _ := networkOwner(n.Labels)
+		if has(n.Name) || has(n.Driver) || has(owner) || slices.ContainsFunc(n.Subnets, has) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// networkUsage is what is attached to the networks of an environment: containers per
+// node for a local network, per network over every node for a swarm-scoped one, and the
+// services whose specs mention a network.
+type networkUsage struct {
+	local    map[[2]string]int
+	wide     map[string]int
+	services map[string]int
+}
+
+// networkUsageOf counts the attachments in an aggregate. Services come from the cached
+// cluster read of a swarm, whatever age it has: a delete reads them live and never
+// trusts this.
+func networkUsageOf(ctx context.Context, clusters *envs.Clusters, envID string, agg envs.Aggregate) networkUsage {
+	u := networkUsage{local: map[[2]string]int{}, wide: map[string]int{}, services: map[string]int{}}
+	for _, c := range agg.Containers {
+		for _, cn := range c.Networks {
+			u.local[[2]string{c.NodeID, cn.NetworkID}]++
+			u.wide[cn.NetworkID]++
+		}
+	}
+	if clusters != nil && agg.Target.Probe.Type == dockerx.TypeSwarmManager {
+		// A failed read leaves what the last good one held.
+		st, _ := clusters.State(ctx, envID)
+		for _, ref := range st.ServiceRefs {
+			for _, id := range ref.Networks {
+				u.services[id]++
+			}
+		}
+	}
+	return u
+}
+
+// of is the containers and services attached to one row. A swarm-scoped network counts
+// the containers of every node; a local one only its own node's, since another node's
+// network with the same ID is a different network.
+func (u networkUsage) of(n envs.NetworkRow) (containers, services int) {
+	if n.Scope == dockerx.ScopeSwarm {
+		return u.wide[n.ID], u.services[n.ID]
+	}
+	return u.local[[2]string{n.NodeID, n.ID}], 0
 }

@@ -10,10 +10,18 @@ import { NoPermission } from "@/components/full-page-state";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SearchBox } from "@/features/containers/container-list";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { CreateNetworkDialog } from "@/features/networks/create-network-dialog";
 import { DeleteNetworkDialog } from "@/features/networks/delete-network-dialog";
-import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
+import {
+  type Column,
+  NodeSelect,
+  ResourceTable,
+  TruncatedText,
+} from "@/features/resources/resource-table";
 import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { usePermission } from "@/hooks/use-me";
@@ -24,13 +32,18 @@ interface NetworkListProps {
   envId: string;
   // The node the list is narrowed to, from the URL.
   node?: string;
+  // The search text, from the URL.
+  q?: string;
   onNodeChange: (node: string | undefined) => void;
+  onSearchChange: (q: string | undefined) => void;
 }
 
-// NetworkList is the networks list of an environment: the read-only columns of
-// Phase 1 and, for an env Admin, the Create network button (D-39, D-51). Someone
-// who may read but not manage sees the button disabled with the reason.
-export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
+// NetworkList is the networks list of an environment: what is attached to each
+// network, who owns it, and the actions on it. For an env Admin it has the Create
+// network button and Delete…; someone who may read but not manage sees both
+// disabled with the reason, and so does Delete… on a network that is built in or
+// in use (D-39, D-40, D-41, D-51).
+export function NetworkList({ envId, node, q, onNodeChange, onSearchChange }: NetworkListProps) {
   const t = useT();
   const key = "dashboard.lists.networks";
   const allowed = usePermission("networks.read", envId);
@@ -39,16 +52,37 @@ export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<NetworkRow | null>(null);
   const nodeColumn = useNodeColumn<NetworkRow>();
-  const query = useQuery({ ...networksQuery(envId, swarm ? node : undefined), enabled: allowed });
+  const nodeFilter = swarm ? node : undefined;
+  const query = useQuery({ ...networksQuery(envId, { node: nodeFilter, q }), enabled: allowed });
   // The create dialog checks the subnet against every node's networks and offers
-  // every node, so while the list is narrowed to one node it reads the whole list.
-  const narrowed = swarm && node !== undefined;
+  // every node, so while the list is narrowed by a node or a search it reads the
+  // whole list.
+  const narrowed = nodeFilter !== undefined || Boolean(q);
   const everything = useQuery({
     ...networksQuery(envId),
     enabled: allowed && narrowed && creating,
   });
   const envName = useEnvName(envId);
   const missing = t("dashboard.time.missing");
+
+  // Why a network cannot be deleted: who may comes first, then what the network is,
+  // then what still uses it.
+  function deleteReason(n: NetworkRow): string | undefined {
+    if (manage.reason) return manage.reason;
+    if (n.builtIn) return t("networks.delete.builtin", { name: n.name });
+    const containers = n.attachedContainers;
+    const services = n.attachedServices;
+    if (containers === 0 && services === 0) return undefined;
+    const parts = [
+      containers > 0 ? t("networks.list.attached.containers", { count: containers }) : null,
+      services > 0 ? t("networks.list.attached.services", { count: services }) : null,
+    ].filter((p): p is string => p !== null);
+    const what =
+      parts.length === 2
+        ? t("networks.list.inUseAnd", { first: parts[0], second: parts[1] })
+        : parts[0];
+    return t("networks.list.inUseBy", { what });
+  }
 
   const columns: Column<NetworkRow>[] = [
     {
@@ -64,19 +98,60 @@ export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
     {
       id: "scope",
       header: t(`${key}.columns.scope`),
-      cell: (n) => n.scope || missing,
+      cell: (n) =>
+        n.scope === "swarm"
+          ? t("networks.list.scope.swarm")
+          : n.scope === "local"
+            ? t("networks.list.scope.local")
+            : n.scope || missing,
     },
     {
       id: "subnet",
       header: t(`${key}.columns.subnet`),
       cell: (n) => {
         const subnets = n.subnets ?? [];
-        return subnets.length > 0 ? (
-          <TruncatedText mono>{subnets.join(", ")}</TruncatedText>
-        ) : (
-          missing
+        const [first, ...rest] = subnets;
+        if (first === undefined) return missing;
+        return (
+          <span className="flex items-center gap-1">
+            <TruncatedText mono>{first}</TruncatedText>
+            {rest.length > 0 ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="shrink-0 rounded text-xs text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+                    {/* Focusable, so the rest open from the keyboard too. */}+{rest.length}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-80 break-all font-mono">
+                  {rest.join(", ")}
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
+          </span>
         );
       },
+    },
+    {
+      id: "attached",
+      header: t(`${key}.columns.attached`),
+      cell: (n) => {
+        if (n.attachedContainers === 0 && n.attachedServices === 0) {
+          return <span className="text-muted-foreground">{t("networks.list.none")}</span>;
+        }
+        const containers = t("networks.list.attached.containers", { count: n.attachedContainers });
+        // Services exist only on a swarm.
+        return swarm
+          ? t("networks.list.attached.both", {
+              containers,
+              services: t("networks.list.attached.services", { count: n.attachedServices }),
+            })
+          : containers;
+      },
+    },
+    {
+      id: "owner",
+      header: t(`${key}.columns.owner`),
+      cell: (n) => (n.owner ? <TruncatedText>{n.owner}</TruncatedText> : missing),
     },
     {
       id: "created",
@@ -88,9 +163,7 @@ export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
       header: <span className="sr-only">{t("actions.column")}</span>,
       className: "w-px px-1 text-end",
       cell: (n) => {
-        // Who may delete comes first; then what makes the network undeletable.
-        const reason =
-          manage.reason ?? (n.builtIn ? t("networks.delete.builtin", { name: n.name }) : undefined);
+        const reason = deleteReason(n);
         return (
           <NeedsTooltip reason={reason}>
             <Button
@@ -108,6 +181,37 @@ export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
     },
   ];
 
+  const toolbar = (
+    <div className="flex flex-wrap items-center gap-2 max-md:[&>*]:min-w-0">
+      <SearchBox
+        value={q}
+        onCommit={onSearchChange}
+        label={t("networks.list.search.label")}
+        placeholder={t("networks.list.search.placeholder")}
+        clearLabel={t("networks.list.search.clear")}
+      />
+      {swarm ? (
+        <NodeSelect value={node} onChange={onNodeChange} nodes={query.data?.nodes ?? []} />
+      ) : null}
+    </div>
+  );
+
+  // A search that matches nothing says so, with the way out.
+  const empty = q ? (
+    <Empty className="min-h-[30svh] border">
+      <EmptyHeader>
+        <EmptyTitle role="heading" aria-level={2} className="text-base break-words">
+          {t("networks.list.empty.search.title", { q })}
+        </EmptyTitle>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button variant="outline" className="max-md:h-11" onClick={() => onSearchChange(undefined)}>
+          {t("networks.list.empty.search.action")}
+        </Button>
+      </EmptyContent>
+    </Empty>
+  ) : undefined;
+
   if (!allowed) return <NoPermission />;
   return (
     <>
@@ -119,6 +223,8 @@ export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
         nodeColumn={swarm ? nodeColumn : undefined}
         nodeFilter={swarm ? { value: node, onChange: onNodeChange } : undefined}
         banner={swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : undefined}
+        toolbar={toolbar}
+        empty={empty}
         getRowKey={(n) => nodeRowKey(n.node, n.id)}
         captionExtra={
           <div className="ml-auto">

@@ -1,5 +1,32 @@
 {
   "networks": {
+    "list": {
+      "search": {
+        "label": "Search networks",
+        "placeholder": "Search by name, driver, subnet or stack",
+        "clear": "Clear search"
+      },
+      "empty": {
+        "search": {
+          "title": "No networks match “{{q}}”.",
+          "action": "Clear search"
+        }
+      },
+      "scope": {
+        "swarm": "Swarm",
+        "local": "Local"
+      },
+      "none": "None",
+      "attached": {
+        "containers_one": "{{count, number}} container",
+        "containers_other": "{{count, number}} containers",
+        "services_one": "{{count, number}} service",
+        "services_other": "{{count, number}} services",
+        "both": "{{containers}}, {{services}}"
+      },
+      "inUseBy": "In use by {{what}}. Open it to see what uses it.",
+      "inUseAnd": "{{first}} and {{second}}"
+    },
     "create": {
       "button": "Create network",
       "title": "Create network",
@@ -77,6 +104,10 @@
       "builtin": "{{name}} is built in and can't be deleted.",
       "inUse": "{{name}} is still in use. Disconnect or remove what uses it, then try again.",
       "label": "Delete network {{name}}"
+    },
+    "usedBy": {
+      "container": "{{name}} on {{node}}",
+      "service": "Service {{name}}"
     },
     "errors": {
       "nameRequired": "Enter a name.",

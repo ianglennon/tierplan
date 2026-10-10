@@ -429,9 +429,10 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // ContainerDetail (Phase 4, RES-01) is a read: one inspect by ID, typed.
 // NetworkCreate (Phase 4, RES-06) takes a typed spec of a name, one of four drivers and
 // its addressing; it cannot express an ingress, config-only or config-from network.
+// ServiceRefs (Phase 4, RES-06) is a read: the networks and volumes each swarm service spec mentions.
 // NetworkRemove (Phase 4, RES-06) removes one network by ID, once; it takes no path and
 // no options, and the API refuses a built-in or an in-use network before it is called.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkCreate", "NetworkRemove", "Probe", "RestartPolicies", "Snapshot", "StartExec"}
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkCreate", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.

@@ -3183,17 +3183,40 @@ export interface components {
             subnet?: string;
         };
         NetworkItem: {
+            /** @description Standalone containers can join it */
+            attachable: boolean;
+            /**
+             * Format: int64
+             * @description Containers, running or not, on any reporting node that are attached to the network. A local network counts the containers of its own node
+             */
+            attachedContainers: number;
+            /**
+             * Format: int64
+             * @description Swarm services whose spec mentions the network, even with no running task, as of the last cluster read. Always 0 off a swarm and for a local network
+             */
+            attachedServices: number;
             /** @description True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted */
             builtIn: boolean;
             /** Format: date-time */
             created?: string;
             driver: string;
             id: string;
+            /** @description No access to outside networks */
+            internal: boolean;
+            /** @description IPv6 is enabled */
+            ipv6: boolean;
             name: string;
             /** @description The node the network is local to, or Cluster for a swarm-wide network */
             node: string;
             /** @description The ID of the node the network was read from; for a swarm-wide network, the manager in use */
             nodeId: string;
+            /** @description The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; empty when the network has neither */
+            owner: string;
+            /**
+             * @description stack, project, or empty when the network has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "project" | "";
             /** @description local, or swarm for a cluster-wide network */
             scope: string;
             /** @description The IPAM subnets in CIDR notation; empty when the network has none */
@@ -5182,6 +5205,8 @@ export interface operations {
             query?: {
                 /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
                 node?: string;
+                /** @description Search: a case-insensitive substring of the name, driver, a subnet or the owner (stack or compose project). Applied before the 500-row cap */
+                q?: string;
             };
             header?: never;
             path: {

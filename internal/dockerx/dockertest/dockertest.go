@@ -32,6 +32,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/system"
@@ -180,6 +181,16 @@ type FakeService struct {
 	// Labels are the service's own labels (the --label of docker service create,
 	// the deploy.labels of a stack file).
 	Labels map[string]string
+	// Networks are the targets of the service spec's network attachments, an ID or a
+	// name as the spec wrote it, and Mounts the mounts of its container spec.
+	Networks []string
+	Mounts   []FakeServiceMount
+}
+
+// FakeServiceMount is one mount of a service's container spec. Type is "volume",
+// "bind" or "tmpfs".
+type FakeServiceMount struct {
+	Type, Source string
 }
 
 // FakeAgentTask is one task of a service in ServiceRows, an agent's when that
@@ -1062,6 +1073,15 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		s := swarm.Service{ID: fs.ID}
 		s.Spec.Name = fs.Name
 		s.Spec.Labels = fs.Labels
+		for _, target := range fs.Networks {
+			s.Spec.TaskTemplate.Networks = append(s.Spec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{Target: target})
+		}
+		if len(fs.Mounts) > 0 {
+			s.Spec.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{}
+			for _, m := range fs.Mounts {
+				s.Spec.TaskTemplate.ContainerSpec.Mounts = append(s.Spec.TaskTemplate.ContainerSpec.Mounts, mount.Mount{Type: mount.Type(m.Type), Source: m.Source})
+			}
+		}
 		s.UpdatedAt = fs.UpdatedAt
 		switch fs.Mode {
 		case "global":

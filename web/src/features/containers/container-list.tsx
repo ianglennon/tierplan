@@ -89,13 +89,18 @@ interface SearchBoxProps {
   // The search in the URL.
   value: string | undefined;
   onCommit: (q: string | undefined) => void;
+  // The words of the box. They are the containers list's unless the owner gives its own.
+  label?: string;
+  placeholder?: string;
+  clearLabel?: string;
 }
 
-// SearchBox is the "Search containers" input. What is typed shows at once; the
+// SearchBox is the "Search containers" input, which the networks list also uses with
+// its own words. What is typed shows at once; the
 // URL, and so the server, hear of it 250 ms after the last key. Clearing is
 // immediate. The text is the user's own until the URL changes by some other
 // route (Clear filters, the back button), and then the box follows it.
-function SearchBox({ value, onCommit }: SearchBoxProps) {
+export function SearchBox({ value, onCommit, label, placeholder, clearLabel }: SearchBoxProps) {
   const t = useT();
   const id = useId();
   const [text, setText] = useState(value ?? "");
@@ -132,7 +137,7 @@ function SearchBox({ value, onCommit }: SearchBoxProps) {
   return (
     <div className="w-full max-w-[360px] max-md:max-w-none">
       <Label htmlFor={id} className="sr-only">
-        {t("containers.list.search.label")}
+        {label ?? t("containers.list.search.label")}
       </Label>
       <InputGroup className="max-md:h-11">
         <InputGroupAddon>
@@ -143,7 +148,7 @@ function SearchBox({ value, onCommit }: SearchBoxProps) {
           type="search"
           autoComplete="off"
           maxLength={MAX_QUERY}
-          placeholder={t("containers.list.search.placeholder")}
+          placeholder={placeholder ?? t("containers.list.search.placeholder")}
           value={text}
           onChange={(e) => change(e.target.value)}
           className="[&::-webkit-search-cancel-button]:hidden"
@@ -153,7 +158,7 @@ function SearchBox({ value, onCommit }: SearchBoxProps) {
             <InputGroupButton
               size="icon-xs"
               className="max-md:size-11"
-              aria-label={t("containers.list.search.clear")}
+              aria-label={clearLabel ?? t("containers.list.search.clear")}
               onClick={clear}
             >
               <X aria-hidden="true" />

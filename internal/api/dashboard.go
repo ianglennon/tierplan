@@ -53,6 +53,9 @@ type AggregateSource interface {
 // DashboardDeps are the dependencies of the summary and list routes.
 type DashboardDeps struct {
 	Aggregator AggregateSource
+	// Clusters is the cluster reader of swarm environments: the networks list counts
+	// the services that mention a network from its last read. Nil counts none.
+	Clusters *envs.Clusters
 	// SelfContainerID is Bayplan's own container ID, for the isSelf flag. Empty
 	// when Bayplan does not run in a container, or cannot tell.
 	SelfContainerID string
@@ -189,6 +192,15 @@ type NetworkItem struct {
 	Subnets []string `json:"subnets" doc:"The IPAM subnets in CIDR notation; empty when the network has none"`
 	Created string   `json:"created,omitempty" format:"date-time"`
 	BuiltIn bool     `json:"builtIn" doc:"True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted"`
+	// AttachedContainers and AttachedServices are what the network cannot be deleted
+	// while any of them exist.
+	AttachedContainers int    `json:"attachedContainers" doc:"Containers, running or not, on any reporting node that are attached to the network. A local network counts the containers of its own node"`
+	AttachedServices   int    `json:"attachedServices" doc:"Swarm services whose spec mentions the network, even with no running task, as of the last cluster read. Always 0 off a swarm and for a local network"`
+	Owner              string `json:"owner" doc:"The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; empty when the network has neither"`
+	OwnerKind          string `json:"ownerKind" enum:"stack,project," doc:"stack, project, or empty when the network has no owner"`
+	Internal           bool   `json:"internal" doc:"No access to outside networks"`
+	Attachable         bool   `json:"attachable" doc:"Standalone containers can join it"`
+	IPv6               bool   `json:"ipv6" doc:"IPv6 is enabled"`
 }
 
 // ContainerListBody and its siblings are a capped list with the full total.
@@ -260,6 +272,12 @@ type ContainerListInput struct {
 	NodeFilterInput
 	Q      string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, image, compose project, stack, service or any label key or value. Applied before the 500-row cap"`
 	Status string `query:"status" maxLength:"64" doc:"Only containers with one of these statuses, comma separated: running, exited, paused, restarting or unhealthy (a health, not a state). Applied before the 500-row cap; any other value is refused 422 invalid_status"`
+}
+
+// NetworkListInput is the networks list: the node filter and the search.
+type NetworkListInput struct {
+	NodeFilterInput
+	Q string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, driver, a subnet or the owner (stack or compose project). Applied before the 500-row cap"`
 }
 
 // NodeFilterInput is the path of a list and its optional node filter (T-02-74).
@@ -505,14 +523,22 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		"List the networks of an environment",
 		"By name. On a swarm a swarm-wide network is listed once, from the manager in use, with node Cluster; local networks are listed per node. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
 		need(rbac.PermNetworksRead),
-		func(ctx context.Context, in *NodeFilterInput) (*NetworkListOutput, error) {
+		func(ctx context.Context, in *NetworkListInput) (*NetworkListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			rows := filterNode(agg.Networks, in.Node, func(n envs.NetworkRow) string { return n.Node })
+			onNode := filterNode(agg.Networks, in.Node, func(n envs.NetworkRow) string { return n.Node })
+			rows := filterNetworks(onNode, in.Q)
+			use := networkUsageOf(ctx, d.Clusters, in.EnvID, agg)
 			items, total, truncated := capRows(rows, func(n envs.NetworkRow) NetworkItem {
-				return NetworkItem{Node: n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created), BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress)}
+				owner, kind := networkOwner(n.Labels)
+				containers, services := use.of(n)
+				return NetworkItem{
+					Node: n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created),
+					BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress), AttachedContainers: containers, AttachedServices: services,
+					Owner: owner, OwnerKind: kind, Internal: n.Internal, Attachable: n.Attachable, IPv6: n.IPv6,
+				}
 			})
 			return &NetworkListOutput{CacheControl: "no-store", Body: NetworkListBody{
 				Items: items, Total: total, Truncated: truncated,

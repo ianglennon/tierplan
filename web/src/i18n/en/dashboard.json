@@ -133,6 +133,8 @@
           "driver": "Driver",
           "scope": "Scope",
           "subnet": "Subnet",
+          "attached": "Attached",
+          "owner": "Owner",
           "created": "Created"
         }
       },

@@ -299,6 +299,13 @@ const row = (name: string, subnets: string[], extra: Partial<NetworkRow> = {}): 
   subnets,
   created: "2026-10-01T10:00:00Z",
   builtIn: false,
+  attachedContainers: 0,
+  attachedServices: 0,
+  owner: "",
+  ownerKind: "",
+  internal: false,
+  attachable: false,
+  ipv6: false,
   ...extra,
 });
 

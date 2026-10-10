@@ -109,12 +109,20 @@ export function volumesQuery(envId: string, node?: string) {
   });
 }
 
-export function networksQuery(envId: string, node?: string) {
+// What narrows the networks list on the server, before its 500-row cap: the node
+// and the search text.
+export interface NetworkFilters {
+  node?: string;
+  q?: string;
+}
+
+export function networksQuery(envId: string, filters: NetworkFilters = {}) {
+  const set = filterPart(filters);
   return queryOptions({
-    queryKey: nodeKey(envId, "networks", node),
+    queryKey: set ? ([...listKey(envId, "networks"), set] as const) : listKey(envId, "networks"),
     queryFn: async () => {
       const { data } = await api.GET("/api/env/{envId}/networks", {
-        params: { path: { envId }, query: node ? { node } : undefined },
+        params: { path: { envId }, query: set },
       });
       if (!data) throw new Error("GET networks failed");
       return data;

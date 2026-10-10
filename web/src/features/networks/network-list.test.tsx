@@ -4,7 +4,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import type { NetworkRow } from "@/api/resources";
@@ -25,7 +25,7 @@ interface Sent {
 
 let sent: Sent[];
 let items: NetworkRow[];
-let onSearch: ReturnType<typeof vi.fn>;
+let onSearch: Mock<(q: string | undefined) => void>;
 let swarmEnv: boolean;
 let answerDelete: (req: Sent) => Response;
 let client: QueryClient;
@@ -56,7 +56,7 @@ const net = (name: string, extra: Partial<NetworkRow> = {}): NetworkRow => ({
 
 beforeEach(() => {
   sent = [];
-  onSearch = vi.fn();
+  onSearch = vi.fn<(q: string | undefined) => void>();
   swarmEnv = false;
   me = makeMe({ envs: { [ENV]: "admin" } });
   items = [net("bridge", { builtIn: true }), net("app-net")];
@@ -84,7 +84,11 @@ beforeEach(() => {
         if (res.ok) items = items.filter((n) => `/api/env/${ENV}/networks/${n.id}` !== entry.path);
         return res;
       }
-      if (entry.path === "/api/environments") return Response.json({ items: [] });
+      if (entry.path === "/api/environments") {
+        return Response.json({
+          items: swarmEnv ? [{ id: ENV, name: "Swarm", envType: "swarm" }] : [],
+        });
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -236,6 +240,24 @@ describe("NetworkList columns", () => {
     expect(within(ovl).getByText("Swarm")).toBeTruthy();
   });
 
+  it("on a swarm counts services too and says Cluster for a swarm-wide network", async () => {
+    swarmEnv = true;
+    items = [
+      net("ovl", {
+        scope: "swarm",
+        node: "Cluster",
+        driver: "overlay",
+        attachedContainers: 1,
+        attachedServices: 3,
+      }),
+    ];
+    mount();
+    const row = (await screen.findByText("ovl")).closest("tr") as HTMLElement;
+    await waitFor(() => expect(within(row).getByText("1 container, 3 services")).toBeTruthy());
+    expect(within(row).getByText("Cluster")).toBeTruthy();
+    expect(within(row).getByText("Swarm")).toBeTruthy();
+  });
+
   it("keeps the rows in the order the server sent them", async () => {
     items = [net("zeta"), net("alpha"), net("mid")];
     mount();
@@ -266,7 +288,8 @@ describe("NetworkList search", () => {
     items = [];
     mount({ q: "zzz" });
     await screen.findByText("No networks match “zzz”.");
-    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    // The box has its own clear button; the empty state's comes after it.
+    fireEvent.click(screen.getAllByRole("button", { name: "Clear search" }).at(-1) as HTMLElement);
     expect(onSearch).toHaveBeenCalledWith(undefined);
 
     cleanup();
