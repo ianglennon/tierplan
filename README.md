@@ -198,6 +198,7 @@ The source code, version and commit are linked from **Settings > About**, as the
 - [SECURITY.md](SECURITY.md): reporting a vulnerability, privately.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and sending changes.
 - [docs/reverse-proxy.md](docs/reverse-proxy.md): running Bayplan behind Caddy, nginx or Traefik, at the root or a subpath.
+- [docs/containers.md](docs/containers.md): containers and bulk actions, logs, browser shells, networks, volumes and events, and what each one records.
 - [docs/access.md](docs/access.md): instance admins, roles, teams, invite and reset links, sessions.
 - [docs/permissions.md](docs/permissions.md): what each role may do, generated from the code.
 - [docs/backup.md](docs/backup.md): backups, the three ways to restore, agents after a restore and rotating the master key.
