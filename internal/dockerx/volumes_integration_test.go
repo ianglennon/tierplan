@@ -109,3 +109,142 @@ func TestVolumeCreateHostFolder(t *testing.T) {
 		t.Fatalf("a container that mounts the volume did not see the folder's file (exit %d)", code)
 	}
 }
+
+// TestVolumeRemoveInUse proves against a real engine that a volume a container mounts
+// is not removed while the container exists, started or not (plan 04-17, RES-07, D-46,
+// T-04-54): VolumeUsers names the container, the engine answers the remove with a
+// conflict, the volume stays, and once the container is gone the remove goes through.
+func TestVolumeRemoveInUse(t *testing.T) {
+	host := dockertest.DockerHost(t)
+	cli, err := dockerx.New(dockertest.TCPTransportFor(host))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	raw := dockertest.RawClient(t, host)
+	pullImage(t, ctx, raw, "busybox:1")
+
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	vol := "bp-inuse-" + suffix
+	ctr := "bp-user-" + suffix
+	if err := cli.VolumeCreate(ctx, dockerx.VolumeCreateSpec{Name: vol}); err != nil {
+		t.Fatalf("VolumeCreate: %v", err)
+	}
+	t.Cleanup(func() {
+		c, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _ = raw.ContainerRemove(c, ctr, client.ContainerRemoveOptions{Force: true})
+		_, _ = raw.VolumeRemove(c, vol, client.VolumeRemoveOptions{Force: true})
+	})
+	if users, err := cli.VolumeUsers(ctx, vol); err != nil || len(users) != 0 {
+		t.Fatalf("VolumeUsers of a volume nothing mounts = %v, %v", users, err)
+	}
+
+	// A container that was created and never started still mounts the volume.
+	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:       ctr,
+		Config:     &container.Config{Image: "busybox:1", Cmd: []string{"true"}},
+		HostConfig: &container.HostConfig{Binds: []string{vol + ":/data"}},
+	}); err != nil {
+		t.Fatalf("create %s: %v", ctr, err)
+	}
+	users, err := cli.VolumeUsers(ctx, vol)
+	if err != nil || len(users) != 1 || users[0] != ctr {
+		t.Fatalf("VolumeUsers = %v, %v, want just %s", users, err, ctr)
+	}
+	if err := cli.VolumeRemove(ctx, vol); !dockerx.IsConflict(err) {
+		t.Fatalf("VolumeRemove of a volume a stopped container mounts = %v, want a conflict", err)
+	}
+	if ok, err := cli.VolumeExists(ctx, vol); err != nil || !ok {
+		t.Fatalf("the refused remove took the volume away (%v, %v)", ok, err)
+	}
+
+	if _, err := raw.ContainerRemove(ctx, ctr, client.ContainerRemoveOptions{Force: true}); err != nil {
+		t.Fatalf("remove %s: %v", ctr, err)
+	}
+	if users, err := cli.VolumeUsers(ctx, vol); err != nil || len(users) != 0 {
+		t.Fatalf("VolumeUsers after the container is gone = %v, %v", users, err)
+	}
+	if err := cli.VolumeRemove(ctx, vol); err != nil {
+		t.Fatalf("VolumeRemove of a volume nothing mounts: %v", err)
+	}
+	if ok, err := cli.VolumeExists(ctx, vol); err != nil || ok {
+		t.Fatalf("VolumeExists after the remove = %v, %v, want false", ok, err)
+	}
+	if err := cli.VolumeRemove(ctx, vol); !dockerx.IsNotFound(err) {
+		t.Fatalf("a second VolumeRemove = %v, want not found", err)
+	}
+}
+
+// TestVolumeAnonymous proves against the engine BAYPLAN_TEST_ENGINE names (29 and 24)
+// that a volume Docker made for a container without a name is listed as anonymous, and a
+// named one is not (plan 04-17, RES-07, D-46): newer engines label such a volume and
+// older ones only give it a 64-hex name, and either is recognised.
+func TestVolumeAnonymous(t *testing.T) {
+	host := dockertest.DockerHost(t)
+	cli, err := dockerx.New(dockertest.TCPTransportFor(host))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	raw := dockertest.RawClient(t, host)
+	pullImage(t, ctx, raw, "busybox:1")
+
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	ctr := "bp-anon-" + suffix
+	named := "bp-named-" + suffix
+	if err := cli.VolumeCreate(ctx, dockerx.VolumeCreateSpec{Name: named}); err != nil {
+		t.Fatalf("VolumeCreate: %v", err)
+	}
+	// The container declares /data a volume and names none, so the engine makes one.
+	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: ctr,
+		Config: &container.Config{
+			Image: "busybox:1", Cmd: []string{"true"},
+			Volumes: map[string]struct{}{"/data": {}},
+		},
+	}); err != nil {
+		t.Fatalf("create %s: %v", ctr, err)
+	}
+	t.Cleanup(func() {
+		c, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _ = raw.ContainerRemove(c, ctr, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+		_, _ = raw.VolumeRemove(c, named, client.VolumeRemoveOptions{Force: true})
+	})
+	insp, err := raw.ContainerInspect(ctx, ctr, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect %s: %v", ctr, err)
+	}
+	anon := ""
+	for _, m := range insp.Container.Mounts {
+		if m.Destination == "/data" {
+			anon = m.Name
+		}
+	}
+	if anon == "" {
+		t.Fatalf("the container has no volume mount at /data: %+v", insp.Container.Mounts)
+	}
+
+	snap, err := cli.Snapshot(ctx, false)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	found := map[string]dockerx.VolumeRow{}
+	for _, v := range snap.Volumes {
+		found[v.Name] = v
+	}
+	if v, ok := found[anon]; !ok || !v.Anonymous {
+		t.Fatalf("the volume %s the engine made = %+v (listed %v), want anonymous (labels %v)", anon, v, ok, v.Labels)
+	}
+	if v, ok := found[named]; !ok || v.Anonymous {
+		t.Fatalf("the volume %s made by name = %+v (listed %v), want not anonymous", named, v, ok)
+	}
+	if users, err := cli.VolumeUsers(ctx, anon); err != nil || len(users) != 1 || users[0] != ctr {
+		t.Fatalf("VolumeUsers of the anonymous volume = %v, %v, want %s", users, err, ctr)
+	}
+}
