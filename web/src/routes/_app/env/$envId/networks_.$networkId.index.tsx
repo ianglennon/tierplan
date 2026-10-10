@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 
-// The start address of a network's page. Until the Overview tab exists it opens the
-// Attachments tab.
+import { NetworkOverview } from "@/features/networks/overview";
+
+// The Overview tab of a network: the page's first tab and its start address.
+function NetworkOverviewRoute() {
+  const { envId, networkId } = Route.useParams();
+  const { node } = Route.useSearch();
+  return <NetworkOverview envId={envId} networkId={networkId} node={node} />;
+}
+
 export const Route = createFileRoute("/_app/env/$envId/networks_/$networkId/")({
-  beforeLoad: ({ params, search }) => {
-    throw redirect({
-      to: "/env/$envId/networks/$networkId/attachments",
-      params,
-      search,
-      replace: true,
-    });
-  },
+  component: NetworkOverviewRoute,
 });

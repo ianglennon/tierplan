@@ -26,7 +26,7 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 interface DeleteNetworkDialogProps {
   envId: string;
   // The network to delete, or null while the dialog is closed.
-  network: NetworkRow | null;
+  network: Pick<NetworkRow, "id" | "name" | "nodeId"> | null;
   onClose: () => void;
 }
 

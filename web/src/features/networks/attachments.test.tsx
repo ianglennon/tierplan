@@ -20,6 +20,7 @@ import { makeMe } from "@/test-me";
 
 const ENV = "e1";
 const PAGE = `/env/${ENV}/networks/app0?node=n1`;
+const ATTACHMENTS = `/env/${ENV}/networks/app0/attachments?node=n1`;
 
 function attachment(name: string, extra: Partial<NetworkAttachment> = {}): NetworkAttachment {
   return {
@@ -186,14 +187,13 @@ function renderAt(path = PAGE) {
 }
 
 describe("the network page frame", () => {
-  it("opens on the Attachments tab, reads the network on its node and draws the header", async () => {
+  it("reads the network on its node and draws the header", async () => {
     answer = () =>
       Response.json(
         detail({ owner: "shop", ownerKind: "stack", attachments: [attachment("web")] }),
       );
-    const router = renderAt(`/env/${ENV}/networks/app0?node=n1`);
+    renderAt(ATTACHMENTS);
     expect(await screen.findByRole("heading", { name: "app-net", level: 2 })).toBeTruthy();
-    await waitFor(() => expect(router.state.location.pathname).toContain("/attachments"));
     expect(screen.getByText("bridge")).toBeTruthy();
     expect(screen.getByText("Local")).toBeTruthy();
     expect(screen.getByText("Stack shop")).toBeTruthy();
@@ -253,7 +253,7 @@ describe("Attachments", () => {
           ],
         }),
       );
-    renderAt();
+    renderAt(ATTACHMENTS);
     const table = await screen.findByRole("table", { name: "Attachments" });
     const rows = within(table).getAllByRole("row");
     expect(rows).toHaveLength(3);
@@ -275,7 +275,7 @@ describe("Attachments", () => {
       Response.json(
         detail({ attachments: [attachment("job", { aliases: null })], aliasesTruncated: true }),
       );
-    renderAt();
+    renderAt(ATTACHMENTS);
     const table = await screen.findByRole("table", { name: "Attachments" });
     expect(
       within(within(table).getAllByRole("row")[1] as HTMLElement).getAllByText("—").length,
@@ -284,14 +284,14 @@ describe("Attachments", () => {
   });
 
   it("says nothing is attached when nothing is", async () => {
-    renderAt();
+    renderAt(ATTACHMENTS);
     expect(await screen.findByText("Nothing is attached to this network.")).toBeTruthy();
     expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("shows a skeleton while the network is read", async () => {
     answer = () => new Promise<Response>(() => {});
-    renderAt();
+    renderAt(ATTACHMENTS);
     expect(await screen.findByText("Loading the attachments")).toBeTruthy();
   });
 
@@ -299,7 +299,7 @@ describe("Attachments", () => {
     envType = "swarm";
     answer = () =>
       Response.json(detail({ attachments: [attachment("web", { node: "worker-2" })] }));
-    renderAt();
+    renderAt(ATTACHMENTS);
     const table = await screen.findByRole("table", { name: "Attachments" });
     await waitFor(() =>
       expect(within(table).getByRole("columnheader", { name: "Node" })).toBeTruthy(),
@@ -439,7 +439,8 @@ describe("Delete and why it is unavailable", () => {
     answer = () =>
       Response.json(detail({ name: "bridge", builtIn: true, attachments: [attachment("web")] }));
     renderAt();
-    expect(await screen.findByText("bridge is built in and can't be deleted.")).toBeTruthy();
+    const note = await screen.findByRole("alert");
+    expect(within(note).getByText("bridge is built in and can't be deleted.")).toBeTruthy();
     expect(screen.queryByText("bridge is in use")).toBeNull();
     const del = screen.getByRole("button", { name: "Delete network bridge" });
     expect(del.getAttribute("aria-disabled")).toBe("true");

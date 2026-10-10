@@ -17,6 +17,7 @@ import { SearchBox } from "@/features/containers/container-list";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { CreateNetworkDialog } from "@/features/networks/create-network-dialog";
 import { DeleteNetworkDialog } from "@/features/networks/delete-network-dialog";
+import { deleteReason } from "@/features/networks/delete-reason";
 import {
   type Column,
   NodeSelect,
@@ -68,22 +69,7 @@ export function NetworkList({ envId, node, q, onNodeChange, onSearchChange }: Ne
 
   // Why a network cannot be deleted: who may comes first, then what the network is,
   // then what still uses it.
-  function deleteReason(n: NetworkRow): string | undefined {
-    if (manage.reason) return manage.reason;
-    if (n.builtIn) return t("networks.delete.builtin", { name: n.name });
-    const containers = n.attachedContainers;
-    const services = n.attachedServices;
-    if (containers === 0 && services === 0) return undefined;
-    const parts = [
-      containers > 0 ? t("networks.list.attached.containers", { count: containers }) : null,
-      services > 0 ? t("networks.list.attached.services", { count: services }) : null,
-    ].filter((p): p is string => p !== null);
-    const what =
-      parts.length === 2
-        ? t("networks.list.inUseAnd", { first: parts[0], second: parts[1] })
-        : parts[0];
-    return t("networks.list.inUseBy", { what });
-  }
+  const deleteReasonOf = (n: NetworkRow) => deleteReason(t, manage.reason, n);
 
   const columns: Column<NetworkRow>[] = [
     {
@@ -173,7 +159,7 @@ export function NetworkList({ envId, node, q, onNodeChange, onSearchChange }: Ne
       header: <span className="sr-only">{t("actions.column")}</span>,
       className: "w-px px-1 text-end",
       cell: (n) => {
-        const reason = deleteReason(n);
+        const reason = deleteReasonOf(n);
         return (
           <span className="flex items-center justify-end gap-1">
             <Button asChild variant="ghost" size="sm" className="max-md:h-11">

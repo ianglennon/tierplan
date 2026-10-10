@@ -167,12 +167,57 @@
           "service": "Service"
         },
         "service": "Service {{name}}",
-        "tasks_one": "{{count, number}} task",
-        "tasks_other": "{{count, number}} tasks",
         "empty": "Nothing is attached to this network.",
         "truncated": "Aliases are shown for the first {{count, number}} containers only.",
-        "loading": "Loading the attachments"
-      }
+        "loading": "Loading the attachments",
+        "tasks_one": "{{count, number}} task",
+        "tasks_other": "{{count, number}} tasks"
+      },
+      "overview": {
+        "loading": "Loading the network",
+        "details": {
+          "title": "Details",
+          "id": "ID",
+          "idLabel": "the network ID",
+          "driver": "Driver",
+          "scope": "Scope",
+          "ipv6": "IPv6",
+          "internal": "Internal",
+          "attachable": "Attachable",
+          "created": "Created",
+          "owner": "Owner",
+          "yes": "Yes",
+          "no": "No"
+        },
+        "pools": {
+          "title": "Subnets and gateways",
+          "subnet": "Subnet",
+          "gateway": "Gateway",
+          "ipRange": "IP range",
+          "empty": "No address pools."
+        },
+        "options": {
+          "title": "Options",
+          "label": "Driver options",
+          "empty": "No options."
+        },
+        "labels": {
+          "title": "Labels",
+          "label": "Labels",
+          "empty": "No labels."
+        }
+      },
+      "inspect": {
+        "loading": "Loading the inspect output",
+        "loadFailed": "Couldn't load the inspect output of {{name}}.",
+        "retry": "Retry"
+      },
+      "inUse": {
+        "title": "{{name}} is in use",
+        "body": "Disconnect or remove these first. Swarm services that mention this network count, even with no running tasks.",
+        "reason": "In use by {{what}}."
+      },
+      "builtin": "{{name}} is built in and can't be deleted."
     }
   }
 }

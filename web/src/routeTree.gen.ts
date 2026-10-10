@@ -44,6 +44,7 @@ import { Route as AppEnvEnvIdContainersContainerIdIndexRouteImport } from './rou
 import { Route as AppEnvEnvIdContainersContainerIdInspectRouteImport } from './routes/_app/env/$envId/containers_.$containerId.inspect'
 import { Route as AppEnvEnvIdNetworksNetworkIdIndexRouteImport } from './routes/_app/env/$envId/networks_.$networkId.index'
 import { Route as AppEnvEnvIdNetworksNetworkIdAttachmentsRouteImport } from './routes/_app/env/$envId/networks_.$networkId.attachments'
+import { Route as AppEnvEnvIdNetworksNetworkIdInspectRouteImport } from './routes/_app/env/$envId/networks_.$networkId.inspect'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -230,6 +231,12 @@ const AppEnvEnvIdNetworksNetworkIdAttachmentsRoute =
     path: '/attachments',
     getParentRoute: () => AppEnvEnvIdNetworksNetworkIdRoute,
   } as any)
+const AppEnvEnvIdNetworksNetworkIdInspectRoute =
+  AppEnvEnvIdNetworksNetworkIdInspectRouteImport.update({
+    id: '/inspect',
+    path: '/inspect',
+    getParentRoute: () => AppEnvEnvIdNetworksNetworkIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -264,6 +271,7 @@ export interface FileRoutesByFullPath {
   '/settings/environments/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/networks/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
+  '/env/$envId/networks/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
   '/env/$envId/containers/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
   '/env/$envId/networks/$networkId/': typeof AppEnvEnvIdNetworksNetworkIdIndexRoute
 }
@@ -294,6 +302,7 @@ export interface FileRoutesByTo {
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/networks/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
+  '/env/$envId/networks/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdIndexRoute
   '/env/$envId/networks/$networkId': typeof AppEnvEnvIdNetworksNetworkIdIndexRoute
 }
@@ -332,6 +341,7 @@ export interface FileRoutesById {
   '/_app/settings/environments_/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/_app/env/$envId/containers_/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/_app/env/$envId/networks_/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
+  '/_app/env/$envId/networks_/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
   '/_app/env/$envId/containers_/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
   '/_app/env/$envId/networks_/$networkId/': typeof AppEnvEnvIdNetworksNetworkIdIndexRoute
 }
@@ -370,6 +380,7 @@ export interface FileRouteTypes {
     | '/settings/environments/$envId/'
     | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/networks/$networkId/attachments'
+    | '/env/$envId/networks/$networkId/inspect'
     | '/env/$envId/containers/$containerId/'
     | '/env/$envId/networks/$networkId/'
   fileRoutesByTo: FileRoutesByTo
@@ -400,6 +411,7 @@ export interface FileRouteTypes {
     | '/settings/environments/$envId'
     | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/networks/$networkId/attachments'
+    | '/env/$envId/networks/$networkId/inspect'
     | '/env/$envId/containers/$containerId'
     | '/env/$envId/networks/$networkId'
   id:
@@ -437,6 +449,7 @@ export interface FileRouteTypes {
     | '/_app/settings/environments_/$envId/'
     | '/_app/env/$envId/containers_/$containerId/inspect'
     | '/_app/env/$envId/networks_/$networkId/attachments'
+    | '/_app/env/$envId/networks_/$networkId/inspect'
     | '/_app/env/$envId/containers_/$containerId/'
     | '/_app/env/$envId/networks_/$networkId/'
   fileRoutesById: FileRoutesById
@@ -696,6 +709,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRouteImport
       parentRoute: typeof AppEnvEnvIdNetworksNetworkIdRoute
     }
+    '/_app/env/$envId/networks_/$networkId/inspect': {
+      id: '/_app/env/$envId/networks_/$networkId/inspect'
+      path: '/inspect'
+      fullPath: '/env/$envId/networks/$networkId/inspect'
+      preLoaderRoute: typeof AppEnvEnvIdNetworksNetworkIdInspectRouteImport
+      parentRoute: typeof AppEnvEnvIdNetworksNetworkIdRoute
+    }
   }
 }
 
@@ -781,6 +801,7 @@ const AppEnvEnvIdContainersContainerIdRouteWithChildren =
 
 interface AppEnvEnvIdNetworksNetworkIdRouteChildren {
   AppEnvEnvIdNetworksNetworkIdAttachmentsRoute: typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
+  AppEnvEnvIdNetworksNetworkIdInspectRoute: typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
   AppEnvEnvIdNetworksNetworkIdIndexRoute: typeof AppEnvEnvIdNetworksNetworkIdIndexRoute
 }
 
@@ -788,6 +809,8 @@ const AppEnvEnvIdNetworksNetworkIdRouteChildren: AppEnvEnvIdNetworksNetworkIdRou
   {
     AppEnvEnvIdNetworksNetworkIdAttachmentsRoute:
       AppEnvEnvIdNetworksNetworkIdAttachmentsRoute,
+    AppEnvEnvIdNetworksNetworkIdInspectRoute:
+      AppEnvEnvIdNetworksNetworkIdInspectRoute,
     AppEnvEnvIdNetworksNetworkIdIndexRoute:
       AppEnvEnvIdNetworksNetworkIdIndexRoute,
   }

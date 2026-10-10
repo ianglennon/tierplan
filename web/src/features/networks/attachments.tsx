@@ -91,7 +91,12 @@ export function Attachments({ envId, networkId, node }: AttachmentsProps) {
                     {a.name}
                   </Link>
                 ) : (
-                  t(`${key}.service`, { name: a.name })
+                  <>
+                    <span>{t(`${key}.service`, { name: a.name })}</span>
+                    <span className="block text-muted-foreground">
+                      {t(`${key}.tasks`, { count: a.tasks })}
+                    </span>
+                  </>
                 )}
               </TableCell>
               <TableCell className="align-top text-sm whitespace-normal">

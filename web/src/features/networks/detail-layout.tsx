@@ -3,10 +3,12 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
-import { Network } from "lucide-react";
+import { Info, Network } from "lucide-react";
+import { useState } from "react";
 
 import { isNetworkGone, type NetworkDetail, networkDetailQuery } from "@/api/networks";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { NeedsTooltip } from "@/components/needs-tooltip";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,8 +22,12 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { UsedByList } from "@/components/used-by-list";
+import { DeleteNetworkDialog } from "@/features/networks/delete-network-dialog";
+import { deleteReason } from "@/features/networks/delete-reason";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { useDocumentTitle } from "@/hooks/use-me";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
 interface NetworkDetailLayoutProps {
@@ -35,9 +41,21 @@ interface NetworkDetailLayoutProps {
 // under networks_.$networkId.*; the Overview is the page's own address.
 const TABS = [
   {
+    id: "overview",
+    to: "/env/$envId/networks/$networkId",
+    labelKey: "networks.detail.tabs.overview",
+    exact: true,
+  },
+  {
     id: "attachments",
     to: "/env/$envId/networks/$networkId/attachments",
     labelKey: "networks.detail.tabs.attachments",
+    exact: false,
+  },
+  {
+    id: "inspect",
+    to: "/env/$envId/networks/$networkId/inspect",
+    labelKey: "networks.detail.tabs.inspect",
     exact: false,
   },
 ] as const;
@@ -123,6 +141,8 @@ function ownerLine(
 export function NetworkDetailLayout({ envId, networkId, node }: NetworkDetailLayoutProps) {
   const t = useT();
   const isSwarm = useEnvIsSwarm(envId);
+  const manage = useNeeds("networks.manage", envId);
+  const [deleting, setDeleting] = useState(false);
   const query = useQuery(networkDetailQuery(envId, networkId, node));
   const { data } = query;
   const gone = isNetworkGone(query.error);
@@ -156,6 +176,9 @@ export function NetworkDetailLayout({ envId, networkId, node }: NetworkDetailLay
   }
 
   const line = data ? ownerLine(t, data) : "";
+  const reason = data ? deleteReason(t, manage.reason, data, true) : undefined;
+  const attachments = data?.attachments ?? [];
+  const inUse = data !== undefined && !data.builtIn && attachments.length > 0;
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-2">
@@ -190,11 +213,44 @@ export function NetworkDetailLayout({ envId, networkId, node }: NetworkDetailLay
               </div>
               {line ? <p className="text-sm break-words text-muted-foreground">{line}</p> : null}
             </div>
+            <NeedsTooltip reason={reason}>
+              <Button
+                type="button"
+                variant="outline"
+                className="max-md:h-11 border-destructive-fill text-destructive"
+                aria-label={t("networks.delete.label", { name: data.name })}
+                onClick={reason ? undefined : () => setDeleting(true)}
+              >
+                {t("networks.delete.action")}
+              </Button>
+            </NeedsTooltip>
           </div>
         ) : (
           <Skeleton className="h-8 w-64" />
         )}
       </header>
+      {data?.builtIn ? (
+        <Alert>
+          <Info aria-hidden="true" />
+          <AlertDescription>{t("networks.detail.builtin", { name: data.name })}</AlertDescription>
+        </Alert>
+      ) : null}
+      {data && inUse ? (
+        <Alert variant="warning">
+          <AlertTitle>{t("networks.detail.inUse.title", { name: data.name })}</AlertTitle>
+          <AlertDescription className="flex flex-col gap-2">
+            <p>{t("networks.detail.inUse.body")}</p>
+            <UsedByList
+              containers={attachments
+                .filter((a) => a.kind === "container")
+                .map((a) => ({ name: a.name, node: a.node }))}
+              services={attachments
+                .filter((a) => a.kind === "service")
+                .map((a) => ({ name: a.name }))}
+            />
+          </AlertDescription>
+        </Alert>
+      ) : null}
       <Tabs value="" className="gap-4">
         <TabsList
           variant="line"
@@ -223,6 +279,13 @@ export function NetworkDetailLayout({ envId, networkId, node }: NetworkDetailLay
         </TabsList>
       </Tabs>
       <Outlet />
+      {data && manage.allowed ? (
+        <DeleteNetworkDialog
+          envId={envId}
+          network={deleting ? data : null}
+          onClose={() => setDeleting(false)}
+        />
+      ) : null}
     </div>
   );
 }
