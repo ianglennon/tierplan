@@ -2,11 +2,13 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 
 import { type ContainerDetail, containerDetailQuery } from "@/api/container-detail";
 import { KeyValueTable } from "@/components/key-value-table";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -17,6 +19,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SettingsCard } from "@/features/environments/settings-card";
+import { ConnectDialog } from "@/features/networks/connect-dialog";
+import {
+  DisconnectDialog,
+  type DisconnectDialogTarget,
+} from "@/features/networks/disconnect-dialog";
+import { useNeeds } from "@/hooks/use-needs";
 import i18n from "@/i18n";
 import { useT } from "@/i18n/use-t";
 
@@ -122,6 +130,8 @@ function RestartCard({ detail }: { detail: ContainerDetail }) {
 interface GridColumn<T> {
   header: string;
   cell: (row: T) => ReactNode;
+  // A column of actions has a name for assistive technology and none on screen.
+  hideHeader?: boolean;
 }
 
 // A table inside a card: it scrolls sideways when the card is narrow, and its
@@ -145,7 +155,9 @@ function CardTable<T>({
       <TableHeader>
         <TableRow>
           {columns.map((c) => (
-            <TableHead key={c.header}>{c.header}</TableHead>
+            <TableHead key={c.header}>
+              {c.hideHeader ? <span className="sr-only">{c.header}</span> : c.header}
+            </TableHead>
           ))}
         </TableRow>
       </TableHeader>
@@ -231,13 +243,29 @@ function MountsCard({ detail }: { detail: ContainerDetail }) {
   );
 }
 
-// NetworksCard shows where the container is attached. It only reads; plan 04-15
-// adds connecting and disconnecting.
-function NetworksCard({ detail }: { detail: ContainerDetail }) {
+// NetworksCard shows where the container is attached, with the means to change it:
+// "Connect to network" above the table and "Disconnect…" on each row, both for an
+// Operator (D-43, D-51) and disabled with the reason for everyone else.
+function NetworksCard({ envId, detail }: { envId: string; detail: ContainerDetail }) {
   const t = useT();
   const missing = useMissing();
+  const connect = useNeeds("networks.connect", envId);
+  const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState<DisconnectDialogTarget | null>(null);
   return (
     <SettingsCard title={t("containerdetail.networks.title")}>
+      <div className="flex justify-end">
+        <NeedsTooltip reason={connect.reason}>
+          <Button
+            type="button"
+            variant="outline"
+            className="max-md:h-11"
+            onClick={connect.allowed ? () => setConnecting(true) : undefined}
+          >
+            {t("networks.connect.actionContainer")}
+          </Button>
+        </NeedsTooltip>
+      </div>
       <CardTable
         label={t("containerdetail.networks.title")}
         empty={t("containerdetail.networks.empty")}
@@ -252,8 +280,55 @@ function NetworksCard({ detail }: { detail: ContainerDetail }) {
             header: t("containerdetail.networks.aliases"),
             cell: (n) => (n.aliases ?? []).join(", ") || missing,
           },
+          {
+            header: t("networks.disconnect.actions"),
+            hideHeader: true,
+            cell: (n) => (
+              <NeedsTooltip reason={connect.reason}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="max-md:h-11"
+                  aria-label={t("networks.disconnect.label", {
+                    container: detail.name,
+                    network: n.name,
+                  })}
+                  onClick={
+                    connect.allowed
+                      ? () =>
+                          setDisconnecting({
+                            networkId: n.networkId,
+                            networkName: n.name,
+                            containerId: detail.id,
+                            containerName: detail.name,
+                            nodeId: detail.nodeId,
+                          })
+                      : undefined
+                  }
+                >
+                  {t("networks.disconnect.action")}
+                </Button>
+              </NeedsTooltip>
+            ),
+          },
         ]}
       />
+      {connect.allowed ? (
+        <>
+          <ConnectDialog
+            envId={envId}
+            open={connecting}
+            onOpenChange={setConnecting}
+            container={{ id: detail.id, name: detail.name, nodeId: detail.nodeId }}
+          />
+          <DisconnectDialog
+            envId={envId}
+            target={disconnecting}
+            onClose={() => setDisconnecting(null)}
+          />
+        </>
+      ) : null}
     </SettingsCard>
   );
 }
@@ -333,7 +408,7 @@ export function Overview({ envId, containerId, node }: OverviewProps) {
         <MountsCard detail={data} />
       </div>
       <div className="flex min-w-0 flex-col gap-4">
-        <NetworksCard detail={data} />
+        <NetworksCard envId={envId} detail={data} />
         <LabelsCard detail={data} />
         <EnvCard detail={data} />
       </div>

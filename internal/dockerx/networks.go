@@ -195,6 +195,16 @@ func (c *Client) NetworkConnect(ctx context.Context, networkID, containerID stri
 	return nil
 }
 
+// NetworkDisconnect disconnects the container from the network once and never retries: a
+// disconnect whose answer was lost may have happened (P2 D-42). It is never forced: the
+// engine's refusal is the answer, and the options hold nothing that could say otherwise.
+func (c *Client) NetworkDisconnect(ctx context.Context, networkID, containerID string) error {
+	if _, err := c.cur().NetworkDisconnect(ctx, networkID, client.NetworkDisconnectOptions{Container: containerID}); err != nil {
+		return fmt.Errorf("disconnect from network on %s: %w", c.t.Describe(), err)
+	}
+	return nil
+}
+
 // IsRefusal reports whether err is the engine itself answering that it will not do what
 // was asked (a bad parameter, a refusal, a missing object or a conflicting state), as
 // opposed to a connection that failed. The words are DaemonText.

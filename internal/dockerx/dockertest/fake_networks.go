@@ -340,7 +340,7 @@ var networkDisconnectPath = regexp.MustCompile(`^/networks/([^/]+)/disconnect$`)
 
 // serveNetworkDisconnect answers POST /networks/{id}/disconnect. An unknown network or
 // container is the 404 a real daemon gives, and a container that is not on the network is
-// the 403 "is not connected" refusal. Otherwise the container leaves the network in every
+// the 500 "is not connected" a real engine gives. Otherwise the container leaves the network in every
 // list and inspect. The body, force included, is kept for NetworkDisconnects and the
 // write is recorded whatever the answer.
 func (f *Fake) serveNetworkDisconnect(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
@@ -376,7 +376,8 @@ func (f *Fake) serveNetworkDisconnect(w http.ResponseWriter, r *http.Request, p 
 		return true
 	}
 	if ep, on := fc.Networks[fn.Name]; !on || (ep.NetworkID != "" && ep.NetworkID != fn.ID) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"message": "container " + fc.ID + " is not connected to network " + fn.Name})
+		// A real engine answers this with a server error, not a refusal.
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "container " + fc.ID + " is not connected to network " + fn.Name})
 		return true
 	}
 	f.mu.Lock()

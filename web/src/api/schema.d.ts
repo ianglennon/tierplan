@@ -680,6 +680,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/networks/{networkId}/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disconnect a container from a network
+         * @description Disconnects one container from one network, once, never retried and never forced. The call goes to the node the container is on, named by nodeId. A container that is not on the network is 409 not_connected; 404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.disconnected, with result failure and the code when it was refused.
+         */
+        post: operations["disconnectContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/networks/{networkId}/inspect": {
         parameters: {
             query?: never;
@@ -3322,6 +3342,12 @@ export interface components {
             /** @description local, or swarm for a cluster-wide network */
             scope: string;
         };
+        NetworkDisconnectRequest: {
+            /** @description The container ID */
+            containerId: string;
+            /** @description The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node */
+            nodeId?: string;
+        };
         NetworkIPAMBody: {
             /** @description The gateway address; empty when the network sets none */
             gateway: string;
@@ -5535,6 +5561,42 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["NetworkConnectRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disconnectContainer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the id of a row of the networks list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkDisconnectRequest"];
             };
         };
         responses: {

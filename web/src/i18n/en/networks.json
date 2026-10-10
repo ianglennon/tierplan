@@ -152,6 +152,19 @@
         "containerGone": "{{container}} no longer exists. It may have been removed."
       }
     },
+    "disconnect": {
+      "action": "Disconnect…",
+      "label": "Disconnect {{container}} from {{network}}",
+      "actions": "Actions",
+      "title": "Disconnect {{container}} from {{network}}?",
+      "body": "It loses access to everything on that network straight away.",
+      "cancel": "Cancel",
+      "confirm": "Disconnect container",
+      "pending": "Disconnecting…",
+      "done": "Disconnected {{container}} from {{network}}.",
+      "notConnected": "{{container}} isn't on {{network}} any more.",
+      "gone": "{{container}} or {{network}} is already gone."
+    },
     "usedBy": {
       "container": "{{name}} on {{node}}",
       "service": "Service {{name}}"

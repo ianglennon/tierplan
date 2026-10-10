@@ -435,3 +435,54 @@ func TestNetworkConnectAContainerAlreadyOnItAnUnknownOneAndANonAttachableOverlay
 		t.Errorf("non-attachable overlay: %v", err)
 	}
 }
+
+// Disconnecting (plan 04-15 task 2, D-43): one POST, never forced.
+
+func TestNetworkDisconnectSendsOneUnforcedPostAndTheContainerLeavesTheNetwork(t *testing.T) {
+	c, fake := connectFake(t)
+	if err := c.NetworkDisconnect(context.Background(), "app0", "c2"); err != nil {
+		t.Fatalf("NetworkDisconnect = %v", err)
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"POST /networks/app0/disconnect"}) {
+		t.Fatalf("writes = %v, want one disconnect and no retry", got)
+	}
+	got := fake.NetworkDisconnects()
+	if len(got) != 1 || got[0].Container != "c2" || got[0].Force {
+		t.Fatalf("disconnects = %+v, want c2 and no force", got)
+	}
+	detail, _, err := c.ContainerDetail(context.Background(), "c2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Networks) != 0 {
+		t.Errorf("container networks = %+v, want none", detail.Networks)
+	}
+}
+
+func TestNetworkDisconnectOfAContainerNotOnTheNetworkAnUnknownContainerAndAnUnknownNetworkAreTheEnginesAnswers(t *testing.T) {
+	c, _ := connectFake(t)
+	ctx := context.Background()
+	if err := c.NetworkDisconnect(ctx, "app0", "c1"); err == nil || !strings.Contains(dockerx.DaemonText(err), "is not connected to network") {
+		t.Errorf("not connected: %v (%q)", err, err)
+	}
+	if err := c.NetworkDisconnect(ctx, "app0", "ghost"); !dockerx.IsNotFound(err) {
+		t.Errorf("unknown container: %v, want not found", err)
+	}
+	if err := c.NetworkDisconnect(ctx, "nope", "c2"); !dockerx.IsNotFound(err) {
+		t.Errorf("unknown network: %v, want not found", err)
+	}
+}
+
+func TestDaemonTextIsTheEnginesSentenceWithoutTheClientsWrapping(t *testing.T) {
+	c, _ := connectFake(t)
+	err := c.NetworkConnect(context.Background(), "nope", "c1", dockerx.EndpointSpec{})
+	if got := dockerx.DaemonText(err); got != "network nope not found" {
+		t.Errorf("DaemonText = %q", got)
+	}
+	if got := dockerx.DaemonText(errors.New("  plain  ")); got != "plain" {
+		t.Errorf("DaemonText of a plain error = %q", got)
+	}
+	if dockerx.IsRefusal(errors.New("connection refused")) {
+		t.Error("a failed connection is not a refusal")
+	}
+}

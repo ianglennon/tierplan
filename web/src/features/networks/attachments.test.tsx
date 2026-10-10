@@ -526,7 +526,7 @@ describe("Connect container", () => {
     const button = await screen.findByRole("button", { name: "Connect container" });
     expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.getAttribute("aria-describedby")).toBeTruthy();
-    expect(screen.getByText("Needs Operator")).toBeTruthy();
+    expect(screen.getAllByText("Needs Operator").length).toBeGreaterThan(0);
     fireEvent.click(button);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -580,7 +580,8 @@ describe("Disconnect…", () => {
     withRows();
     renderAt(ATTACHMENTS);
     await screen.findByRole("button", { name: "Disconnect web from app-net" });
-    const row = screen.getByText("Service api-svc").closest("tr") as HTMLElement;
+    const table = screen.getByRole("table", { name: "Attachments" });
+    const row = within(table).getByText("Service api-svc").closest("tr") as HTMLElement;
     expect(within(row).queryByRole("button")).toBeNull();
   });
 

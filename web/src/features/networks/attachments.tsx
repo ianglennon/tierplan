@@ -19,6 +19,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ConnectDialog } from "@/features/networks/connect-dialog";
+import {
+  DisconnectDialog,
+  type DisconnectDialogTarget,
+} from "@/features/networks/disconnect-dialog";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -49,6 +53,7 @@ export function Attachments({ envId, networkId, node }: AttachmentsProps) {
   const { data } = useQuery(networkDetailQuery(envId, networkId, node));
   const connect = useNeeds("networks.connect", envId);
   const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState<DisconnectDialogTarget | null>(null);
   const missing = t("networks.detail.missing");
   const key = "networks.detail.attachments";
 
@@ -119,6 +124,9 @@ export function Attachments({ envId, networkId, node }: AttachmentsProps) {
             <TableHead>{t(`${key}.columns.ipv6`)}</TableHead>
             <TableHead>{t(`${key}.columns.mac`)}</TableHead>
             <TableHead>{t(`${key}.columns.aliases`)}</TableHead>
+            <TableHead>
+              <span className="sr-only">{t("networks.disconnect.actions")}</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -167,10 +175,47 @@ export function Attachments({ envId, networkId, node }: AttachmentsProps) {
                   missing
                 )}
               </TableCell>
+              <TableCell className="align-top whitespace-normal">
+                {a.kind === "container" ? (
+                  <NeedsTooltip reason={connect.reason}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="max-md:h-11"
+                      aria-label={t("networks.disconnect.label", {
+                        container: a.name,
+                        network: data.name,
+                      })}
+                      onClick={
+                        connect.allowed
+                          ? () =>
+                              setDisconnecting({
+                                networkId: data.id,
+                                networkName: data.name,
+                                containerId: a.id,
+                                containerName: a.name,
+                                nodeId: a.nodeId,
+                              })
+                          : undefined
+                      }
+                    >
+                      {t("networks.disconnect.action")}
+                    </Button>
+                  </NeedsTooltip>
+                ) : null}
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
+      {connect.allowed ? (
+        <DisconnectDialog
+          envId={envId}
+          target={disconnecting}
+          onClose={() => setDisconnecting(null)}
+        />
+      ) : null}
     </div>
   );
 }

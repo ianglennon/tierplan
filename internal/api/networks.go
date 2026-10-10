@@ -48,6 +48,7 @@ const (
 	problemNetworkUnavailableOnNode = "network_unavailable_on_node"
 	codeConnected                   = "connected"
 	codeDisconnected                = "disconnected"
+	problemNotConnected             = "not_connected"
 )
 
 // NetworksDeps are the dependencies of the network routes.
@@ -116,6 +117,22 @@ type NetworkConnectInput struct {
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      NetworkConnectRequest
+}
+
+// NetworkDisconnectRequest is the body of POST /api/env/{envId}/networks/{networkId}/disconnect.
+// There is no force: a disconnect the engine refuses is refused.
+type NetworkDisconnectRequest struct {
+	NodeID      string `json:"nodeId,omitempty" maxLength:"128" doc:"The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node"`
+	ContainerID string `json:"containerId" minLength:"1" maxLength:"128" doc:"The container ID"`
+}
+
+// NetworkDisconnectInput is the path and body of the disconnect route.
+type NetworkDisconnectInput struct {
+	EnvironmentPathInput
+	NetworkID string `path:"networkId" maxLength:"128" doc:"The network ID: the id of a row of the networks list"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      NetworkDisconnectRequest
 }
 
 // NetworkDetailInput is the path and query of the network detail and inspect routes.
@@ -291,6 +308,24 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
 			return nil, connectContainer(ctx, d, p, env.ID, in)
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "disconnectContainer", Method: http.MethodPost, Path: "/api/env/{envId}/networks/{networkId}/disconnect",
+		Summary: "Disconnect a container from a network",
+		Description: "Disconnects one container from one network, once, never retried and never forced. " +
+			"The call goes to the node the container is on, named by nodeId. " +
+			"A container that is not on the network is 409 not_connected; 404 network_not_found or container_not_found, " +
+			"409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. " +
+			"Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.disconnected, with result failure and the code when it was refused.",
+		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
+	}, rbac.Requirement{Perm: rbac.PermNetworksConnect, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *NetworkDisconnectInput) (*struct{}, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			return nil, disconnectContainer(ctx, d, p, env.ID, in)
 		})
 
 	httpx.Register(r, huma.Operation{
@@ -1068,6 +1103,69 @@ func networkConnectProblem(log *slog.Logger, envID string, row envs.NetworkRow, 
 			row.Name+" is not attachable, so standalone containers can't join it. Only services can.")
 	case strings.Contains(lower, "address") || strings.Contains(lower, "ipv4") || strings.Contains(lower, "ipv6") || strings.Contains(lower, "subnet"):
 		return problemAddressInvalid, httpx.Problem(http.StatusUnprocessableEntity, problemAddressInvalid, clipDetail(text))
+	}
+	return codeActionFailed, httpx.Problem(http.StatusConflict, codeActionFailed, clipDetail(text))
+}
+
+// disconnectContainer detaches a container from a network, once and never forced. The
+// list is not trusted to say whether the container is on the network (it may have joined
+// or left a moment ago): the engine is asked, and its answer is mapped. The write goes to
+// the container's node, and every attempt on a container and a network that exist is
+// audited.
+func disconnectContainer(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID string, in *NetworkDisconnectInput) error {
+	body := in.Body
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return snapshotProblem(d.Log, envID, err)
+	}
+	ct, row, err := endpointTarget(agg, in.NetworkID, body.NodeID, body.ContainerID)
+	if err != nil {
+		return err
+	}
+	audited := func(code string) {
+		recordEndpoint(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkDisconnected, row, ct, dockerx.EndpointSpec{}, code)
+	}
+	// A local network of another node cannot hold this container.
+	if row.Scope != dockerx.ScopeSwarm && row.NodeID != ct.NodeID {
+		audited(problemNodeMismatch)
+		return httpx.Problem(http.StatusUnprocessableEntity, problemNodeMismatch,
+			row.Name+" is local to "+row.Node+", and "+ct.Name+" is on "+ct.Node+", so it can't be on it.")
+	}
+
+	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	err = d.Aggregator.WriteOnNode(writeCtx, envID, ct.NodeID, func(c *dockerx.Client) error {
+		return c.NetworkDisconnect(writeCtx, row.ID, ct.ID)
+	})
+	if err != nil {
+		code, problem := networkDisconnectProblem(d.Log, envID, row, ct, err)
+		audited(code)
+		return problem
+	}
+	audited(codeDisconnected)
+	return nil
+}
+
+// networkDisconnectProblem turns the error of a disconnect into the audit code and the
+// problem the SPA understands.
+func networkDisconnectProblem(log *slog.Logger, envID string, row envs.NetworkRow, ct envs.ContainerRow, err error) (string, error) {
+	text := dockerx.DaemonText(err)
+	lower := strings.ToLower(text)
+	var denied *envs.AgentPolicyDeniedError
+	switch {
+	case errors.Is(err, envs.ErrHostReadOnly), errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound),
+		errors.As(envs.ClassifyDockerError(err), &denied):
+		return networkWriteProblem(log, envID, err)
+	// A real engine answers this with a server error rather than a refusal class, so it is
+	// recognised by its words before the class is asked.
+	case strings.Contains(lower, "is not connected"):
+		return problemNotConnected, httpx.Problem(http.StatusConflict, problemNotConnected, ct.Name+" isn't on "+row.Name+" any more.")
+	case !dockerx.IsRefusal(err):
+		return networkWriteProblem(log, envID, err)
+	case dockerx.IsNotFound(err) && strings.Contains(lower, "no such container"):
+		return problemContainerNotFound, httpx.Problem(http.StatusNotFound, problemContainerNotFound, ct.Name+" is already gone.")
+	case dockerx.IsNotFound(err):
+		return problemNetworkNotFound, httpx.Problem(http.StatusNotFound, problemNetworkNotFound, row.Name+" is already gone.")
 	}
 	return codeActionFailed, httpx.Problem(http.StatusConflict, codeActionFailed, clipDetail(text))
 }

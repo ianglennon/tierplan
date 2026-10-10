@@ -122,6 +122,47 @@ export function useConnectContainer(envId: string) {
   });
 }
 
+// What a disconnect is aimed at: the network and the container on its node.
+export interface DisconnectTarget {
+  networkId: string;
+  containerId: string;
+  nodeId: string;
+}
+
+// disconnectFromNetwork detaches one container from one network. It never retries: a
+// disconnect whose answer was lost may have happened (P2 D-42), and the next read says
+// which. There is no force.
+export async function disconnectFromNetwork(
+  envId: string,
+  target: DisconnectTarget,
+): Promise<void> {
+  try {
+    const res = await api.POST("/api/env/{envId}/networks/{networkId}/disconnect", {
+      params: { path: { envId, networkId: target.networkId } },
+      body: { containerId: target.containerId, nodeId: target.nodeId },
+    });
+    if (!res.response.ok) {
+      const problem = readProblem(res.error, res.response);
+      throw new NetworkRequestError(problem.status, problem.type);
+    }
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof NetworkRequestError ? e : new NetworkRequestError(0);
+  }
+}
+
+// useDisconnectContainer is the mutation behind the disconnect confirm. It does not
+// retry, and reads the lists again whatever the answer, so a container that was already
+// gone from the network leaves its row too.
+export function useDisconnectContainer(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, NetworkRequestError, DisconnectTarget>({
+    mutationFn: (target) => disconnectFromNetwork(envId, target),
+    retry: false,
+    onSettled: () => refreshAttachments(queryClient, envId),
+  });
+}
+
 // What a delete is aimed at: the network's ID and, for a local network, the node
 // it is on (the row's nodeId).
 export interface NetworkTarget {

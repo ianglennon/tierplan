@@ -58,12 +58,14 @@ let answer: () => Response;
 let disconnectAnswer: () => Response;
 let me: ReturnType<typeof makeMe>;
 let posts: Array<{ path: string; body: unknown }>;
+let meServed: number;
 let urls: string[];
 let client: QueryClient;
 
 beforeEach(() => {
   urls = [];
   posts = [];
+  meServed = 0;
   me = makeMe({ envs: { [ENV]: "viewer" } });
   answer = () => Response.json(detail());
   disconnectAnswer = () => new Response(null, { status: 204 });
@@ -73,7 +75,10 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
-      if (url.pathname === "/api/me") return Response.json(me);
+      if (url.pathname === "/api/me") {
+        meServed++;
+        return Response.json(me);
+      }
       if (url.pathname === `/api/env/${ENV}/containers/web-id`) {
         urls.push(`${url.pathname}${url.search}`);
         return answer();
@@ -107,6 +112,12 @@ function mount() {
 }
 
 const card = (title: string) => screen.getByRole("region", { name: title });
+
+// The page holds its actions back until it knows who the user is: wait for that answer.
+async function signedIn() {
+  await waitFor(() => expect(meServed).toBeGreaterThan(0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 describe("Overview: the tracer cards", () => {
   it("asks for the container on its node and shows skeletons until it answers", async () => {
@@ -383,6 +394,7 @@ describe("Overview: connecting and disconnecting from the Networks card", () => 
     answer = () => Response.json(withNetworks());
     mount();
     const networks = await screen.findByRole("region", { name: "Networks" });
+    await signedIn();
     const connect = await within(networks).findByRole("button", { name: "Connect to network" });
     expect(connect.getAttribute("aria-disabled")).toBe("true");
     const disconnect = within(networks).getByRole("button", { name: "Disconnect web from front" });
@@ -399,6 +411,7 @@ describe("Overview: connecting and disconnecting from the Networks card", () => 
     me = makeMe({ envs: { [ENV]: "operator" } });
     mount();
     expect(await screen.findByText("Not connected to any network.")).toBeTruthy();
+    await signedIn();
     const connect = screen.getByRole("button", { name: "Connect to network" });
     expect(connect.getAttribute("aria-disabled")).toBeNull();
     fireEvent.click(connect);
@@ -409,7 +422,9 @@ describe("Overview: connecting and disconnecting from the Networks card", () => 
     me = makeMe({ envs: { [ENV]: "operator" } });
     answer = () => Response.json(withNetworks());
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Disconnect web from front" }));
+    const row = await screen.findByRole("button", { name: "Disconnect web from front" });
+    await signedIn();
+    fireEvent.click(row);
     const dialog = await screen.findByRole("alertdialog", { name: "Disconnect web from front?" });
     expect(posts).toEqual([]);
     fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect container" }));
@@ -426,7 +441,9 @@ describe("Overview: connecting and disconnecting from the Networks card", () => 
     me = makeMe({ envs: { [ENV]: "operator" } });
     answer = () => Response.json(withNetworks());
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Disconnect web from front" }));
+    const row = await screen.findByRole("button", { name: "Disconnect web from front" });
+    await signedIn();
+    fireEvent.click(row);
     const dialog = await screen.findByRole("alertdialog");
     const before = urls.length;
     fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect container" }));
