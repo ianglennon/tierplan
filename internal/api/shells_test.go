@@ -779,3 +779,131 @@ func TestShellRefusesAnImageWithNoShellByClosingWithNoShell(t *testing.T) {
 		t.Errorf("closed row = %+v, want reason no_shell", rows[1])
 	}
 }
+
+// Ending when the right to have a shell goes (plan 04-23, D-29, P3 D-10, T-04-83). The
+// bridge checks every few milliseconds here; in production every 5 seconds.
+
+// operatorWithShell makes a user who is an Operator on the environment with the shell
+// extra, and signs them in.
+func (f *shellFix) operatorWithShell(t *testing.T, name string) (cookie, csrf string) {
+	t.Helper()
+	f.addEnvUser(t, name, f.env.ID, "operator")
+	if _, err := f.st.Write.Exec(`INSERT INTO assignment_extras (assignment_id, permission) VALUES (?, 'containers.exec')`, "ra-"+name+"-"+f.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	return f.signIn(t, name, false)
+}
+
+// openAs opens a shell in web as the user and attaches to it with their cookie.
+func (f *shellFix) openAs(t *testing.T, cookie, csrf string) *websocket.Conn {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodPost, path: f.openPath("web"), body: openBody, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("open: %d %s", rec.Code, rec.Body)
+	}
+	var s shellSession
+	if err := json.Unmarshal(rec.Body.Bytes(), &s); err != nil {
+		t.Fatal(err)
+	}
+	c, status, _, err := f.dial(t, cookie, s.WSPath, f.srv.URL)
+	if err != nil {
+		t.Fatalf("attach: %v (status %d)", err, status)
+	}
+	sendBinary(t, c, "echo up\n")
+	readUntilBinary(t, c, "up")
+	return c
+}
+
+// closedWithin reads until the closed frame, which must come within a second of start.
+func closedWithin(t *testing.T, c *websocket.Conn, start time.Time) shells.Control {
+	t.Helper()
+	ctl := readControl(t, c, "closed")
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("the session took %v to close after the access went", took)
+	}
+	return ctl
+}
+
+func TestShellAccessLostWhenTheShellPermissionIsRemovedEndsTheSessionAndAuditsTheReason(t *testing.T) {
+	f := newShellFix(t, func(f *envFix) { f.shellsControls = shells.Controls{TickInterval: 20 * time.Millisecond} })
+	cookie, csrf := f.operatorWithShell(t, "olive")
+	c := f.openAs(t, cookie, csrf)
+
+	start := time.Now()
+	if _, err := f.st.Write.Exec(`DELETE FROM assignment_extras WHERE assignment_id = ?`, "ra-olive-"+f.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ctl := closedWithin(t, c, start); ctl.Reason != "access_lost" {
+		t.Errorf("closed frame = %+v, want reason access_lost", ctl)
+	}
+	drain(t, c)
+	rows := f.waitShellRows(t, 2)
+	if rows[1].Action != audit.ActionShellClosed || rows[1].Details["reason"] != "access_lost" || rows[1].Actor != "id-olive" {
+		t.Errorf("closed row = %+v, want olive's shell closed with reason access_lost", rows[1])
+	}
+	waitFor(t, "the session to leave the registry", func() bool { return len(f.shellsReg.List(shells.Filter{})) == 0 })
+}
+
+func TestShellAccessLostWhenTheEnvironmentGrantGoesEndsTheSession(t *testing.T) {
+	f := newShellFix(t, func(f *envFix) { f.shellsControls = shells.Controls{TickInterval: 20 * time.Millisecond} })
+	cookie, csrf := f.operatorWithShell(t, "olive")
+	c := f.openAs(t, cookie, csrf)
+
+	start := time.Now()
+	if _, err := f.st.Write.Exec(`DELETE FROM role_assignments WHERE id = ?`, "ra-olive-"+f.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ctl := closedWithin(t, c, start); ctl.Reason != "access_lost" {
+		t.Errorf("closed frame = %+v, want reason access_lost", ctl)
+	}
+	drain(t, c)
+	if rows := f.waitShellRows(t, 2); rows[1].Details["reason"] != "access_lost" {
+		t.Errorf("closed row = %+v, want reason access_lost", rows[1])
+	}
+}
+
+func TestShellAccessLostWhenTheUserSignsOutEndsTheSession(t *testing.T) {
+	f := newShellFix(t, func(f *envFix) { f.shellsControls = shells.Controls{TickInterval: 20 * time.Millisecond} })
+	cookie, csrf := f.operatorWithShell(t, "olive")
+	c := f.openAs(t, cookie, csrf)
+
+	start := time.Now()
+	if _, err := f.st.Write.Exec(`DELETE FROM sessions WHERE user_id = ?`, "id-olive"); err != nil {
+		t.Fatal(err)
+	}
+	if ctl := closedWithin(t, c, start); ctl.Reason != "access_lost" {
+		t.Errorf("closed frame = %+v, want reason access_lost", ctl)
+	}
+	drain(t, c)
+}
+
+func TestShellAccessAnAdministratorEndingASessionTellsItsBrowserAndAuditsIt(t *testing.T) {
+	f := newShellFix(t, nil)
+	s := f.session(t)
+	c := f.attach(t, s)
+	sendBinary(t, c, "echo up\n")
+	readUntilBinary(t, c, "up")
+
+	if _, ok := f.shellsReg.End(s.SessionID, "ended_by_admin"); !ok {
+		t.Fatal("the session was not open")
+	}
+	if ctl := readControl(t, c, "closed"); ctl.Reason != "ended_by_admin" {
+		t.Errorf("closed frame = %+v, want reason ended_by_admin", ctl)
+	}
+	drain(t, c)
+	if rows := f.waitShellRows(t, 2); rows[1].Details["reason"] != "ended_by_admin" {
+		t.Errorf("closed row = %+v, want reason ended_by_admin", rows[1])
+	}
+}
+
+func TestShellAccessAShellOfSomeoneWhoKeepsTheirAccessIsLeftAlone(t *testing.T) {
+	f := newShellFix(t, func(f *envFix) { f.shellsControls = shells.Controls{TickInterval: 10 * time.Millisecond} })
+	cookie, csrf := f.operatorWithShell(t, "olive")
+	c := f.openAs(t, cookie, csrf)
+	time.Sleep(300 * time.Millisecond) // thirty checks
+	sendBinary(t, c, "echo still\n")
+	readUntilBinary(t, c, "still")
+	if got := f.shellsReg.List(shells.Filter{}); len(got) != 1 {
+		t.Fatalf("%d sessions open, want the one that was left alone", len(got))
+	}
+}

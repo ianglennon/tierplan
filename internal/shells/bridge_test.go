@@ -560,3 +560,52 @@ func TestAShellWithNoIdleLimitNeverGoesIdle(t *testing.T) {
 	clk.Advance(1000 * time.Hour)
 	ir.none(t, 100*time.Millisecond)
 }
+
+func TestAShellWhoseUserLosesAccessIsClosedWithReasonAccessLostWithinATickAndKeepsNothingOpen(t *testing.T) {
+	var allowed atomic.Bool
+	allowed.Store(true)
+	x := newFakeExec()
+	r := newRig(t, Controls{TickInterval: 20 * time.Millisecond, StillAllowed: allowed.Load}, x)
+	go x.Print([]byte("prompt$ "))
+	r.readUntil(t, "prompt$ ")
+	time.Sleep(100 * time.Millisecond) // several ticks while still allowed; a close now would be the frame read next
+
+	allowed.Store(false)
+	start := time.Now()
+	c := r.control(t)
+	if c.Type != "closed" || c.Reason != ReasonAccessLost {
+		t.Fatalf("frame = %+v, want closed with reason access_lost", c)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("the shell took %v to close after the access went", took)
+	}
+	r.drain()
+	if got := r.gotReason(t); got != ReasonAccessLost {
+		t.Errorf("reason = %q, want access_lost", got)
+	}
+	if r.sess.Reason() != ReasonAccessLost || x.closeCount() != 1 {
+		t.Errorf("session ended for %q with %d closes of the process, want access_lost and one", r.sess.Reason(), x.closeCount())
+	}
+}
+
+func TestAnAdminEndingTheSessionAndTheServersShutdownTellTheBrowserWhichItWas(t *testing.T) {
+	for _, reason := range []string{ReasonEndedByAdmin, ReasonServerShutdown} {
+		x := newFakeExec()
+		r := newRig(t, Controls{}, x)
+		go x.Print([]byte("up\r\n"))
+		r.readUntil(t, "up")
+		if reason == ReasonServerShutdown {
+			r.reg.CloseAll(reason)
+		} else {
+			r.reg.End(r.sess.ID, reason)
+		}
+		c := r.control(t)
+		if c.Type != "closed" || c.Reason != reason {
+			t.Errorf("%s: frame = %+v, want closed with that reason", reason, c)
+		}
+		r.drain()
+		if got := r.gotReason(t); got != reason {
+			t.Errorf("%s: Bridge returned %q", reason, got)
+		}
+	}
+}
