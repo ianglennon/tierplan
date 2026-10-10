@@ -212,15 +212,76 @@ describe("the end of the stream", () => {
     expect(screen.getByRole("log").textContent).toContain("line 2");
   });
 
-  it("shows Reconnecting while the browser retries a dropped stream and Live again after", async () => {
-    renderViewer();
-    await connect();
-    await act(async () => {
-      source().fail();
-    });
-    expect(screen.getByText("Reconnecting…")).toBeTruthy();
-    await connect();
-    expect(screen.getByText("Live")).toBeTruthy();
+  it("shows Reconnecting while it retries a dropped stream, keeps the lines, and shows Live again once it is back", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderViewer();
+      await connect();
+      await send(lines(2));
+      await act(async () => {
+        source().fail();
+      });
+      expect(screen.getByText("Reconnecting…")).toBeTruthy();
+      expect(screen.getByRole("log").textContent).toContain("line 1");
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
+      const again = FakeEventSource.instances[1] as FakeEventSource;
+      expect(new URL(again.url, "http://x").searchParams.get("after")).toBe(lines(2)[1]?.t);
+      await act(async () => {
+        again.open();
+        again.sendFrame("ready", { tty: false });
+        // The seam: line 1 is held already, line 2 is new.
+        again.sendFrame("log", { lines: [...lines(2).slice(1), ...lines(1, 2)] });
+      });
+      expect(screen.getByText("Live")).toBeTruthy();
+      const rows = Array.from(screen.getByRole("log").querySelectorAll("[data-stream]")).map(
+        (r) => r.textContent,
+      );
+      expect(rows).toEqual(["line 0", "line 1", "line 2"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("adds one row, Logs were interrupted, when the stream cannot be resumed because the container is gone", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ type: "container_not_found", status: 404 }), {
+            status: 404,
+            headers: { "content-type": "application/problem+json" },
+          }),
+      ),
+    );
+    try {
+      renderViewer();
+      await connect();
+      await send(lines(2));
+      await act(async () => {
+        source().fail();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
+      await act(async () => {
+        (FakeEventSource.instances[1] as FakeEventSource).fail(true);
+      });
+      await act(async () => {});
+      const note = "Logs were interrupted. Some lines may be missing.";
+      expect(screen.getAllByText(note)).toHaveLength(1);
+      expect(screen.getByRole("log").textContent).toContain("line 1");
+      expect(screen.queryByText("Reconnecting…")).toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getAllByText(note)).toHaveLength(1);
+      expect(FakeEventSource.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not claim the access changed for a stream that simply could not be opened", async () => {
@@ -230,6 +291,41 @@ describe("the end of the stream", () => {
     });
     expect(screen.queryByText("Your access changed. Logs were closed.")).toBeNull();
     expect(screen.queryByText("Live")).toBeNull();
+  });
+});
+
+describe("a first load that fails", () => {
+  it("says Couldn't load logs. and offers Retry, which opens a new stream for the same viewer", async () => {
+    renderViewer();
+    const sid = new URL(source().url, "http://x").searchParams.get("sid");
+    await act(async () => {
+      source().fail(true);
+    });
+    expect(screen.getByText("Couldn't load logs.")).toBeTruthy();
+    expect(screen.getByText("Check the connection and try again.")).toBeTruthy();
+    expect(screen.queryByRole("log")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(FakeEventSource.instances).toHaveLength(2);
+    const again = FakeEventSource.instances[1] as FakeEventSource;
+    expect(new URL(again.url, "http://x").searchParams.get("sid")).toBe(sid);
+    expect(screen.queryByText("Couldn't load logs.")).toBeNull();
+    await act(async () => {
+      again.open();
+      again.sendFrame("ready", { tty: false });
+    });
+    expect(screen.getByRole("log", { name: "Logs for web" })).toBeTruthy();
+    expect(screen.getByText("Live")).toBeTruthy();
+  });
+
+  it("does not show the error once the stream has been live", async () => {
+    renderViewer();
+    await connect();
+    await send(lines(1));
+    await act(async () => {
+      source().fail(true);
+    });
+    expect(screen.queryByText("Couldn't load logs.")).toBeNull();
+    expect(screen.getByRole("log").textContent).toContain("line 0");
   });
 });
 

@@ -23,6 +23,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -79,22 +80,29 @@ describe("the state", () => {
     expect(onReady).toHaveBeenCalledWith({ tty: true });
   });
 
-  it("is reconnecting when a live stream drops and the browser is trying again, live again at the next ready", () => {
+  it("is reconnecting when a live stream drops, and live again at the next ready of the new connection", () => {
+    vi.useFakeTimers();
     const { source, states } = open();
     source.sendFrame("ready", { tty: false });
     source.fail();
     expect(states.at(-1)).toEqual({ status: "reconnecting" });
-    source.sendFrame("ready", { tty: false });
+    vi.advanceTimersByTime(1000);
+    const next = FakeEventSource.instances[1] as FakeEventSource;
+    next.sendFrame("ready", { tty: false });
     expect(states.at(-1)).toEqual({ status: "live" });
   });
 
-  it("says nothing of a failed first attempt the browser is retrying, so the viewer keeps its skeleton", () => {
+  it("is closed as failed when the very first attempt fails, so the viewer can offer Retry, and is not retried", () => {
+    vi.useFakeTimers();
     const { source, states } = open();
     source.fail();
-    expect(states).toEqual([{ status: "connecting" }]);
+    expect(states.at(-1)).toEqual({ status: "closed", reason: "failed" });
+    expect(source.closed).toBe(true);
+    vi.advanceTimersByTime(60_000);
+    expect(FakeEventSource.instances).toHaveLength(1);
   });
 
-  it("is closed as failed when the browser gives up, as it does for a refusal", () => {
+  it("is closed as failed when the browser gives up on the first attempt, as it does for a refusal", () => {
     const { source, states } = open();
     source.fail(true);
     expect(states.at(-1)).toEqual({ status: "closed", reason: "failed" });
@@ -219,5 +227,230 @@ describe("a log the engine cannot read", () => {
     const { source } = open({ onUnreadable });
     source.sendFrame("unreadable", { driver: 7, options: "nope" });
     expect(onUnreadable).toHaveBeenCalledWith({ driver: "", options: [] });
+  });
+});
+
+// Reconnecting (plan 04-21, UI-SPEC "Reconnects", D-24, Pitfall 12): a dropped stream is
+// reopened by the page itself, after 1, 2, 4 and then 8 seconds, with the same viewer ID,
+// resuming from the stamp of the last line it holds.
+describe("reconnecting", () => {
+  const T1 = "2026-10-09T12:00:01.000000000Z";
+  const T2 = "2026-10-09T12:00:02.000000000Z";
+
+  const send = (s: FakeEventSource, ...lines: Array<{ t: string; s?: string; m: string }>) =>
+    s.sendFrame("log", { lines: lines.map((l) => ({ s: "o", ...l })) }, lines.at(-1)?.t ?? "");
+  const current = () => FakeEventSource.instances.at(-1) as FakeEventSource;
+  const query = (s: FakeEventSource) => new URL(s.url, "http://x").searchParams;
+
+  it("closes the dropped connection and opens a new one after one second, with the same viewer ID, from the last line", () => {
+    vi.useFakeTimers();
+    const { source, lines } = open({ nodeId: "n1", tail: 500 });
+    source.sendFrame("ready", { tty: false });
+    send(source, { t: T1, m: "a" }, { t: T2, m: "b" });
+    source.fail();
+    expect(source.closed).toBe(true);
+    vi.advanceTimersByTime(999);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeEventSource.instances).toHaveLength(2);
+    const q = query(current());
+    expect(q.get("sid")).toBe(SID);
+    expect(q.get("nodeId")).toBe("n1");
+    expect(q.get("after")).toBe(T2);
+    expect(q.has("tail")).toBe(false);
+    expect(q.has("since")).toBe(false);
+    send(current(), { t: "2026-10-09T12:00:03.000000000Z", m: "c" });
+    expect(lines.map((l) => l.map((x) => (x as { m: string }).m))).toEqual([["a", "b"], ["c"]]);
+  });
+
+  it("backs off 1, 2, 4 and then 8 seconds while the reopened connections keep failing, staying at 8", () => {
+    vi.useFakeTimers();
+    const { source } = open();
+    source.sendFrame("ready", { tty: false });
+    source.fail();
+    const waits: number[] = [];
+    for (let want = 1; want <= 6; want++) {
+      const before = FakeEventSource.instances.length;
+      let waited = 0;
+      while (FakeEventSource.instances.length === before && waited < 20_000) {
+        vi.advanceTimersByTime(1000);
+        waited += 1000;
+      }
+      waits.push(waited);
+      current().fail();
+    }
+    expect(waits).toEqual([1000, 2000, 4000, 8000, 8000, 8000]);
+  });
+
+  it("starts again at one second after a reconnect succeeded", () => {
+    vi.useFakeTimers();
+    const { source } = open();
+    source.sendFrame("ready", { tty: false });
+    source.fail();
+    vi.advanceTimersByTime(1000);
+    current().fail();
+    vi.advanceTimersByTime(2000);
+    current().sendFrame("ready", { tty: false });
+    current().fail();
+    vi.advanceTimersByTime(999);
+    expect(FakeEventSource.instances).toHaveLength(3);
+    vi.advanceTimersByTime(1);
+    expect(FakeEventSource.instances).toHaveLength(4);
+  });
+
+  it("keeps saying Reconnecting while it retries, with no chip lost and no closed state", () => {
+    vi.useFakeTimers();
+    const { source, states } = open();
+    source.sendFrame("ready", { tty: false });
+    source.fail();
+    vi.advanceTimersByTime(1000);
+    current().fail();
+    expect(states.filter((s) => s.status === "closed")).toEqual([]);
+    expect(states.at(-1)).toEqual({ status: "reconnecting" });
+  });
+
+  it("reopens a stream that has not yet had a line as it was first opened, with no after", () => {
+    vi.useFakeTimers();
+    const { source } = open({ tail: 500 });
+    source.sendFrame("ready", { tty: false });
+    source.fail();
+    vi.advanceTimersByTime(1000);
+    const q = query(current());
+    expect(q.has("after")).toBe(false);
+    expect(q.get("tail")).toBe("500");
+  });
+
+  it("keeps the end of a range when it resumes", () => {
+    vi.useFakeTimers();
+    const { source } = open({
+      since: "2026-10-09T10:00:00.000Z",
+      until: "2026-10-09T13:00:00.000Z",
+      tail: 50000,
+    });
+    source.sendFrame("ready", { tty: false });
+    send(source, { t: T1, m: "a" });
+    source.fail();
+    vi.advanceTimersByTime(1000);
+    const q = query(current());
+    expect(q.get("until")).toBe("2026-10-09T13:00:00.000Z");
+    expect(q.get("after")).toBe(T1);
+    expect(q.has("since")).toBe(false);
+  });
+
+  it("drops the lines of the seam that it already holds, by stamp and text, and keeps a different line at the same stamp", () => {
+    vi.useFakeTimers();
+    const { source, lines } = open();
+    source.sendFrame("ready", { tty: false });
+    send(source, { t: T1, m: "a" }, { t: T2, m: "b" }, { t: T2, m: "b" });
+    source.fail();
+    vi.advanceTimersByTime(1000);
+    const next = current();
+    next.sendFrame("ready", { tty: false });
+    send(
+      next,
+      { t: T1, m: "a" },
+      { t: T2, m: "b" },
+      { t: T2, m: "b" },
+      { t: T2, m: "other" },
+      { t: "2026-10-09T12:00:03.000000000Z", m: "c" },
+    );
+    expect(
+      lines
+        .slice(1)
+        .flat()
+        .map((l) => (l as { m: string }).m),
+    ).toEqual(["other", "c"]);
+  });
+
+  it("stops dropping once a new line has come, so later equal lines are kept", () => {
+    vi.useFakeTimers();
+    const { source, lines } = open();
+    source.sendFrame("ready", { tty: false });
+    send(source, { t: T2, m: "b" });
+    source.fail();
+    vi.advanceTimersByTime(1000);
+    const next = current();
+    send(next, { t: "2026-10-09T12:00:03.000000000Z", m: "b" });
+    send(next, { t: T2, m: "b" });
+    expect(lines.slice(1).flat()).toHaveLength(2);
+  });
+
+  it("does nothing more once closed, and cancels a retry that was waiting", () => {
+    vi.useFakeTimers();
+    const { stream, source, states } = open();
+    source.sendFrame("ready", { tty: false });
+    source.fail();
+    const seen = states.length;
+    stream.close();
+    vi.advanceTimersByTime(60_000);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(states).toHaveLength(seen);
+  });
+
+  describe("when the reopened connection is refused", () => {
+    const refuse = async (status: number) => {
+      vi.useFakeTimers();
+      const probe = vi.fn(async () => status);
+      const onInterrupted = vi.fn();
+      const o = open({ probe, onInterrupted });
+      o.source.sendFrame("ready", { tty: false });
+      send(o.source, { t: T1, m: "a" });
+      o.source.fail();
+      vi.advanceTimersByTime(1000);
+      current().fail(true);
+      await vi.advanceTimersByTimeAsync(0);
+      return { ...o, probe, onInterrupted };
+    };
+
+    it("reports the logs interrupted once and gives up when the container is gone (404)", async () => {
+      const { states, onInterrupted, probe } = await refuse(404);
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(onInterrupted).toHaveBeenCalledTimes(1);
+      expect(states.at(-1)).toEqual({ status: "closed", reason: "failed" });
+      vi.advanceTimersByTime(60_000);
+      expect(FakeEventSource.instances).toHaveLength(2);
+    });
+
+    it("keeps retrying with the backoff when the node is only unreachable (503)", async () => {
+      const { states, onInterrupted } = await refuse(503);
+      expect(onInterrupted).not.toHaveBeenCalled();
+      expect(states.at(-1)).toEqual({ status: "reconnecting" });
+      vi.advanceTimersByTime(2000);
+      expect(FakeEventSource.instances).toHaveLength(3);
+    });
+
+    it("keeps retrying when the probe itself cannot reach the server", async () => {
+      const { states, onInterrupted } = await refuse(0);
+      expect(onInterrupted).not.toHaveBeenCalled();
+      expect(states.at(-1)).toEqual({ status: "reconnecting" });
+    });
+
+    it("says the access changed when the server refuses with 403", async () => {
+      const { states } = await refuse(403);
+      expect(states.at(-1)).toEqual({ status: "closed", reason: "access_lost" });
+    });
+
+    it("gives up without the interrupted row when the session is gone (401)", async () => {
+      const { states, onInterrupted } = await refuse(401);
+      expect(onInterrupted).not.toHaveBeenCalled();
+      expect(states.at(-1)).toEqual({ status: "closed", reason: "failed" });
+    });
+
+    it("ignores the probe's answer when the stream was closed meanwhile", async () => {
+      vi.useFakeTimers();
+      let answer: (n: number) => void = () => {};
+      const probe = vi.fn(() => new Promise<number>((r) => (answer = r)));
+      const onInterrupted = vi.fn();
+      const { stream, source, states } = open({ probe, onInterrupted });
+      source.sendFrame("ready", { tty: false });
+      source.fail();
+      vi.advanceTimersByTime(1000);
+      current().fail(true);
+      stream.close();
+      answer(404);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onInterrupted).not.toHaveBeenCalled();
+      expect(states.at(-1)).toEqual({ status: "reconnecting" });
+    });
   });
 });

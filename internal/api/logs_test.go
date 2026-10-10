@@ -1360,3 +1360,67 @@ func TestLogDownloadStopsReadingTheEngineWhenTheBrowserLeaves(t *testing.T) {
 		t.Fatal("the download kept running after the browser left")
 	}
 }
+
+// Resuming a log stream (plan 04-21, OBS-01, D-24, Pitfall 12). A browser that lost
+// the connection comes back with the stamp of the last line it saw as Last-Event-ID,
+// and a page that reopens it by hand sends the same stamp as after.
+
+func resumeFix(t *testing.T) (*logsFix, []logLine) {
+	t.Helper()
+	f := newLogsFix(t, logsEngine(), nil)
+	at := time.Date(2026, 10, 9, 12, 0, 0, 5, time.UTC)
+	for i := range 5 {
+		f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: fmt.Sprintf("line %d", i), Time: at.Add(time.Duration(i) * time.Second)})
+	}
+	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
+	lines, _ := readLines(t, c, 5)
+	c.close()
+	return f, lines
+}
+
+func TestLogStreamResumeTakesTheLaterOfAfterAndLastEventID(t *testing.T) {
+	f, lines := resumeFix(t)
+
+	// after is the later one: the stream resumes after line 3.
+	c := f.open(t, f.cookie, webID, "sid="+sidA+"&after="+lines[3].T, lines[1].T)
+	got, _ := readLines(t, c, 1)
+	if got[0].M != "line 4" {
+		t.Errorf("with after later than Last-Event-ID the first line = %q, want line 4", got[0].M)
+	}
+	if fr, ok := c.next(150 * time.Millisecond); ok && fr.event == "log" {
+		t.Errorf("an extra log event arrived: %+v", fr)
+	}
+	c.close()
+
+	// Last-Event-ID is the later one: the stream resumes after line 2.
+	c2 := f.open(t, f.cookie, webID, "sid="+sidA+"&after="+lines[0].T, lines[2].T)
+	got, _ = readLines(t, c2, 2)
+	if got[0].M != "line 3" || got[1].M != "line 4" {
+		t.Errorf("with Last-Event-ID later than after the lines = %+v, want line 3 and line 4", got)
+	}
+}
+
+func TestLogStreamResumeWithTheSameViewerIDWritesNoSecondAuditRow(t *testing.T) {
+	f, lines := resumeFix(t)
+	for i := range 3 {
+		c := f.open(t, f.cookie, webID, "sid="+sidA, lines[i].T)
+		readLines(t, c, 1)
+		c.close()
+	}
+	if n := len(f.logAudits(t)); n != 1 {
+		t.Errorf("%d audit rows after three resumes of one viewer, want 1", n)
+	}
+}
+
+func TestLogStreamIgnoresALastEventIDThatIsNotATime(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "a"}, dockertest.FakeLogLine{Text: "b"})
+	c := f.open(t, f.cookie, webID, "sid="+sidA, "not a time")
+	if c.status0() != http.StatusOK {
+		t.Fatalf("status = %d: %s", c.status0(), c.bodyString())
+	}
+	got, _ := readLines(t, c, 2)
+	if got[0].M != "a" || got[1].M != "b" {
+		t.Errorf("lines = %+v, want the whole tail as if no id was sent", got)
+	}
+}
