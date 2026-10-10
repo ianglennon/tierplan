@@ -3,12 +3,16 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setCsrfToken } from "@/api/client";
 import type { ContainerDetail } from "@/api/container-detail";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Overview } from "@/features/container-detail/overview";
 import "@/i18n";
+import { makeMe } from "@/test-me";
 
 // The Overview tab of a container (plan 04-10, RES-01, D-04, P3 D-15a).
 
@@ -51,20 +55,32 @@ function detail(extra: Partial<ContainerDetail> = {}): ContainerDetail {
 }
 
 let answer: () => Response;
+let disconnectAnswer: () => Response;
+let me: ReturnType<typeof makeMe>;
+let posts: Array<{ path: string; body: unknown }>;
 let urls: string[];
 let client: QueryClient;
 
 beforeEach(() => {
   urls = [];
+  posts = [];
+  me = makeMe({ envs: { [ENV]: "viewer" } });
   answer = () => Response.json(detail());
+  disconnectAnswer = () => new Response(null, { status: 204 });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  setCsrfToken(null);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
+      if (url.pathname === "/api/me") return Response.json(me);
       if (url.pathname === `/api/env/${ENV}/containers/web-id`) {
         urls.push(`${url.pathname}${url.search}`);
         return answer();
+      }
+      if (req.method === "POST") {
+        posts.push({ path: url.pathname, body: await req.clone().json() });
+        if (url.pathname.endsWith("/disconnect")) return disconnectAnswer();
       }
       return Response.json({}, { status: 404 });
     }),
@@ -72,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  toast.dismiss();
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -83,6 +100,7 @@ function mount() {
     <QueryClientProvider client={client}>
       <TooltipProvider>
         <Overview envId={ENV} containerId="web-id" node="n1" />
+        <Toaster />
       </TooltipProvider>
     </QueryClientProvider>,
   );
@@ -281,9 +299,9 @@ describe("Overview: the other cards", () => {
     mount();
     const card = await screen.findByRole("region", { name: "Networks" });
     expect(rows(card)).toEqual([
-      ["Network", "IPv4", "IPv6", "MAC", "Aliases"],
-      ["front", "10.0.0.2", "\u2014", "02:42:0a:00:00:02", "web, site"],
-      ["back", "\u2014", "\u2014", "\u2014", "\u2014"],
+      ["Network", "IPv4", "IPv6", "MAC", "Aliases", "Actions"],
+      ["front", "10.0.0.2", "\u2014", "02:42:0a:00:00:02", "web, site", "Disconnect\u2026"],
+      ["back", "\u2014", "\u2014", "\u2014", "\u2014", "Disconnect\u2026"],
     ]);
     cleanup();
     client.clear();
@@ -349,5 +367,69 @@ describe("Overview: the other cards", () => {
     expect(second).not.toBe(first);
     expect(column("Labels")).toBe(second);
     expect(column("Environment variables")).toBe(second);
+  });
+});
+
+describe("Overview: connecting and disconnecting from the Networks card", () => {
+  const withNetworks = () =>
+    detail({
+      networks: [
+        { networkId: "front-id", name: "front", ipv4: "10.0.0.2", aliases: ["web"] },
+        { networkId: "back-id", name: "back", aliases: [] },
+      ],
+    });
+
+  it("shows 'Connect to network' and 'Disconnect…' disabled with 'Needs Operator' for a Viewer", async () => {
+    answer = () => Response.json(withNetworks());
+    mount();
+    const networks = await screen.findByRole("region", { name: "Networks" });
+    const connect = await within(networks).findByRole("button", { name: "Connect to network" });
+    expect(connect.getAttribute("aria-disabled")).toBe("true");
+    const disconnect = within(networks).getByRole("button", { name: "Disconnect web from front" });
+    expect(disconnect.getAttribute("aria-disabled")).toBe("true");
+    expect(within(networks).getAllByText("Needs Operator").length).toBeGreaterThan(0);
+    fireEvent.click(connect);
+    fireEvent.click(disconnect);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(posts).toEqual([]);
+  });
+
+  it("opens the connect dialog for an Operator, also when the container is on no network", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    mount();
+    expect(await screen.findByText("Not connected to any network.")).toBeTruthy();
+    const connect = screen.getByRole("button", { name: "Connect to network" });
+    expect(connect.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(connect);
+    expect(await screen.findByRole("dialog", { name: "Connect web to a network" })).toBeTruthy();
+  });
+
+  it("confirms, then disconnects the container from that row's network on its node", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    answer = () => Response.json(withNetworks());
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect web from front" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Disconnect web from front?" });
+    expect(posts).toEqual([]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect container" }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toEqual({
+      path: `/api/env/${ENV}/networks/front-id/disconnect`,
+      body: { containerId: "web-id", nodeId: "n1" },
+    });
+    expect(await screen.findByText("Disconnected web from front.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  it("reads the container again after a disconnect so the card follows", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    answer = () => Response.json(withNetworks());
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect web from front" }));
+    const dialog = await screen.findByRole("alertdialog");
+    const before = urls.length;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect container" }));
+    await waitFor(() => expect(urls.length).toBeGreaterThan(before));
   });
 });

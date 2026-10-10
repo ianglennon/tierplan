@@ -75,6 +75,7 @@ interface Sent {
   method: string;
   path: string;
   search: string;
+  body?: Record<string, unknown>;
 }
 
 let sent: Sent[];
@@ -82,6 +83,7 @@ let me: ReturnType<typeof makeMe>;
 let answer: () => Response | Promise<Response>;
 let inspectAnswer: () => Response | Promise<Response>;
 let deleteAnswer: () => Response | Promise<Response>;
+let disconnectAnswer: () => Response | Promise<Response>;
 let envType: "swarm" | "standalone";
 const defaults = queryClient.getDefaultOptions();
 
@@ -92,6 +94,7 @@ beforeEach(() => {
   inspectAnswer = () =>
     Response.json({ inspect: { Id: "app0", Name: "app-net", Driver: "bridge" } });
   deleteAnswer = () => new Response(null, { status: 204 });
+  disconnectAnswer = () => new Response(null, { status: 204 });
   envType = "standalone";
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   detailRetry.attempts = 0;
@@ -102,7 +105,12 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
-      sent.push({ method: req.method, path: url.pathname, search: url.search });
+      sent.push({
+        method: req.method,
+        path: url.pathname,
+        search: url.search,
+        body: req.method === "POST" ? await req.clone().json() : undefined,
+      });
       switch (url.pathname) {
         case "/api/instance":
           return Response.json({ instanceName: "Lab", needsSetup: false, rememberDays: 30 });
@@ -157,6 +165,8 @@ beforeEach(() => {
           return req.method === "DELETE" ? deleteAnswer() : answer();
         case `/api/env/${ENV}/networks/app0/inspect`:
           return inspectAnswer();
+        case `/api/env/${ENV}/networks/app0/disconnect`:
+          return disconnectAnswer();
       }
       return Response.json({}, { status: 404 });
     }),
@@ -532,5 +542,123 @@ describe("Connect container", () => {
     expect(
       await screen.findByRole("dialog", { name: "Connect a container to app-net" }),
     ).toBeTruthy();
+  });
+});
+
+describe("Disconnect…", () => {
+  const disconnects = () => sent.filter((s) => s.path.endsWith("/disconnect"));
+
+  function withRows() {
+    answer = () =>
+      Response.json(
+        detail({
+          attachments: [
+            attachment("web"),
+            attachment("db"),
+            attachment("api-svc", { kind: "service", id: "", nodeId: "", node: "", tasks: 2 }),
+          ],
+        }),
+      );
+  }
+
+  it("is disabled for a Viewer on every container row, with 'Needs Operator'", async () => {
+    withRows();
+    renderAt(ATTACHMENTS);
+    const web = await screen.findByRole("button", { name: "Disconnect web from app-net" });
+    expect(web.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen
+        .getByRole("button", { name: "Disconnect db from app-net" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+    fireEvent.click(web);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(disconnects()).toEqual([]);
+  });
+
+  it("has no action on a service row", async () => {
+    withRows();
+    renderAt(ATTACHMENTS);
+    await screen.findByRole("button", { name: "Disconnect web from app-net" });
+    const row = screen.getByText("Service api-svc").closest("tr") as HTMLElement;
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  it("asks first, and keeps Cancel focused, before anything is sent", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    withRows();
+    renderAt(ATTACHMENTS);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect web from app-net" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Disconnect web from app-net?" });
+    expect(dialog.textContent).toContain(
+      "It loses access to everything on that network straight away.",
+    );
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(disconnects()).toEqual([]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(disconnects()).toEqual([]);
+  });
+
+  it("disconnects the container on its node after the confirm, says so and refreshes the network", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    withRows();
+    renderAt(ATTACHMENTS);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect web from app-net" }));
+    const dialog = await screen.findByRole("alertdialog");
+    const reads = sent.filter(
+      (s) => s.method === "GET" && s.path === `/api/env/${ENV}/networks/app0`,
+    ).length;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect container" }));
+    await waitFor(() => expect(disconnects()).toHaveLength(1));
+    expect(disconnects()[0]).toMatchObject({
+      method: "POST",
+      path: `/api/env/${ENV}/networks/app0/disconnect`,
+      body: { containerId: "web-id", nodeId: "n1" },
+    });
+    expect(await screen.findByText("Disconnected web from app-net.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() =>
+      expect(
+        sent.filter((s) => s.method === "GET" && s.path === `/api/env/${ENV}/networks/app0`).length,
+      ).toBeGreaterThan(reads),
+    );
+  });
+
+  it("shows the pending label while the request is out and cannot be dismissed", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    withRows();
+    let release: (r: Response) => void = () => {};
+    disconnectAnswer = () => new Promise<Response>((resolve) => (release = resolve));
+    renderAt(ATTACHMENTS);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect web from app-net" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect container" }));
+    expect(await within(dialog).findByText("Disconnecting…")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+    release(new Response(null, { status: 204 }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  it("keeps a refusal inside the dialog, and treats 'not connected' as already done", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    withRows();
+    disconnectAnswer = () => problem(503, "node_unavailable");
+    renderAt(ATTACHMENTS);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect web from app-net" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect container" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain(
+      "That node isn't reachable right now.",
+    );
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+
+    disconnectAnswer = () => problem(409, "not_connected");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect container" }));
+    expect(await screen.findByText("web isn't on app-net any more.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(disconnects()).toHaveLength(2);
   });
 });

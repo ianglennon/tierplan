@@ -1375,3 +1375,155 @@ func TestConnectContainerAWorkerThatHasNotLearnedTheOverlayAnswersNetworkUnavail
 		t.Errorf("the worker served %d writes, want the one connect", got)
 	}
 }
+
+// Disconnecting a container from a network (plan 04-15 task 2, D-43, D-51, P2 D-42): sent
+// once to the container's node, never forced, and audited.
+
+// disconnectNet posts a disconnect as the signed-in admin, after the monitor's first probe.
+func (f *envFix) disconnectNet(t *testing.T, e envBody, networkID, body string) *envRec {
+	t.Helper()
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/networks/"+networkID+"/disconnect", body)
+}
+
+func TestDisconnectContainerAsAnOperatorSendsOneUnforcedDisconnectAndAuditsIt(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	f.addUser(t, "operator", false)
+	f.addEnvRole(t, "operator", e.ID, "operator")
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	cookie, csrf := f.signIn(t, "operator", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/networks/app0/disconnect",
+		body: `{"containerId":"c2"}`, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /networks/app0/disconnect"}) {
+		t.Fatalf("writes = %v, want one disconnect", w)
+	}
+	got := f.fake.NetworkDisconnects()
+	if len(got) != 1 || got[0].Container != "c2" || got[0].Force {
+		t.Fatalf("the engine saw %+v, want one disconnect of c2 that is not forced", got)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %+v, want one", rows)
+	}
+	r := rows[0]
+	if r.Action != audit.ActionNetworkDisconnected || r.Result != string(audit.ResultSuccess) || r.TargetType != "network" || r.TargetID != "app0" || r.EnvID != e.ID {
+		t.Errorf("audit row = %+v", r)
+	}
+	for k, want := range map[string]string{"network": "app-net", "container": "db", "node": e.ID, "code": "disconnected"} {
+		if r.Details[k] != want {
+			t.Errorf("detail %s = %q, want %q (%+v)", k, r.Details[k], want, r.Details)
+		}
+	}
+}
+
+func TestDisconnectContainerAViewerIsRefusedAndNothingIsSent(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	cookie, csrf := f.signIn(t, "viewer", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/networks/app0/disconnect",
+		body: `{"containerId":"c2"}`, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a refused caller reached the engine: %v", w)
+	}
+	if rows := f.networkAudits(t); len(rows) != 0 {
+		t.Fatalf("network audit rows = %+v, want none", rows)
+	}
+}
+
+func TestDisconnectContainerCannotBeForcedAndTheBodyTakesNoOtherField(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	for name, body := range map[string]string{
+		"a force flag":    `{"containerId":"c2","force":true}`,
+		"no container":    `{}`,
+		"empty container": `{"containerId":""}`,
+	} {
+		rec := f.req(t, http.MethodPost, "/api/env/"+e.ID+"/networks/app0/disconnect", body)
+		if rec.code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status = %d, want 422: %s", name, rec.code, rec.body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a refused body reached the engine: %v", w)
+	}
+}
+
+func TestDisconnectContainerAnUnknownNetworkContainerOrEnvironmentIs404(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	rec := f.disconnectNet(t, e, "nope", `{"containerId":"c2"}`)
+	if rec.code != http.StatusNotFound || rec.ptyp != "network_not_found" {
+		t.Errorf("network: %d %q, want 404 network_not_found", rec.code, rec.ptyp)
+	}
+	rec = f.disconnectNet(t, e, "app0", `{"containerId":"ghost"}`)
+	if rec.code != http.StatusNotFound || rec.ptyp != "container_not_found" {
+		t.Errorf("container: %d %q, want 404 container_not_found", rec.code, rec.ptyp)
+	}
+	rec = f.req(t, http.MethodPost, "/api/env/nope/networks/app0/disconnect", `{"containerId":"c2"}`)
+	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Errorf("environment: %d %q, want 404 environment_not_found", rec.code, rec.ptyp)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a lookup that failed reached the engine: %v", w)
+	}
+}
+
+func TestDisconnectContainerThatIsNotOnTheNetworkAnyMoreIs409NotConnectedFromTheEnginesAnswerAndAudited(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	// c1 is on nothing: the engine refuses, and the list is not trusted to say so first.
+	rec := f.disconnectNet(t, e, "app0", `{"containerId":"c1"}`)
+	if rec.code != http.StatusConflict || rec.ptyp != "not_connected" {
+		t.Fatalf("%d %q, want 409 not_connected: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /networks/app0/disconnect"}) {
+		t.Fatalf("writes = %v, want the one disconnect the engine refused", w)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 1 || rows[0].Action != audit.ActionNetworkDisconnected || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "not_connected" {
+		t.Fatalf("audit rows = %+v, want one failure named not_connected", rows)
+	}
+}
+
+func TestDisconnectContainerThenConnectItAgainRoundTripsThroughTheEngine(t *testing.T) {
+	f, e := dashEnv(t, connectEngine())
+	if rec := f.disconnectNet(t, e, "app0", `{"containerId":"c2"}`); rec.code != http.StatusNoContent {
+		t.Fatalf("disconnect: %d %s", rec.code, rec.body)
+	}
+	if rec := f.connectNet(t, e, "app0", `{"containerId":"c2","alias":"db"}`); rec.code != http.StatusNoContent {
+		t.Fatalf("connect again: %d %q %s", rec.code, rec.ptyp, rec.body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /networks/app0/disconnect", "POST /networks/app0/connect"}) {
+		t.Fatalf("writes = %v", w)
+	}
+}
+
+func TestDisconnectContainerOnASwarmGoesToTheContainersNodeOnly(t *testing.T) {
+	s := newSwarmFix(t)
+	rec := s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/networks/brw/connect",
+		fmt.Sprintf(`{"containerId":"w002","nodeId":%q}`, s.w.id))
+	if rec.code != http.StatusNoContent {
+		t.Fatalf("connect: %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	rec = s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/networks/brw/disconnect",
+		fmt.Sprintf(`{"containerId":"w002","nodeId":%q}`, s.w.id))
+	if rec.code != http.StatusNoContent {
+		t.Fatalf("disconnect: %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if got := s.w.fake.NetworkDisconnects(); len(got) != 1 || got[0].Container != "w002" {
+		t.Errorf("the worker saw %+v", got)
+	}
+	if len(s.m1.fake.Writes())+len(s.m2.fake.Writes()) != 0 {
+		t.Error("the disconnect reached a manager")
+	}
+	rows := s.networkAudits(t)
+	if len(rows) != 2 || rows[1].Action != audit.ActionNetworkDisconnected || rows[1].Result != string(audit.ResultSuccess) {
+		t.Errorf("audit rows = %+v", rows)
+	}
+}

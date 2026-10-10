@@ -21,6 +21,7 @@ var _ = registerFakeHandler((*Fake).serveNetworkCreate)
 var _ = registerFakeHandler((*Fake).serveNetworkRemove)
 var _ = registerFakeHandler((*Fake).serveNetworkInspect)
 var _ = registerFakeHandler((*Fake).serveNetworkConnect)
+var _ = registerFakeHandler((*Fake).serveNetworkDisconnect)
 
 // serveNetworkCreate answers POST /networks/create. A name the daemon already has is
 // the 409 a real one gives. The network joins the lists the daemon answers, with the
@@ -332,6 +333,69 @@ func (f *Fake) serveNetworkConnect(w http.ResponseWriter, r *http.Request, p str
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
 	return true
+}
+
+// networkDisconnectPath matches POST /networks/{id}/disconnect.
+var networkDisconnectPath = regexp.MustCompile(`^/networks/([^/]+)/disconnect$`)
+
+// serveNetworkDisconnect answers POST /networks/{id}/disconnect. An unknown network or
+// container is the 404 a real daemon gives, and a container that is not on the network is
+// the 403 "is not connected" refusal. Otherwise the container leaves the network in every
+// list and inspect. The body, force included, is kept for NetworkDisconnects and the
+// write is recorded whatever the answer.
+func (f *Fake) serveNetworkDisconnect(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	m := networkDisconnectPath.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	var req network.DisconnectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body: " + err.Error()})
+		return true
+	}
+	fn, ok := cfg.resolveNetwork(m[1])
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "network " + m[1] + " not found"})
+		return true
+	}
+	fc, ok := cfg.resolveContainer(req.Container)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + req.Container})
+		return true
+	}
+	if ep, on := fc.Networks[fn.Name]; !on || (ep.NetworkID != "" && ep.NetworkID != fn.ID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "container " + fc.ID + " is not connected to network " + fn.Name})
+		return true
+	}
+	f.mu.Lock()
+	if f.epChanges == nil {
+		f.epChanges = map[[2]string]*FakeEndpoint{}
+	}
+	f.epChanges[[2]string{fc.ID, fn.Name}] = nil
+	f.netDisconnects = append(f.netDisconnects, req)
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusOK)
+	return true
+}
+
+// NetworkDisconnects returns the body of every network disconnect the daemon accepted,
+// in order, as the daemon decoded it.
+func (f *Fake) NetworkDisconnects() []network.DisconnectRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.netDisconnects)
 }
 
 // NetworkConnects returns the body of every network connect the daemon accepted, in
