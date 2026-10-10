@@ -347,3 +347,184 @@ describe("VolumeList create button", () => {
     expect(await screen.findByText("existing")).toBeTruthy();
   });
 });
+
+// The presets, the generated options and the SMB password warning (plan 04-16 task 2).
+
+async function chooseType(dialog: HTMLElement, label: string) {
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "Type" }));
+  fireEvent.click(await screen.findByRole("option", { name: label }));
+}
+
+const fill = (dialog: HTMLElement, label: string, value: string) =>
+  fireEvent.change(within(dialog).getByLabelText(label), { target: { value } });
+
+const submit = (dialog: HTMLElement) =>
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create volume" }));
+
+describe("CreateVolumeDialog (presets)", () => {
+  it("offers None, NFS share, SMB (CIFS) share and Host folder", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Type" }));
+    for (const label of ["None", "NFS share", "SMB (CIFS) share", "Host folder"]) {
+      expect(await screen.findByRole("option", { name: label })).toBeTruthy();
+    }
+  });
+
+  it("swaps the NFS fields in place, with the mount options defaulting to rw", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByLabelText("Server address")).toBeNull();
+    await chooseType(dialog, "NFS share");
+    expect(within(dialog).getByLabelText("Server address")).toBeTruthy();
+    const path = within(dialog).getByLabelText("Exported path") as HTMLInputElement;
+    expect(path.placeholder).toBe("/srv/data");
+    expect((within(dialog).getByLabelText("Mount options") as HTMLInputElement).value).toBe("rw");
+    // The free-form editor gives way to the generated options.
+    expect(within(dialog).queryByRole("button", { name: "Add option" })).toBeNull();
+    expect(within(dialog).queryByText(/stores this password/)).toBeNull();
+  });
+
+  it("shows the generated options read-only as the NFS fields are typed", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await chooseType(dialog, "NFS share");
+    fill(dialog, "Server address", "10.0.0.5");
+    fill(dialog, "Exported path", "/srv/data");
+    const generated = within(dialog).getByRole("group", {
+      name: "Driver options that will be sent",
+    });
+    expect(within(generated).getByText("addr=10.0.0.5,rw")).toBeTruthy();
+    expect(within(generated).getByText(":/srv/data")).toBeTruthy();
+    expect(within(generated).getByText("nfs")).toBeTruthy();
+    expect(generated.querySelector("input")).toBeNull();
+  });
+
+  it("posts the NFS options and the name", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    typeName(dialog, "share1");
+    await chooseType(dialog, "NFS share");
+    fill(dialog, "Server address", "10.0.0.5");
+    fill(dialog, "Exported path", "/srv/data");
+    submit(dialog);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({
+      name: "share1",
+      driverOptions: { type: "nfs", o: "addr=10.0.0.5,rw", device: ":/srv/data" },
+    });
+  });
+
+  it("asks for the server and a path that starts with a slash, sending nothing", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    typeName(dialog, "share1");
+    await chooseType(dialog, "NFS share");
+    fill(dialog, "Exported path", "srv/data");
+    submit(dialog);
+    expect(await within(dialog).findByText("Enter a server address.")).toBeTruthy();
+    expect(within(dialog).getByText("Enter a path that starts with /.")).toBeTruthy();
+    expect(posts()).toEqual([]);
+  });
+
+  it("shows the SMB fields and the password warning, and posts the cifs options", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    typeName(dialog, "media");
+    await chooseType(dialog, "SMB (CIFS) share");
+    expect(dialog.textContent).toContain(
+      "Docker stores this password in the volume's options, where anyone who can inspect the volume can read it. Use a credentials file if you can.",
+    );
+    const password = within(dialog).getByLabelText("Password") as HTMLInputElement;
+    expect(password.type).toBe("password");
+    fill(dialog, "Server address", "nas.lan");
+    fill(dialog, "Share name", "media");
+    fill(dialog, "Username", "bob");
+    fill(dialog, "Password", "s3cret");
+    fill(dialog, "Mount options", "vers=3.0");
+    submit(dialog);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({
+      name: "media",
+      driverOptions: {
+        type: "cifs",
+        o: "addr=nas.lan,username=bob,password=s3cret,vers=3.0",
+        device: "//nas.lan/media",
+      },
+    });
+  });
+
+  it("asks for a share name for SMB", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    typeName(dialog, "media");
+    await chooseType(dialog, "SMB (CIFS) share");
+    fill(dialog, "Server address", "nas.lan");
+    submit(dialog);
+    expect(await within(dialog).findByText("Enter a share name.")).toBeTruthy();
+    expect(posts()).toEqual([]);
+  });
+
+  it("shows the host folder field with its helper and posts a bind", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    typeName(dialog, "hostdata");
+    await chooseType(dialog, "Host folder");
+    expect(dialog.textContent).toContain("The folder must already exist on the host.");
+    expect(
+      (within(dialog).getByLabelText("Folder on the host") as HTMLInputElement).placeholder,
+    ).toBe("/srv/data");
+    fill(dialog, "Folder on the host", "relative");
+    submit(dialog);
+    expect(await within(dialog).findByText("Enter a path that starts with /.")).toBeTruthy();
+    expect(posts()).toEqual([]);
+    fill(dialog, "Folder on the host", "/srv/data");
+    submit(dialog);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({
+      name: "hostdata",
+      driverOptions: { type: "none", o: "bind", device: "/srv/data" },
+    });
+  });
+
+  it("names the chosen node in the host folder helper on a swarm", async () => {
+    mount({
+      swarm: true,
+      networks: [
+        { id: "b", name: "bridge", driver: "bridge", scope: "local", node: "node-2", nodeId: "n2" },
+      ] as never[],
+    });
+    const dialog = await screen.findByRole("dialog");
+    await chooseType(dialog, "Host folder");
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Create on node" }));
+    fireEvent.click(await screen.findByRole("option", { name: "node-2" }));
+    expect(dialog.textContent).toContain("The folder must already exist on node-2.");
+  });
+
+  it("goes back to None: the preset fields go, the free-form options come back, nothing is kept", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    typeName(dialog, "plain");
+    await chooseType(dialog, "SMB (CIFS) share");
+    fill(dialog, "Password", "s3cret");
+    await chooseType(dialog, "None");
+    expect(within(dialog).queryByLabelText("Password")).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Add option" })).toBeTruthy();
+    submit(dialog);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({ name: "plain" });
+  });
+
+  it("wraps long paths and option rows with break-all in mono", async () => {
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await chooseType(dialog, "Host folder");
+    fill(dialog, "Folder on the host", `/${"a".repeat(200)}`);
+    const generated = within(dialog).getByRole("group", {
+      name: "Driver options that will be sent",
+    });
+    const value = within(generated).getByText(`/${"a".repeat(200)}`);
+    expect(value.className).toContain("break-all");
+    expect(value.className).toContain("font-mono");
+  });
+});

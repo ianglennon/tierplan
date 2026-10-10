@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/redact"
@@ -295,5 +296,82 @@ func TestMaskContainerInspectMasksAnEnvEntryThatIsNotAStringRatherThanKeepingIt(
 	out, masked, err := redact.MaskContainerInspect([]byte(`{"Config":{"Env":[{"v":"secret"},"A=b"]}}`), false)
 	if err != nil || !masked || strings.Contains(string(out), "secret") || strings.Contains(string(out), "=b") {
 		t.Fatalf("out=%q masked=%v err=%v", out, masked, err)
+	}
+}
+
+// A volume create is audited with its driver options, which can hold an SMB password
+// (plan 04-16, T-04-55, RES-07). The row keeps the option names and values and masks
+// any password-like part. Negative cases are mandatory (D-81).
+
+func TestAuditOptionsMasksThePasswordSegmentOfOAndKeepsTheRest(t *testing.T) {
+	got := redact.AuditOptions(map[string]string{
+		"type": "cifs", "o": "addr=x,username=u,password=p", "device": "//x/s",
+	})
+	want := "device=//x/s; o=addr=x,username=u,password=<hidden>; type=cifs"
+	if got != want {
+		t.Fatalf("AuditOptions = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "password=p") {
+		t.Fatalf("the password is in the audit text: %q", got)
+	}
+}
+
+func TestAuditOptionsReplacesTheWholeValueOfAKeyThatNamesASecret(t *testing.T) {
+	for _, key := range []string{"password", "Password", "DB_PASS", "passwd", "secret", "api_secret", "credentials", "token", "AUTH_TOKEN"} {
+		got := redact.AuditOptions(map[string]string{key: "hunter2", "type": "x"})
+		if strings.Contains(got, "hunter2") {
+			t.Errorf("key %q: the value is in the audit text: %q", key, got)
+		}
+		if !strings.Contains(got, key+"="+redact.Placeholder) || !strings.Contains(got, "type=x") {
+			t.Errorf("key %q: AuditOptions = %q, want the key kept with the placeholder and other options kept", key, got)
+		}
+	}
+}
+
+func TestAuditOptionsMasksEverySecretLikeSegmentNameInAnOptionList(t *testing.T) {
+	got := redact.AuditOptions(map[string]string{"o": "addr=h,pass=1,credentials=/etc/smb,token=t,secret=s,vers=3.0"})
+	for _, leaked := range []string{"pass=1", "/etc/smb", "token=t", "secret=s"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("%q is in the audit text: %q", leaked, got)
+		}
+	}
+	for _, kept := range []string{"addr=h", "vers=3.0", "pass=<hidden>", "credentials=<hidden>"} {
+		if !strings.Contains(got, kept) {
+			t.Errorf("%q is missing from the audit text: %q", kept, got)
+		}
+	}
+}
+
+func TestAuditOptionsDoesNotLeakTheRestOfAPasswordThatHoldsACommaOrADoubledComma(t *testing.T) {
+	for _, o := range []string{"addr=h,password=ab,cd,username=u", "addr=h,password=ab,,cd,username=u"} {
+		got := redact.AuditOptions(map[string]string{"o": o})
+		if strings.Contains(got, "cd") || strings.Contains(got, "ab") {
+			t.Errorf("o=%q: part of the password is in the audit text: %q", o, got)
+		}
+		if !strings.Contains(got, "username=u") || !strings.Contains(got, "password=<hidden>") {
+			t.Errorf("o=%q: AuditOptions = %q, want the next option and the placeholder", o, got)
+		}
+	}
+}
+
+func TestAuditOptionsKeepsAPlainBindVolumeAsItIsAndNothingIsEmpty(t *testing.T) {
+	if got := redact.AuditOptions(map[string]string{"type": "none", "o": "bind", "device": "/srv/data"}); got != "device=/srv/data; o=bind; type=none" {
+		t.Errorf("AuditOptions = %q", got)
+	}
+	if got := redact.AuditOptions(nil); got != "" {
+		t.Errorf("AuditOptions(nil) = %q, want empty", got)
+	}
+}
+
+func TestAuditOptionsIsCappedAtFiveHundredBytesWithoutSplittingACharacter(t *testing.T) {
+	got := redact.AuditOptions(map[string]string{"device": strings.Repeat("é", 400)})
+	if len(got) > 500 {
+		t.Fatalf("len = %d, want at most 500", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("the cap split a character: %q", got)
+	}
+	if got := redact.AuditOptions(map[string]string{"o": strings.Repeat("a", 600) + ",password=hunter2"}); strings.Contains(got, "hunter2") {
+		t.Fatalf("a cap must never reveal a password: %q", got)
 	}
 }
