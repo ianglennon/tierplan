@@ -186,3 +186,45 @@ describe("following", () => {
     expect(surface.scrollTop).toBe(120 * LINE);
   });
 });
+
+describe("the end of the stream", () => {
+  it("closes the connection when the viewer goes away", async () => {
+    const { unmount } = renderViewer();
+    await connect();
+    expect(source().closed).toBe(false);
+    unmount();
+    expect(source().closed).toBe(true);
+  });
+
+  it("says the access changed and keeps the lines, when the server closes the stream for it", async () => {
+    renderViewer();
+    await connect();
+    await send(lines(3));
+    await act(async () => {
+      source().sendFrame("closed", { reason: "access_lost" });
+    });
+    expect(screen.getByText("Your access changed. Logs were closed.")).toBeTruthy();
+    expect(screen.queryByText("Live")).toBeNull();
+    expect(screen.getByRole("log").textContent).toContain("line 2");
+  });
+
+  it("shows Reconnecting while the browser retries a dropped stream and Live again after", async () => {
+    renderViewer();
+    await connect();
+    await act(async () => {
+      source().fail();
+    });
+    expect(screen.getByText("Reconnecting…")).toBeTruthy();
+    await connect();
+    expect(screen.getByText("Live")).toBeTruthy();
+  });
+
+  it("does not claim the access changed for a stream that simply could not be opened", async () => {
+    renderViewer();
+    await act(async () => {
+      source().fail(true);
+    });
+    expect(screen.queryByText("Your access changed. Logs were closed.")).toBeNull();
+    expect(screen.queryByText("Live")).toBeNull();
+  });
+});
