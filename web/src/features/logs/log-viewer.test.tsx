@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import type { LogLineData } from "@/features/logs/log-buffer";
-import { LogViewer } from "@/features/logs/log-viewer";
+import { LogViewer, popoutLogsUrl } from "@/features/logs/log-viewer";
 import "@/i18n";
 
 // The live log viewer (plan 04-19, OBS-01, D-15, D-16, T-04-67). jsdom lays nothing
@@ -1024,6 +1024,151 @@ describe("downloading", () => {
       expect(await screen.findByRole("dialog", { name: "Download logs" })).toBeTruthy();
     } finally {
       window.innerWidth = width;
+    }
+  });
+});
+
+describe("the pop-out", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("builds the address of the pop-out with the settings carried", () => {
+    const url = new URL(
+      popoutLogsUrl("e 1", "web/id", "n1", {
+        since: "1h",
+        q: "404",
+        ts: true,
+        utc: false,
+        wrap: true,
+      }),
+      "http://x",
+    );
+    expect(url.pathname).toBe("/popout/e%201/containers/web%2Fid/logs");
+    expect(url.searchParams.get("node")).toBe("n1");
+    expect(url.searchParams.get("since")).toBe("1h");
+    expect(url.searchParams.get("ts")).toBe("true");
+    expect(url.searchParams.get("utc")).toBe("false");
+    expect(url.searchParams.get("wrap")).toBe("true");
+    // A query that reads as a number or a boolean stays text through the router.
+    expect(url.searchParams.get("q")).toBe('"404"');
+  });
+
+  it("leaves out what is not set", () => {
+    const url = new URL(popoutLogsUrl("e1", "c", undefined, {}), "http://x");
+    expect(url.search).toBe("");
+  });
+
+  it("opens the pop-out in a new window carrying the range, the search and the toggles", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderViewer({
+      params: { since: "5m", q: "boom", ts: true, utc: true, wrap: true },
+      onParamsChange: vi.fn(),
+    });
+    await connect();
+    fireEvent.click(screen.getByRole("button", { name: "Open in new window" }));
+    expect(open).toHaveBeenCalledTimes(1);
+    const [href, target, features] = open.mock.calls[0] as [string, string, string];
+    const url = new URL(href, "http://x");
+    expect(url.pathname).toBe("/popout/e1/containers/web-id/logs");
+    expect(url.searchParams.get("node")).toBe("n1");
+    expect(url.searchParams.get("since")).toBe("5m");
+    expect(url.searchParams.get("q")).toBe("boom");
+    expect(url.searchParams.get("ts")).toBe("true");
+    expect(url.searchParams.get("utc")).toBe("true");
+    expect(url.searchParams.get("wrap")).toBe("true");
+    expect(target).toBe("_blank");
+    expect(features).toContain("noopener");
+  });
+
+  it("carries the choices this browser remembers when the address names none", async () => {
+    localStorage.setItem(
+      "bayplan.logs.view",
+      JSON.stringify({ wrap: true, timestamps: true, utc: false }),
+    );
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderViewer();
+    await connect();
+    fireEvent.click(screen.getByRole("button", { name: "Open in new window" }));
+    const url = new URL((open.mock.calls[0] as [string])[0], "http://x");
+    expect(url.searchParams.get("ts")).toBe("true");
+    expect(url.searchParams.get("wrap")).toBe("true");
+  });
+
+  it("is not offered inside the pop-out itself", async () => {
+    renderViewer({ popout: true });
+    await connect();
+    expect(screen.queryByRole("button", { name: "Open in new window" })).toBeNull();
+  });
+});
+
+describe("a hidden pop-out", () => {
+  const hide = (hidden: boolean) => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+  afterEach(() => {
+    Reflect.deleteProperty(document, "hidden");
+  });
+
+  it("closes its stream after a minute hidden and reopens it from the last line when seen again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderViewer({ popout: true });
+      await connect();
+      await send(lines(2));
+      const first = source();
+      await act(async () => {
+        hide(true);
+        vi.advanceTimersByTime(59_000);
+      });
+      expect(first.closed).toBe(false);
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(first.closed).toBe(true);
+      expect(FakeEventSource.instances).toHaveLength(1);
+      await act(async () => {
+        hide(false);
+      });
+      expect(FakeEventSource.instances).toHaveLength(2);
+      const again = FakeEventSource.instances[1] as FakeEventSource;
+      expect(new URL(again.url, "http://x").searchParams.get("after")).toBe(lines(2)[1]?.t);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps its stream when it is seen again within the minute", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderViewer({ popout: true });
+      await connect();
+      await act(async () => {
+        hide(true);
+        vi.advanceTimersByTime(30_000);
+        hide(false);
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(source().closed).toBe(false);
+      expect(FakeEventSource.instances).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves the Logs tab alone: it keeps its stream hidden or not", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderViewer();
+      await connect();
+      await act(async () => {
+        hide(true);
+        vi.advanceTimersByTime(120_000);
+      });
+      expect(source().closed).toBe(false);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

@@ -287,3 +287,36 @@ describe("under 768px", () => {
     expect(button("More")).toBeTruthy();
   });
 });
+
+describe("Open in new window", () => {
+  it("is a button at the right of the second row, calling for the pop-out", () => {
+    const onOpenPopout = vi.fn();
+    renderBar({ onOpenPopout });
+    fireEvent.click(button("Open in new window"));
+    expect(onOpenPopout).toHaveBeenCalledTimes(1);
+  });
+
+  it("comes after the other actions", () => {
+    renderBar({ onOpenPopout: vi.fn(), actions: <button type="button">Download…</button> });
+    const names = within(screen.getByRole("toolbar"))
+      .getAllByRole("button")
+      .map((b) => b.textContent)
+      .filter((n) => n === "Download…" || n === "Open in new window");
+    expect(names).toEqual(["Download…", "Open in new window"]);
+  });
+
+  it("is not there without a pop-out to open", () => {
+    renderBar();
+    expect(screen.queryByRole("button", { name: "Open in new window" })).toBeNull();
+  });
+
+  it("is an item of the More menu under 768px, and the only one a pop-out leaves", () => {
+    window.innerWidth = 500;
+    const onOpenPopout = vi.fn();
+    renderBar({ onOpenPopout });
+    expect(screen.queryByRole("button", { name: "Open in new window" })).toBeNull();
+    fireEvent.keyDown(button("More"), { key: "Enter" });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open in new window" }));
+    expect(onOpenPopout).toHaveBeenCalledTimes(1);
+  });
+});

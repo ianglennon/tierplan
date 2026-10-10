@@ -454,3 +454,79 @@ describe("reconnecting", () => {
     });
   });
 });
+
+// Pausing a stream nobody is looking at (plan 04-21, D-22): the pop-out closes it after a
+// minute hidden and reopens it from the last line when it is seen again.
+describe("suspending", () => {
+  const T1 = "2026-10-09T12:00:01.000000000Z";
+  const current = () => FakeEventSource.instances.at(-1) as FakeEventSource;
+
+  it("closes the connection and does not retry while suspended", () => {
+    vi.useFakeTimers();
+    const { stream, source, states } = open();
+    source.sendFrame("ready", { tty: false });
+    const seen = states.length;
+    stream.suspend();
+    expect(source.closed).toBe(true);
+    vi.advanceTimersByTime(60_000);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(states).toHaveLength(seen);
+  });
+
+  it("reopens from the last line, with the same viewer ID, and says it is reconnecting until it is back", () => {
+    vi.useFakeTimers();
+    const { stream, source, states } = open({ tail: 500 });
+    source.sendFrame("ready", { tty: false });
+    source.sendFrame("log", { lines: [{ t: T1, s: "o", m: "a" }] }, T1);
+    stream.suspend();
+    stream.resume();
+    expect(FakeEventSource.instances).toHaveLength(2);
+    const q = new URL(current().url, "http://x").searchParams;
+    expect(q.get("after")).toBe(T1);
+    expect(q.get("sid")).toBe(SID);
+    expect(q.has("tail")).toBe(false);
+    expect(states.at(-1)).toEqual({ status: "reconnecting" });
+    current().sendFrame("ready", { tty: false });
+    expect(states.at(-1)).toEqual({ status: "live" });
+  });
+
+  it("drops what it holds at the seam when it resumes", () => {
+    vi.useFakeTimers();
+    const { stream, source, lines } = open();
+    source.sendFrame("ready", { tty: false });
+    source.sendFrame("log", { lines: [{ t: T1, s: "o", m: "a" }] }, T1);
+    stream.suspend();
+    stream.resume();
+    current().sendFrame("log", {
+      lines: [
+        { t: T1, s: "o", m: "a" },
+        { t: "2026-10-09T12:00:02.000000000Z", s: "o", m: "b" },
+      ],
+    });
+    expect(lines.flat().map((l) => (l as { m: string }).m)).toEqual(["a", "b"]);
+  });
+
+  it("does nothing when resumed without being suspended, or after close", () => {
+    vi.useFakeTimers();
+    const { stream, source } = open();
+    source.sendFrame("ready", { tty: false });
+    stream.resume();
+    expect(FakeEventSource.instances).toHaveLength(1);
+    stream.suspend();
+    stream.close();
+    stream.resume();
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it("cancels a retry that was waiting when it is suspended", () => {
+    vi.useFakeTimers();
+    const { stream, source } = open();
+    source.sendFrame("ready", { tty: false });
+    source.fail();
+    stream.suspend();
+    vi.advanceTimersByTime(60_000);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    stream.resume();
+    expect(FakeEventSource.instances).toHaveLength(2);
+  });
+});
