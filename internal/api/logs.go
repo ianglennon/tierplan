@@ -70,6 +70,8 @@ type LogsDeps struct {
 	Aggregator LogsSource
 	// Audit records that a stream was opened, never what it showed.
 	Audit *audit.Writer
+	// Checker decides who may see the values of a log driver's options (secrets.reveal).
+	Checker *rbac.Checker
 	// Heartbeat is how often an idle stream gets a comment line and has its access
 	// checked again. Zero means 15 seconds; tests shorten it.
 	Heartbeat time.Duration

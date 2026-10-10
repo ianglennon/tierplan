@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -154,5 +155,38 @@ func TestContainerLogsFollowDeliversNewLinesAndCloseEndsTheFollow(t *testing.T) 
 			t.Fatal("the engine's follow stayed open after Close")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestContainerLogsOfADriverTheEngineCannotReadIsErrLogsUnreadableAndNothingElseIs(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		Containers: []dockertest.FakeContainer{
+			{ID: "quiet-id", Names: []string{"/quiet"}, Image: "alpine", State: "running", Status: "Up",
+				Inspect: dockertest.FakeInspect{LogType: "none"}},
+			// A syslog container whose logs the engine still keeps (dual logging) reads fine.
+			{ID: "sys-id", Names: []string{"/sys"}, Image: "alpine", State: "running", Status: "Up",
+				Inspect: dockertest.FakeInspect{LogType: "syslog"}},
+		},
+	})
+	c := newClient(t, fake)
+	fake.AppendLogs("sys", dockertest.FakeLogLine{Text: "readable"})
+
+	rc, _, err := c.ContainerLogs(context.Background(), "quiet", dockerx.LogOptions{Follow: true})
+	if rc != nil {
+		_ = rc.Close()
+	}
+	if !errors.Is(err, dockerx.ErrLogsUnreadable) {
+		t.Fatalf("err = %v, want ErrLogsUnreadable", err)
+	}
+
+	rc, _, err = c.ContainerLogs(context.Background(), "sys", dockerx.LogOptions{Tail: "all"})
+	if err != nil {
+		t.Fatalf("a syslog container whose logs are readable failed: %v", err)
+	}
+	_ = rc.Close()
+
+	_, _, err = c.ContainerLogs(context.Background(), "nope", dockerx.LogOptions{})
+	if err == nil || errors.Is(err, dockerx.ErrLogsUnreadable) || !dockerx.IsNotFound(err) {
+		t.Errorf("an unknown container gave %v, want a not-found error that is not ErrLogsUnreadable", err)
 	}
 }

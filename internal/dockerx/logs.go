@@ -5,11 +5,18 @@ package dockerx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/moby/moby/client"
 )
+
+// ErrLogsUnreadable is returned by ContainerLogs when the engine answers that it cannot
+// read the container's log back: its logging driver (none, and some others) keeps no
+// log the engine can show. It is the engine's own word, an HTTP 501; nothing is guessed
+// from the driver's name, because a driver such as syslog can keep a readable copy too.
+var ErrLogsUnreadable = errors.New("the engine cannot read this container's logs back")
 
 // LogOptions say which part of a container's log to read.
 type LogOptions struct {

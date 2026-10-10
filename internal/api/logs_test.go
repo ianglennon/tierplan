@@ -878,3 +878,108 @@ func TestLogPageKeepsTheNewestLinesWhenThePageIsOverItsByteBudget(t *testing.T) 
 		t.Error("lines were left out for size, so this is not the start of the logs")
 	}
 }
+
+// Logs Docker cannot read back (plan 04-20, D-25 as amended).
+
+func unreadableEngine() dockertest.FakeConfig {
+	cfg := logsEngine()
+	cfg.Containers = append(cfg.Containers,
+		dockertest.FakeContainer{ID: "cccccccccccc33333333333333333333333333333333333333333333333333", Names: []string{"/quiet"}, Image: "alpine", State: "running", Status: "Up 1 hour",
+			Inspect: dockertest.FakeInspect{LogType: "none", LogOptions: map[string]string{"tag": "web", "syslog-address": "tcp://user:pw@10.0.0.9:514"}}},
+		dockertest.FakeContainer{ID: "dddddddddddd44444444444444444444444444444444444444444444444444", Names: []string{"/sys"}, Image: "alpine", State: "running", Status: "Up 1 hour",
+			Inspect: dockertest.FakeInspect{LogType: "syslog", LogOptions: map[string]string{"syslog-address": "tcp://10.0.0.9:514"}}},
+	)
+	return cfg
+}
+
+const (
+	quietID = "cccccccccccc33333333333333333333333333333333333333333333333333"
+	sysID   = "dddddddddddd44444444444444444444444444444444444444444444444444"
+)
+
+type unreadableBody struct {
+	Driver  string `json:"driver"`
+	Options []struct {
+		Name   string `json:"name"`
+		Value  string `json:"value"`
+		Masked bool   `json:"masked"`
+	} `json:"options"`
+}
+
+func TestLogStreamOfAContainerTheEngineCannotReadSendsUnreadableWithTheDriverAndEndsWithoutAnAuditRow(t *testing.T) {
+	f := newLogsFix(t, unreadableEngine(), nil)
+	c := f.open(t, f.cookie, quietID, "sid="+sidA, "")
+	if c.status0() != http.StatusOK {
+		t.Fatalf("status = %d: %s", c.status0(), c.bodyString())
+	}
+	fr := nextEvent(t, c, "unreadable", 5*time.Second)
+	var body unreadableBody
+	if err := json.Unmarshal([]byte(fr.data), &body); err != nil {
+		t.Fatalf("unreadable data %q: %v", fr.data, err)
+	}
+	if body.Driver != "none" {
+		t.Errorf("driver = %q, want none", body.Driver)
+	}
+	if len(body.Options) != 2 || body.Options[0].Name != "syslog-address" || body.Options[1].Name != "tag" {
+		t.Errorf("options = %+v, want the two by name", body.Options)
+	}
+	c.waitEnded(t, 3*time.Second, "an unreadable log has nothing to stream")
+	if n := len(f.logAudits(t)); n != 0 {
+		t.Errorf("%d audit rows for a log that was never read", n)
+	}
+	if n := f.fake.LogFollows(); n != 0 {
+		t.Errorf("%d engine follows open", n)
+	}
+}
+
+func TestLogStreamUnreadableMasksTheOptionValuesForAViewerAndShowsThemToAHolderOfSecretsReveal(t *testing.T) {
+	f := newLogsFix(t, unreadableEngine(), nil)
+	admin := f.open(t, f.cookie, quietID, "sid="+sidA, "")
+	var shown unreadableBody
+	if err := json.Unmarshal([]byte(nextEvent(t, admin, "unreadable", 5*time.Second).data), &shown); err != nil {
+		t.Fatal(err)
+	}
+	if shown.Options[0].Masked || shown.Options[0].Value != "tcp://user:pw@10.0.0.9:514" {
+		t.Errorf("a revealer saw %+v, want the value", shown.Options[0])
+	}
+
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", f.env.ID, "viewer")
+	cookie, _ := f.signIn(t, "viewer", false)
+	viewer := f.open(t, cookie, quietID, "sid="+sidB, "")
+	frame := nextEvent(t, viewer, "unreadable", 5*time.Second)
+	if strings.Contains(frame.data, "pw@") || strings.Contains(frame.data, "10.0.0.9") || strings.Contains(frame.data, `"web"`) {
+		t.Fatalf("a viewer was sent a value: %s", frame.data)
+	}
+	var masked unreadableBody
+	if err := json.Unmarshal([]byte(frame.data), &masked); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range masked.Options {
+		if !o.Masked || o.Value != "" {
+			t.Errorf("option %+v should be masked with no value", o)
+		}
+	}
+}
+
+func TestLogStreamOfASyslogContainerWhoseLogsReadStreamsNormally(t *testing.T) {
+	f := newLogsFix(t, unreadableEngine(), nil)
+	f.fake.AppendLogs("sys", dockertest.FakeLogLine{Text: "dual logging keeps a copy"})
+	c := f.open(t, f.cookie, sysID, "sid="+sidA, "")
+	nextEvent(t, c, "ready", 5*time.Second)
+	lines, _ := readLines(t, c, 1)
+	if lines[0].M != "dual logging keeps a copy" {
+		t.Errorf("line = %+v", lines[0])
+	}
+	if fr, ok := c.next(150 * time.Millisecond); ok && fr.event == "unreadable" {
+		t.Errorf("a readable syslog container was called unreadable: %+v", fr)
+	}
+}
+
+func TestLogPageOfAContainerTheEngineCannotReadIs409LogsUnreadable(t *testing.T) {
+	f := newLogsFix(t, unreadableEngine(), nil)
+	rec := f.req(t, http.MethodGet, f.pagePath(quietID, "sid="+sidA+"&tail=5"), "")
+	if rec.code != http.StatusConflict || rec.ptyp != "logs_unreadable" {
+		t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+}

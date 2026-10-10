@@ -257,7 +257,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			logsSrc = f.logsWrap(logsSrc)
 		}
 		api.RegisterLogs(r, api.LogsDeps{
-			Aggregator: logsSrc, Audit: f.aud, Heartbeat: f.logsHeartbeat, MaxStreamsPerUser: f.logsMaxStreams,
+			Aggregator: logsSrc, Audit: f.aud, Checker: checker, Heartbeat: f.logsHeartbeat, MaxStreamsPerUser: f.logsMaxStreams,
 			MaxLifetime: f.logsMaxLifetime, MaxPageBytes: f.logsMaxPageBytes, Now: f.clk.now, Log: log,
 		})
 	}

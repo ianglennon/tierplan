@@ -141,7 +141,7 @@ func (f *Fake) LogQueries() []url.Values {
 // EndLogs, the client leaving or the daemon stopping. A container with a TTY
 // (FakeInspect.Tty) is answered raw, with CR LF line ends; any other is multiplexed
 // as stdcopy frames, one frame per line. An unknown container is the 404 an engine
-// gives.
+// gives, and a container whose log driver is none (FakeInspect.LogType) the 501.
 func (f *Fake) serveLogs(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
 	m := logsRoute.FindStringSubmatch(p)
 	if m == nil || r.Method != http.MethodGet {
@@ -150,6 +150,12 @@ func (f *Fake) serveLogs(w http.ResponseWriter, r *http.Request, p string, cfg F
 	c, known := cfg.resolveContainer(m[1])
 	if !known {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + m[1]})
+		return true
+	}
+	// Like the engine, a container whose log driver keeps nothing to read (none) answers
+	// 501 to a read of its log.
+	if c.Inspect.LogType == "none" {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"message": "configured logging driver does not support reading"})
 		return true
 	}
 	q := r.URL.Query()
