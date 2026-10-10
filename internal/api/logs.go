@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/redact"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -36,7 +37,8 @@ const (
 	// logOpenTimeout bounds how long opening the engine's log may take.
 	logOpenTimeout = 30 * time.Second
 
-	problemStreamBusy = "stream_busy"
+	problemStreamBusy     = "stream_busy"
+	problemLogsUnreadable = "logs_unreadable"
 
 	logTargetType = "container"
 )
@@ -287,6 +289,9 @@ func getContainerLogs(ctx context.Context, d LogsDeps, mem *logAuditMemory, in *
 		}
 		ring = &logPageRing{maxLines: in.Tail, maxBytes: budget}
 		rc, tty, err := openLogs(ctx, d, env.ID, nodeID, in.ContainerID, params)
+		if errors.Is(err, dockerx.ErrLogsUnreadable) {
+			return nil, httpx.Problem(http.StatusConflict, problemLogsUnreadable, "Docker can't read this container's logs back.")
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -395,6 +400,9 @@ func openLogs(ctx context.Context, d LogsDeps, envID, nodeID, containerID string
 	case errors.Is(err, tunnel.ErrBusy):
 		return nil, false, httpx.Problem(http.StatusServiceUnavailable, problemStreamBusy,
 			"This host's agent is serving as many logs and shells as it can. Close one and try again.")
+	case errors.Is(err, dockerx.ErrLogsUnreadable):
+		// Not a failure: the caller says so in its own way.
+		return nil, false, err
 	case dockerx.IsNotFound(err):
 		return nil, false, httpx.Problem(http.StatusNotFound, problemContainerNotFound, "This container does not exist on that node. It may have been removed.")
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
@@ -452,6 +460,10 @@ func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *s
 	_, events, cancelEvents := d.Aggregator.Events(streamCtx, env.ID)
 	defer cancelEvents()
 	run, tty, err := openLogRun(streamCtx, d, env.ID, nodeID, containerID, params)
+	if errors.Is(err, dockerx.ErrLogsUnreadable) {
+		serveUnreadable(streamCtx, w, d, p, env.ID, nodeID, containerID)
+		return
+	}
 	if err != nil {
 		writeProblemError(w, err)
 		return
@@ -461,33 +473,9 @@ func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *s
 	fullID, name := logContainerRow(agg, nodeID, containerID)
 	auditLogsViewed(ctx, d, mem, p, env.ID, fullID, name, nodeID, params, req.UserAgent())
 
-	// A stream lives for hours, so the server's other timeouts must not apply to it.
-	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Time{})
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-cache")
-	// Tells nginx not to buffer the response (Pitfall 8).
-	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	if rc.Flush() != nil {
+	rc, send := startSSE(w, d.Log)
+	if rc == nil {
 		return
-	}
-	send := func(event, id string, v any) bool {
-		data, err := json.Marshal(v)
-		if err != nil {
-			d.Log.Error("encode a log event", "event", event, "error", err)
-			return false
-		}
-		if id != "" {
-			if _, err := fmt.Fprintf(w, "id: %s\n", id); err != nil {
-				return false
-			}
-		}
-		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
-			return false
-		}
-		return rc.Flush() == nil
 	}
 	if !send("ready", "", map[string]bool{"tty": tty}) {
 		return
@@ -708,6 +696,79 @@ func (s *logSeam) skip(l LogLine) bool {
 		}
 	}
 	return false
+}
+
+// startSSE begins a server-sent event response and returns what writes to it: the
+// response controller, to flush, and send, which writes one event (with an id when it is
+// not empty) and flushes. A stream lives for hours, so the server's other timeouts must
+// not apply to it. A nil controller means the response could not be started.
+func startSSE(w http.ResponseWriter, log *slog.Logger) (*http.ResponseController, func(event, id string, v any) bool) {
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	// Tells nginx not to buffer the response (Pitfall 8).
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	if rc.Flush() != nil {
+		return nil, nil
+	}
+	send := func(event, id string, v any) bool {
+		data, err := json.Marshal(v)
+		if err != nil {
+			log.Error("encode a log event", "event", event, "error", err)
+			return false
+		}
+		if id != "" {
+			if _, err := fmt.Fprintf(w, "id: %s\n", id); err != nil {
+				return false
+			}
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+			return false
+		}
+		return rc.Flush() == nil
+	}
+	return rc, send
+}
+
+// unreadableBody is what the viewer is told when the engine cannot read a container's
+// log back (D-25): the driver, and its options with their values withheld from anyone
+// who may not reveal secrets.
+type unreadableBody struct {
+	Driver  string             `json:"driver"`
+	Options []redact.OptionVar `json:"options"`
+}
+
+// logUnreadable reads the log driver of a container for the notice.
+func logUnreadable(ctx context.Context, d LogsDeps, p *rbac.Principal, envID, nodeID, containerID string) (unreadableBody, error) {
+	var detail dockerx.ContainerDetail
+	err := d.Aggregator.OnNode(ctx, envID, nodeID, func(c *dockerx.Client) error {
+		var e error
+		detail, _, e = c.ContainerDetail(ctx, containerID)
+		return e
+	})
+	if err != nil {
+		return unreadableBody{}, snapshotProblem(d.Log, envID, err)
+	}
+	reveal := redact.CanReveal(ctx, d.Checker, p, envID)
+	return unreadableBody{Driver: detail.LogConfig.Type, Options: redact.Options(detail.LogConfig.Options, reveal)}, nil
+}
+
+// serveUnreadable answers a stream for a container whose log the engine cannot read: it
+// sends one unreadable event with the driver and its options and ends. Nothing was
+// shown, so nothing is audited. The browser closes its connection when it gets the
+// event, so it does not come back.
+func serveUnreadable(ctx context.Context, w http.ResponseWriter, d LogsDeps, p *rbac.Principal, envID, nodeID, containerID string) {
+	body, err := logUnreadable(ctx, d, p, envID, nodeID, containerID)
+	if err != nil {
+		writeProblemError(w, err)
+		return
+	}
+	if rc, send := startSSE(w, d.Log); rc != nil {
+		send("unreadable", "", body)
+	}
 }
 
 // auditLogsViewed writes the logs.viewed row of a stream, once per viewer: a

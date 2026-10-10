@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 )
 
@@ -37,8 +38,8 @@ type LogOptions struct {
 //
 // The container is inspected first, because the engine does not say in the answer
 // which of the two formats it chose. A container that does not exist is an error
-// IsNotFound recognises. Whatever the engine refuses, such as a log driver that
-// cannot be read back, comes back as its error.
+// IsNotFound recognises. A log driver the engine cannot read back is
+// ErrLogsUnreadable; anything else the engine refuses comes back as its error.
 func (c *Client) ContainerLogs(ctx context.Context, id string, o LogOptions) (rc io.ReadCloser, tty bool, err error) {
 	cli := c.cur()
 	res, err := cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
@@ -51,6 +52,9 @@ func (c *Client) ContainerLogs(ctx context.Context, id string, o LogOptions) (rc
 		Since: o.Since, Until: o.Until, Tail: o.Tail, Follow: o.Follow,
 	})
 	if err != nil {
+		if cerrdefs.IsNotImplemented(err) {
+			return nil, tty, fmt.Errorf("read logs of a container on %s: %w: %w", c.t.Describe(), ErrLogsUnreadable, err)
+		}
 		return nil, tty, fmt.Errorf("read logs of a container on %s: %w", c.t.Describe(), err)
 	}
 	return out, tty, nil
