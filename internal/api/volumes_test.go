@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -355,5 +356,165 @@ func TestCreateVolumeWithNoOptionsRecordsNoOptionsDetail(t *testing.T) {
 	rows := f.volumeAudits(t)
 	if _, has := rows[0].Details["options"]; len(rows) != 1 || has {
 		t.Fatalf("audit rows = %+v, want no options key", rows)
+	}
+}
+
+// Volume delete (plan 04-17, RES-07, D-45, D-46, P2 D-42). The holder of volumes.delete is
+// an Operator with the dangerous extra.
+
+type volumeDeleted struct {
+	BulkID  string `json:"bulkId"`
+	Results []struct {
+		NodeID string `json:"nodeId"`
+		Name   string `json:"name"`
+		Result string `json:"result"`
+		Code   string `json:"code"`
+		Detail string `json:"detail"`
+	} `json:"results"`
+}
+
+// volumeDeleter makes a user who holds volumes.delete on the environment and returns the
+// way to post a delete as them. It waits for the monitor's first probe like createVol does.
+func (f *envFix) volumeDeleter(t *testing.T, e envBody, user string) func(body string) *httptest.ResponseRecorder {
+	t.Helper()
+	f.addUser(t, user, false)
+	f.addEnvRole(t, user, e.ID, "operator")
+	if _, err := f.st.Write.Exec(`INSERT INTO assignment_extras (assignment_id, permission) VALUES (?, 'volumes.delete')`, "ra-"+user+"-"+e.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	cookie, csrf := f.signIn(t, user, false)
+	return func(body string) *httptest.ResponseRecorder {
+		return f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/volumes/delete", body: body, cookie: cookie, csrf: csrf})
+	}
+}
+
+func deleteVolumesJSON(confirm string, targets ...[2]string) string {
+	var ts []string
+	for _, t := range targets {
+		ts = append(ts, fmt.Sprintf(`{"nodeId":%q,"name":%q}`, t[0], t[1]))
+	}
+	return fmt.Sprintf(`{"confirm":%q,"targets":[%s]}`, confirm, strings.Join(ts, ","))
+}
+
+func TestDeleteVolumeAHolderOfVolumesDeleteDeletesAnUnusedVolumeWithItsNameTypedAndItIsAudited(t *testing.T) {
+	f, e := dashEnv(t, volumeEngine())
+	post := f.volumeDeleter(t, e, "trusted")
+	rec := post(deleteVolumesJSON("existing", [2]string{e.ID, "existing"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	var got volumeDeleted
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("body = %s (%v)", rec.Body, err)
+	}
+	if r := got.Results[0]; r.Result != "done" || r.Name != "existing" || r.NodeID != e.ID || got.BulkID != "" {
+		t.Fatalf("result = %+v bulk %q, want done and no bulk for one target", r, got.BulkID)
+	}
+	if w := f.fake.Writes(); !slices.Contains(w, "DELETE /volumes/existing") || slices.ContainsFunc(w, func(s string) bool { return strings.Contains(s, "force") }) {
+		t.Fatalf("writes = %v, want the delete and never a force", w)
+	}
+	rows := f.volumeAudits(t)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %+v, want one", rows)
+	}
+	r := rows[0]
+	if r.Action != audit.ActionVolumeRemoved || r.Result != string(audit.ResultSuccess) || r.TargetType != "volume" || r.TargetID != "existing" || r.EnvID != e.ID {
+		t.Errorf("audit row = %+v", r)
+	}
+	for k, want := range map[string]string{"name": "existing", "node": e.ID, "driver": "local", "code": "removed"} {
+		if r.Details[k] != want {
+			t.Errorf("detail %s = %q, want %q (%+v)", k, r.Details[k], want, r.Details)
+		}
+	}
+	list := decode[listBody[volumeItem]](t, f.get(t, e, "volumes"))
+	if slices.ContainsFunc(list.Items, func(v volumeItem) bool { return v.Name == "existing" }) {
+		t.Fatalf("the volume is still listed: %+v", list.Items)
+	}
+}
+
+func TestDeleteVolumeAWrongConfirmationIs422ConfirmationRequiredAndNothingIsSent(t *testing.T) {
+	f, e := dashEnv(t, volumeEngine())
+	post := f.volumeDeleter(t, e, "trusted")
+	for name, body := range map[string]string{
+		"no confirmation":      deleteVolumesJSON("", [2]string{e.ID, "existing"}),
+		"another name":         deleteVolumesJSON("other", [2]string{e.ID, "existing"}),
+		"a different case":     deleteVolumesJSON("Existing", [2]string{e.ID, "existing"}),
+		"the phrase for one":   deleteVolumesJSON("delete 1 volume", [2]string{e.ID, "existing"}),
+		"the name for several": deleteVolumesJSON("existing", [2]string{e.ID, "existing"}, [2]string{e.ID, "two"}),
+		"a number too small":   deleteVolumesJSON("delete 1 volumes", [2]string{e.ID, "existing"}, [2]string{e.ID, "two"}),
+	} {
+		rec := post(body)
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "confirmation_required") {
+			t.Errorf("%s: %d %s, want 422 confirmation_required", name, rec.Code, rec.Body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("an unconfirmed request reached the engine: %v", w)
+	}
+	if rows := f.volumeAudits(t); len(rows) != 0 {
+		t.Fatalf("an unconfirmed request was audited as an attempt: %+v", rows)
+	}
+}
+
+func TestDeleteVolumeWithoutTheDeleteVolumesPermissionIs403AndNothingIsSent(t *testing.T) {
+	f, e := dashEnv(t, volumeEngine())
+	for _, who := range []struct{ user, role string }{{"viewer", "viewer"}, {"operator", "operator"}} {
+		f.addUser(t, who.user, false)
+		f.addEnvRole(t, who.user, e.ID, who.role)
+	}
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	for _, who := range []string{"viewer", "operator"} {
+		cookie, csrf := f.signIn(t, who, false)
+		rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/volumes/delete",
+			body: deleteVolumesJSON("existing", [2]string{e.ID, "existing"}), cookie: cookie, csrf: csrf})
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s: status = %d, want 403: %s", who, rec.Code, rec.Body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a refused caller reached the engine: %v", w)
+	}
+	if rows := f.volumeAudits(t); len(rows) != 0 {
+		t.Fatalf("volume audit rows = %+v, want none", rows)
+	}
+	denied := f.audits(t, audit.ActionPermissionDenied)
+	if len(denied) == 0 || denied[len(denied)-1].TargetID != "POST /api/env/{envId}/volumes/delete" {
+		t.Fatalf("the refusal was not audited as permission.denied: %+v", denied)
+	}
+}
+
+func TestDeleteVolumeASecondDeleteOfTheSameVolumeAnswersNotFoundAndIsNotAudited(t *testing.T) {
+	f, e := dashEnv(t, volumeEngine())
+	post := f.volumeDeleter(t, e, "trusted")
+	body := deleteVolumesJSON("existing", [2]string{e.ID, "existing"})
+	if rec := post(body); rec.Code != http.StatusOK {
+		t.Fatalf("first: %d %s", rec.Code, rec.Body)
+	}
+	rec := post(body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second: %d %s", rec.Code, rec.Body)
+	}
+	var got volumeDeleted
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("body = %s (%v)", rec.Body, err)
+	}
+	if r := got.Results[0]; r.Result != "failed" || r.Code != "not_found" {
+		t.Fatalf("second result = %+v, want failed not_found", r)
+	}
+	if rows := f.volumeAudits(t); len(rows) != 1 {
+		t.Fatalf("audit rows = %+v, want only the first delete's", rows)
+	}
+}
+
+func TestDeleteVolumeAnEmptyTargetListIs422(t *testing.T) {
+	f, e := dashEnv(t, volumeEngine())
+	post := f.volumeDeleter(t, e, "trusted")
+	rec := post(`{"confirm":"delete 0 volumes","targets":[]}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422: %s", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("writes = %v", w)
 	}
 }

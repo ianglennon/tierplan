@@ -15,6 +15,7 @@ import (
 
 var _ = registerFakeHandler((*Fake).serveVolumeCreate)
 var _ = registerFakeHandler((*Fake).serveVolumeInspect)
+var _ = registerFakeHandler((*Fake).serveVolumeRemove)
 
 // serveVolumeCreate answers POST /volumes/create. Like a real daemon it answers a name
 // it already has with the existing volume and no error, and it makes a volume of no
@@ -51,6 +52,7 @@ func (f *Fake) serveVolumeCreate(w http.ResponseWriter, r *http.Request, p strin
 		Labels: req.Labels, Options: req.DriverOpts,
 	}
 	f.mu.Lock()
+	delete(f.volGone, req.Name)
 	f.vols = append(f.vols, fv)
 	f.volCreates = append(f.volCreates, req)
 	f.mu.Unlock()
@@ -117,5 +119,57 @@ func (c FakeConfig) withVolumes(created []FakeVolume) FakeConfig {
 		return c
 	}
 	c.Volumes = append(slices.Clone(c.Volumes), created...)
+	return c
+}
+
+// serveVolumeRemove answers DELETE /volumes/{name}. A name the daemon does not have is the
+// 404 a real one gives; a volume some container mounts, running or not, is the 409 "volume
+// is in use" a real one gives, naming the container. Otherwise the volume leaves every
+// list. The write is recorded whatever the answer, with its query, so a test can see that
+// force was never sent.
+func (f *Fake) serveVolumeRemove(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodDelete {
+		return false
+	}
+	m := volumePath.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	if _, ok := cfg.resolveVolume(m[1]); !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "get " + m[1] + ": no such volume"})
+		return true
+	}
+	for _, c := range cfg.Containers {
+		if slices.Contains(c.Mounts, m[1]) {
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "remove " + m[1] + ": volume is in use - [" + c.ID + "]"})
+			return true
+		}
+	}
+	f.mu.Lock()
+	if f.volGone == nil {
+		f.volGone = map[string]bool{}
+	}
+	f.volGone[m[1]] = true
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+	return true
+}
+
+// withoutVolumes returns c without the volumes removed through the daemon. The slice is
+// copied, so the Fake's own configuration is not touched.
+func (c FakeConfig) withoutVolumes(gone map[string]bool) FakeConfig {
+	if len(gone) == 0 {
+		return c
+	}
+	c.Volumes = slices.DeleteFunc(slices.Clone(c.Volumes), func(v FakeVolume) bool { return gone[v.Name] })
 	return c
 }

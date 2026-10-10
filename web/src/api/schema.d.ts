@@ -804,6 +804,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/volumes/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete volumes
+         * @description Deletes up to 25 volumes, each named by its node ID and name, and answers one result per target in request order. This is irreversible: the data in the volume is gone. The caller types the confirmation: the volume's name for a single target, or delete {n} volumes for several, where n is at least the number of targets in the request (else 422 confirmation_required and nothing is sent). Volumes are node-local: a volume is deleted on the node named, and the same name on another node is left alone. A volume that any container on its node, running or stopped, or any swarm service mounts is never deleted: the result is failed with code volume_in_use and the detail names up to 5 users. The users are read again from the node and from a manager just before each removal, and force is never sent, so a container that mounts the volume between the check and the call makes the engine refuse and is answered volume_in_use too. A volume the node does not have is failed with code not_found. One that fails never stops the others. Needs volumes.delete (an Operator or above with the delete volumes permission) on the environment; a caller without it is refused 403 and the refusal is audited as permission.denied. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Every attempt on a volume that exists is audited as volume.removed, failures included.
+         */
+        post: operations["deleteVolumes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments": {
         parameters: {
             query?: never;
@@ -4193,6 +4213,47 @@ export interface components {
             /** @description The node to create the volume on: the nodeId of a row of a list. Volumes are node-local. Left out only on an environment of one node that is not a swarm */
             nodeId?: string;
         };
+        VolumeDeleteRequest: {
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
+             */
+            bulkId?: string;
+            /** @description The confirmation, typed: the volume's name for a single target, else the phrase delete {n} volumes where n is at least the number of targets (a bulk of more than 25 is sent in chunks, each carrying the phrase for the whole selection). Anything else is 422 confirmation_required and nothing is sent */
+            confirm: string;
+            /** @description The volumes to delete, at most 25. Each is answered separately; one that fails never stops the others */
+            targets: components["schemas"]["VolumeDeleteTarget"][] | null;
+        };
+        VolumeDeleteResponse: {
+            /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent */
+            bulkId?: string;
+            /** @description One entry per requested target, in request order */
+            results: components["schemas"]["VolumeDeleteResult"][] | null;
+        };
+        VolumeDeleteResult: {
+            /**
+             * @description Why a target failed. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @enum {string}
+             */
+            code?: "volume_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
+            /** @description A plain sentence, or for action_failed the engine's message, at most 300 characters */
+            detail?: string;
+            /** @description The volume name the request named */
+            name: string;
+            /** @description The node ID the request named */
+            nodeId: string;
+            /**
+             * @description done: the engine removed the volume. failed: it was refused or could not be sent; code says why
+             * @enum {string}
+             */
+            result: "done" | "failed";
+        };
+        VolumeDeleteTarget: {
+            /** @description The volume name */
+            name: string;
+            /** @description The node the volume is on: the nodeId of its row in the volumes list. Never the display name */
+            nodeId: string;
+        };
         VolumeItem: {
             /** Format: date-time */
             created?: string;
@@ -5877,6 +5938,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VolumeCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteVolumes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VolumeDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeDeleteResponse"];
                 };
             };
             /** @description Error */

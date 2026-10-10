@@ -22,6 +22,7 @@ import { type Column, ResourceTable, TruncatedText } from "@/features/resources/
 import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { CreateVolumeDialog } from "@/features/volumes/create-volume-dialog";
+import { DeleteVolumesDialog } from "@/features/volumes/delete-volumes-dialog";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -41,8 +42,15 @@ export function VolumeList({ envId, node, onNodeChange }: VolumeListProps) {
   const key = "dashboard.lists.volumes";
   const allowed = usePermission("volumes.read", envId);
   const create = useNeeds("volumes.create", envId);
+  const remove = useNeeds("volumes.delete", envId);
   const swarm = useEnvIsSwarm(envId);
   const [creating, setCreating] = useState(false);
+  // The rows a delete is about stay while the dialog closes, so its title never reads
+  // "Delete ?" on the way out.
+  const [deleting, setDeleting] = useState<{ rows: VolumeRow[]; open: boolean }>({
+    rows: [],
+    open: false,
+  });
   const nodeColumn = useNodeColumn<VolumeRow>();
   const nodeFilter = swarm ? node : undefined;
   const query = useQuery({ ...volumesQuery(envId, nodeFilter), enabled: allowed });
@@ -74,6 +82,26 @@ export function VolumeList({ envId, node, onNodeChange }: VolumeListProps) {
       id: "created",
       header: t(`${key}.columns.created`),
       cell: (v) => <RelativeTime value={v.created} />,
+    },
+    {
+      id: "actions",
+      header: <span className="sr-only">{t("actions.column")}</span>,
+      className: "w-px px-1 text-end",
+      cell: (v) => (
+        <NeedsTooltip
+          reason={remove.allowed ? undefined : (remove.reason ?? t("needs.extra.volumes.delete"))}
+        >
+          <Button
+            variant="ghost"
+            size="sm"
+            className="max-md:h-11"
+            aria-label={t("volumes.delete.label", { name: v.name })}
+            onClick={remove.allowed ? () => setDeleting({ rows: [v], open: true }) : undefined}
+          >
+            {t("volumes.delete.action")}
+          </Button>
+        </NeedsTooltip>
+      ),
     },
   ];
 
@@ -117,6 +145,14 @@ export function VolumeList({ envId, node, onNodeChange }: VolumeListProps) {
         getRowKey={(v) => nodeRowKey(v.node, v.name)}
         captionExtra={<div className="ml-auto">{createButton()}</div>}
       />
+      {remove.allowed ? (
+        <DeleteVolumesDialog
+          envId={envId}
+          rows={deleting.rows}
+          open={deleting.open}
+          onClose={() => setDeleting((d) => ({ ...d, open: false }))}
+        />
+      ) : null}
       {create.allowed ? (
         <CreateVolumeDialog
           envId={envId}

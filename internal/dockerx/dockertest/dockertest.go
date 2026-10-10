@@ -372,6 +372,8 @@ type Fake struct {
 	// requests (fake_volumes.go).
 	vols       []FakeVolume
 	volCreates []volume.CreateRequest
+	// volGone are the names of the volumes removed through the fake.
+	volGone map[string]bool
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
@@ -494,7 +496,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

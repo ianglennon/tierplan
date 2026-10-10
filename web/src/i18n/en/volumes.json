@@ -88,7 +88,21 @@
       "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
       "serverRequired": "Enter a server address.",
       "pathInvalid": "Enter a path that starts with /.",
-      "shareRequired": "Enter a share name."
+      "shareRequired": "Enter a share name.",
+      "nodeNamedUnreachable": "{{node}} isn't reachable right now. Try again when it's back."
+    },
+    "delete": {
+      "action": "Delete…",
+      "label": "Delete {{name}}",
+      "title": "Delete {{name}}?",
+      "body": "This deletes the volume and the data in it. This can't be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete volume",
+      "pending": "Deleting…",
+      "done": "Deleted {{name}}.",
+      "gone": "{{name}} no longer exists. The list has been refreshed.",
+      "inUse": "{{name}} is still in use. Remove what uses it, then try again.",
+      "confirmation": "Type the volume's name to confirm this."
     }
   }
 }

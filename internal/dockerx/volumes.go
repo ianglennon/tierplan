@@ -44,11 +44,29 @@ func (c *Client) VolumeCreate(ctx context.Context, spec VolumeCreateSpec) error 
 
 // VolumeExists reports whether the engine has a volume of that name.
 func (c *Client) VolumeExists(ctx context.Context, name string) (bool, error) {
-	if _, err := c.cur().VolumeInspect(ctx, name, client.VolumeInspectOptions{}); err != nil {
+	_, ok, err := c.VolumeDriver(ctx, name)
+	return ok, err
+}
+
+// VolumeDriver reads the driver of the volume of that name, and whether the engine has it.
+func (c *Client) VolumeDriver(ctx context.Context, name string) (driver string, ok bool, err error) {
+	res, err := c.cur().VolumeInspect(ctx, name, client.VolumeInspectOptions{})
+	if err != nil {
 		if IsNotFound(err) {
-			return false, nil
+			return "", false, nil
 		}
-		return false, fmt.Errorf("inspect volume on %s: %w", c.t.Describe(), err)
+		return "", false, fmt.Errorf("inspect volume on %s: %w", c.t.Describe(), err)
 	}
-	return true, nil
+	return res.Volume.Driver, true, nil
+}
+
+// VolumeRemove removes the volume once and never retries (P2 D-42). Force is never
+// set: it would remove a volume a container still mounts, and the agent refuses it
+// too. A volume a container uses is refused by the engine with a conflict, which
+// IsConflict reports.
+func (c *Client) VolumeRemove(ctx context.Context, name string) error {
+	if _, err := c.cur().VolumeRemove(ctx, name, client.VolumeRemoveOptions{}); err != nil {
+		return fmt.Errorf("remove volume on %s: %w", c.t.Describe(), err)
+	}
+	return nil
 }
