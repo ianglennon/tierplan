@@ -999,7 +999,12 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 func (s *Server) shutdown(srv *http.Server, restarting bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	err := srv.Shutdown(ctx)
+	// Shutdown runs the shell hook on a goroutine it does not wait for. CloseAll
+	// waits for every shell's end to be audited, so nothing is lost when the
+	// database closes after serve returns.
+	s.shells.CloseAll("server_shutdown")
+	if err != nil {
 		if restarting {
 			s.log.Warn("some connections were still open at the restart and were closed", "error", err)
 			_ = srv.Close()

@@ -185,6 +185,10 @@ type Registry struct {
 	byID   map[string]*Session
 	closed bool
 	onEnd  func(*Session, string, EndResult)
+	// ending counts the End calls still running, and idle is signalled when it
+	// falls to zero, so CloseAll can wait for every end to be audited.
+	ending int
+	idle   *sync.Cond
 }
 
 // NewRegistry returns an empty registry. A nil clock is the wall clock.
@@ -192,7 +196,9 @@ func NewRegistry(clock Clock) *Registry {
 	if clock == nil {
 		clock = wallClock{}
 	}
-	return &Registry{clock: clock, byID: map[string]*Session{}}
+	r := &Registry{clock: clock, byID: map[string]*Session{}}
+	r.idle = sync.NewCond(&r.mu)
+	return r
 }
 
 // Now is the registry's clock reading.
@@ -309,10 +315,12 @@ func (r *Registry) End(id, reason string) (EndResult, bool) {
 		return EndResult{}, false
 	}
 	delete(r.byID, id)
+	r.ending++
 	onEnd := r.onEnd
 	stop := s.pendingStop
 	s.pendingStop = nil
 	r.mu.Unlock()
+	defer r.endDone()
 	if stop != nil {
 		stop()
 	}
@@ -336,7 +344,8 @@ func (r *Registry) End(id, reason string) (EndResult, bool) {
 
 // CloseAll ends every session, pending or attached, with reason, and refuses new
 // ones: the server is stopping. http.Server.Shutdown does not track hijacked
-// connections, so without this a WebSocket would outlive the shutdown.
+// connections, so without this a WebSocket would outlive the shutdown. It returns
+// only when every end, including one another goroutine started, has run OnEnd.
 func (r *Registry) CloseAll(reason string) int {
 	r.mu.Lock()
 	r.closed = true
@@ -351,7 +360,24 @@ func (r *Registry) CloseAll(reason string) int {
 			n++
 		}
 	}
+	// An End started elsewhere, such as the HTTP server's shutdown hook, may still
+	// be auditing. Wait for it, so the caller can close the database after this.
+	r.mu.Lock()
+	for r.ending > 0 {
+		r.idle.Wait()
+	}
+	r.mu.Unlock()
 	return n
+}
+
+// endDone marks one End finished and wakes CloseAll when none is left.
+func (r *Registry) endDone() {
+	r.mu.Lock()
+	r.ending--
+	if r.ending == 0 {
+		r.idle.Broadcast()
+	}
+	r.mu.Unlock()
 }
 
 // List returns a copy of the facts of the open sessions that match f, oldest first.

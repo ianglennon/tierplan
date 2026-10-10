@@ -387,6 +387,38 @@ func TestCloseAllEndsPendingAndAttachedSessionsWithTheReasonAndRefusesNewOnes(t 
 	}
 }
 
+// The HTTP server runs its shutdown hooks on goroutines it does not wait for, so
+// an end can still be auditing when the server's Close calls CloseAll and then
+// closes the database. CloseAll must wait for that end.
+func TestCloseAllWaitsForAnEndStartedElsewhereToFinishItsAudit(t *testing.T) {
+	r := NewRegistry(newFakeClock())
+	s := r.Create(newSession("ann"), newFakeExec(), 0)
+	entered, release := make(chan struct{}), make(chan struct{})
+	r.OnEnd(func(*Session, string, EndResult) {
+		close(entered)
+		<-release
+	})
+
+	go r.End(s.ID, "server_shutdown")
+	<-entered
+	returned := make(chan struct{})
+	go func() {
+		r.CloseAll("server_shutdown")
+		close(returned)
+	}()
+	select {
+	case <-returned:
+		t.Fatal("CloseAll returned while another end was still auditing")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CloseAll did not return after the end finished")
+	}
+}
+
 // A bridge whose read fails the moment the process closes must already be able to see
 // that the session was ended from outside, and why, or it reads the failure as the
 // process having exited and sends an exit code the process never gave.
