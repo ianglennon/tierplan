@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 var _ = registerFakeHandler((*Fake).serveNetworkCreate)
 var _ = registerFakeHandler((*Fake).serveNetworkRemove)
+var _ = registerFakeHandler((*Fake).serveNetworkInspect)
 
 // serveNetworkCreate answers POST /networks/create. A name the daemon already has is
 // the 409 a real one gives. The network joins the lists the daemon answers, with the
@@ -163,4 +165,93 @@ func (c FakeConfig) withoutNetworks(gone map[string]bool) FakeConfig {
 	}
 	c.Networks = kept
 	return c
+}
+
+// resolveNetwork finds a network the way a real daemon does: by its full ID, its name or
+// an ID prefix.
+func (c FakeConfig) resolveNetwork(ref string) (FakeNetwork, bool) {
+	for _, n := range c.Networks {
+		if n.ID == ref || n.Name == ref || (len(ref) >= 4 && strings.HasPrefix(n.ID, ref)) {
+			return n, true
+		}
+	}
+	return FakeNetwork{}, false
+}
+
+// serveNetworkInspect answers GET /networks/{id}: the network with its addressing,
+// options and labels, the containers attached to it and, for a swarm-scoped network on
+// a manager asked with verbose, the services whose specs mention it with a task for each
+// one that runs. An unknown network is the 404 a real daemon gives.
+func (f *Fake) serveNetworkInspect(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	m := networkPath.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	fn, ok := cfg.resolveNetwork(m[1])
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "network " + m[1] + " not found"})
+		return true
+	}
+	out := network.Inspect{
+		Network: network.Network{
+			ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created,
+			Labels: fn.Labels, Options: fn.Options, Internal: fn.Internal, Attachable: fn.Attachable,
+			Ingress: fn.Ingress, EnableIPv6: fn.IPv6, EnableIPv4: true,
+		},
+		Containers: map[string]network.EndpointResource{},
+	}
+	for i, sub := range fn.Subnets {
+		c := network.IPAMConfig{Subnet: netip.MustParsePrefix(sub)}
+		if i < len(fn.Gateways) && fn.Gateways[i] != "" {
+			c.Gateway = netip.MustParseAddr(fn.Gateways[i])
+		}
+		out.IPAM.Config = append(out.IPAM.Config, c)
+	}
+	for _, c := range cfg.Containers {
+		for name, ep := range c.Networks {
+			if ep.NetworkID != fn.ID && (ep.NetworkID != "" || name != fn.Name) {
+				continue
+			}
+			er := network.EndpointResource{Name: strings.TrimPrefix(firstOf(c.Names, c.ID), "/")}
+			if ep.IPv4 != "" {
+				er.IPv4Address = netip.PrefixFrom(netip.MustParseAddr(ep.IPv4), 24)
+			}
+			if ep.IPv6 != "" {
+				er.IPv6Address = netip.PrefixFrom(netip.MustParseAddr(ep.IPv6), 64)
+			}
+			if ep.MAC != "" {
+				_ = er.MacAddress.UnmarshalText([]byte(ep.MAC))
+			}
+			out.Containers[c.ID] = er
+		}
+	}
+	if fn.Scope == "swarm" && cfg.swarmManager() && r.URL.Query().Get("verbose") == "true" {
+		out.Services = map[string]network.ServiceInfo{}
+		for _, s := range cfg.ServiceRows {
+			if !slices.ContainsFunc(s.Networks, func(n string) bool { return n == fn.ID || n == fn.Name }) {
+				continue
+			}
+			info := network.ServiceInfo{Ports: []string{}, Tasks: []network.Task{}}
+			for i := range s.Running {
+				info.Tasks = append(info.Tasks, network.Task{Name: fmt.Sprintf("%s.%d", s.Name, i+1)})
+			}
+			out.Services[s.Name] = info
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+	return true
+}
+
+func firstOf(names []string, fallback string) string {
+	if len(names) > 0 {
+		return names[0]
+	}
+	return fallback
 }

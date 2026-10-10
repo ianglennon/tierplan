@@ -927,3 +927,224 @@ func TestDeleteNetworkALocalBridgeOnASwarmNodeGoesToThatNodeOnly(t *testing.T) {
 		t.Fatalf("deletes = %v, want one, on the worker", got)
 	}
 }
+
+// Network detail (plan 04-14, RES-06, D-42): what is attached to a network, with the
+// addresses and aliases, and its raw inspect.
+
+type attachmentItem struct {
+	Kind    string   `json:"kind"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Node    string   `json:"node"`
+	NodeID  string   `json:"nodeId"`
+	State   string   `json:"state"`
+	IPv4    string   `json:"ipv4"`
+	IPv6    string   `json:"ipv6"`
+	MAC     string   `json:"mac"`
+	Aliases []string `json:"aliases"`
+	Tasks   int      `json:"tasks"`
+}
+
+type ipamItem struct {
+	Subnet  string `json:"subnet"`
+	Gateway string `json:"gateway"`
+	IPRange string `json:"ipRange"`
+}
+
+type networkDetailItem struct {
+	ID                 string            `json:"id"`
+	Name               string            `json:"name"`
+	Driver             string            `json:"driver"`
+	Scope              string            `json:"scope"`
+	Node               string            `json:"node"`
+	NodeID             string            `json:"nodeId"`
+	Created            string            `json:"created"`
+	Internal           bool              `json:"internal"`
+	Attachable         bool              `json:"attachable"`
+	IPv6               bool              `json:"ipv6"`
+	BuiltIn            bool              `json:"builtIn"`
+	Owner              string            `json:"owner"`
+	OwnerKind          string            `json:"ownerKind"`
+	Labels             map[string]string `json:"labels"`
+	Options            map[string]string `json:"options"`
+	IPAM               []ipamItem        `json:"ipam"`
+	Attachments        []attachmentItem  `json:"attachments"`
+	AttachedContainers int               `json:"attachedContainers"`
+	AttachedServices   int               `json:"attachedServices"`
+	AliasesTruncated   bool              `json:"aliasesTruncated"`
+	NotReporting       []string          `json:"notReporting"`
+}
+
+func netDetailEngine() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Networks: []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+			{ID: "app0", Name: "app-net", Driver: "bridge", Scope: "local", Internal: true, IPv6: true,
+				Subnets: []string{"10.20.0.0/24", "fd00:20::/64"}, Gateways: []string{"10.20.0.1"},
+				Options: map[string]string{"com.docker.network.bridge.name": "br-app"},
+				Labels:  map[string]string{"com.docker.stack.namespace": "shop"}},
+			{ID: "lone0", Name: "lonely", Driver: "bridge", Scope: "local"},
+		},
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/web"}, State: "running", Networks: map[string]dockertest.FakeEndpoint{
+				"app-net": {NetworkID: "app0", IPv4: "10.20.0.2", IPv6: "fd00:20::2", MAC: "02:42:0a:14:00:02", Aliases: []string{"web", "api"}}}},
+			{ID: "c2", Names: []string{"/db"}, State: "exited", Networks: map[string]dockertest.FakeEndpoint{
+				"app-net": {NetworkID: "app0", IPv4: "10.20.0.3", MAC: "02:42:0a:14:00:03", Aliases: []string{"db"}}}},
+			{ID: "c3", Names: []string{"/blog"}, State: "running", Networks: map[string]dockertest.FakeEndpoint{
+				"bridge": {NetworkID: "br0", IPv4: "172.17.0.2"}}},
+		},
+	}
+}
+
+func getNet(t *testing.T, f *envFix, e envBody, id string) networkDetailItem {
+	t.Helper()
+	rec := f.get(t, e, "networks/"+id)
+	if rec.code != http.StatusOK {
+		t.Fatalf("GET networks/%s: %d %s", id, rec.code, rec.body)
+	}
+	return decode[networkDetailItem](t, rec)
+}
+
+func TestGetNetworkAnswersTheOverviewAndTheAttachmentsSortedByNameWithAddressesAndAliases(t *testing.T) {
+	f, e := dashEnv(t, netDetailEngine())
+	n := getNet(t, f, e, "app0")
+	if n.ID != "app0" || n.Name != "app-net" || n.Driver != "bridge" || n.Scope != "local" || !n.Internal || !n.IPv6 || n.Attachable || n.BuiltIn {
+		t.Errorf("overview = %+v", n)
+	}
+	if n.Owner != "shop" || n.OwnerKind != "stack" || n.Labels["com.docker.stack.namespace"] != "shop" || n.Options["com.docker.network.bridge.name"] != "br-app" {
+		t.Errorf("owner %q/%q, labels %v, options %v", n.Owner, n.OwnerKind, n.Labels, n.Options)
+	}
+	wantIPAM := []ipamItem{{Subnet: "10.20.0.0/24", Gateway: "10.20.0.1"}, {Subnet: "fd00:20::/64"}}
+	if !slices.Equal(n.IPAM, wantIPAM) {
+		t.Errorf("ipam = %+v, want %+v", n.IPAM, wantIPAM)
+	}
+	if n.AttachedContainers != 2 || n.AttachedServices != 0 || n.AliasesTruncated || len(n.Attachments) != 2 {
+		t.Fatalf("counts %d/%d, truncated %v, attachments %+v", n.AttachedContainers, n.AttachedServices, n.AliasesTruncated, n.Attachments)
+	}
+	db, web := n.Attachments[0], n.Attachments[1]
+	if db.Name != "db" || db.Kind != "container" || db.State != "exited" || db.IPv4 != "10.20.0.3" || db.MAC != "02:42:0a:14:00:03" || !slices.Equal(db.Aliases, []string{"db"}) {
+		t.Errorf("db = %+v", db)
+	}
+	if web.Name != "web" || web.State != "running" || web.IPv4 != "10.20.0.2" || web.IPv6 != "fd00:20::2" || web.Node != "node-1" || web.NodeID == "" || !slices.Equal(web.Aliases, []string{"web", "api"}) {
+		t.Errorf("web = %+v", web)
+	}
+}
+
+func TestGetNetworkWithNothingAttachedHasAnEmptyListAndABridgeIsBuiltIn(t *testing.T) {
+	f, e := dashEnv(t, netDetailEngine())
+	lone := getNet(t, f, e, "lone0")
+	if lone.Attachments == nil || len(lone.Attachments) != 0 || lone.AttachedContainers != 0 || lone.BuiltIn || lone.IPAM == nil {
+		t.Errorf("lonely = %+v, want an empty list (not null) and no IPAM rows", lone)
+	}
+	br := getNet(t, f, e, "br0")
+	if !br.BuiltIn || br.AttachedContainers != 1 || br.Attachments[0].Name != "blog" {
+		t.Errorf("bridge = %+v", br)
+	}
+}
+
+func TestGetNetworkAnUnknownOneIs404NetworkNotFoundAndAViewerMayRead(t *testing.T) {
+	f, e := dashEnv(t, netDetailEngine())
+	rec := f.get(t, e, "networks/nope")
+	if rec.code != http.StatusNotFound || rec.ptyp != "network_not_found" {
+		t.Fatalf("%d %q, want 404 network_not_found", rec.code, rec.ptyp)
+	}
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	cookie, csrf := f.signIn(t, "viewer", false)
+	ok := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/networks/app0", cookie: cookie, csrf: csrf})
+	if ok.Code != http.StatusOK {
+		t.Fatalf("a viewer: %d %s", ok.Code, ok.Body)
+	}
+	if rec := f.req(t, http.MethodGet, "/api/env/nope/networks/app0", ""); rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Errorf("unknown environment: %d %q", rec.code, rec.ptyp)
+	}
+}
+
+func TestGetNetworkInspectsAtMost50ContainersForAliasesAndSaysTheRestWereLeftOut(t *testing.T) {
+	cfg := netDetailEngine()
+	cfg.Containers = nil
+	for i := range 53 {
+		name := fmt.Sprintf("job-%02d", i)
+		cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
+			ID: fmt.Sprintf("j%02d", i), Names: []string{"/" + name}, State: "running",
+			Networks: map[string]dockertest.FakeEndpoint{"app-net": {NetworkID: "app0", Aliases: []string{"alias-" + name}}},
+		})
+	}
+	f, e := dashEnv(t, cfg)
+	n := getNet(t, f, e, "app0")
+	if n.AttachedContainers != 53 || len(n.Attachments) != 53 || !n.AliasesTruncated {
+		t.Fatalf("counts %d, attachments %d, truncated %v", n.AttachedContainers, len(n.Attachments), n.AliasesTruncated)
+	}
+	withAliases := 0
+	for i, a := range n.Attachments {
+		if a.Name != fmt.Sprintf("job-%02d", i) {
+			t.Fatalf("attachment %d is %q, want them sorted by name", i, a.Name)
+		}
+		if i < 50 {
+			if !slices.Equal(a.Aliases, []string{"alias-" + a.Name}) {
+				t.Errorf("%s aliases = %v, want inspected", a.Name, a.Aliases)
+			}
+			withAliases++
+		} else if a.Aliases != nil {
+			t.Errorf("%s aliases = %v, want null past the 50th", a.Name, a.Aliases)
+		}
+	}
+	if withAliases != 50 {
+		t.Errorf("%d inspected", withAliases)
+	}
+	reads := 0
+	for _, r := range f.fake.Requests() {
+		if strings.HasSuffix(r, "/json") && strings.Contains(r, "/containers/") && !strings.Contains(r, "/containers/json") {
+			reads++
+		}
+	}
+	if reads != 50 {
+		t.Errorf("%d container inspects, want exactly 50", reads)
+	}
+}
+
+func TestInspectNetworkAnswersTheEnginesDocumentAndAnUnknownOneIs404(t *testing.T) {
+	f, e := dashEnv(t, netDetailEngine())
+	rec := f.get(t, e, "networks/app0/inspect")
+	if rec.code != http.StatusOK {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	got := decode[struct {
+		Inspect map[string]any `json:"inspect"`
+	}](t, rec)
+	if got.Inspect["Name"] != "app-net" || got.Inspect["Driver"] != "bridge" {
+		t.Errorf("inspect = %v", got.Inspect)
+	}
+	if rec := f.get(t, e, "networks/nope/inspect"); rec.code != http.StatusNotFound || rec.ptyp != "network_not_found" {
+		t.Errorf("unknown: %d %q", rec.code, rec.ptyp)
+	}
+}
+
+func TestGetNetworkOnASwarmListsEveryServiceThatMentionsAnOverlayEvenAtZeroReplicasAndReadsItOnAManager(t *testing.T) {
+	s := newSwarmFix(t)
+	rec := s.get(t, s.env.ID, "networks/ovl")
+	if rec.code != http.StatusOK {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	n := decode[networkDetailItem](t, rec)
+	if n.Scope != "swarm" || n.Node != "Cluster" || n.AttachedServices != 2 || n.AttachedContainers != 0 {
+		t.Fatalf("overlay = %+v", n)
+	}
+	want := map[string]int{"idle": 0, "web": 1}
+	if len(n.Attachments) != 2 {
+		t.Fatalf("attachments = %+v", n.Attachments)
+	}
+	for i, a := range n.Attachments {
+		if a.Kind != "service" || a.Tasks != want[a.Name] || a.Node != "" || a.Aliases != nil {
+			t.Errorf("service %d = %+v", i, a)
+		}
+	}
+	if n.Attachments[0].Name != "idle" || n.Attachments[1].Name != "web" {
+		t.Errorf("order = %+v, want by name", n.Attachments)
+	}
+	if w := s.m1.fake.Writes(); len(w) != 0 {
+		t.Errorf("a read wrote: %v", w)
+	}
+}

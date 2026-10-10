@@ -5,9 +5,11 @@ package dockerx_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -269,5 +271,71 @@ func TestNetworkRowsCarryLabelsAndFlags(t *testing.T) {
 	}
 	if a := by["app"]; !a.Internal || !a.Attachable || a.Ingress || a.Labels["com.docker.stack.namespace"] != "shop" {
 		t.Errorf("app = %+v", a)
+	}
+}
+
+// Network detail (plan 04-14, D-42): one network read on its own, with its addressing,
+// its options and, for a swarm-scoped network read on a manager, the services on it.
+
+func detailManager() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		Networks: []dockertest.FakeNetwork{
+			{ID: "ovl-id-1", Name: "ovl", Driver: "overlay", Scope: "swarm", Attachable: true,
+				Subnets: []string{"10.0.1.0/24", "fd00:1::/64"}, Gateways: []string{"10.0.1.1"}, IPv6: true,
+				Options: map[string]string{"com.docker.network.driver.overlay.vxlanid_list": "4097"},
+				Labels:  map[string]string{"com.docker.stack.namespace": "shop"}},
+			{ID: "br-id", Name: "bridge", Driver: "bridge", Scope: "local"},
+		},
+		ServiceRows: []dockertest.FakeService{
+			{ID: "s1", Name: "shop_web", Mode: "replicated", Running: 2, Desired: 2, Networks: []string{"ovl-id-1"}},
+			{ID: "s2", Name: "shop_idle", Mode: "replicated", Running: 0, Desired: 0, Networks: []string{"ovl"}},
+			{ID: "s3", Name: "other", Mode: "replicated", Running: 1, Desired: 1},
+		},
+	}
+}
+
+func TestNetworkDetailReadsAddressingOptionsLabelsAndFlags(t *testing.T) {
+	fake := dockertest.NewFake(t, detailManager())
+	d, raw, err := newClient(t, fake).NetworkDetail(context.Background(), "ovl-id-1", false)
+	if err != nil {
+		t.Fatalf("NetworkDetail: %v", err)
+	}
+	if d.ID != "ovl-id-1" || d.Name != "ovl" || d.Driver != "overlay" || d.Scope != "swarm" || !d.Attachable || !d.IPv6 || d.Internal || d.Ingress {
+		t.Errorf("detail = %+v", d)
+	}
+	if d.Options["com.docker.network.driver.overlay.vxlanid_list"] != "4097" || d.Labels["com.docker.stack.namespace"] != "shop" {
+		t.Errorf("options %v, labels %v", d.Options, d.Labels)
+	}
+	want := []dockerx.IPAMRow{{Subnet: "10.0.1.0/24", Gateway: "10.0.1.1"}, {Subnet: "fd00:1::/64"}}
+	if !reflect.DeepEqual(d.IPAM, want) {
+		t.Errorf("IPAM = %+v, want %+v", d.IPAM, want)
+	}
+	if len(d.Services) != 0 {
+		t.Errorf("services without verbose = %+v", d.Services)
+	}
+	if !json.Valid(raw) || !strings.Contains(string(raw), `"ovl"`) {
+		t.Errorf("raw = %s, want the inspect document", raw)
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Fatalf("a read wrote: %v", w)
+	}
+}
+
+func TestNetworkDetailVerboseListsTheServicesOnASwarmNetworkWithTheirTaskCounts(t *testing.T) {
+	d, _, err := newClient(t, dockertest.NewFake(t, detailManager())).NetworkDetail(context.Background(), "ovl-id-1", true)
+	if err != nil {
+		t.Fatalf("NetworkDetail: %v", err)
+	}
+	want := []dockerx.NetworkService{{Name: "shop_idle", Tasks: 0}, {Name: "shop_web", Tasks: 2}}
+	if !reflect.DeepEqual(d.Services, want) {
+		t.Errorf("services = %+v, want %+v (by name; an unreferenced service is not listed)", d.Services, want)
+	}
+}
+
+func TestNetworkDetailOfAnUnknownNetworkIsNotFound(t *testing.T) {
+	_, _, err := newClient(t, dockertest.NewFake(t, detailManager())).NetworkDetail(context.Background(), "nope", false)
+	if !dockerx.IsNotFound(err) {
+		t.Fatalf("err = %v, want not found", err)
 	}
 }

@@ -306,6 +306,12 @@ type FakeNetwork struct {
 	Internal   bool
 	Attachable bool
 	Ingress    bool
+	// IPv6 is EnableIPv6, Options the driver options, and Gateways the gateway of
+	// each subnet of Subnets by position (a shorter list leaves the rest without
+	// one). They are what an inspect of the network reports.
+	IPv6     bool
+	Options  map[string]string
+	Gateways []string
 }
 
 func (c FakeConfig) withDefaults() FakeConfig {
@@ -747,6 +753,7 @@ func (c FakeConfig) networkList() []network.Summary {
 		n := network.Summary{Network: network.Network{
 			ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created,
 			Labels: fn.Labels, Internal: fn.Internal, Attachable: fn.Attachable, Ingress: fn.Ingress,
+			EnableIPv6: fn.IPv6,
 		}}
 		for _, sub := range fn.Subnets {
 			n.IPAM.Config = append(n.IPAM.Config, network.IPAMConfig{Subnet: netip.MustParsePrefix(sub)})
