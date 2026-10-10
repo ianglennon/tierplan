@@ -329,3 +329,101 @@ test("the Events page lists the container's start event", async ({ page }) => {
     .filter({ has: page.getByRole("cell", { name: "start", exact: true }) });
   await expect(start.first()).toBeVisible();
 });
+
+test("a network is created, joined with an alias, refused deletion while attached, and deleted once empty", async ({
+  page,
+}) => {
+  await page.goto(at(`/env/${envId}/networks`));
+  await expect(page.getByRole("heading", { name: "Networks", level: 1 })).toBeVisible();
+
+  await page.getByRole("button", { name: "Create network" }).first().click();
+  const create = page.getByRole("dialog", { name: "Create network" });
+  await create.getByRole("textbox", { name: "Name" }).fill("e2e-net");
+  await create.getByRole("button", { name: "Create network", exact: true }).click();
+  await expect(page.getByText("Created network e2e-net.")).toBeVisible();
+  expect(dind("docker network inspect -f '{{.Driver}}' e2e-net")).toBe("bridge");
+
+  await page.getByRole("link", { name: "e2e-net", exact: true }).click();
+  await page.getByRole("tab", { name: "Attachments", exact: true }).click();
+  await expect(page.getByText("Nothing is attached to this network.")).toBeVisible();
+
+  // Connect the container with an alias, and the alias shows in Attachments.
+  await page.getByRole("button", { name: "Connect container", exact: true }).click();
+  const connect = page.getByRole("dialog", { name: "Connect a container to e2e-net" });
+  await connect.getByRole("combobox", { name: "Container" }).click();
+  await page.getByRole("option", { name: /e2e-web/ }).click();
+  await connect.getByRole("textbox", { name: "Alias (optional)" }).fill("e2e-alias");
+  await connect.getByRole("button", { name: "Connect container", exact: true }).click();
+  await expect(page.getByText("Connected e2e-web to e2e-net.")).toBeVisible();
+  const attachments = page.getByRole("table", { name: "Attachments" });
+  const attached = attachments.getByRole("row").filter({
+    has: page.getByRole("cell", { name: "e2e-web", exact: true }),
+  });
+  await expect(attached.getByText("e2e-alias", { exact: true })).toBeVisible();
+  expect(dind("docker inspect -f '{{json .NetworkSettings.Networks}}' e2e-web")).toContain(
+    "e2e-alias",
+  );
+
+  // Delete is refused while something is attached: it says why and opens nothing.
+  const del = page.getByRole("button", { name: "Delete network e2e-net" });
+  await expect(del).toHaveAttribute("aria-disabled", "true");
+  await expect(del).toHaveAccessibleDescription(/In use by 1 container/);
+  // The button is aria-disabled, which Playwright will not click without force; a
+  // person's click shows the reason as a toast and opens nothing.
+  await del.click({ force: true });
+  await expect(
+    page.locator("[data-sonner-toast]").filter({ hasText: /In use by 1 container/ }),
+  ).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(dind("docker network ls --filter name=e2e-net -q")).not.toBe("");
+
+  // Disconnect, confirm, and the network can go.
+  await attached.getByRole("button", { name: "Disconnect e2e-web from e2e-net" }).click();
+  await page
+    .getByRole("alertdialog", { name: "Disconnect e2e-web from e2e-net?" })
+    .getByRole("button", { name: "Disconnect container" })
+    .click();
+  await expect(page.getByText("Disconnected e2e-web from e2e-net.")).toBeVisible();
+  await expect(page.getByText("Nothing is attached to this network.")).toBeVisible();
+
+  await expect(del).not.toHaveAttribute("aria-disabled", "true");
+  await del.click();
+  await page
+    .getByRole("alertdialog", { name: "Delete e2e-net?" })
+    .getByRole("button", { name: "Delete network" })
+    .click();
+  await expect(page.getByText("Deleted network e2e-net.")).toBeVisible();
+  expect(dind("docker network ls --filter name=e2e-net -q")).toBe("");
+
+  await page.goto(at(`/env/${envId}/networks`));
+  await expect(page.getByRole("heading", { name: "Networks", level: 1 })).toBeVisible();
+  await expect(page.getByRole("link", { name: "e2e-net", exact: true })).toHaveCount(0);
+});
+
+test("a volume is created and deleted with its name typed", async ({ page }) => {
+  await page.goto(at(`/env/${envId}/volumes`));
+  await expect(page.getByRole("heading", { name: "Volumes", level: 1 })).toBeVisible();
+
+  await page.getByRole("button", { name: "Create volume" }).first().click();
+  const create = page.getByRole("dialog", { name: "Create volume" });
+  await create.getByRole("textbox", { name: "Name" }).fill("e2e-vol");
+  await create.getByRole("button", { name: "Create volume", exact: true }).click();
+  await expect(page.getByText("Created volume e2e-vol.")).toBeVisible();
+  expect(dind("docker volume ls -q --filter name=e2e-vol")).toBe("e2e-vol");
+
+  await page.getByRole("link", { name: "e2e-vol", exact: true }).click();
+  await page.getByRole("button", { name: "Delete e2e-vol" }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Delete e2e-vol?" });
+  const submit = confirm.getByRole("button", { name: "Delete volume" });
+  // The name has to be typed first.
+  await expect(submit).toBeDisabled();
+  await confirm.getByRole("textbox").fill("e2e-vol");
+  await submit.click();
+  await expect(page.getByText("Deleted e2e-vol.")).toBeVisible();
+  expect(dind("docker volume ls -q --filter name=e2e-vol")).toBe("");
+
+  await page.goto(at(`/env/${envId}/volumes`));
+  await expect(page.getByRole("heading", { name: "Volumes", level: 1 })).toBeVisible();
+  await expect(page.getByRole("link", { name: "e2e-vol", exact: true })).toHaveCount(0);
+});
