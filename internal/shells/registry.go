@@ -317,7 +317,6 @@ func (r *Registry) End(id, reason string) (EndResult, bool) {
 		stop()
 	}
 
-	s.closeExec.Do(func() { _ = s.exec.Close() })
 	now := r.clock.Now()
 	s.mu.Lock()
 	s.state = StateClosed
@@ -325,7 +324,10 @@ func (r *Registry) End(id, reason string) (EndResult, bool) {
 	s.result = EndResult{Duration: max(now.Sub(s.CreatedAt), 0), ExitCode: s.exitCode, StillRunning: s.exitCode == nil}
 	res := s.result
 	s.mu.Unlock()
+	// Done is closed before the process is, so a bridge whose read fails the moment
+	// the process closes already knows the session was ended from outside, and why.
 	close(s.done)
+	s.closeExec.Do(func() { _ = s.exec.Close() })
 	if onEnd != nil {
 		onEnd(s, reason, res)
 	}

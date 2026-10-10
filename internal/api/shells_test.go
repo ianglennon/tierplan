@@ -470,3 +470,102 @@ func TestShellServerShutdownTellsAnAttachedBrowserWhy(t *testing.T) {
 		t.Errorf("closed row = %+v, want reason server_shutdown", rows[1])
 	}
 }
+
+func TestShellOpenOnANodeThatIsNotConnectedAnswersNodeUnavailableBeforeAnyExec(t *testing.T) {
+	f := newShellFix(t, nil)
+	rec := f.open(t, "web", `{"nodeId":"nobody","shell":"auto","cols":80,"rows":24}`)
+	if rec.code != http.StatusServiceUnavailable || rec.ptyp != "node_unavailable" {
+		t.Fatalf("%d %q, want 503 node_unavailable: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if n := len(f.fake.ExecCreateBodies()); n != 0 {
+		t.Errorf("the engine was asked for %d execs", n)
+	}
+	if rows := f.shellAudits(t); len(rows) != 0 {
+		t.Errorf("shell rows = %+v, want none", rows)
+	}
+}
+
+func TestShellOpenWhenTheEngineRefusesTheExecAnswersTheMappedProblemAndWritesNoRow(t *testing.T) {
+	f := newShellFix(t, nil)
+	// The exited container: the engine answers the exec create with 409.
+	rec := f.open(t, "db", `{"shell":"auto","cols":80,"rows":24}`)
+	if rec.code != http.StatusConflict || rec.ptyp != "container_not_running" {
+		t.Fatalf("%d %q, want 409 container_not_running: %s", rec.code, rec.ptyp, rec.body)
+	}
+	rec = f.open(t, "ghost", `{"shell":"auto","cols":80,"rows":24}`)
+	if rec.code != http.StatusNotFound || rec.ptyp != "container_not_found" {
+		t.Fatalf("%d %q, want 404 container_not_found: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if rows := f.shellAudits(t); len(rows) != 0 {
+		t.Errorf("shell rows = %+v, want none: a shell that never started is not on record", rows)
+	}
+	if got := f.shellsReg.List(shells.Filter{}); len(got) != 0 {
+		t.Errorf("registry = %+v, want empty", got)
+	}
+}
+
+func TestShellOpenRefusesACustomCommandThatCannotBeReadBeforeAnyExec(t *testing.T) {
+	f := newShellFix(t, nil)
+	for _, body := range []string{
+		`{"shell":"custom","command":"/bin/sh -c 'unbalanced","cols":80,"rows":24}`,
+		`{"shell":"custom","command":"","cols":80,"rows":24}`,
+	} {
+		rec := f.open(t, "web", body)
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "invalid_shell" {
+			t.Errorf("%s: %d %q, want 422 invalid_shell: %s", body, rec.code, rec.ptyp, rec.body)
+		}
+	}
+	rec := f.open(t, "web", `{"shell":"auto","user":"ro\nt","cols":80,"rows":24}`)
+	if rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("a user with a control character: %d, want 422: %s", rec.code, rec.body)
+	}
+	rec = f.open(t, "web", `{"shell":"auto","cols":0,"rows":24}`)
+	if rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("zero columns: %d, want 422: %s", rec.code, rec.body)
+	}
+	if n := len(f.fake.ExecCreateBodies()); n != 0 {
+		t.Errorf("the engine was asked for %d execs", n)
+	}
+}
+
+func TestShellOpenPassesTheChosenUserDirectoryAndSizeAndRecordsACustomCommand(t *testing.T) {
+	f := newShellFix(t, nil)
+	rec := f.open(t, "web", `{"shell":"custom","command":"/bin/zsh -l","user":"www-data","workingDir":"/srv","cols":120,"rows":40}`)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	s := decode[shellSession](t, rec)
+	if len(s.Command) != 2 || s.Command[0] != "/bin/zsh" || s.Command[1] != "-l" || s.User != "www-data" || s.WorkingDir != "/srv" {
+		t.Errorf("session = %+v", s)
+	}
+	var created struct {
+		User        string
+		WorkingDir  string
+		Cmd         []string
+		ConsoleSize []int
+	}
+	if err := json.Unmarshal([]byte(f.fake.ExecCreateBodies()[0]), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.User != "www-data" || created.WorkingDir != "/srv" || len(created.Cmd) != 2 {
+		t.Errorf("exec create = %+v", created)
+	}
+	rows := f.waitShellRows(t, 1)
+	if d := rows[0].Details; d["command"] != "/bin/zsh -l" || d["user"] != "www-data" || d["workdir"] != "/srv" {
+		t.Errorf("opened details = %+v", d)
+	}
+}
+
+func TestShellASessionThatIsNotAttachedInTimeIsEndedItsExecClosedAndTheEndAudited(t *testing.T) {
+	f := newShellFix(t, func(f *envFix) { f.shellsPending = 150 * time.Millisecond })
+	s := f.session(t)
+
+	waitFor(t, "the session to expire", func() bool { return len(f.shellsReg.List(shells.Filter{})) == 0 })
+	rows := f.waitShellRows(t, 2)
+	closed := rows[1]
+	if closed.Action != audit.ActionShellClosed || closed.Details["sid"] != s.SessionID || closed.Details["reason"] != "expired" || closed.Details["still_running"] != "true" {
+		t.Errorf("closed row = %+v, want reason expired for the session %s", closed, s.SessionID)
+	}
+	_, status, ptype, err := f.dial(t, f.cookie, s.WSPath, f.srv.URL)
+	dialRefused(t, "attach after expiry", status, ptype, err, http.StatusNotFound)
+}
