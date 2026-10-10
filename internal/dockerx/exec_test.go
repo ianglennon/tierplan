@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -153,6 +154,31 @@ func TestExecAMissingExecutableIsErrNoShell(t *testing.T) {
 	}
 	if st.ExitCode != 127 || st.Running {
 		t.Errorf("state = %+v, want exit code 127", st)
+	}
+}
+
+// A shell exits with the status of the last command, so a mistyped command followed by
+// exit ends a working session with 127. That is not a missing shell (WR-02).
+func TestExecAShellThatWasGivenInputAndEndsWith127IsNotErrNoShell(t *testing.T) {
+	for _, code := range []string{"126", "127"} {
+		t.Run(code, func(t *testing.T) {
+			c, _ := execFake(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			s, err := c.StartExec(ctx, "web", dockerx.ExecOptions{Cmd: []string{"/bin/sh"}})
+			if err != nil {
+				t.Fatalf("StartExec: %v", err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			if _, err := s.Write([]byte("exit " + code + "\n")); err != nil {
+				t.Fatal(err)
+			}
+			drain(t, s)
+			st, err := s.Wait(ctx)
+			if err != nil || st.Running || strconv.Itoa(st.ExitCode) != code {
+				t.Fatalf("Wait = %+v, %v; want a normal end with exit code %s", st, err, code)
+			}
+		})
 	}
 }
 

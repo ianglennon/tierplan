@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/moby/moby/client"
@@ -173,6 +174,10 @@ type ExecSession struct {
 	closeOnce sync.Once
 	closeErr  error
 
+	// wrote is set by the first Write. A shell that has been given input was running,
+	// so its exit code is the last command's and not a missing executable.
+	wrote atomic.Bool
+
 	mu    sync.Mutex
 	tail  []byte
 	ended bool
@@ -255,7 +260,12 @@ func (s *ExecSession) Read(p []byte) (int, error) {
 }
 
 // Write sends bytes to the terminal's input.
-func (s *ExecSession) Write(p []byte) (int, error) { return s.hr.Conn.Write(p) }
+func (s *ExecSession) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		s.wrote.Store(true)
+	}
+	return s.hr.Conn.Write(p)
+}
 
 // Resize changes the size of the terminal.
 func (s *ExecSession) Resize(ctx context.Context, cols, rows uint) error {
@@ -288,7 +298,9 @@ func (s *ExecSession) inspect(ctx context.Context) (ExecState, bool, error) {
 // it has or ctx is done. It returns ErrNoShell, with the state, when the process
 // could not be started because the executable is not in the image: exit code 126 or
 // 127, or the runtime's "no such file or directory" message at the end of the output
-// that Read returned. A caller that reads the output should read it to its end first
+// that Read returned. That is only said of a session nothing was ever written to: a
+// shell that was given input ran, and a 126 or 127 from it is the status of the last
+// command the person typed, a normal end. A caller that reads the output should read it to its end first
 // so a process that has not started yet is not mistaken for one that ended with 0.
 func (s *ExecSession) Wait(ctx context.Context) (ExecState, error) {
 	t := time.NewTicker(waitPoll)
@@ -302,7 +314,7 @@ func (s *ExecSession) Wait(ctx context.Context) (ExecState, error) {
 		ended := s.ended
 		s.mu.Unlock()
 		if !st.Running && (started || ended) {
-			if st.ExitCode == 126 || st.ExitCode == 127 || looksLikeNoShell(s.output()) {
+			if !s.wrote.Load() && (st.ExitCode == 126 || st.ExitCode == 127 || looksLikeNoShell(s.output())) {
 				return st, ErrNoShell
 			}
 			return st, nil
