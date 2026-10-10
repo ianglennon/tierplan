@@ -31,8 +31,6 @@ const (
 	// still mounts, found by the check or refused by the engine. It is also the problem
 	// type the SPA words.
 	codeVolumeInUse = "volume_in_use"
-	// maxVolumeTargets is how many volumes one delete request names.
-	maxVolumeTargets = 25
 )
 
 // bulkPhrase is the confirmation of a delete of several volumes: delete {n} volumes. The
