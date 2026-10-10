@@ -436,6 +436,12 @@ func serveShell(w http.ResponseWriter, req *http.Request, d ShellsDeps) {
 	if ctl.Idle == nil && d.Instance != nil {
 		ctl.Idle = d.Instance.ShellIdle // read on every tick, never captured
 	}
+	if ctl.StillAllowed == nil {
+		// The policy that let the upgrade in, asked again on every tick: a shell does not
+		// outlive its user's sign-in, their grant on the environment or the permission
+		// itself (P3 D-10, T-04-83).
+		ctl.StillAllowed = func() bool { return httpx.StillAuthorized(ctx) }
+	}
 	reason := shells.Bridge(ctx, conn, s, ctl)
 	d.Registry.End(s.ID, reason)
 }

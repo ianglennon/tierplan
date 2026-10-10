@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ContainerRow } from "@/api/resources";
@@ -66,7 +67,7 @@ interface PanelState {
 
 // The reasons the server closes a session with that have a message of their own. Any
 // other reason is shown as a plain disconnect.
-const CLOSED_REASONS = new Set(["idle"]);
+const CLOSED_REASONS = new Set(["idle", "access_lost", "ended_by_admin"]);
 
 // The size the shell starts at; the terminal sends its real size as soon as it has
 // fitted its box and the socket is open.
@@ -112,6 +113,7 @@ export function ShellPanel({
   const t = useT();
   const needs = useNeeds("containers.exec", envId);
   const open = useOpenShell();
+  const queryClient = useQueryClient();
   const [state, setState] = useState<PanelState>({ phase: "launcher" });
   const socket = useRef<TerminalSocket | null>(null);
   const terminal = useRef<TerminalApi | null>(null);
@@ -200,6 +202,8 @@ export function ShellPanel({
           drop();
           setState({ phase: "launcher", failure: new ShellOpenError(409, "no_shell") });
         } else if (c.type === "closed") {
+          // Whoever lost the right to a shell should see what else changed with it.
+          if (c.reason === "access_lost") void queryClient.invalidateQueries({ queryKey: ["me"] });
           setState((s) =>
             CLOSED_REASONS.has(c.reason)
               ? { ...s, phase: "closed", closed: { reason: c.reason, minutes: c.minutes } }
@@ -231,7 +235,7 @@ export function ShellPanel({
       socket.current = sock;
       setState({ phase: "connecting", sessionId });
     },
-    [needs.allowed, drop, open, envId, containerId, nodeId, createSocket],
+    [needs.allowed, drop, open, queryClient, envId, containerId, nodeId, createSocket],
   );
 
   const register = useCallback((api: TerminalApi | null) => {

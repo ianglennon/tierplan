@@ -845,3 +845,65 @@ describe("an agent that is too old (Pitfall 13)", () => {
     expect(screen.queryByRole("button", { name: "Open shell" })).toBeNull();
   });
 });
+
+describe("a session the server ended (plan 04-23, D-29, P3 D-10)", () => {
+  const cases = [
+    ["access_lost", "Your access changed. This session was closed."],
+    ["ended_by_admin", "An administrator ended this session."],
+  ] as const;
+
+  it.each(cases)(
+    "%s: the message, the screen kept read only, and Start a new session in focus",
+    async (reason, message) => {
+      renderPanel();
+      const ws = await openShell();
+      act(() => ws.open());
+      await screen.findByText("Connected");
+      act(() => {
+        ws.output("last screen\r\n");
+        ws.control({ type: "closed", reason });
+        ws.drop();
+      });
+      const shown = await screen.findByText(message);
+      expect(shown.closest("output")).toBeTruthy();
+      expect(screen.queryByText("Disconnected")).toBeNull();
+      const button = screen.getByRole("button", { name: "Start a new session" });
+      expect(button.getAttribute("data-variant")).toBe("default");
+      await waitFor(() => expect(document.activeElement).toBe(button));
+      expect(screen.getByLabelText("Terminal in web").getAttribute("data-readonly")).toBe("true");
+      expect(term.written.map(text).join("")).toContain("last screen");
+    },
+  );
+
+  it("access lost reads who the user is again, so what else changed with it shows", async () => {
+    renderPanel();
+    const ws = await openShell();
+    act(() => ws.open());
+    await screen.findByText("Connected");
+    const meReads = () => sent.filter((s) => s.path === "/api/me").length;
+    const before = meReads();
+    act(() => {
+      ws.control({ type: "closed", reason: "access_lost" });
+      ws.drop();
+    });
+    await screen.findByText("Your access changed. This session was closed.");
+    await waitFor(() => expect(meReads()).toBeGreaterThan(before));
+  });
+
+  it("the server stopping is the disconnected state: the screen kept, Reconnect shell in focus", async () => {
+    renderPanel();
+    const ws = await openShell();
+    act(() => ws.open());
+    await screen.findByText("Connected");
+    act(() => {
+      ws.output("before the stop\r\n");
+      ws.control({ type: "closed", reason: "server_shutdown" });
+      ws.drop();
+    });
+    expect(await screen.findByText("Disconnected")).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Reconnect shell" });
+    await waitFor(() => expect(document.activeElement).toBe(button));
+    expect(screen.getByLabelText("Terminal in web").getAttribute("data-readonly")).toBe("true");
+    expect(term.written.map(text).join("")).toContain("before the stop");
+  });
+});
