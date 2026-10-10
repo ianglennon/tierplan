@@ -83,6 +83,8 @@ type fakeExec struct {
 	closes  int
 	state   dockerx.ExecState
 	waitErr error
+	// onClose, when set, runs inside Close, before it returns.
+	onClose func()
 }
 
 func newFakeExec() *fakeExec {
@@ -101,7 +103,11 @@ func (f *fakeExec) Write(p []byte) (int, error) {
 func (f *fakeExec) Close() error {
 	f.mu.Lock()
 	f.closes++
+	hook := f.onClose
 	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	_ = f.outR.CloseWithError(errors.New("closed"))
 	return nil
 }
@@ -140,6 +146,18 @@ func (f *fakeExec) closeCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.closes
+}
+
+func (f *fakeExec) written() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.got.String()
+}
+
+func (f *fakeExec) sizes() [][2]uint {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][2]uint(nil), f.resizes...)
 }
 
 func newSession(user string) *Session {
@@ -267,5 +285,128 @@ func TestASessionEndedWithoutAnExitCodeIsStillRunning(t *testing.T) {
 	res, ok := r.End(s.ID, "disconnected")
 	if !ok || res.ExitCode != nil || !res.StillRunning {
 		t.Fatalf("End = %+v, %v, want still running with no exit code (D-30)", res, ok)
+	}
+}
+
+func TestAPendingSessionExpiresAtThirtySecondsAndItsProcessIsClosedOnce(t *testing.T) {
+	clk := newFakeClock()
+	r := NewRegistry(clk)
+	var reasons []string
+	r.OnEnd(func(_ *Session, reason string, _ EndResult) { reasons = append(reasons, reason) })
+	x := newFakeExec()
+	s := r.Create(newSession("ann"), x, 0)
+
+	clk.Advance(29 * time.Second)
+	if got := r.List(Filter{}); len(got) != 1 || x.closeCount() != 0 {
+		t.Fatalf("at 29 s: %d sessions, process closed %d times, want the session still waiting", len(got), x.closeCount())
+	}
+	clk.Advance(2 * time.Second)
+	if got := r.List(Filter{}); len(got) != 0 {
+		t.Fatalf("at 31 s the session is still listed: %+v", got)
+	}
+	if x.closeCount() != 1 {
+		t.Errorf("the process was closed %d times, want exactly once", x.closeCount())
+	}
+	if s.Reason() != "expired" || len(reasons) != 1 || reasons[0] != "expired" {
+		t.Errorf("reason %q, hook reasons %v, want one expired", s.Reason(), reasons)
+	}
+	if _, err := r.Claim(s.ID, "user:ann", "sign-in-ann"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Claim after expiry = %v, want ErrNotFound", err)
+	}
+	if err := r.Check(s.ID, "env1", "user:ann", "sign-in-ann"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Check after expiry = %v, want ErrNotFound", err)
+	}
+}
+
+func TestAClaimedSessionNoLongerExpires(t *testing.T) {
+	clk := newFakeClock()
+	r := NewRegistry(clk)
+	x := newFakeExec()
+	s := r.Create(newSession("ann"), x, 0)
+	if _, err := r.Claim(s.ID, "user:ann", "sign-in-ann"); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(10 * time.Minute)
+	if got := r.List(Filter{}); len(got) != 1 || x.closeCount() != 0 {
+		t.Fatalf("an attached session was ended by the pending clock: %+v, closed %d times", got, x.closeCount())
+	}
+}
+
+func TestEndAnEndedSessionReturnsFalseAndDoesNothingMore(t *testing.T) {
+	r := NewRegistry(newFakeClock())
+	calls := 0
+	r.OnEnd(func(*Session, string, EndResult) { calls++ })
+	x := newFakeExec()
+	s := r.Create(newSession("ann"), x, 0)
+
+	if _, ok := r.End(s.ID, "disconnected"); !ok {
+		t.Fatal("the first End reported false")
+	}
+	if _, ok := r.End(s.ID, "server_shutdown"); ok {
+		t.Error("the second End reported true")
+	}
+	if s.Reason() != "disconnected" {
+		t.Errorf("Reason = %q, want the first reason only", s.Reason())
+	}
+	if x.closeCount() != 1 || calls != 1 {
+		t.Errorf("closed %d times, hook called %d times, want once each", x.closeCount(), calls)
+	}
+	if _, ok := r.End("never-existed", "x"); ok {
+		t.Error("End of an unknown ID reported true")
+	}
+}
+
+func TestCloseAllEndsPendingAndAttachedSessionsWithTheReasonAndRefusesNewOnes(t *testing.T) {
+	r := NewRegistry(newFakeClock())
+	pending, attached := newFakeExec(), newFakeExec()
+	p := r.Create(newSession("ann"), pending, 0)
+	a := r.Create(newSession("bob"), attached, 0)
+	if _, err := r.Claim(a.ID, "user:bob", "sign-in-bob"); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := r.CloseAll("server_shutdown"); n != 2 {
+		t.Fatalf("CloseAll ended %d sessions, want 2", n)
+	}
+	for name, s := range map[string]*Session{"pending": p, "attached": a} {
+		if s.Reason() != "server_shutdown" {
+			t.Errorf("%s session reason = %q", name, s.Reason())
+		}
+		select {
+		case <-s.Done():
+		default:
+			t.Errorf("%s session is not done", name)
+		}
+	}
+	if pending.closeCount() != 1 || attached.closeCount() != 1 {
+		t.Errorf("processes closed %d and %d times, want once each", pending.closeCount(), attached.closeCount())
+	}
+	late := newFakeExec()
+	if got := r.Create(newSession("ann"), late, 0); got != nil || late.closeCount() != 1 {
+		t.Errorf("a session created while the server stops: %v, process closed %d times, want nil and a closed process", got, late.closeCount())
+	}
+}
+
+// A bridge whose read fails the moment the process closes must already be able to see
+// that the session was ended from outside, and why, or it reads the failure as the
+// process having exited and sends an exit code the process never gave.
+func TestEndMarksTheSessionDoneBeforeItClosesTheProcess(t *testing.T) {
+	r := NewRegistry(newFakeClock())
+	x := newFakeExec()
+	s := r.Create(newSession("ann"), x, 0)
+	var doneAtClose bool
+	var reasonAtClose string
+	x.onClose = func() {
+		select {
+		case <-s.Done():
+			doneAtClose = true
+		default:
+		}
+		reasonAtClose = s.Reason()
+	}
+
+	r.End(s.ID, "server_shutdown")
+	if !doneAtClose || reasonAtClose != "server_shutdown" {
+		t.Errorf("at the moment the process was closed Done was closed = %v and the reason was %q, want true and server_shutdown", doneAtClose, reasonAtClose)
 	}
 }
