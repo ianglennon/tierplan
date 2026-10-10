@@ -93,9 +93,16 @@ type imageItem struct {
 }
 
 type volumeItem struct {
-	Name    string `json:"name"`
-	Driver  string `json:"driver"`
-	Created string `json:"created"`
+	Name             string `json:"name"`
+	Driver           string `json:"driver"`
+	Created          string `json:"created"`
+	Node             string `json:"node"`
+	NodeID           string `json:"nodeId"`
+	UsedByContainers int    `json:"usedByContainers"`
+	UsedByServices   int    `json:"usedByServices"`
+	Anonymous        bool   `json:"anonymous"`
+	Project          string `json:"project"`
+	Stack            string `json:"stack"`
 }
 
 type networkItem struct {
@@ -852,7 +859,9 @@ func newSwarmFix(t *testing.T) *swarmFix {
 			// Two services mention the overlay; one of them is scaled to zero.
 			ServiceRows: []dockertest.FakeService{
 				{ID: "svc-web", Name: "web", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"ovl"}},
-				{ID: "svc-idle", Name: "idle", Mode: "replicated", Running: 0, Desired: 0, Networks: []string{"ovl"}},
+				// Scaled to zero, so no task keeps the volume, yet its spec mounts it.
+				{ID: "svc-idle", Name: "idle", Mode: "replicated", Running: 0, Desired: 0, Networks: []string{"ovl"},
+					Mounts: []dockertest.FakeServiceMount{{Type: "volume", Source: "data"}, {Type: "bind", Source: "/srv/x"}}},
 			},
 			Images:  []dockertest.FakeImage{{ID: "sha256:" + strings.Repeat("a", 64), RepoTags: []string{"nginx:1"}, Size: 5}},
 			Volumes: []dockertest.FakeVolume{{Name: "data", Driver: "local"}},

@@ -148,6 +148,10 @@ func (f *Fake) serveVolumeRemove(w http.ResponseWriter, r *http.Request, p strin
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "get " + m[1] + ": no such volume"})
 		return true
 	}
+	if slices.Contains(cfg.BusyVolumes, m[1]) {
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "remove " + m[1] + ": volume is in use - [started-meanwhile]"})
+		return true
+	}
 	for _, c := range cfg.Containers {
 		if slices.Contains(c.Mounts, m[1]) {
 			writeJSON(w, http.StatusConflict, map[string]string{"message": "remove " + m[1] + ": volume is in use - [" + c.ID + "]"})

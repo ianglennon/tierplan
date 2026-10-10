@@ -302,7 +302,7 @@ describe("CreateVolumeDialog (swarm)", () => {
 });
 
 describe("VolumeList create button", () => {
-  const list = () => <VolumeList envId={ENV} onNodeChange={() => {}} />;
+  const list = () => <VolumeList envId={ENV} search={{}} onSearchChange={() => {}} />;
 
   it("shows an env Admin an enabled Create volume button that opens the dialog", async () => {
     render(wrap(list()));

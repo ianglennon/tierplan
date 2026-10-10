@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { VolumeList } from "@/features/volumes/volume-list";
+import {
+  VolumeList,
+  type VolumeSearch,
+  type VolumeSearchPatch,
+} from "@/features/volumes/volume-list";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -54,6 +58,8 @@ const failed =
     });
 
 beforeEach(() => {
+  search = {};
+  onSearchChange = () => {};
   sent = [];
   me = makeMe({ envs: { [ENV]: "admin" } });
   answer = done;
@@ -98,12 +104,15 @@ afterEach(() => {
 
 const deletes = () => sent.filter((s) => s.path.endsWith("/volumes/delete"));
 
+let search: VolumeSearch;
+let onSearchChange: (patch: VolumeSearchPatch) => void;
+
 function mount() {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <VolumeList envId={ENV} onNodeChange={() => {}} />
+          <VolumeList envId={ENV} search={search} onSearchChange={onSearchChange} />
           <Toaster />
         </TooltipProvider>
       </TestRouter>
@@ -226,5 +235,140 @@ describe("Delete… on a volume row", () => {
     fireEvent.click(button);
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(await screen.findByText("Needs the delete volumes permission")).toBeTruthy();
+  });
+});
+
+// Several volumes at once (plan 04-17 task 2, D-46).
+
+const many = (n: number) =>
+  Array.from({ length: n }, (_, i) => volume(`vol-${String(i).padStart(3, "0")}`));
+
+async function selectRows(names: string[]) {
+  for (const name of names)
+    fireEvent.click(await screen.findByRole("checkbox", { name: `Select ${name}` }));
+}
+
+async function openBulkDelete(names: string[]) {
+  await selectRows(names);
+  fireEvent.click(await screen.findByRole("button", { name: "Delete…" }));
+  return screen.findByRole("alertdialog");
+}
+
+describe("DeleteVolumesDialog (several volumes)", () => {
+  beforeEach(() => {
+    volumes = [volume("a"), volume("b"), volume("c")];
+  });
+
+  it("asks Delete 3 volumes? with a target list and the phrase delete 3 volumes", async () => {
+    mount();
+    const dialog = await openBulkDelete(["a", "b", "c"]);
+    expect(within(dialog).getByText("Delete 3 volumes?")).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        "This deletes the volumes and the data in them. This can't be undone.",
+      ),
+    ).toBeTruthy();
+    const list = dialog.querySelector('[data-slot="target-list"]') as HTMLElement;
+    expect(within(list).getByText("Volume")).toBeTruthy();
+    for (const n of ["a", "b", "c"]) expect(within(list).getByText(n)).toBeTruthy();
+    const confirm = within(dialog).getByRole("button", { name: "Delete 3 volumes" });
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    const input = within(dialog).getByLabelText("Type delete 3 volumes to confirm");
+    fireEvent.change(input, { target: { value: "delete 3 volume" } });
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.change(input, { target: { value: "delete 3 volumes" } });
+    expect(confirm.getAttribute("aria-disabled")).toBe("false");
+  });
+
+  it("sends every target with the phrase, toasts Deleted 3 volumes. and clears the selection", async () => {
+    mount();
+    const dialog = await openBulkDelete(["a", "b", "c"]);
+    fireEvent.change(within(dialog).getByLabelText("Type delete 3 volumes to confirm"), {
+      target: { value: "delete 3 volumes" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete 3 volumes" }));
+    await waitFor(() => expect(deletes()).toHaveLength(1));
+    expect(deletes()[0]?.body?.confirm).toBe("delete 3 volumes");
+    expect(deletes()[0]?.body?.targets).toEqual([
+      { nodeId: "node-1-id", name: "a" },
+      { nodeId: "node-1-id", name: "b" },
+      { nodeId: "node-1-id", name: "c" },
+    ]);
+    expect(await screen.findByText("Deleted 3 volumes.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull());
+  });
+
+  it("sums a partial result up as Deleted 2, 1 failed with Details that list the reason", async () => {
+    answer = (req) =>
+      Response.json({
+        bulkId: "bulk-1",
+        results: (req.body?.targets ?? []).map((t) =>
+          t.name === "b"
+            ? { ...t, result: "failed", code: "volume_in_use", detail: "named by the server" }
+            : { ...t, result: "done" },
+        ),
+      });
+    mount();
+    const dialog = await openBulkDelete(["a", "b", "c"]);
+    fireEvent.change(within(dialog).getByLabelText("Type delete 3 volumes to confirm"), {
+      target: { value: "delete 3 volumes" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete 3 volumes" }));
+    expect(await screen.findByText("Deleted 2, 1 failed")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const results = await screen.findByRole("dialog", { name: "Delete results" });
+    expect(within(results).getByText("Volume")).toBeTruthy();
+    expect(
+      within(results).getByText("b is still in use. Remove what uses it, then try again."),
+    ).toBeTruthy();
+  });
+
+  it("uses the single flow, with the name typed, when one volume is selected", async () => {
+    mount();
+    const dialog = await openBulkDelete(["b"]);
+    expect(within(dialog).getByText("Delete b?")).toBeTruthy();
+    expect(within(dialog).getByLabelText("Type b to confirm")).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: /Delete \d+ volumes/ })).toBeNull();
+  });
+
+  it("sends a selection of 60 in chunks of 25 with the same phrase and one bulk ID", async () => {
+    volumes = many(60);
+    answer = (req) =>
+      Response.json({
+        bulkId: "bulk-xyz",
+        results: (req.body?.targets ?? []).map((t) => ({ ...t, result: "done" })),
+      });
+    mount();
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Select all volumes" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Delete 60 volumes?")).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText("Type delete 60 volumes to confirm"), {
+      target: { value: "delete 60 volumes" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete 60 volumes" }));
+    await waitFor(() => expect(deletes()).toHaveLength(3));
+    expect(deletes().map((d) => d.body?.targets?.length)).toEqual([25, 25, 10]);
+    expect(deletes().every((d) => d.body?.confirm === "delete 60 volumes")).toBe(true);
+    expect(deletes()[0]?.body?.bulkId).toBeUndefined();
+    expect(deletes()[1]?.body?.bulkId).toBe("bulk-xyz");
+    expect(deletes()[2]?.body?.bulkId).toBe("bulk-xyz");
+    expect(await screen.findByText("Deleted 60 volumes.")).toBeTruthy();
+  });
+
+  it("keeps the dialog open with the reason when the whole request is refused", async () => {
+    answer = () =>
+      Response.json({ type: "forbidden", title: "x", status: 403, detail: "d" }, { status: 403 });
+    mount();
+    const dialog = await openBulkDelete(["a", "b"]);
+    fireEvent.change(within(dialog).getByLabelText("Type delete 2 volumes to confirm"), {
+      target: { value: "delete 2 volumes" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 volumes" }));
+    expect(
+      await within(dialog).findByText(
+        "You no longer have permission to do that. Your access may have changed.",
+      ),
+    ).toBeTruthy();
   });
 });

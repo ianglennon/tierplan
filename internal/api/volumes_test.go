@@ -518,3 +518,337 @@ func TestDeleteVolumeAnEmptyTargetListIs422(t *testing.T) {
 		t.Fatalf("writes = %v", w)
 	}
 }
+
+// What uses each volume, and the rule that nothing in use is deleted (plan 04-17 task 2,
+// D-45, D-46, T-04-54).
+
+const hex64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func usageEngine() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Volumes: []dockertest.FakeVolume{
+			{Name: "appdata", Driver: "local", Labels: map[string]string{"com.docker.compose.project": "shop"}},
+			{Name: "cache", Driver: "local"},
+			{Name: "scratch", Driver: "local", Labels: map[string]string{"owner": "ops", "com.docker.stack.namespace": "mon"}},
+			{Name: "labelled-anon", Driver: "local", Labels: map[string]string{"com.docker.volume.anonymous": ""}},
+			{Name: hex64, Driver: "local"},
+			{Name: "nfs-share", Driver: "nfs"},
+		},
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/web"}, State: "running", Mounts: []string{"appdata"}},
+			{ID: "c2", Names: []string{"/old-db"}, State: "exited", Mounts: []string{"appdata", "cache", "/srv/bind"}},
+		},
+	}
+}
+
+func listVolumes(t *testing.T, f *envFix, e envBody, query string) listBody[volumeItem] {
+	t.Helper()
+	path := "volumes"
+	if query != "" {
+		path += "?" + query
+	}
+	rec := f.get(t, e, path)
+	if rec.code != http.StatusOK {
+		t.Fatalf("list %q: %d %s", query, rec.code, rec.body)
+	}
+	return decode[listBody[volumeItem]](t, rec)
+}
+
+func volumeNames(items []volumeItem) []string {
+	var out []string
+	for _, v := range items {
+		out = append(out, v.Name)
+	}
+	return out
+}
+
+func TestVolumeListCarriesWhatUsesEachVolumeThatIsAnonymousAndWhatItGroupsBy(t *testing.T) {
+	f, e := dashEnv(t, usageEngine())
+	got := map[string]volumeItem{}
+	for _, v := range listVolumes(t, f, e, "").Items {
+		got[v.Name] = v
+	}
+	if v := got["appdata"]; v.UsedByContainers != 2 || v.UsedByServices != 0 || v.Project != "shop" || v.Stack != "" || v.NodeID != e.ID {
+		t.Errorf("appdata = %+v, want 2 containers (a running and a stopped one), project shop", v)
+	}
+	if v := got["cache"]; v.UsedByContainers != 1 {
+		t.Errorf("cache = %+v, want the stopped container to count", v)
+	}
+	if v := got["scratch"]; v.UsedByContainers != 0 || v.Stack != "mon" {
+		t.Errorf("scratch = %+v, want unused, stack mon", v)
+	}
+	for name, want := range map[string]bool{"appdata": false, "labelled-anon": true, hex64: true, "scratch": false} {
+		if got[name].Anonymous != want {
+			t.Errorf("%s anonymous = %v, want %v", name, got[name].Anonymous, want)
+		}
+	}
+	// A bind mount of the same text as a volume name is not a use of the volume.
+	if _, ok := got["/srv/bind"]; ok {
+		t.Error("a bind mount was listed as a volume")
+	}
+}
+
+func TestVolumeListUsageFilterRunsBeforeTheCapAndSearchMatchesNameDriverLabelAndStack(t *testing.T) {
+	f, e := dashEnv(t, usageEngine())
+	used := volumeNames(listVolumes(t, f, e, "usage=used").Items)
+	if !slices.Equal(used, []string{"appdata", "cache"}) {
+		t.Errorf("usage=used = %v", used)
+	}
+	unusedList := listVolumes(t, f, e, "usage=unused")
+	if unusedList.Total != 4 || slices.Contains(volumeNames(unusedList.Items), "appdata") {
+		t.Errorf("usage=unused = %+v, want the 4 unused ones and a total of 4", unusedList)
+	}
+	if all := listVolumes(t, f, e, "usage=all"); all.Total != 6 {
+		t.Errorf("usage=all total = %d, want 6", all.Total)
+	}
+	for q, want := range map[string][]string{
+		"APPD":    {"appdata"},
+		"nfs":     {"nfs-share"}, // name and driver
+		"ops":     {"scratch"},   // a label value
+		"owner":   {"scratch"},   // a label key
+		"mon":     {"scratch"},   // the stack
+		"shop":    {"appdata"},   // the project
+		"nomatch": nil,
+	} {
+		if got := volumeNames(listVolumes(t, f, e, "q="+q).Items); !slices.Equal(got, want) {
+			t.Errorf("q=%s = %v, want %v", q, got, want)
+		}
+	}
+	// The search and the usage filter combine.
+	if got := volumeNames(listVolumes(t, f, e, "q=a&usage=used").Items); !slices.Equal(got, []string{"appdata", "cache"}) {
+		t.Errorf("q=a&usage=used = %v", got)
+	}
+	rec := f.get(t, e, "volumes?usage=bogus")
+	if rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("usage=bogus: %d, want 422", rec.code)
+	}
+}
+
+func TestDeleteVolumeAVolumeAStoppedContainerMountsIsVolumeInUseAndNothingIsSent(t *testing.T) {
+	f, e := dashEnv(t, usageEngine())
+	post := f.volumeDeleter(t, e, "trusted")
+	rec := post(deleteVolumesJSON("cache", [2]string{e.ID, "cache"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	var got volumeDeleted
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("body = %s (%v)", rec.Body, err)
+	}
+	r := got.Results[0]
+	if r.Result != "failed" || r.Code != "volume_in_use" || !strings.Contains(r.Detail, "old-db") {
+		t.Fatalf("result = %+v, want failed volume_in_use naming old-db", r)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("the daemon was asked to delete a volume in use: %v", w)
+	}
+	rows := f.volumeAudits(t)
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "volume_in_use" || rows[0].Details["code"] != "volume_in_use" || rows[0].Details["driver"] != "local" {
+		t.Fatalf("audit rows = %+v, want one failure naming volume_in_use", rows)
+	}
+}
+
+func TestDeleteVolumeAContainerThatStartsBetweenTheCheckAndTheCallMakesTheEngineRefuseAsVolumeInUse(t *testing.T) {
+	cfg := usageEngine()
+	cfg.BusyVolumes = []string{"scratch"}
+	f, e := dashEnv(t, cfg)
+	post := f.volumeDeleter(t, e, "trusted")
+	rec := post(deleteVolumesJSON("scratch", [2]string{e.ID, "scratch"}))
+	var got volumeDeleted
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("%d body = %s (%v)", rec.Code, rec.Body, err)
+	}
+	if r := got.Results[0]; r.Result != "failed" || r.Code != "volume_in_use" {
+		t.Fatalf("result = %+v, want failed volume_in_use", r)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"DELETE /volumes/scratch"}) {
+		t.Fatalf("writes = %v, want the one delete the engine refused", w)
+	}
+	if rows := f.volumeAudits(t); len(rows) != 1 || rows[0].Details["code"] != "volume_in_use" {
+		t.Fatalf("audit rows = %+v", rows)
+	}
+}
+
+func TestDeleteVolumeABulkContinuesPastAFailureAndEveryAuditRowCarriesTheSameBulkID(t *testing.T) {
+	f, e := dashEnv(t, usageEngine())
+	post := f.volumeDeleter(t, e, "trusted")
+	rec := post(deleteVolumesJSON("delete 4 volumes",
+		[2]string{e.ID, "scratch"}, [2]string{e.ID, "appdata"}, [2]string{e.ID, "never-existed"}, [2]string{e.ID, "nfs-share"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	var got volumeDeleted
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 4 || got.BulkID == "" {
+		t.Fatalf("body = %s (%v)", rec.Body, err)
+	}
+	var verdict []string
+	for _, r := range got.Results {
+		verdict = append(verdict, r.Name+":"+r.Result+":"+r.Code)
+	}
+	want := []string{"scratch:done:", "appdata:failed:volume_in_use", "never-existed:failed:not_found", "nfs-share:done:"}
+	if !slices.Equal(verdict, want) {
+		t.Fatalf("results = %v, want %v, in request order", verdict, want)
+	}
+	rows := f.volumeAudits(t)
+	if len(rows) != 3 {
+		t.Fatalf("audit rows = %+v, want one per volume that exists (a volume that is not there has nothing to record)", rows)
+	}
+	for _, r := range rows {
+		if r.Action != audit.ActionVolumeRemoved || r.Details["bulk"] != got.BulkID {
+			t.Errorf("audit row = %+v, want volume.removed with bulk %s", r, got.BulkID)
+		}
+	}
+	if w := f.fake.Writes(); slices.Contains(w, "DELETE /volumes/appdata") {
+		t.Errorf("writes = %v: the volume in use was sent to the engine", w)
+	}
+}
+
+func TestDeleteVolumeAChunkOfOneThatBelongsToABulkIsConfirmedByThePhraseOfTheWholeSelection(t *testing.T) {
+	f, e := dashEnv(t, usageEngine())
+	post := f.volumeDeleter(t, e, "trusted")
+	id := "0198f0a0-0000-7000-8000-000000000001"
+	body := fmt.Sprintf(`{"confirm":"delete 26 volumes","bulkId":%q,"targets":[{"nodeId":%q,"name":"scratch"}]}`, id, e.ID)
+	rec := post(body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if rows := f.volumeAudits(t); len(rows) != 1 || rows[0].Details["bulk"] != id {
+		t.Fatalf("audit rows = %+v, want the bulk ID that was sent", rows)
+	}
+	// The same phrase without a bulk ID does not confirm a lone volume.
+	body = fmt.Sprintf(`{"confirm":"delete 26 volumes","targets":[{"nodeId":%q,"name":"nfs-share"}]}`, e.ID)
+	if rec := post(body); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a lone volume confirmed by a bulk phrase: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestDeleteVolumeMoreThan25TargetsIs422AndNothingIsSent(t *testing.T) {
+	f, e := dashEnv(t, usageEngine())
+	post := f.volumeDeleter(t, e, "trusted")
+	var targets [][2]string
+	for i := range 26 {
+		targets = append(targets, [2]string{e.ID, fmt.Sprintf("v%d", i)})
+	}
+	rec := post(deleteVolumesJSON("delete 26 volumes", targets...))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422: %s", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("writes = %v", w)
+	}
+}
+
+func TestDeleteVolumeANodeThatIsNotOneOfTheEnvironmentsIsNodeUnreachableAndNothingIsSent(t *testing.T) {
+	f, e := dashEnv(t, usageEngine())
+	post := f.volumeDeleter(t, e, "trusted")
+	rec := post(deleteVolumesJSON("cache", [2]string{"not-a-node", "cache"}))
+	var got volumeDeleted
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("%d body = %s (%v)", rec.Code, rec.Body, err)
+	}
+	if r := got.Results[0]; r.Result != "failed" || r.Code != "node_unreachable" {
+		t.Fatalf("result = %+v, want failed node_unreachable", r)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("writes = %v", w)
+	}
+}
+
+// On a swarm (plan 04-17 tasks 1 and 2, D-45).
+
+func (s *swarmFix) deleteVolumes(t *testing.T, body string) (*envRec, volumeDeleted) {
+	t.Helper()
+	rec := s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/volumes/delete", body)
+	var got volumeDeleted
+	if rec.code == http.StatusOK {
+		if err := json.Unmarshal([]byte(rec.body), &got); err != nil {
+			t.Fatalf("body = %s (%v)", rec.body, err)
+		}
+	}
+	return rec, got
+}
+
+func (s *swarmFix) volumeDeletesOn() map[string][]string {
+	out := map[string][]string{}
+	for name, a := range map[string]*agentConn{"m1": s.m1, "m2": s.m2, "w": s.w} {
+		var dels []string
+		for _, w := range a.fake.Writes() {
+			if strings.HasPrefix(w, "DELETE /volumes/") {
+				dels = append(dels, w)
+			}
+		}
+		out[name] = dels
+	}
+	return out
+}
+
+func TestSwarmVolumeListsOneRowPerNodeAndCountsTheServiceSpecsThatMountIt(t *testing.T) {
+	s := newSwarmFix(t)
+	waitFor(t, "the cluster read", func() bool {
+		rec := s.get(t, s.env.ID, "volumes")
+		if rec.code != http.StatusOK {
+			return false
+		}
+		items := decode[listBody[volumeItem]](t, rec).Items
+		return len(items) == 2 && items[0].UsedByServices == 1
+	})
+	items := decode[listBody[volumeItem]](t, s.get(t, s.env.ID, "volumes")).Items
+	if items[0].Name != "data" || items[1].Name != "data" || items[0].NodeID == items[1].NodeID {
+		t.Fatalf("items = %+v, want the same name on two nodes as two rows", items)
+	}
+	for _, v := range items {
+		// The idle service has no running task and its spec mounts the volume.
+		if v.UsedByServices != 1 || v.UsedByContainers != 0 {
+			t.Errorf("%+v, want 0 containers and 1 service", v)
+		}
+	}
+}
+
+func TestSwarmVolumeAServiceSpecThatMountsTheVolumeKeepsItEvenWithNoTaskAndNothingIsSent(t *testing.T) {
+	s := newSwarmFix(t)
+	rec, got := s.deleteVolumes(t, deleteVolumesJSON("data", [2]string{s.m1.id, "data"}))
+	if rec.code != http.StatusOK || len(got.Results) != 1 {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	if r := got.Results[0]; r.Result != "failed" || r.Code != "volume_in_use" || !strings.Contains(r.Detail, "idle") {
+		t.Fatalf("result = %+v, want failed volume_in_use naming the idle service", r)
+	}
+	if d := s.volumeDeletesOn(); len(d["m1"])+len(d["m2"])+len(d["w"]) != 0 {
+		t.Fatalf("a delete reached an engine: %v", d)
+	}
+}
+
+func TestSwarmVolumeDeletingOneNodesCopyLeavesTheSameNameOnTheOtherNode(t *testing.T) {
+	s := newSwarmFix(t)
+	for _, node := range []string{s.m1.id, s.w.id} {
+		if rec := s.postVolume(t, fmt.Sprintf(`{"name":"shared","nodeId":%q}`, node)); rec.code != http.StatusCreated {
+			t.Fatalf("create on %s: %d %s", node, rec.code, rec.body)
+		}
+	}
+	waitFor(t, "two rows called shared", func() bool {
+		n := 0
+		for _, v := range decode[listBody[volumeItem]](t, s.get(t, s.env.ID, "volumes")).Items {
+			if v.Name == "shared" {
+				n++
+			}
+		}
+		return n == 2
+	})
+	rec, got := s.deleteVolumes(t, deleteVolumesJSON("shared", [2]string{s.m1.id, "shared"}))
+	if rec.code != http.StatusOK || len(got.Results) != 1 || got.Results[0].Result != "done" {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	if d := s.volumeDeletesOn(); len(d["m1"]) != 1 || len(d["m2"])+len(d["w"]) != 0 {
+		t.Fatalf("deletes = %v, want exactly one, on the node named", d)
+	}
+	waitFor(t, "one row called shared", func() bool {
+		var rows []volumeItem
+		for _, v := range decode[listBody[volumeItem]](t, s.get(t, s.env.ID, "volumes")).Items {
+			if v.Name == "shared" {
+				rows = append(rows, v)
+			}
+		}
+		return len(rows) == 1 && rows[0].NodeID == s.w.id
+	})
+}

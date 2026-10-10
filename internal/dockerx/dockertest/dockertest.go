@@ -106,6 +106,9 @@ type FakeConfig struct {
 	Images     []FakeImage
 	Volumes    []FakeVolume
 	Networks   []FakeNetwork
+	// BusyVolumes are volumes the daemon refuses to remove as in use although no container
+	// in its list mounts them, as when a container starts between a check and the call.
+	BusyVolumes []string
 	// Nodes and Services are how many swarm nodes and services /nodes and
 	// /services list. A fake that is not a swarm manager answers both with the
 	// 503 a real worker gives, so a client that asks anyway fails loudly.
