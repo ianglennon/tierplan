@@ -75,6 +75,15 @@ type EventDTO struct {
 	Attributes map[string]string `json:"attributes" doc:"Only name, image and exitCode, when the event had them"`
 }
 
+// InvalidateDTO is the data of an `event: invalidate` frame: a change that makes
+// the browser's lists stale but is not shown in the feed, such as a container's
+// health turning unhealthy. It carries no attributes.
+type InvalidateDTO struct {
+	Type    string `json:"type"`
+	ActorID string `json:"actorId"`
+	Node    string `json:"node"`
+}
+
 // EventListBody is the recent events of an environment.
 type EventListBody struct {
 	Items []EventDTO `json:"items" doc:"At most 50 events, newest first"`
@@ -229,6 +238,19 @@ func serveEventStream(w http.ResponseWriter, req *http.Request, d EventsDeps, li
 	}
 
 	send := func(row envs.NodeEvent) bool {
+		if row.InvalidateOnly {
+			// Tells the browser a list changed. It has no id, so Last-Event-ID resume
+			// is unaffected, and nothing about the event but its type, actor and node.
+			data, err := json.Marshal(InvalidateDTO{Type: row.Type, ActorID: row.ActorID, Node: row.Node})
+			if err != nil {
+				d.Log.Error("encode an invalidate frame", "error", err)
+				return false
+			}
+			if _, err := fmt.Fprintf(w, "event: invalidate\ndata: %s\n\n", data); err != nil {
+				return false
+			}
+			return rc.Flush() == nil
+		}
 		data, err := json.Marshal(eventDTO(row))
 		if err != nil {
 			d.Log.Error("encode an event", "error", err)

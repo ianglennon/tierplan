@@ -286,18 +286,69 @@ func TestHubKeepsArrivalOrderForEventsWithTheSameTimestamp(t *testing.T) {
 	}
 }
 
-func TestHubDropsExecAndHealthNoiseBeforeTheBuffer(t *testing.T) {
+func TestHubDropsExecNoiseBeforeTheBuffer(t *testing.T) {
 	r := newHubRig(t, dockertest.FakeConfig{})
 	r.waitStreamOpen(t)
 	_, ch, _ := r.subscribe(t)
 	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "exec_start: sh", ActorID: "noise"})
-	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "health_status: healthy", ActorID: "noise"})
+	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "exec_die", ActorID: "noise"})
 	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "kept"})
 	if ev := recvEvent(t, ch); ev.ActorID != "kept" {
 		t.Errorf("first event = %+v, want the kept one", ev)
 	}
 	if got := actors(r.hub.Recent(hubEnv, 10)); !slices.Equal(got, []string{"kept"}) {
 		t.Errorf("the buffer holds %v, want only the kept event", got)
+	}
+}
+
+func TestHubInvalidateOnlyRowDropsTheSnapshotAndReachesSubscribersButNeverTheBuffer(t *testing.T) {
+	// RES-14: a health change must refresh the open lists, and must not enter the
+	// feed people read.
+	r := newHubRig(t, oneContainer())
+	r.waitStreamOpen(t)
+	listRequests := func() int {
+		n := 0
+		for _, p := range r.fake.Requests() {
+			if strings.HasSuffix(p, "/containers/json") {
+				n++
+			}
+		}
+		return n
+	}
+	ctx := context.Background()
+	if _, _, err := r.snaps.Get(ctx, hubEnv); err != nil {
+		t.Fatal(err)
+	}
+	before := listRequests()
+	_, ch, _ := r.subscribe(t)
+
+	n := time.Now().UnixNano()
+	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "health_status: unhealthy", ActorID: "c1", TimeNano: n,
+		Attributes: map[string]string{"name": "web", "check": "curl -u a:secret"}})
+	ev := recvEvent(t, ch)
+	if !ev.InvalidateOnly || ev.ActorID != "c1" || len(ev.Attributes) != 0 {
+		t.Fatalf("subscriber got %+v, want an invalidate-only row for c1 with no attributes", ev)
+	}
+	if _, _, err := r.snaps.Get(ctx, hubEnv); err != nil {
+		t.Fatal(err)
+	}
+	if got := listRequests(); got != before+1 {
+		t.Errorf("%d list fetches after a health change, want %d (the row must drop the cached snapshot)", got, before+1)
+	}
+	if got := r.hub.Recent(hubEnv, 10); len(got) != 0 {
+		t.Errorf("Recent = %v, want the invalidate-only row kept out of the buffer", actors(got))
+	}
+	if backlog, _, _ := r.subscribe(t); len(backlog) != 0 {
+		t.Errorf("a new subscriber's backlog = %v, want none", actors(backlog))
+	}
+
+	// After a drop the daemon replays the row; it is remembered, so it is not
+	// delivered, and does not invalidate, a second time.
+	r.fake.DropEventStreams()
+	eventually(t, "the stream to reopen", func() bool { return len(r.fake.EventQueries()) == 2 && r.fake.OpenEventStreams() == 1 })
+	r.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c-next", TimeNano: n + 1})
+	if ev := recvEvent(t, ch); ev.ActorID != "c-next" {
+		t.Errorf("after the drop the next event is %+v, want c-next (the health row must not repeat)", ev)
 	}
 }
 
@@ -747,6 +798,27 @@ func TestSwarmScopeEventsFollowTheManagerInUseAcrossAFailoverWithoutLossOrRepeat
 	one("net-1", "mgr-2")
 	one("net-2", to) // seen by the new manager while it was not yet the one in use, and not lost
 	one("net-3", to)
+}
+
+func TestMergedFeedInvalidateOnlyRowReachesSubscribersWithItsNodeButNeverTheRing(t *testing.T) {
+	s := newMergedRig(t)
+	sink := s.subscribeMerged(t)
+	s.m[2].fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "health_status: unhealthy", ActorID: "sick", Attributes: map[string]string{"name": "web", "cmd": "secret"}})
+	sink.await(t, "the invalidate row", actor("sick"), 1)
+	got := sink.where(actor("sick"))
+	if len(got) != 1 || !got[0].InvalidateOnly || got[0].Node != "mgr-3" || len(got[0].Attributes) != 0 {
+		t.Fatalf("subscriber rows = %+v, want one invalidate-only row from mgr-3 with no attributes", got)
+	}
+	sentinels(t, sink, map[string]*agentConn{"mgr-3": s.m[2]})
+	for _, ev := range s.agg.Recent(context.Background(), s.env.ID, 100) {
+		if ev.ActorID == "sick" {
+			t.Errorf("Recent holds the invalidate-only row %+v", ev)
+		}
+	}
+	late := s.subscribeMerged(t)
+	if len(late.where(actor("sick"))) != 0 {
+		t.Error("a later subscriber's backlog holds the invalidate-only row")
+	}
 }
 
 func TestMergedFeedCarriesTheFailoverRowAsBayplanWithTheNewManagerAsNode(t *testing.T) {

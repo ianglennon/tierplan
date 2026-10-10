@@ -346,6 +346,11 @@ func (f *feed) lastSeen() (nano int64, ok bool) {
 // event either in its backlog or on its channel, never both and never neither.
 // The snapshot is invalidated before the event is delivered, so a browser that
 // refetches on seeing it reads fresh data.
+//
+// An invalidate-only row (a health_status change) does all of that except enter
+// the ring: it is remembered, so a replay does not repeat it, and delivered, so
+// every open list refreshes, but Recent and a new subscriber's backlog never see
+// it.
 func (f *feed) ingest(snaps *Snapshots, ev dockerx.EventRow) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -356,7 +361,9 @@ func (f *feed) ingest(snaps *Snapshots, ev dockerx.EventRow) {
 	if !f.haveLast || ev.TimeNano > f.last {
 		f.last, f.haveLast = ev.TimeNano, true
 	}
-	f.addLocked(ev)
+	if !ev.InvalidateOnly {
+		f.addLocked(ev)
+	}
 	if snaps != nil {
 		snaps.Invalidate(f.env)
 	}
@@ -801,11 +808,13 @@ func (f *mergedFeed) ingest(ev NodeEvent) {
 		return
 	}
 	f.remember(ev.ID)
-	f.ring = append(f.ring, ev)
-	if len(f.ring) > ringSize {
-		n := copy(f.ring, f.ring[len(f.ring)-ringSize:])
-		clear(f.ring[n:])
-		f.ring = f.ring[:n]
+	if !ev.InvalidateOnly {
+		f.ring = append(f.ring, ev)
+		if len(f.ring) > ringSize {
+			n := copy(f.ring, f.ring[len(f.ring)-ringSize:])
+			clear(f.ring[n:])
+			f.ring = f.ring[:n]
+		}
 	}
 	for s := range f.subs {
 		select {

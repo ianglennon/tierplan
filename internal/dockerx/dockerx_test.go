@@ -826,12 +826,11 @@ func recvRow(t *testing.T, rows <-chan dockerx.EventRow) dockerx.EventRow {
 	return dockerx.EventRow{}
 }
 
-func TestEventsKeepsContainerImageNetworkAndVolumeEventsAndDropsTheNoise(t *testing.T) {
+func TestEventsKeepsContainerImageNetworkAndVolumeEventsAndDropsExecNoise(t *testing.T) {
 	base := time.Now().Add(-time.Minute).UnixNano()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
 		{Type: "container", Action: "create", ActorID: "c1", TimeNano: base + 1, Attributes: map[string]string{"name": "web", "image": "nginx:1.27"}},
 		{Type: "container", Action: "exec_start: sh -c 'echo $SECRET'", ActorID: "c1", TimeNano: base + 2, Attributes: map[string]string{"name": "web"}},
-		{Type: "container", Action: "health_status: healthy", ActorID: "c1", TimeNano: base + 3, Attributes: map[string]string{"name": "web"}},
 		{Type: "image", Action: "pull", ActorID: "nginx:1.27", TimeNano: base + 4, Attributes: map[string]string{"name": "nginx"}},
 		{Type: "network", Action: "connect", ActorID: "n1", TimeNano: base + 5, Attributes: map[string]string{"name": "app", "container": "c1"}},
 		{Type: "volume", Action: "create", ActorID: "data", TimeNano: base + 6, Attributes: map[string]string{"driver": "local"}},
@@ -863,7 +862,7 @@ func TestEventsKeepsContainerImageNetworkAndVolumeEventsAndDropsTheNoise(t *test
 	}
 	select {
 	case r := <-rows:
-		t.Errorf("a fifth row arrived: %+v (exec and health events must be dropped)", r)
+		t.Errorf("a fifth row arrived: %+v (exec events must be dropped)", r)
 	case <-time.After(150 * time.Millisecond):
 	}
 }
@@ -892,7 +891,7 @@ func TestEventsDropsAttachDetachResizeAndTopToo(t *testing.T) {
 	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
 	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
-	for _, a := range []string{"attach", "detach", "resize", "top", "exec_die", "exec_create: sh", "health_status: unhealthy"} {
+	for _, a := range []string{"attach", "detach", "resize", "top", "exec_die", "exec_create: sh"} {
 		fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: a, ActorID: "c1"})
 	}
 	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c1"})
@@ -916,6 +915,33 @@ func TestEventsCopiesOnlyNameImageAndExitCode(t *testing.T) {
 	want := map[string]string{"name": "web", "image": "nginx:1.27", "exitCode": "137"}
 	if !reflect.DeepEqual(r.Attributes, want) {
 		t.Errorf("Attributes = %v, want only %v (T-01-88)", r.Attributes, want)
+	}
+}
+
+func TestEventsTurnAHealthStatusChangeIntoAnInvalidateOnlyRowWithoutAttributes(t *testing.T) {
+	// RES-14: a list must show Unhealthy at once, but a feed for people has no use
+	// for every check, and the attributes of the event can name the check command.
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
+	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+
+	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "health_status: unhealthy", ActorID: "c1", Attributes: map[string]string{
+		"name": "web", "image": "nginx:1.27", "healthcheck": "curl -u admin:hunter2 localhost", "API_TOKEN": "hunter2",
+	}})
+	r := recvRow(t, rows)
+	if !r.InvalidateOnly || r.Type != "container" || r.ActorID != "c1" || r.ID == "" {
+		t.Fatalf("row = %+v, want an invalidate-only container row for c1", r)
+	}
+	if len(r.Attributes) != 0 || r.Attributes == nil || r.Name != "" {
+		t.Errorf("Attributes = %#v, Name = %q, want an empty, non-nil map and no name", r.Attributes, r.Name)
+	}
+
+	// A kept event next to it is a normal row.
+	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c1"})
+	if r := recvRow(t, rows); r.InvalidateOnly || r.Action != "die" {
+		t.Errorf("next row = %+v, want a normal die row", r)
 	}
 }
 

@@ -370,6 +370,50 @@ func TestEventStreamSendsTheHeadersTheBacklogAndThenLiveFrames(t *testing.T) {
 	}
 }
 
+func TestEventStreamSendsAHealthChangeAsAnIdlessInvalidateFrameAndTheListNeverHoldsIt(t *testing.T) {
+	// RES-14: the browser must learn that a list is stale, but the feed people read
+	// has no row for it, and nothing about the health check leaves the server.
+	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
+	f.waitStream(t)
+	c := f.openStream(t, f.cookie, "")
+
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "health_status: unhealthy", ActorID: "sick",
+		Attributes: map[string]string{"name": "web", "image": "img", "check": "curl -u admin:hunter2 localhost"}})
+	publish(f, "after")
+
+	fr, ok := c.next(5 * time.Second)
+	if !ok {
+		t.Fatal("no frame arrived")
+	}
+	if fr.event != "invalidate" || fr.id != "" {
+		t.Fatalf("frame = %+v, want event invalidate with no id (Last-Event-ID resume must be unaffected)", fr)
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(fr.data), &got); err != nil {
+		t.Fatalf("data %q: %v", fr.data, err)
+	}
+	if len(got) != 3 || got["type"] != "container" || got["actorId"] != "sick" || got["node"] == "" {
+		t.Errorf("invalidate data = %v, want exactly type, actorId and node", got)
+	}
+	if strings.Contains(fr.data, "hunter2") || strings.Contains(fr.data, "curl") {
+		t.Errorf("the invalidate frame leaks the check: %s", fr.data)
+	}
+	if next, e := c.mustNext(t); next.event != "docker" || e.ActorID != "after" {
+		t.Errorf("next frame = %+v / %+v, want the docker frame for \"after\"", next, e)
+	}
+
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + f.env.ID + "/events", cookie: f.cookie})
+	var body recentBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range body.Items {
+		if it.ActorID == "sick" {
+			t.Errorf("the recent list holds the health row %+v", it)
+		}
+	}
+}
+
 func TestEventStreamResumesAfterLastEventID(t *testing.T) {
 	now := time.Now()
 	f := newEventsFix(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{

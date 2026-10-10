@@ -39,8 +39,16 @@ type EventRow struct {
 	// Name is the container, image or network name; for a volume, its name,
 	// which Docker uses as the actor ID.
 	Name string
-	// Attributes holds only name, image and exitCode, when the event had them.
+	// Attributes holds only the allowlisted attributes (keptAttributes), when the
+	// event had them.
 	Attributes map[string]string
+	// InvalidateOnly marks a row that tells the hub to drop its cached snapshot and
+	// tells browsers to refetch, but is not shown in the feed and is not stored in
+	// the ring. A container's health_status change is one: the list needs to show
+	// Unhealthy at once, while a feed meant for people has no use for every check
+	// result. Its attributes are always empty, so a health check's command line
+	// never leaves the server.
+	InvalidateOnly bool
 }
 
 // eventTypes are the event types the feed shows (D-57). Swarm event types
@@ -49,13 +57,17 @@ var eventTypes = []string{"container", "image", "network", "volume"}
 
 // Actions that are noise in a feed meant for people (A12). exec_create,
 // exec_start and exec_die fire for every health check command and every
-// `docker exec`, and health_status for every check, so a busy host would bury
-// everything else; the exec_ and health_status actions also carry the command
-// line, which can hold secrets.
+// `docker exec`, so a busy host would bury everything else; the exec_ actions
+// also carry the command line, which can hold secrets.
 var (
-	noiseActionPrefixes = []string{"exec_", "health_status"}
+	noiseActionPrefixes = []string{"exec_"}
 	noiseActions        = map[string]bool{"attach": true, "detach": true, "resize": true, "top": true}
 )
+
+// invalidateOnlyActionPrefixes are the actions that change what a list shows but
+// would bury the feed: a container's health_status fires for every check. They
+// become rows with InvalidateOnly set and no attributes (RES-14).
+var invalidateOnlyActionPrefixes = []string{"health_status"}
 
 // keptAttributes is the allowlist of event attributes that reach the feed.
 var keptAttributes = []string{"name", "image", "exitCode"}
@@ -154,6 +166,12 @@ func eventRow(m events.Message) (EventRow, bool) {
 		// Never nil, so a JSON consumer always sees an object.
 		Attributes: map[string]string{},
 	}
+	if isInvalidateOnly(action) {
+		// Nothing but the fact that this container changed leaves the server: the
+		// attributes of a health_status event can name the check command.
+		row.InvalidateOnly = true
+		return row, true
+	}
 	for _, k := range keptAttributes {
 		if v, ok := m.Actor.Attributes[k]; ok {
 			row.Attributes[k] = v
@@ -169,6 +187,15 @@ func eventRow(m events.Message) (EventRow, bool) {
 func isFeedType(t string) bool {
 	for _, k := range eventTypes {
 		if t == k {
+			return true
+		}
+	}
+	return false
+}
+
+func isInvalidateOnly(action string) bool {
+	for _, p := range invalidateOnlyActionPrefixes {
+		if strings.HasPrefix(action, p) {
 			return true
 		}
 	}

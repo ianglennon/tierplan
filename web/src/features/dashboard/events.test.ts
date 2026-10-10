@@ -294,6 +294,51 @@ describe("createEventsConnection", () => {
     expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(2);
   });
 
+  it("refreshes the containers and the summary on an invalidate frame without touching the feed", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+    const before = c.last();
+
+    source.sendFrame("invalidate", { type: "container", actorId: "c1", node: "node-1" });
+    expect(c.invalidated).toEqual([
+      ["env", "e1", "summary"],
+      ["env", "e1", "containers"],
+    ]);
+    expect(c.last().events).toEqual(before.events);
+    expect(c.last().events).toHaveLength(0);
+  });
+
+  it("throttles invalidate frames like docker events: a burst collapses into one trailing refetch", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+
+    for (let i = 0; i < 5; i++) {
+      source.sendFrame("invalidate", { type: "container", actorId: `c${i}`, node: "node-1" });
+    }
+    expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(2);
+  });
+
+  it("ignores an invalidate frame it cannot read", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+    source.sendFrame("invalidate", null);
+    source.sendFrame("invalidate", { actorId: "c1" });
+    expect(c.invalidated).toEqual([]);
+  });
+
   it("does not invalidate for an event it already has", async () => {
     const known = ev("k", "2026-10-02T10:00:01Z");
     const c = connect(() => Promise.resolve([known]));

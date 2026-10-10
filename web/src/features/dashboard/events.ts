@@ -20,6 +20,15 @@ import { apiUrl } from "@/lib/base-path";
 export type EventDTO = components["schemas"]["EventDTO"];
 export type EventType = EventDTO["type"];
 
+// The data of an `event: invalidate` frame: a change that makes lists stale but is
+// not shown in the feed, such as a container's health turning unhealthy. It has no
+// id and no attributes.
+interface InvalidateFrame {
+  type: EventType;
+  actorId: string;
+  node: string;
+}
+
 // What the feed shows (UI-SPEC "Events feed"): newest first, 50 at most.
 export const FEED_CAP = 50;
 
@@ -281,6 +290,20 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
     take([parsed], true);
   }
 
+  // An invalidate frame refreshes the lists its type touches, throttled like a
+  // docker event, and adds nothing to the feed.
+  function onInvalidate(event: Event): void {
+    if (closed) return;
+    let parsed: InvalidateFrame;
+    try {
+      parsed = JSON.parse((event as MessageEvent<string>).data) as InvalidateFrame;
+    } catch {
+      return;
+    }
+    if (typeof parsed?.type !== "string") return;
+    for (const key of invalidationKeys(parsed.type, envId)) throttled(key);
+  }
+
   return {
     start() {
       void read(false);
@@ -300,6 +323,7 @@ export function createEventsConnection(options: EventsConnectionOptions): Events
       });
       source.addEventListener("error", onError);
       source.addEventListener("docker", onDocker);
+      source.addEventListener("invalidate", onInvalidate);
       publish();
     },
     reload() {
