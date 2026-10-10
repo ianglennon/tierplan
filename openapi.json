@@ -4991,6 +4991,41 @@
         ],
         "type": "object"
       },
+      "ShellPreferenceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "With shell custom, the command that was entered; otherwise empty",
+            "type": "string"
+          },
+          "shell": {
+            "description": "The shell that was chosen",
+            "enum": [
+              "auto",
+              "bash",
+              "sh",
+              "ash",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "user": {
+            "description": "The user it ran as; empty means the container's own",
+            "type": "string"
+          },
+          "workingDir": {
+            "description": "Its working directory; empty means the container's own",
+            "type": "string"
+          }
+        },
+        "required": [
+          "shell",
+          "command",
+          "user",
+          "workingDir"
+        ],
+        "type": "object"
+      },
       "ShellSessionBody": {
         "additionalProperties": false,
         "properties": {
@@ -10671,6 +10706,60 @@
         "summary": "Sign one of the caller's other sessions out",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/me/shell-preferences": {
+      "get": {
+        "description": "The shell, custom command, user and working directory of the caller's most recent successful shell in a container of the image, so the launcher can preselect them on any browser. 404 shell_preference_not_found when the caller has none for that image. At most 200 images are remembered per user; the oldest are dropped. Nothing typed in a shell is part of it.",
+        "operationId": "getShellPreference",
+        "parameters": [
+          {
+            "description": "The image reference of the container, for example nginx:1.27, as the container detail names it",
+            "explode": false,
+            "in": "query",
+            "name": "image",
+            "required": true,
+            "schema": {
+              "description": "The image reference of the container, for example nginx:1.27, as the container detail names it",
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellPreferenceBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "How the signed-in user last opened a shell in an image",
+        "tags": [
+          "environments"
         ]
       }
     },

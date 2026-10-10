@@ -6,7 +6,29 @@
       "body": "You get a terminal inside the container. Nothing you type or see is recorded. Bayplan records that the session happened.",
       "bodyNode": "You get a terminal inside the container, on {{node}}. Nothing you type or see is recorded. Bayplan records that the session happened.",
       "open": "Open shell",
-      "opening": "Opening shell…"
+      "opening": "Opening shell…",
+      "shell": {
+        "label": "Shell",
+        "auto": "Automatic (bash, then sh)",
+        "bash": "bash",
+        "sh": "sh",
+        "ash": "ash",
+        "custom": "Custom command…"
+      },
+      "command": {
+        "label": "Command",
+        "helper": "The command to run, for example /bin/zsh."
+      },
+      "options": "Options",
+      "user": {
+        "label": "User",
+        "placeholder": "Container default",
+        "helper": "For example root, 0 or www-data."
+      },
+      "dir": {
+        "label": "Working directory",
+        "placeholder": "Container default"
+      }
     },
     "notRunning": {
       "heading": "Start the container to open a shell",
@@ -51,12 +73,7 @@
       "ownContainer": "Bayplan doesn't open shells in its own containers.",
       "noShell": {
         "heading": "No shell in this image",
-        "body": "Bayplan couldn't find bash or sh in this container. If the image has one somewhere else, enter its path.",
-        "command": {
-          "label": "Command",
-          "helper": "The command to run, for example /bin/zsh."
-        },
-        "open": "Open shell"
+        "body": "Bayplan couldn't find bash or sh in this container. If the image has one somewhere else, enter its path."
       },
       "limit_one": "You already have {{count}} shell open, which is the most allowed. Close one to open another.",
       "limit_other": "You already have {{count}} shells open, which is the most allowed. Close one to open another."

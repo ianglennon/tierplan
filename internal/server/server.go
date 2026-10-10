@@ -718,7 +718,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
-		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, SelfContainerID: selfID, Log: log},
+		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, SelfContainerID: selfID, Store: st, Log: log},
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},

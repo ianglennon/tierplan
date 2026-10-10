@@ -1294,6 +1294,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/shell-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How the signed-in user last opened a shell in an image
+         * @description The shell, custom command, user and working directory of the caller's most recent successful shell in a container of the image, so the launcher can preselect them on any browser. 404 shell_preference_not_found when the caller has none for that image. At most 200 images are remembered per user; the oldest are dropped. Nothing typed in a shell is part of it.
+         */
+        get: operations["getShellPreference"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/owned/{kind}/{resourceId}/eligible-owners": {
         parameters: {
             query?: never;
@@ -3951,6 +3971,19 @@ export interface components {
             user?: string;
             /** @description The working directory. Empty means the container's own */
             workingDir?: string;
+        };
+        ShellPreferenceBody: {
+            /** @description With shell custom, the command that was entered; otherwise empty */
+            command: string;
+            /**
+             * @description The shell that was chosen
+             * @enum {string}
+             */
+            shell: "auto" | "bash" | "sh" | "ash" | "custom";
+            /** @description The user it ran as; empty means the container's own */
+            user: string;
+            /** @description Its working directory; empty means the container's own */
+            workingDir: string;
         };
         ShellSessionBody: {
             /** @description The command that was started */
@@ -7178,6 +7211,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getShellPreference: {
+        parameters: {
+            query: {
+                /** @description The image reference of the container, for example nginx:1.27, as the container detail names it */
+                image: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellPreferenceBody"];
+                };
             };
             /** @description Error */
             default: {

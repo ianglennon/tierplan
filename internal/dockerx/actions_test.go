@@ -98,6 +98,9 @@ func TestContainerOwnershipReadsLabelsAndStateFromAFreshInspect(t *testing.T) {
 	if got.ID != "web-id" || got.Name != "web" || !got.Running || got.Labels["bayplan.agent"] != "true" {
 		t.Fatalf("ownership = %+v", got)
 	}
+	if got.Image == "" {
+		t.Errorf("ownership has no Image; a remembered shell choice is keyed by it: %+v", got)
+	}
 	if _, err := c.ContainerOwnership(context.Background(), "nope"); !dockerx.IsNotFound(err) {
 		t.Fatalf("err = %v, want not found", err)
 	}

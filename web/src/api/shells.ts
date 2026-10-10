@@ -9,6 +9,7 @@ import type { components } from "@/api/schema";
 import { apiUrl } from "@/lib/base-path";
 
 export type ShellSession = components["schemas"]["ShellSessionBody"];
+export type ShellPreference = components["schemas"]["ShellPreferenceBody"];
 export type ShellOpenRequest = components["schemas"]["ShellOpenBody"];
 
 // ShellOpenError is a shell the server would not open, with the problem type it
@@ -71,6 +72,36 @@ export async function openShell({
 export function useOpenShell() {
   return useMutation<ShellSession, ShellOpenError, OpenShellVariables>({
     mutationFn: openShell,
+    retry: false,
+  });
+}
+
+// The longest image reference the server remembers a choice for.
+const MAX_PREFERENCE_IMAGE = 512;
+
+// shellPreferenceKey is the cache key of the signed-in user's remembered choice for an
+// image, so a successful open can put the new choice there at once.
+export function shellPreferenceKey(image: string) {
+  return ["shell-preference", image] as const;
+}
+
+// useShellPreference reads how the signed-in user last opened a shell in a container of
+// this image (D-26), kept on the server so it follows them to another browser. It is
+// null when there is none (404), and not asked for without an image. A failure to read it
+// is not shown: the launcher then simply starts from its defaults.
+export function useShellPreference(image: string | undefined) {
+  const ref = image ?? "";
+  return useQuery<ShellPreference | null>({
+    queryKey: shellPreferenceKey(ref),
+    queryFn: async () => {
+      const { data, response } = await api.GET("/api/me/shell-preferences", {
+        params: { query: { image: ref } },
+      });
+      if (data) return data;
+      if (response.status === 404) return null;
+      throw new Error(`GET shell-preferences failed (${response.status})`);
+    },
+    enabled: ref !== "" && ref.length <= MAX_PREFERENCE_IMAGE,
     retry: false,
   });
 }

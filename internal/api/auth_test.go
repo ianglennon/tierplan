@@ -291,7 +291,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		}
 		api.RegisterShells(r, api.ShellsDeps{
 			Aggregator: f.agg, Registry: f.shellsReg, Audit: f.aud, Checker: checker, Instance: f.inst, SelfContainerID: f.envSvc.SelfContainerID(),
-			PendingTTL: f.shellsPending, Controls: f.shellsControls, Log: log,
+			PendingTTL: f.shellsPending, Controls: f.shellsControls, Store: f.st, Now: f.clk.now, Log: log,
 		})
 	}
 	if f.envSvc != nil && f.agg != nil && f.hub != nil {

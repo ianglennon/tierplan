@@ -219,3 +219,13 @@ type UserRecentEnvironment struct {
 	EnvID  string
 	UsedAt int64
 }
+
+type UserShellPref struct {
+	UserID     string
+	Image      string
+	Shell      string
+	Command    string
+	RunAs      string
+	WorkingDir string
+	UpdatedAt  int64
+}

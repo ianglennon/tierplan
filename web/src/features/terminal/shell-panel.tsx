@@ -2,17 +2,25 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ContainerRow } from "@/api/resources";
-import { ShellOpenError, shellSocketUrl, useOpenShell } from "@/api/shells";
-import { NeedsTooltip } from "@/components/needs-tooltip";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  ShellOpenError,
+  shellPreferenceKey,
+  shellSocketUrl,
+  useOpenShell,
+  useShellPreference,
+} from "@/api/shells";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
 import { IdleBanner } from "@/features/terminal/idle-banner";
 import { type Refusal, RefusalPanel } from "@/features/terminal/refusal-panels";
+import {
+  choiceOf,
+  DEFAULT_CHOICE,
+  type ShellChoice,
+  ShellLauncher,
+} from "@/features/terminal/shell-launcher";
 import { Terminal, type TerminalApi } from "@/features/terminal/terminal";
 import {
   createTerminalSocket,
@@ -32,6 +40,9 @@ export interface ShellPanelProps {
   name: string;
   // The node's display name, given only where it tells the person something (a swarm).
   node?: string;
+  // The image the container was created with, which the last shell choice is kept by;
+  // undefined until the container has loaded.
+  image?: string;
   // Whether the container runs; undefined until it has loaded.
   running?: boolean;
   // The container as the list knows it: whether it is one of Bayplan's own, whether its
@@ -106,6 +117,7 @@ export function ShellPanel({
   nodeId,
   name,
   node,
+  image,
   running,
   row,
   createSocket,
@@ -114,12 +126,17 @@ export function ShellPanel({
   const needs = useNeeds("containers.exec", envId);
   const open = useOpenShell();
   const queryClient = useQueryClient();
+  const preference = useShellPreference(image);
+  const remembered = useMemo(() => choiceOf(preference.data), [preference.data]);
   const [state, setState] = useState<PanelState>({ phase: "launcher" });
   const socket = useRef<TerminalSocket | null>(null);
   const terminal = useRef<TerminalApi | null>(null);
   // Output that arrived before the terminal was up.
   const held = useRef<Uint8Array[]>([]);
   const size = useRef<{ cols: number; rows: number }>({ ...START_SIZE });
+  // How the last session was asked for, so Reconnect shell and Start a new session open
+  // another one the same way.
+  const lastChoice = useRef<ShellChoice>(DEFAULT_CHOICE);
   const mounted = useRef(true);
   const again = useRef<HTMLButtonElement>(null);
   // The server warned that the shell closes in a minute; input or output dismisses it.
@@ -159,15 +176,16 @@ export function ShellPanel({
     }
   }, [phase]);
 
-  // command is the custom command the No shell panel asks for; without it the shell is
-  // the automatic one.
+  // choice is what the launcher asked for; without one the last choice is used again.
   const start = useCallback(
-    async (command?: string) => {
+    async (choice?: ShellChoice) => {
       if (!needs.allowed) return;
       drop();
       held.current = [];
       setWarned(false);
       setState({ phase: "opening" });
+      const asked = choice ?? lastChoice.current;
+      lastChoice.current = asked;
       let sessionId: string;
       try {
         const session = await open.mutateAsync({
@@ -175,12 +193,25 @@ export function ShellPanel({
           containerId,
           body: {
             nodeId,
-            ...(command ? { shell: "custom", command } : { shell: "auto" }),
+            shell: asked.shell,
+            ...(asked.shell === "custom" ? { command: asked.command } : {}),
+            ...(asked.user ? { user: asked.user } : {}),
+            ...(asked.workingDir ? { workingDir: asked.workingDir } : {}),
             cols: size.current.cols,
             rows: size.current.rows,
           },
         });
         sessionId = session.sessionId;
+        // The server remembers the choice for the next container of this image; the
+        // page's copy follows at once, so a second open here starts from it.
+        if (image) {
+          queryClient.setQueryData(shellPreferenceKey(image), {
+            shell: asked.shell,
+            command: asked.shell === "custom" ? asked.command : "",
+            user: asked.user,
+            workingDir: asked.workingDir,
+          });
+        }
       } catch (e) {
         if (mounted.current) {
           setState({ phase: "launcher", failure: e as ShellOpenError });
@@ -235,7 +266,7 @@ export function ShellPanel({
       socket.current = sock;
       setState({ phase: "connecting", sessionId });
     },
-    [needs.allowed, drop, open, queryClient, envId, containerId, nodeId, createSocket],
+    [needs.allowed, drop, open, queryClient, image, envId, containerId, nodeId, createSocket],
   );
 
   const register = useCallback((api: TerminalApi | null) => {
@@ -330,55 +361,21 @@ export function ShellPanel({
         envId={envId}
         row={row}
         opening={phase === "opening"}
-        onOpenCommand={(command) => void start(command)}
+        onOpen={(choice) => void start(choice)}
       />
     );
   }
 
-  const opening = phase === "opening";
   return (
-    <Card className="max-w-[480px]">
-      <CardHeader>
-        <CardTitle>
-          <h2>{t("terminal.launcher.heading", { name })}</h2>
-        </CardTitle>
-        <CardDescription>
-          {node ? t("terminal.launcher.bodyNode", { node }) : t("terminal.launcher.body")}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {failure?.type === "shell_limit_reached" && failure.limit ? (
-          <Alert variant="destructive">
-            <AlertDescription>
-              {t("terminal.refusal.limit", { count: failure.limit })}
-            </AlertDescription>
-          </Alert>
-        ) : failure ? (
-          <Alert variant="destructive">
-            <AlertDescription>{t(failureCopyKey(failure))}</AlertDescription>
-          </Alert>
-        ) : null}
-        <div>
-          <NeedsTooltip reason={needs.allowed ? undefined : needs.reason}>
-            <Button
-              type="button"
-              className="max-md:h-11"
-              disabled={opening}
-              aria-busy={opening}
-              onClick={() => void start()}
-            >
-              {opening ? (
-                <>
-                  <Spinner aria-hidden="true" />
-                  {t("terminal.launcher.opening")}
-                </>
-              ) : (
-                t("terminal.launcher.open")
-              )}
-            </Button>
-          </NeedsTooltip>
-        </div>
-      </CardContent>
-    </Card>
+    <ShellLauncher
+      envId={envId}
+      name={name}
+      node={node}
+      initial={remembered}
+      failure={failure}
+      failureCopyKey={failure ? failureCopyKey(failure) : undefined}
+      opening={phase === "opening"}
+      onOpen={(choice) => void start(choice)}
+    />
   );
 }

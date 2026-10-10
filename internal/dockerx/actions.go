@@ -101,6 +101,9 @@ type ContainerOwnership struct {
 	Labels  map[string]string
 	Running bool
 	Tty     bool
+	// Image is the image reference the container was created with (Config.Image), for
+	// example nginx:1.27. It is what a remembered shell choice is keyed by.
+	Image string
 	// StopTimeout is the container's own stop timeout in seconds, nil when it sets
 	// none (the engine then waits 10 s); StopSignal is its own stop signal, empty for
 	// SIGTERM. A stop deadline is derived from them (D-09).
@@ -121,6 +124,7 @@ func (c *Client) ContainerOwnership(ctx context.Context, id string) (ContainerOw
 			out.Labels[k] = v
 		}
 		out.Tty = insp.Config.Tty
+		out.Image = insp.Config.Image
 		out.StopTimeout = insp.Config.StopTimeout
 		out.StopSignal = insp.Config.StopSignal
 	}

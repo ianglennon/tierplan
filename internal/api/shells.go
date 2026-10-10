@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/shells"
+	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
@@ -87,6 +88,11 @@ type ShellsDeps struct {
 	// Instance says which origin the WebSocket may be opened from, and the idle limit
 	// and the per-person cap.
 	Instance ShellInstance
+	// Store keeps each user's last shell choice per image (D-26). Without one nothing is
+	// remembered and the preference route answers 503.
+	Store *store.Store
+	// Now stamps a remembered choice. Nil means time.Now.
+	Now func() time.Time
 	// PendingTTL is how long a session waits for its browser. Zero means 30 s.
 	PendingTTL time.Duration
 	// Controls tune the byte bridge; tests shorten them.
@@ -170,6 +176,8 @@ func RegisterShells(r *httpx.Router, d ShellsDeps) {
 	r.Guarded(http.MethodGet, "/api/env/{envId}/shell-sessions/{sessionId}/ws", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		serveShell(w, req, d)
 	}))
+
+	registerShellPreference(r, d)
 }
 
 // userKey is the identity a session is bound to: the kind of principal and its ID.
@@ -301,6 +309,9 @@ func openShell(ctx context.Context, d ShellsDeps, in *ShellOpenInput) (*ShellOpe
 		return nil, huma.Error500InternalServerError("internal error")
 	}
 	s.MarkOpened()
+	// How this person opened it is remembered for the next container of the image. A
+	// failure to save is logged and never fails an open that has already happened.
+	rememberShell(ctx, d, p, own.Image, image, b)
 	return &ShellOpenOutput{CacheControl: "no-store", Body: ShellSessionBody{
 		SessionID:  s.ID,
 		WSPath:     "/api/env/" + env.ID + "/shell-sessions/" + s.ID + "/ws",

@@ -26,6 +26,7 @@ function ContainerShellRoute() {
       nodeId={node ?? detail.data?.nodeId}
       name={detail.data?.name ?? containerId}
       node={isSwarm ? (detail.data?.node ?? undefined) : undefined}
+      image={detail.data?.image}
       running={detail.data ? detail.data.state === "running" : undefined}
       row={detail.data ? rowOf(detail.data) : undefined}
     />

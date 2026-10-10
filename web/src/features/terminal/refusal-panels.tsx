@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { type FormEvent, useEffect, useRef, useState } from "react";
-
 import type { ContainerRow } from "@/api/resources";
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { useImmediateAction } from "@/features/containers/row-actions";
+import { DEFAULT_CHOICE, type ShellChoice, ShellForm } from "@/features/terminal/shell-launcher";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -25,8 +22,8 @@ interface RefusalPanelProps {
   // The container, for the Start button of the Not running panel. Without it the panel
   // says what is wrong and offers nothing.
   row?: ContainerRow;
-  // Opens the shell with this command, for the No shell panel.
-  onOpenCommand: (command: string) => void;
+  // Opens the shell as chosen, for the No shell panel.
+  onOpen: (choice: ShellChoice) => void;
   // True while that open is under way.
   opening: boolean;
 }
@@ -79,31 +76,21 @@ function StartButton({ envId, row }: { envId: string; row: ContainerRow }) {
   );
 }
 
-// NoShell: the image has neither bash nor sh where Bayplan looks. The custom command
-// field is shown and focused, so a path to the image's own shell can be entered.
+// NoShell: the image has neither bash nor sh where Bayplan looks. The launcher's form is
+// shown with Custom command chosen and its field focused, so a path to the image's own
+// shell can be entered.
+const CUSTOM_CHOICE: ShellChoice = { ...DEFAULT_CHOICE, shell: "custom" };
+
 function NoShell({
   envId,
-  onOpenCommand,
+  onOpen,
   opening,
 }: {
   envId: string;
-  onOpenCommand: (command: string) => void;
+  onOpen: (choice: ShellChoice) => void;
   opening: boolean;
 }) {
   const t = useT();
-  const needs = useNeeds("containers.exec", envId);
-  const [command, setCommand] = useState("");
-  const field = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    field.current?.focus();
-  }, []);
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    const words = command.trim();
-    if (needs.allowed && words !== "") onOpenCommand(words);
-  }
-
   return (
     <Card className="max-w-[480px]">
       <CardHeader>
@@ -113,48 +100,13 @@ function NoShell({
         <CardDescription>{t("terminal.refusal.noShell.body")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <form noValidate onSubmit={submit} className="flex flex-col gap-3">
-          <Field>
-            <FieldLabel htmlFor="shell-custom-command">
-              {t("terminal.refusal.noShell.command.label")}
-            </FieldLabel>
-            <Input
-              id="shell-custom-command"
-              ref={field}
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              className="h-11 font-mono md:h-8"
-              autoComplete="off"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              maxLength={4096}
-              aria-describedby="shell-custom-command-helper"
-            />
-            <FieldDescription id="shell-custom-command-helper">
-              {t("terminal.refusal.noShell.command.helper")}
-            </FieldDescription>
-          </Field>
-          <div>
-            <NeedsTooltip reason={needs.allowed ? undefined : needs.reason}>
-              <Button
-                type="submit"
-                className="max-md:h-11"
-                disabled={opening || command.trim() === ""}
-                aria-busy={opening}
-              >
-                {opening ? (
-                  <>
-                    <Spinner aria-hidden="true" />
-                    {t("terminal.launcher.opening")}
-                  </>
-                ) : (
-                  t("terminal.refusal.noShell.open")
-                )}
-              </Button>
-            </NeedsTooltip>
-          </div>
-        </form>
+        <ShellForm
+          envId={envId}
+          initial={CUSTOM_CHOICE}
+          focusCommand
+          opening={opening}
+          onOpen={onOpen}
+        />
       </CardContent>
     </Card>
   );
@@ -163,13 +115,13 @@ function NoShell({
 // RefusalPanel is the panel of one reason a shell cannot be opened: not running (with
 // Start container), no shell found (with the custom command field), a read-only host, one
 // of Bayplan's own containers, or an agent too old to run an exec.
-export function RefusalPanel({ kind, envId, row, onOpenCommand, opening }: RefusalPanelProps) {
+export function RefusalPanel({ kind, envId, row, onOpen, opening }: RefusalPanelProps) {
   const t = useT();
   switch (kind) {
     case "notRunning":
       return <NotRunning envId={envId} row={row} />;
     case "noShell":
-      return <NoShell envId={envId} onOpenCommand={onOpenCommand} opening={opening} />;
+      return <NoShell envId={envId} onOpen={onOpen} opening={opening} />;
     case "agentTooOld":
       return <AgentUpdateNotice envId={envId} />;
     case "readOnly":
