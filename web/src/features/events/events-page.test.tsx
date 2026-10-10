@@ -17,11 +17,13 @@ import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
+// A higher id is a second newer, so the order of events never rests on the clock
+// ticking between two calls.
 function ev(id: string, over: Partial<EventDTO> = {}): EventDTO {
   return {
     id,
     node: "node-1",
-    time: new Date(Date.now() - 60_000).toISOString(),
+    time: new Date(Date.now() - 60_000 + (Number.parseInt(id, 10) || 0) * 1000).toISOString(),
     type: "container",
     action: "start",
     actorId: `0123456789abcdef-${id}`,
