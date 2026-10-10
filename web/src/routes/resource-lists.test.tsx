@@ -118,23 +118,42 @@ const IMAGES = {
 
 const VOLUMES = { items: [{ name: "pgdata", driver: "local" }], total: 1, truncated: false };
 
+// What every network row carries besides its columns' own values (plan 04-13).
+const NO_USE = {
+  builtIn: false,
+  attachedContainers: 0,
+  attachedServices: 0,
+  owner: "",
+  ownerKind: "",
+  internal: false,
+  attachable: false,
+  ipv6: false,
+};
+
 const NETWORKS = {
   items: [
     {
+      ...NO_USE,
       id: "n1",
       name: "bridge",
       driver: "bridge",
       scope: "local",
       subnets: ["172.17.0.0/16"],
       created: ago(10 * 86_400_000),
+      builtIn: true,
+      attachedContainers: 2,
+      owner: "shop",
+      ownerKind: "stack",
     },
     {
+      ...NO_USE,
       id: "n2",
       name: "host",
       driver: "host",
       scope: "local",
       subnets: [],
       created: ago(10 * 86_400_000),
+      builtIn: true,
     },
   ],
   total: 2,
@@ -413,17 +432,34 @@ describe("volumes list", () => {
 });
 
 describe("networks list", () => {
-  it("shows Name, Driver, Scope, Subnet and Created, with a dash for no subnet", async () => {
+  it("shows Name to Created, with a dash for no subnet or owner and None when nothing is attached", async () => {
     renderAt("/env/e1/networks");
     await screen.findByText("172.17.0.0/16");
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
-    expect(headers).toEqual(["Name", "Driver", "Scope", "Subnet", "Created"]);
+    expect(headers).toEqual([
+      "Name",
+      "Driver",
+      "Scope",
+      "Subnet",
+      "Attached",
+      "Owner",
+      "Created",
+      "Actions",
+    ]);
     const rows = screen.getAllByRole("row").slice(1);
     const bridge = cellsOf(rows[0] as HTMLElement);
-    expect(bridge.slice(0, 4)).toEqual(["bridge", "bridge", "local", "172.17.0.0/16"]);
+    expect(bridge.slice(0, 6)).toEqual([
+      "bridge",
+      "bridge",
+      "Local",
+      "172.17.0.0/16",
+      "2 containers",
+      "shop",
+    ]);
     // Ten days old: an absolute date, not "10 d ago" (D-66).
-    expect(bridge[4]).toMatch(/2026/);
-    expect(cellsOf(rows[1] as HTMLElement)[3]).toBe("—");
+    expect(bridge[6]).toMatch(/2026/);
+    const host = cellsOf(rows[1] as HTMLElement);
+    expect(host.slice(3, 6)).toEqual(["—", "None", "—"]);
   });
 });
 
@@ -659,6 +695,7 @@ describe("swarm lists", () => {
       Response.json({
         items: [
           {
+            ...NO_USE,
             id: "n1",
             name: "ingress",
             node: "Cluster",
@@ -668,6 +705,7 @@ describe("swarm lists", () => {
             created: ago(86_400_000 * 10),
           },
           {
+            ...NO_USE,
             id: "n2",
             name: "bridge",
             node: "n1",
@@ -685,7 +723,17 @@ describe("swarm lists", () => {
     renderAt("/env/e1/networks");
     await screen.findByText("ingress");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(headers).toEqual(["Name", "Node", "Driver", "Scope", "Subnet", "Created"]);
+    expect(headers).toEqual([
+      "Name",
+      "Node",
+      "Driver",
+      "Scope",
+      "Subnet",
+      "Attached",
+      "Owner",
+      "Created",
+      "Actions",
+    ]);
     const rows = screen.getAllByRole("row").slice(1);
     expect(cellsOf(rows[0] as HTMLElement).slice(0, 2)).toEqual(["ingress", "Cluster"]);
     expect(cellsOf(rows[1] as HTMLElement).slice(0, 2)).toEqual(["bridge", "n1"]);
@@ -810,6 +858,7 @@ describe("swarm lists", () => {
     answers["/api/env/e1/networks"] = () =>
       Response.json({
         items: ["n1", "n2"].map((node) => ({
+          ...NO_USE,
           id: "b1",
           name: "bridge",
           node,
