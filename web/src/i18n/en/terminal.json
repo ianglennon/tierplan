@@ -77,6 +77,37 @@
       },
       "limit_one": "You already have {{count}} shell open, which is the most allowed. Close one to open another.",
       "limit_other": "You already have {{count}} shells open, which is the most allowed. Close one to open another."
+    },
+    "toolbar": {
+      "label": "Terminal controls",
+      "fontSize": "Font size",
+      "search": "Search",
+      "openWindow": "Open in new window",
+      "end": "End session",
+      "summary": "{{shell}} as {{user}} in {{directory}}",
+      "auto": "bash or sh",
+      "defaultUser": "default user",
+      "defaultDirectory": "default directory"
+    },
+    "keyboard": {
+      "trigger": "Keyboard",
+      "copy": "Copy",
+      "paste": "Paste",
+      "search": "Search",
+      "leave": "Leave the terminal",
+      "copyOnSelect": "Copy on select is off.",
+      "screenReader": "Screen reader support"
+    },
+    "search": {
+      "label": "Search the terminal",
+      "placeholder": "Search",
+      "previous": "Previous match",
+      "next": "Next match",
+      "close": "Close search",
+      "noMatch": "No matches"
+    },
+    "popout": {
+      "title": "{{name}} shell"
     }
   }
 }

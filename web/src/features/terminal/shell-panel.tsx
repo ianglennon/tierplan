@@ -28,8 +28,14 @@ import {
   type TerminalSocket,
   type WebSocketLike,
 } from "@/features/terminal/terminal-socket";
+import {
+  TerminalToolbar,
+  type TerminalToolbarHandle,
+  useTerminalPrefs,
+} from "@/features/terminal/terminal-toolbar";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
+import { withBase } from "@/lib/base-path";
 
 export interface ShellPanelProps {
   envId: string;
@@ -49,8 +55,31 @@ export interface ShellPanelProps {
   // host is read-only, and what the Not running panel starts. Undefined until it has
   // loaded.
   row?: ContainerRow;
+  // True in the pop-out window, which has the whole window to itself: the terminal is
+  // taller and there is no Open in new window.
+  popout?: boolean;
   // The real WebSocket unless a test supplies one.
   createSocket?: (url: string) => WebSocketLike;
+}
+
+// popoutShellUrl is the address of the shell pop-out for a container, under the base
+// path. A node ID that would read as a number, a boolean or JSON is quoted, since the
+// router parses every search value as JSON first (as the logs pop-out's address does).
+export function popoutShellUrl(envId: string, containerId: string, nodeId?: string): string {
+  let query = "";
+  if (nodeId) {
+    let node = nodeId;
+    try {
+      JSON.parse(nodeId);
+      node = JSON.stringify(nodeId);
+    } catch {
+      // Not JSON: it is a plain string as it is.
+    }
+    query = `?${new URLSearchParams({ node }).toString()}`;
+  }
+  return withBase(
+    `/popout/${encodeURIComponent(envId)}/containers/${encodeURIComponent(containerId)}/shell${query}`,
+  );
 }
 
 // Where the shell is. "ended" is a process that exited, "closed" a session the server
@@ -69,6 +98,9 @@ interface PanelState {
   phase: Phase;
   // The session the terminal belongs to; a new session is a new terminal.
   sessionId?: string;
+  // What runs in it, for the toolbar's summary: the shell asked for, and the user and
+  // working directory the server started it with (empty means the container's own).
+  ran?: { shell: string; user: string; workingDir: string };
   exitCode?: number;
   // Why the server closed the session, and for idle the limit it was closed at.
   closed?: { reason: string; minutes?: number };
@@ -120,6 +152,7 @@ export function ShellPanel({
   image,
   running,
   row,
+  popout = false,
   createSocket,
 }: ShellPanelProps) {
   const t = useT();
@@ -131,6 +164,8 @@ export function ShellPanel({
   const [state, setState] = useState<PanelState>({ phase: "launcher" });
   const socket = useRef<TerminalSocket | null>(null);
   const terminal = useRef<TerminalApi | null>(null);
+  const toolbar = useRef<TerminalToolbarHandle>(null);
+  const prefs = useTerminalPrefs();
   // Output that arrived before the terminal was up.
   const held = useRef<Uint8Array[]>([]);
   const size = useRef<{ cols: number; rows: number }>({ ...START_SIZE });
@@ -187,6 +222,7 @@ export function ShellPanel({
       const asked = choice ?? lastChoice.current;
       lastChoice.current = asked;
       let sessionId: string;
+      let ran: PanelState["ran"];
       try {
         const session = await open.mutateAsync({
           envId,
@@ -202,6 +238,11 @@ export function ShellPanel({
           },
         });
         sessionId = session.sessionId;
+        ran = {
+          shell: asked.shell === "custom" ? asked.command : asked.shell,
+          user: session.user,
+          workingDir: session.workingDir,
+        };
         // The server remembers the choice for the next container of this image; the
         // page's copy follows at once, so a second open here starts from it.
         if (image) {
@@ -264,10 +305,27 @@ export function ShellPanel({
         },
       });
       socket.current = sock;
-      setState({ phase: "connecting", sessionId });
+      setState({ phase: "connecting", sessionId, ran });
     },
     [needs.allowed, drop, open, queryClient, image, envId, containerId, nodeId, createSocket],
   );
+
+  // End session closes the socket, which ends the exec on the server (D-30), and goes
+  // back to the launcher, which starts from the choice just used.
+  const endSession = useCallback(() => {
+    drop();
+    held.current = [];
+    setWarned(false);
+    setState({ phase: "launcher" });
+  }, [drop]);
+
+  const openWindow = useCallback(() => {
+    window.open(
+      popoutShellUrl(envId, containerId, nodeId),
+      "_blank",
+      "popup,noopener,width=1100,height=760",
+    );
+  }, [envId, containerId, nodeId]);
 
   const register = useCallback((api: TerminalApi | null) => {
     terminal.current = api;
@@ -294,24 +352,44 @@ export function ShellPanel({
 
   if (hasTerminal && state.sessionId) {
     const over = phase === "ended" || phase === "closed" || phase === "disconnected";
+    const ran = state.ran;
+    const summary = t("terminal.toolbar.summary", {
+      shell: ran?.shell === "auto" ? t("terminal.toolbar.auto") : (ran?.shell ?? ""),
+      user: ran?.user || t("terminal.toolbar.defaultUser"),
+      directory: ran?.workingDir || t("terminal.toolbar.defaultDirectory"),
+    });
     return (
       <div className="flex flex-col gap-3">
-        <div className="relative h-[calc(100svh-20rem)] min-h-80">
+        <TerminalToolbar
+          ref={toolbar}
+          live={!over}
+          connected={phase === "connected"}
+          summary={summary}
+          fontSize={prefs.fontSize}
+          onFontSizeChange={prefs.setFontSize}
+          screenReader={prefs.screenReader}
+          onScreenReaderChange={prefs.setScreenReader}
+          onSearch={() => terminal.current?.openSearch()}
+          onOpenWindow={popout ? undefined : openWindow}
+          onEnd={endSession}
+        />
+        <div
+          className={`relative min-h-80 ${popout ? "h-[calc(100svh-16rem)]" : "h-[calc(100svh-20rem)]"}`}
+        >
           {warned && !over ? <IdleBanner /> : null}
           <Terminal
             key={state.sessionId}
             name={name}
             readOnly={over}
+            fontSize={prefs.fontSize}
+            screenReader={prefs.screenReader}
             onInput={onInput}
             onResize={onResize}
+            onLeave={() => toolbar.current?.focusFirst()}
             register={register}
           />
         </div>
-        {phase === "connecting" || phase === "connected" ? (
-          <output className="text-xs text-muted-foreground">
-            {t(phase === "connected" ? "terminal.status.connected" : "terminal.status.connecting")}
-          </output>
-        ) : (
+        {over ? (
           <div className="flex flex-wrap items-center gap-3">
             <output className="flex min-w-0 flex-col gap-0.5 text-sm">
               {phase === "ended" ? (
@@ -341,7 +419,7 @@ export function ShellPanel({
                 : t("terminal.disconnected.reconnect")}
             </Button>
           </div>
-        )}
+        ) : null}
       </div>
     );
   }
