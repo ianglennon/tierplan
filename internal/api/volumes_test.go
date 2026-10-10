@@ -1232,3 +1232,83 @@ func TestSwarmVolumeDetailNeedsTheNodeAndNamesTheServicesWhoseSpecMountsItEvenWi
 		t.Errorf("the worker: %d %q, want 404 volume_not_found", rec.code, rec.ptyp)
 	}
 }
+
+// The Inspect tab: the engine's own document of the volume, with the option values
+// withheld from callers who may not see secrets (plan 04-18 task 3, D-47, T-04-59).
+
+type volumeInspect struct {
+	Masked  bool           `json:"masked"`
+	Inspect map[string]any `json:"inspect"`
+}
+
+func TestVolumeInspectAViewerGetsTheDocumentWithEveryOptionValueReplacedAndMaskedSaysSo(t *testing.T) {
+	f, e := dashEnv(t, volumeDetailEngine())
+	get := f.asRole(t, e, "inspect-viewer", "viewer")
+	rec := get("volumes/share/inspect")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inspect: %d %s", rec.Code, rec.Body)
+	}
+	for _, leak := range []string{shareSecret, "10.0.0.9", "cifs"} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Fatalf("a viewer's inspect carries %q: %s", leak, rec.Body)
+		}
+	}
+	var got volumeInspect
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Masked || got.Inspect["Name"] != "share" || got.Inspect["Driver"] != "local" {
+		t.Fatalf("inspect = %+v, want masked, with the rest of the document", got)
+	}
+	opts, _ := got.Inspect["Options"].(map[string]any)
+	if len(opts) != 3 || opts["type"] != "<hidden>" || opts["device"] != "<hidden>" || opts["o"] != "<hidden>" {
+		t.Errorf("Options = %v, want every value <hidden> and the names kept", opts)
+	}
+}
+
+func TestVolumeInspectAHolderOfSecretsRevealGetsTheDocumentAsTheEngineSentIt(t *testing.T) {
+	f, e := dashEnv(t, volumeDetailEngine())
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	got := decode[volumeInspect](t, f.get(t, e, "volumes/share/inspect"))
+	if got.Masked {
+		t.Error("masked = true for an instance admin")
+	}
+	opts, _ := got.Inspect["Options"].(map[string]any)
+	if opts["type"] != "cifs" || !strings.Contains(opts["o"].(string), shareSecret) {
+		t.Errorf("Options = %v, want the real values", opts)
+	}
+}
+
+func TestVolumeInspectAVolumeWithNoOptionsIsNotMasked(t *testing.T) {
+	f, e := dashEnv(t, volumeDetailEngine())
+	get := f.asRole(t, e, "inspect-viewer2", "viewer")
+	rec := get("volumes/appdata/inspect")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inspect: %d %s", rec.Code, rec.Body)
+	}
+	var got volumeInspect
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Masked || got.Inspect["Name"] != "appdata" {
+		t.Errorf("inspect = %+v, want the document and nothing masked", got)
+	}
+}
+
+func TestVolumeInspectUsesTheDetailRoutesRulesForTheNodeAndForAVolumeThatIsNotThere(t *testing.T) {
+	f, e := dashEnv(t, volumeDetailEngine())
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	if rec := f.get(t, e, "volumes/ghost/inspect"); rec.code != http.StatusNotFound || rec.ptyp != "volume_not_found" {
+		t.Errorf("unknown volume: %d %q, want 404 volume_not_found: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if rec := f.get(t, e, "volumes/appdata/inspect?nodeId=nobody"); rec.code != http.StatusServiceUnavailable || rec.ptyp != "node_unavailable" {
+		t.Errorf("unknown node: %d %q, want 503 node_unavailable", rec.code, rec.ptyp)
+	}
+	s := newSwarmFix(t)
+	if rec := s.get(t, s.env.ID, "volumes/data/inspect"); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "node_required" {
+		t.Errorf("swarm without a node: %d %q, want 422 node_required", rec.code, rec.ptyp)
+	}
+	if rec := s.get(t, s.env.ID, "volumes/data/inspect?nodeId="+s.m1.id); rec.code != http.StatusOK {
+		t.Errorf("swarm with a node: %d %s", rec.code, rec.body)
+	}
+}
