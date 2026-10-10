@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/network"
@@ -163,4 +164,75 @@ func IsNetworkInUse(err error) bool {
 		return false
 	}
 	return strings.Contains(msg, "active endpoints") || strings.Contains(msg, "is in use by")
+}
+
+// IPAMRow is one address pool of a network: the subnet, the gateway and the range
+// containers are given addresses from. A part the network does not set is empty.
+type IPAMRow struct {
+	Subnet, Gateway, IPRange string
+}
+
+// NetworkService is a swarm service on a swarm-scoped network, with the number of its
+// tasks that have an endpoint on it.
+type NetworkService struct {
+	Name  string
+	Tasks int
+}
+
+// NetworkDetail is one network as its detail page shows it. Which containers are
+// attached is not here: the lists of every node say that, with the addresses.
+type NetworkDetail struct {
+	ID, Name, Driver, Scope string
+	Internal, Attachable    bool
+	IPv6, Ingress           bool
+	Created                 time.Time
+	// Labels and Options are never nil.
+	Labels, Options map[string]string
+	// IPAM is the network's address pools, in the engine's order. Never nil.
+	IPAM []IPAMRow
+	// Services are the services on the network by name, filled only when verbose was
+	// asked for and the engine answered with them (a swarm-scoped network, read on a
+	// manager). Never nil.
+	Services []NetworkService
+}
+
+// NetworkDetail inspects one network and returns the typed detail and the raw
+// document, for the Inspect tab. verbose asks a manager for the services on a
+// swarm-scoped network too; a local network ignores it.
+func (c *Client) NetworkDetail(ctx context.Context, id string, verbose bool) (NetworkDetail, []byte, error) {
+	res, err := c.cur().NetworkInspect(ctx, id, client.NetworkInspectOptions{Verbose: verbose})
+	if err != nil {
+		return NetworkDetail{}, nil, fmt.Errorf("inspect network on %s: %w", c.t.Describe(), err)
+	}
+	in := res.Network
+	d := NetworkDetail{
+		ID: in.ID, Name: in.Name, Driver: in.Driver, Scope: in.Scope,
+		Internal: in.Internal, Attachable: in.Attachable, IPv6: in.EnableIPv6, Ingress: in.Ingress,
+		Created: in.Created, Labels: map[string]string{}, Options: map[string]string{},
+		IPAM: []IPAMRow{}, Services: []NetworkService{},
+	}
+	for k, v := range in.Labels {
+		d.Labels[k] = v
+	}
+	for k, v := range in.Options {
+		d.Options[k] = v
+	}
+	for _, cfg := range in.IPAM.Config {
+		var row IPAMRow
+		if cfg.Subnet.IsValid() {
+			row.Subnet = cfg.Subnet.String()
+		}
+		if cfg.Gateway.IsValid() {
+			row.Gateway = cfg.Gateway.String()
+		}
+		if cfg.IPRange.IsValid() {
+			row.IPRange = cfg.IPRange.String()
+		}
+		d.IPAM = append(d.IPAM, row)
+	}
+	for name, svc := range in.Services {
+		d.Services = append(d.Services, NetworkService{Name: name, Tasks: len(svc.Tasks)})
+	}
+	slices.SortFunc(d.Services, func(a, b NetworkService) int { return strings.Compare(a.Name, b.Name) })
+	return d, res.Raw, nil
 }

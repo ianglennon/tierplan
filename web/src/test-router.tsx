@@ -19,6 +19,7 @@ export function TestRouter({ children }: { children: ReactNode }) {
     const root = createRootRoute();
     const tree = root.addChildren([
       createRoute({ getParentRoute: () => root, path: "/env/$envId/containers/$containerId" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/networks/$networkId" }),
     ]);
     return createRouter({
       routeTree: tree,

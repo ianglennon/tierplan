@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { type QueryClient, useMutation, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
+import { DETAIL_REFETCH_MS, detailRetry } from "@/api/container-detail";
 import { readProblem } from "@/api/problem";
 import { listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
@@ -107,5 +108,56 @@ export function useDeleteNetwork(envId: string) {
     mutationFn: (target) => removeNetwork(envId, target),
     retry: false,
     onSettled: () => refreshLists(queryClient, envId),
+  });
+}
+
+export type NetworkDetail = components["schemas"]["NetworkDetailBody"];
+export type NetworkAttachment = components["schemas"]["NetworkAttachmentBody"];
+
+// NetworkLoadError is a detail read the server refused or could not answer. The
+// status and the problem type tell a network that no longer exists (404
+// network_not_found) from every other failure.
+export class NetworkLoadError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`GET network failed (${status})`);
+    this.name = "NetworkLoadError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// isNetworkGone says whether the error is the server answering that the network
+// does not exist: it was removed, or a deploy replaced it.
+export function isNetworkGone(error: unknown): boolean {
+  return (
+    error instanceof NetworkLoadError && error.status === 404 && error.type === "network_not_found"
+  );
+}
+
+// The key of one network's detail. It extends the networks list key, so the events
+// feed and every write, which refresh that key, refresh an open detail page too.
+export function networkDetailKey(envId: string, id: string, nodeId: string | undefined) {
+  return [...listKey(envId, "networks"), "detail", nodeId ?? "", id] as const;
+}
+
+// One network, with what is attached to it. nodeId names the node of a local network.
+export function networkDetailQuery(envId: string, id: string, nodeId?: string) {
+  return queryOptions({
+    queryKey: networkDetailKey(envId, id, nodeId),
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/networks/{networkId}", {
+        params: { path: { envId, networkId: id }, query: nodeId ? { nodeId } : undefined },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new NetworkLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    // A network that does not exist will not exist on a second try.
+    retry: (count, error) => !isNetworkGone(error) && count < detailRetry.attempts,
+    refetchInterval: DETAIL_REFETCH_MS,
   });
 }

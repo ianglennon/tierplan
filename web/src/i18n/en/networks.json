@@ -123,6 +123,56 @@
       "rangeOutside": "The IP range must be inside the subnet.",
       "attachableOverlayOnly": "Only an overlay network on a swarm can be attachable.",
       "overlayNeedsSwarm": "An overlay network needs a swarm. This environment isn't one."
+    },
+    "detail": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "networks": "Networks"
+      },
+      "tabs": {
+        "label": "Network sections",
+        "overview": "Overview",
+        "attachments": "Attachments",
+        "inspect": "Inspect"
+      },
+      "owner": {
+        "stack": "Stack {{name}}",
+        "project": "Project {{name}}"
+      },
+      "error": {
+        "loadFailed": "Couldn't load {{name}}. Docker may be unreachable. Try again.",
+        "retry": "Retry"
+      },
+      "gone": {
+        "heading": "This network is gone",
+        "body": "It was removed, or a deploy replaced it. Go back to the list to find it.",
+        "back": "Back to networks"
+      },
+      "open": "Open",
+      "openLabel": "Open network {{name}}",
+      "missing": "—",
+      "attachments": {
+        "title": "Attachments",
+        "columns": {
+          "name": "Name",
+          "type": "Type",
+          "node": "Node",
+          "ipv4": "IPv4",
+          "ipv6": "IPv6",
+          "mac": "MAC",
+          "aliases": "Aliases"
+        },
+        "type": {
+          "container": "Container",
+          "service": "Service"
+        },
+        "service": "Service {{name}}",
+        "tasks_one": "{{count, number}} task",
+        "tasks_other": "{{count, number}} tasks",
+        "empty": "Nothing is attached to this network.",
+        "truncated": "Aliases are shown for the first {{count, number}} containers only.",
+        "loading": "Loading the attachments"
+      }
     }
   }
 }

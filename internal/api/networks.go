@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -90,6 +92,80 @@ type NetworkDeleteInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
+// NetworkDetailInput is the path and query of the network detail and inspect routes.
+type NetworkDetailInput struct {
+	EnvironmentPathInput
+	NetworkID string `path:"networkId" maxLength:"128" doc:"The network ID: the id of a row of the networks list"`
+	NodeID    string `query:"nodeId" maxLength:"128" doc:"The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster"`
+}
+
+// NetworkIPAMBody is one address pool of a network.
+type NetworkIPAMBody struct {
+	Subnet  string `json:"subnet" doc:"The subnet in CIDR notation"`
+	Gateway string `json:"gateway" doc:"The gateway address; empty when the network sets none"`
+	IPRange string `json:"ipRange" doc:"The range containers are given addresses from, in CIDR notation; empty when the network sets none"`
+}
+
+// NetworkAttachmentBody is one thing attached to a network: a container on a node, or a
+// swarm service whose spec mentions the network.
+type NetworkAttachmentBody struct {
+	Kind    string   `json:"kind" enum:"container,service" doc:"container, or service for a swarm service whose spec mentions the network"`
+	ID      string   `json:"id" doc:"The container ID; for a service, its ID when the cluster read has it, else empty"`
+	Name    string   `json:"name" doc:"The container or service name"`
+	Node    string   `json:"node" doc:"The display name of the node a container is on; empty for a service"`
+	NodeID  string   `json:"nodeId" doc:"The ID of the node a container is on: what a write is routed by; empty for a service"`
+	State   string   `json:"state" doc:"The container state; empty for a service"`
+	IPv4    string   `json:"ipv4" doc:"The container's IPv4 address on this network; empty when it has none"`
+	IPv6    string   `json:"ipv6" doc:"The container's IPv6 address on this network; empty when it has none"`
+	MAC     string   `json:"mac" doc:"The container's MAC address on this network; empty when it has none"`
+	Aliases []string `json:"aliases" nullable:"true" doc:"The DNS names the container answers to on this network, from an inspect of the container. Null for a service, for a container whose inspect failed, and for a container past the 50th (see aliasesTruncated)"`
+	Tasks   int      `json:"tasks" doc:"For a service, how many of its tasks have an endpoint on the network, as the manager reports it; 0 for a container and when not known"`
+}
+
+// NetworkDetailBody is one network as its detail page shows it.
+type NetworkDetailBody struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Driver     string `json:"driver"`
+	Scope      string `json:"scope" doc:"local, or swarm for a cluster-wide network"`
+	Node       string `json:"node" doc:"The node the network is local to, or Cluster for a swarm-wide network"`
+	NodeID     string `json:"nodeId" doc:"The ID of the node the network was read from; for a swarm-wide network, the manager in use"`
+	Created    string `json:"created,omitempty" format:"date-time"`
+	Internal   bool   `json:"internal" doc:"No access to outside networks"`
+	Attachable bool   `json:"attachable" doc:"Standalone containers can join it"`
+	IPv6       bool   `json:"ipv6" doc:"IPv6 is enabled"`
+	BuiltIn    bool   `json:"builtIn" doc:"True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted"`
+
+	Owner     string            `json:"owner" doc:"The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; empty when the network has neither"`
+	OwnerKind string            `json:"ownerKind" enum:"stack,project," doc:"stack, project, or empty when the network has no owner"`
+	Labels    map[string]string `json:"labels" doc:"Every label of the network"`
+	Options   map[string]string `json:"options" doc:"The driver options the network was created with"`
+	IPAM      []NetworkIPAMBody `json:"ipam" doc:"The address pools, in the engine's order; empty when the network has none"`
+
+	Attachments        []NetworkAttachmentBody `json:"attachments" doc:"Every container on every reporting node that is attached to the network (a local network: its own node's) and, on a swarm, every service whose spec mentions it. Sorted by name, then node"`
+	AttachedContainers int                     `json:"attachedContainers" doc:"How many attachments are containers"`
+	AttachedServices   int                     `json:"attachedServices" doc:"How many attachments are services"`
+	AliasesTruncated   bool                    `json:"aliasesTruncated" doc:"True when more than 50 containers are attached, so only the first 50 (in the order above) were inspected for their aliases and the rest have aliases null"`
+	NotReporting       []string                `json:"notReporting" doc:"Nodes that should have answered and did not, so the attachments may be incomplete"`
+}
+
+// NetworkDetailOutput wraps NetworkDetailBody for huma.
+type NetworkDetailOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         NetworkDetailBody
+}
+
+// NetworkInspectBody is the raw inspect document of one network.
+type NetworkInspectBody struct {
+	Inspect map[string]any `json:"inspect" doc:"The engine's inspect document of the network as it is; verbose, with the services, for a swarm-scoped network read on a manager"`
+}
+
+// NetworkInspectOutput wraps NetworkInspectBody for huma.
+type NetworkInspectOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         NetworkInspectBody
+}
+
 // NetworkCreateOutput wraps NetworkCreateBody for huma.
 type NetworkCreateOutput struct {
 	CacheControl string `header:"Cache-Control"`
@@ -120,6 +196,55 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
 			return createNetwork(ctx, d, p, env.ID, in)
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getNetwork", Method: http.MethodGet, Path: "/api/env/{envId}/networks/{networkId}",
+		Summary: "One network: its configuration and what is attached to it",
+		Description: "Everything the network detail page shows: driver, scope, addressing, flags, owner, options, labels, and every attachment. " +
+			"Attachments are the containers, running or not, on every node that answered (a local network: its own node, named by nodeId), each with its node, addresses and aliases, " +
+			"and on a swarm every service whose spec mentions the network, even with no running task. Sorted by name, then node. " +
+			"Aliases come from an inspect of the attached containers, at most 50 of them (4 at once per node); the rest have aliases null and aliasesTruncated is true. " +
+			"A local-scope network on a swarm is named by nodeId (422 node_required when two nodes have one with that ID). " +
+			"404 network_not_found when the network is not there; 409 node_unreachable when it is missing and a node did not answer; 503 node_unavailable when its node is not connected. " +
+			"Needs networks.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermNetworksRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *NetworkDetailInput) (*NetworkDetailOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := getNetwork(ctx, d, env.ID, in)
+			if err != nil {
+				return nil, err
+			}
+			return &NetworkDetailOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "inspectNetwork", Method: http.MethodGet, Path: "/api/env/{envId}/networks/{networkId}/inspect",
+		Summary: "One network's raw inspect document",
+		Description: "The engine's inspect document of the network as it is, for the Inspect tab: verbose for a swarm-scoped network read on a manager, so the services are in it. " +
+			"The network is named as the detail route names it, with the same rules and problems (422 node_required, 404 network_not_found, 409 node_unreachable, 503 node_unavailable). " +
+			"Needs networks.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermNetworksRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *NetworkDetailInput) (*NetworkInspectOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			_, _, _, raw, err := d.readNetwork(ctx, env.ID, in)
+			if err != nil {
+				return nil, err
+			}
+			doc, err := decodeInspect(raw)
+			if err != nil {
+				d.Log.Error("reading a network inspect failed", "environment", env.ID, "error", err)
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			return &NetworkInspectOutput{CacheControl: "no-store", Body: NetworkInspectBody{Inspect: doc}}, nil
 		})
 
 	httpx.Register(r, huma.Operation{
@@ -568,4 +693,189 @@ func joinMore(items []string, limit int) string {
 		return strings.Join(items, ", ")
 	}
 	return strings.Join(items[:limit], ", ") + " and " + strconv.Itoa(len(items)-limit) + " more"
+}
+
+// maxAliasInspects is how many attached containers are inspected for their aliases; the
+// list names the rest without them (T-04-51).
+const maxAliasInspects = 50
+
+// readNetwork finds the network in the environment and reads it live from the engine it
+// belongs to: a local network from its own node, a swarm-scoped one from the manager the
+// environment's read used, verbose so the services on it are in the answer. It returns the
+// typed detail and the raw document. The errors are already problems.
+func (d NetworksDeps) readNetwork(ctx context.Context, envID string, in *NetworkDetailInput) (agg envs.Aggregate, row envs.NetworkRow, detail dockerx.NetworkDetail, raw []byte, err error) {
+	agg, _, err = d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return agg, row, detail, nil, snapshotProblem(d.Log, envID, err)
+	}
+	row, err = findNetwork(agg, in.NetworkID, in.NodeID)
+	if err != nil {
+		if !errors.Is(err, errNoSuchNetwork) {
+			return agg, row, detail, nil, err
+		}
+		// A node that did not answer may be the one that holds it: it is not gone then,
+		// it is out of reach.
+		if len(agg.NotReporting) > 0 {
+			return agg, row, detail, nil, httpx.Problem(http.StatusConflict, problemNodeUnreachable,
+				"Can't find this network: "+joinMore(agg.NotReporting, 3)+" didn't answer. Try again when it's back.")
+		}
+		return agg, row, detail, nil, httpx.Problem(http.StatusNotFound, problemNetworkNotFound, "This network does not exist. It may have been removed.")
+	}
+	verbose := row.Scope == dockerx.ScopeSwarm && agg.Target.Probe.Type == dockerx.TypeSwarmManager
+	readCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
+	err = d.Aggregator.OnNode(readCtx, envID, row.NodeID, func(c *dockerx.Client) error {
+		var e error
+		detail, raw, e = c.NetworkDetail(readCtx, row.ID, verbose)
+		return e
+	})
+	switch {
+	case err == nil:
+		return agg, row, detail, raw, nil
+	case dockerx.IsNotFound(err):
+		return agg, row, detail, nil, httpx.Problem(http.StatusNotFound, problemNetworkNotFound, "This network does not exist. It may have been removed.")
+	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
+		return agg, row, detail, nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+	}
+	return agg, row, detail, nil, snapshotProblem(d.Log, envID, err)
+}
+
+// getNetwork builds the detail page's answer: the network read live, the attachments from
+// the lists of every node that answered, the services from the cluster read, and the
+// aliases from an inspect of the first maxAliasInspects attached containers.
+func getNetwork(ctx context.Context, d NetworksDeps, envID string, in *NetworkDetailInput) (NetworkDetailBody, error) {
+	agg, row, detail, _, err := d.readNetwork(ctx, envID, in)
+	if err != nil {
+		return NetworkDetailBody{}, err
+	}
+	owner, kind := networkOwner(detail.Labels)
+	body := NetworkDetailBody{
+		ID: row.ID, Name: row.Name, Driver: row.Driver, Scope: row.Scope, Node: row.Node, NodeID: row.NodeID,
+		Created: rfc3339(detail.Created), Internal: detail.Internal, Attachable: detail.Attachable, IPv6: detail.IPv6,
+		BuiltIn: dockerx.IsBuiltinNetwork(row.Name, detail.Ingress || row.Ingress),
+		Owner:   owner, OwnerKind: kind, Labels: detail.Labels, Options: detail.Options,
+		IPAM:         make([]NetworkIPAMBody, 0, len(detail.IPAM)),
+		Attachments:  []NetworkAttachmentBody{},
+		NotReporting: agg.NotReporting,
+	}
+	if body.Created == "" {
+		body.Created = rfc3339(row.Created)
+	}
+	for _, p := range detail.IPAM {
+		body.IPAM = append(body.IPAM, NetworkIPAMBody{Subnet: p.Subnet, Gateway: p.Gateway, IPRange: p.IPRange})
+	}
+
+	containers := attachedContainers(agg, row)
+	body.AttachedContainers = len(containers)
+	body.AliasesTruncated = len(containers) > maxAliasInspects
+	d.fillAliases(ctx, envID, row.ID, containers)
+	body.Attachments = append(body.Attachments, containers...)
+
+	services := d.attachedServices(ctx, envID, agg, row, detail)
+	body.AttachedServices = len(services)
+	body.Attachments = append(body.Attachments, services...)
+	slices.SortStableFunc(body.Attachments, func(a, b NetworkAttachmentBody) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.Node, b.Node), strings.Compare(a.NodeID, b.NodeID), strings.Compare(a.Kind, b.Kind))
+	})
+	return body, nil
+}
+
+// attachedContainers are the containers attached to the network, from the lists of the
+// nodes that answered, sorted by name then node. A swarm-scoped network counts the
+// containers of every node; a local one only its own node's, since another node's
+// network with the same ID is a different network.
+func attachedContainers(agg envs.Aggregate, row envs.NetworkRow) []NetworkAttachmentBody {
+	out := []NetworkAttachmentBody{}
+	for _, c := range agg.Containers {
+		if row.Scope != dockerx.ScopeSwarm && c.NodeID != row.NodeID {
+			continue
+		}
+		for _, cn := range c.Networks {
+			if cn.NetworkID != row.ID {
+				continue
+			}
+			out = append(out, NetworkAttachmentBody{
+				Kind: "container", ID: c.ID, Name: c.Name, Node: c.Node, NodeID: c.NodeID, State: c.State,
+				IPv4: cn.IPv4, IPv6: cn.IPv6, MAC: cn.MAC,
+			})
+			break
+		}
+	}
+	slices.SortFunc(out, func(a, b NetworkAttachmentBody) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.Node, b.Node), strings.Compare(a.NodeID, b.NodeID))
+	})
+	return out
+}
+
+// fillAliases inspects the first maxAliasInspects of the containers for the aliases they
+// answer to on the network: at most perNodeCalls at once on one node and bulkParallel in
+// all, each under the inspect timeout. A container whose inspect fails keeps aliases null
+// and nothing else is lost.
+func (d NetworksDeps) fillAliases(ctx context.Context, envID, networkID string, containers []NetworkAttachmentBody) {
+	lim := &nodeLimiter{sems: map[string]chan struct{}{}}
+	var g errgroup.Group
+	g.SetLimit(bulkParallel)
+	for i := range min(len(containers), maxAliasInspects) {
+		g.Go(func() error {
+			release, err := lim.acquire(ctx, containers[i].NodeID)
+			if err != nil {
+				return nil
+			}
+			defer release()
+			inspectCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+			defer cancel()
+			var detail dockerx.ContainerDetail
+			err = d.Aggregator.OnNode(inspectCtx, envID, containers[i].NodeID, func(c *dockerx.Client) error {
+				var e error
+				detail, _, e = c.ContainerDetail(inspectCtx, containers[i].ID)
+				return e
+			})
+			if err != nil {
+				d.Log.Debug("could not inspect a container for its aliases", "environment", envID, "container", containers[i].Name, "error", err)
+				return nil
+			}
+			for _, n := range detail.Networks {
+				if n.NetworkID == networkID {
+					containers[i].Aliases = append([]string{}, n.Aliases...)
+					break
+				}
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // every goroutine returns nil: a failure is a container without aliases
+}
+
+// attachedServices are the services whose specs mention a swarm-scoped network, even
+// with no running task, from the cached cluster read, with the task counts the manager
+// gave for the services on it. Services the manager reports on the network that the
+// cluster read does not have are listed too. Off a swarm and for a local network there
+// are none.
+func (d NetworksDeps) attachedServices(ctx context.Context, envID string, agg envs.Aggregate, row envs.NetworkRow, detail dockerx.NetworkDetail) []NetworkAttachmentBody {
+	out := []NetworkAttachmentBody{}
+	if row.Scope != dockerx.ScopeSwarm || agg.Target.Probe.Type != dockerx.TypeSwarmManager {
+		return out
+	}
+	tasks := map[string]int{}
+	for _, s := range detail.Services {
+		tasks[s.Name] = s.Tasks
+	}
+	seen := map[string]bool{}
+	if d.Clusters != nil {
+		// A failed read leaves what the last good one held.
+		st, _ := d.Clusters.State(ctx, envID)
+		for _, ref := range st.ServiceRefs {
+			if slices.Contains(ref.Networks, row.ID) && !seen[ref.Name] {
+				seen[ref.Name] = true
+				out = append(out, NetworkAttachmentBody{Kind: "service", ID: ref.ID, Name: ref.Name, Tasks: tasks[ref.Name]})
+			}
+		}
+	}
+	for _, s := range detail.Services {
+		if !seen[s.Name] {
+			seen[s.Name] = true
+			out = append(out, NetworkAttachmentBody{Kind: "service", Name: s.Name, Tasks: s.Tasks})
+		}
+	}
+	return out
 }

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { useState } from "react";
 
@@ -88,7 +89,16 @@ export function NetworkList({ envId, node, q, onNodeChange, onSearchChange }: Ne
     {
       id: "name",
       header: t(`${key}.columns.name`),
-      cell: (n) => <TruncatedText>{n.name}</TruncatedText>,
+      cell: (n) => (
+        <Link
+          to="/env/$envId/networks/$networkId"
+          params={{ envId, networkId: n.id }}
+          search={{ node: n.nodeId }}
+          className="block min-w-0 rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <TruncatedText>{n.name}</TruncatedText>
+        </Link>
+      ),
     },
     {
       id: "driver",
@@ -165,17 +175,29 @@ export function NetworkList({ envId, node, q, onNodeChange, onSearchChange }: Ne
       cell: (n) => {
         const reason = deleteReason(n);
         return (
-          <NeedsTooltip reason={reason}>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="max-md:h-11"
-              aria-label={t("networks.delete.label", { name: n.name })}
-              onClick={reason ? undefined : () => setDeleting(n)}
-            >
-              {t("networks.delete.action")}
+          <span className="flex items-center justify-end gap-1">
+            <Button asChild variant="ghost" size="sm" className="max-md:h-11">
+              <Link
+                to="/env/$envId/networks/$networkId"
+                params={{ envId, networkId: n.id }}
+                search={{ node: n.nodeId }}
+                aria-label={t("networks.detail.openLabel", { name: n.name })}
+              >
+                {t("networks.detail.open")}
+              </Link>
             </Button>
-          </NeedsTooltip>
+            <NeedsTooltip reason={reason}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="max-md:h-11"
+                aria-label={t("networks.delete.label", { name: n.name })}
+                onClick={reason ? undefined : () => setDeleting(n)}
+              >
+                {t("networks.delete.action")}
+              </Button>
+            </NeedsTooltip>
+          </span>
         );
       },
     },

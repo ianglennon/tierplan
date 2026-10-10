@@ -14,6 +14,7 @@ import { CreateNetworkDialog } from "@/features/networks/create-network-dialog";
 import { NetworkList } from "@/features/networks/network-list";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
@@ -96,10 +97,12 @@ const posts = () => sent.filter((s) => s.method === "POST" && s.path.endsWith("/
 function wrap(node: React.ReactNode) {
   return (
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        {node}
-        <Toaster />
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          {node}
+          <Toaster />
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>
   );
 }

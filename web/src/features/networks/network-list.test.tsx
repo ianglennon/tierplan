@@ -14,6 +14,7 @@ import { UsedByList } from "@/components/used-by-list";
 import { NetworkList } from "@/features/networks/network-list";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
@@ -107,10 +108,12 @@ const deletes = () => sent.filter((s) => s.method === "DELETE");
 function mount(props: { q?: string } = {}) {
   render(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <NetworkList envId={ENV} q={props.q} onNodeChange={() => {}} onSearchChange={onSearch} />
-        <Toaster />
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <NetworkList envId={ENV} q={props.q} onNodeChange={() => {}} onSearchChange={onSearch} />
+          <Toaster />
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>,
   );
 }
@@ -215,6 +218,17 @@ describe("NetworkList delete", () => {
 // 04-13 task 2, D-40, D-41).
 
 describe("NetworkList columns", () => {
+  it("links the name and an Open item to the network's page with the node it is on", async () => {
+    items = [net("app-net")];
+    mount();
+    const name = await screen.findByRole("link", { name: "app-net" });
+    const href = new URL(name.getAttribute("href") ?? "", "http://x");
+    expect(href.pathname).toBe(`/env/${ENV}/networks/id-app-net`);
+    expect(href.searchParams.get("node")).toBe("node-1-id");
+    const open = screen.getByRole("link", { name: "Open network app-net" });
+    expect(open.getAttribute("href")).toBe(name.getAttribute("href"));
+  });
+
   it("shows Scope as Swarm or Local, the first subnet with +n, Attached, Owner and a dash for none", async () => {
     items = [
       net("app-net", {

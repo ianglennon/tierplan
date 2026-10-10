@@ -643,7 +643,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * One network: its configuration and what is attached to it
+         * @description Everything the network detail page shows: driver, scope, addressing, flags, owner, options, labels, and every attachment. Attachments are the containers, running or not, on every node that answered (a local network: its own node, named by nodeId), each with its node, addresses and aliases, and on a swarm every service whose spec mentions the network, even with no running task. Sorted by name, then node. Aliases come from an inspect of the attached containers, at most 50 of them (4 at once per node); the rest have aliases null and aliasesTruncated is true. A local-scope network on a swarm is named by nodeId (422 node_required when two nodes have one with that ID). 404 network_not_found when the network is not there; 409 node_unreachable when it is missing and a node did not answer; 503 node_unavailable when its node is not connected. Needs networks.read (Viewer) on the environment.
+         */
+        get: operations["getNetwork"];
         put?: never;
         post?: never;
         /**
@@ -651,6 +655,26 @@ export interface paths {
          * @description Deletes one network, once and never retried. 404 network_not_found when the network is not there (already gone). 409 network_builtin for bridge, host, none, ingress, docker_gwbridge and any network with the ingress flag. A local-scope network on a swarm is named by nodeId, the nodeId of its row (422 node_required when two nodes have one with that ID). Needs networks.manage (Admin) on the environment. Every attempt on a network that exists is audited as network.removed, with result failure and the code when it was refused.
          */
         delete: operations["deleteNetwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/networks/{networkId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One network's raw inspect document
+         * @description The engine's inspect document of the network as it is, for the Inspect tab: verbose for a swarm-scoped network read on a manager, so the services are in it. The network is named as the detail route names it, with the same rules and problems (422 node_required, 404 network_not_found, 409 node_unreachable, 503 node_unavailable). Needs networks.read (Viewer) on the environment.
+         */
+        get: operations["inspectNetwork"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3145,6 +3169,36 @@ export interface components {
             /** @description The signed-in user */
             user: components["schemas"]["UserBody"];
         };
+        NetworkAttachmentBody: {
+            /** @description The DNS names the container answers to on this network, from an inspect of the container. Null for a service, for a container whose inspect failed, and for a container past the 50th (see aliasesTruncated) */
+            aliases: string[] | null;
+            /** @description The container ID; for a service, its ID when the cluster read has it, else empty */
+            id: string;
+            /** @description The container's IPv4 address on this network; empty when it has none */
+            ipv4: string;
+            /** @description The container's IPv6 address on this network; empty when it has none */
+            ipv6: string;
+            /**
+             * @description container, or service for a swarm service whose spec mentions the network
+             * @enum {string}
+             */
+            kind: "container" | "service";
+            /** @description The container's MAC address on this network; empty when it has none */
+            mac: string;
+            /** @description The container or service name */
+            name: string;
+            /** @description The display name of the node a container is on; empty for a service */
+            node: string;
+            /** @description The ID of the node a container is on: what a write is routed by; empty for a service */
+            nodeId: string;
+            /** @description The container state; empty for a service */
+            state: string;
+            /**
+             * Format: int64
+             * @description For a service, how many of its tasks have an endpoint on the network, as the manager reports it; 0 for a container and when not known
+             */
+            tasks: number;
+        };
         NetworkCreateBody: {
             /** @description The ID of the network the engine made */
             id: string;
@@ -3181,6 +3235,74 @@ export interface components {
             };
             /** @description The subnet in CIDR form, for example 10.20.0.0/24. Left out, the engine picks one */
             subnet?: string;
+        };
+        NetworkDetailBody: {
+            /** @description True when more than 50 containers are attached, so only the first 50 (in the order above) were inspected for their aliases and the rest have aliases null */
+            aliasesTruncated: boolean;
+            /** @description Standalone containers can join it */
+            attachable: boolean;
+            /**
+             * Format: int64
+             * @description How many attachments are containers
+             */
+            attachedContainers: number;
+            /**
+             * Format: int64
+             * @description How many attachments are services
+             */
+            attachedServices: number;
+            /** @description Every container on every reporting node that is attached to the network (a local network: its own node's) and, on a swarm, every service whose spec mentions it. Sorted by name, then node */
+            attachments: components["schemas"]["NetworkAttachmentBody"][] | null;
+            /** @description True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted */
+            builtIn: boolean;
+            /** Format: date-time */
+            created?: string;
+            driver: string;
+            id: string;
+            /** @description No access to outside networks */
+            internal: boolean;
+            /** @description The address pools, in the engine's order; empty when the network has none */
+            ipam: components["schemas"]["NetworkIPAMBody"][] | null;
+            /** @description IPv6 is enabled */
+            ipv6: boolean;
+            /** @description Every label of the network */
+            labels: {
+                [key: string]: string;
+            };
+            name: string;
+            /** @description The node the network is local to, or Cluster for a swarm-wide network */
+            node: string;
+            /** @description The ID of the node the network was read from; for a swarm-wide network, the manager in use */
+            nodeId: string;
+            /** @description Nodes that should have answered and did not, so the attachments may be incomplete */
+            notReporting: string[] | null;
+            /** @description The driver options the network was created with */
+            options: {
+                [key: string]: string;
+            };
+            /** @description The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; empty when the network has neither */
+            owner: string;
+            /**
+             * @description stack, project, or empty when the network has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "project" | "";
+            /** @description local, or swarm for a cluster-wide network */
+            scope: string;
+        };
+        NetworkIPAMBody: {
+            /** @description The gateway address; empty when the network sets none */
+            gateway: string;
+            /** @description The range containers are given addresses from, in CIDR notation; empty when the network sets none */
+            ipRange: string;
+            /** @description The subnet in CIDR notation */
+            subnet: string;
+        };
+        NetworkInspectBody: {
+            /** @description The engine's inspect document of the network as it is; verbose, with the services, for a swarm-scoped network read on a manager */
+            inspect: {
+                [key: string]: unknown;
+            };
         };
         NetworkItem: {
             /** @description Standalone containers can join it */
@@ -5293,6 +5415,44 @@ export interface operations {
             };
         };
     };
+    getNetwork: {
+        parameters: {
+            query?: {
+                /** @description The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the id of a row of the networks list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     deleteNetwork: {
         parameters: {
             query?: {
@@ -5316,6 +5476,44 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectNetwork: {
+        parameters: {
+            query?: {
+                /** @description The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the id of a row of the networks list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkInspectBody"];
+                };
             };
             /** @description Error */
             default: {
