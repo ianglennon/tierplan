@@ -37,6 +37,7 @@ function detail(extra: Partial<ContainerDetail> = {}): ContainerDetail {
     restartCount: 2,
     command: ["nginx", "-g", "daemon off;"],
     entrypoint: [],
+    commandMasked: false,
     restartPolicy: "no",
     restartMaxRetries: 0,
     ports: [],
@@ -232,6 +233,40 @@ describe("Overview: the other cards", () => {
       ["Working directory", "/app"],
       ["User", "\u2014"],
     ]);
+  });
+
+  it("draws the command and entrypoint as masked values, with no text of them, when the server withheld them", async () => {
+    answer = () =>
+      Response.json(
+        detail({
+          command: ["<hidden>"],
+          entrypoint: ["<hidden>"],
+          commandMasked: true,
+          masked: true,
+        }),
+      );
+    mount();
+    const card = await screen.findByRole("region", { name: "Image and command" });
+    expect(rows(card)).toEqual([
+      ["Image", "nginx:1.27"],
+      ["Command", "••••••••"],
+      ["Entrypoint", "••••••••"],
+      ["Working directory", "\u2014"],
+      ["User", "\u2014"],
+    ]);
+    expect(within(card).queryByText(/hidden>/)).toBeNull();
+    expect(within(card).queryByRole("button")).toBeNull();
+    expect(within(card).getByText(/The command line is hidden/)).toBeTruthy();
+  });
+
+  it("leaves an empty entrypoint as a dash even when the command was withheld", async () => {
+    answer = () =>
+      Response.json(
+        detail({ command: ["<hidden>"], entrypoint: [], commandMasked: true, masked: true }),
+      );
+    mount();
+    const card = await screen.findByRole("region", { name: "Image and command" });
+    expect(rows(card)[2]).toEqual(["Entrypoint", "\u2014"]);
   });
 
   it("lists the published ports, or says there are none", async () => {

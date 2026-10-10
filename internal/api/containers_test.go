@@ -1013,26 +1013,28 @@ func TestOwnContainerADroppedAgentConnectionIsRecordedAsConnectionLost(t *testin
 // holds secrets.reveal.
 
 type detailBody struct {
-	Node      string `json:"node"`
-	NodeID    string `json:"nodeId"`
-	ReadOnly  bool   `json:"readOnly"`
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Image     string `json:"image"`
-	State     string `json:"state"`
-	Health    string `json:"health"`
-	ExitCode  int    `json:"exitCode"`
-	Command   []string
-	Masked    bool `json:"masked"`
-	IsSelf    bool `json:"isSelf"`
-	SelfKind  string
-	Project   string `json:"project"`
-	Stack     string `json:"stack"`
-	Service   string `json:"service"`
-	Restart   string `json:"restartPolicy"`
-	Retries   int    `json:"restartMaxRetries"`
-	StartedAt string `json:"startedAt"`
-	Env       []struct {
+	Node          string `json:"node"`
+	NodeID        string `json:"nodeId"`
+	ReadOnly      bool   `json:"readOnly"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Image         string `json:"image"`
+	State         string `json:"state"`
+	Health        string `json:"health"`
+	ExitCode      int    `json:"exitCode"`
+	Command       []string
+	Entrypoint    []string
+	CommandMasked bool `json:"commandMasked"`
+	Masked        bool `json:"masked"`
+	IsSelf        bool `json:"isSelf"`
+	SelfKind      string
+	Project       string `json:"project"`
+	Stack         string `json:"stack"`
+	Service       string `json:"service"`
+	Restart       string `json:"restartPolicy"`
+	Retries       int    `json:"restartMaxRetries"`
+	StartedAt     string `json:"startedAt"`
+	Env           []struct {
 		Name   string `json:"name"`
 		Value  string `json:"value"`
 		Masked bool   `json:"masked"`
@@ -1068,8 +1070,9 @@ func detailEngine() dockertest.FakeConfig {
 	cfg.Containers[1].Networks = map[string]dockertest.FakeEndpoint{"front": {NetworkID: "n1", IPv4: "10.0.0.2", Aliases: []string{"web"}}}
 	cfg.Containers[1].Health = "healthy"
 	cfg.Containers[1].Inspect = dockertest.FakeInspect{
-		Env: []string{"DB_PASSWORD=hunter2", "MODE=prod"}, Cmd: []string{"nginx", "-g", "daemon off;"},
-		StartedAt: "2026-10-01T10:00:00Z", FinishedAt: "0001-01-01T00:00:00Z",
+		Env: []string{"DB_PASSWORD=hunter2", "MODE=prod"}, Cmd: []string{"nginx", "-g", "daemon off;", "--api-key=k3y-in-argv"},
+		Entrypoint: []string{"/entry.sh", "-p", "ep-secret"},
+		StartedAt:  "2026-10-01T10:00:00Z", FinishedAt: "0001-01-01T00:00:00Z",
 		LogType: "syslog", LogOptions: map[string]string{"splunk-token": "s3cret-token"},
 	}
 	cfg.RestartPolicies = map[string]string{webID: "on-failure:3"}
@@ -1125,8 +1128,14 @@ func TestContainerDetailOfAViewerNamesTheVariablesAndWithholdsEveryValue(t *test
 	if d.StartedAt != "2026-10-01T10:00:00Z" || strings.Contains(string(rec.body), "0001-01-01") {
 		t.Errorf("times: the engine's zero time must be left out: %s", rec.body)
 	}
-	if got := rec.body; !strings.Contains(string(got), `"command":["nginx","-g","daemon off;"]`) {
-		t.Errorf("command missing: %s", got)
+	// The command line is where credentials are passed, so it is withheld like a value.
+	if !d.CommandMasked || len(d.Command) != 1 || d.Command[0] != "<hidden>" || len(d.Entrypoint) != 1 || d.Entrypoint[0] != "<hidden>" {
+		t.Errorf("command = %v entrypoint = %v commandMasked = %v, want the placeholder", d.Command, d.Entrypoint, d.CommandMasked)
+	}
+	for _, leak := range []string{"k3y-in-argv", "ep-secret", "daemon off", "entry.sh"} {
+		if strings.Contains(string(rec.body), leak) {
+			t.Errorf("a Viewer's body carries %q from the command line: %s", leak, rec.body)
+		}
 	}
 }
 
@@ -1142,6 +1151,9 @@ func TestContainerDetailOfAnAdminCarriesTheValues(t *testing.T) {
 	}
 	if len(d.LogConfig.Options) != 1 || d.LogConfig.Options[0].Value != "s3cret-token" {
 		t.Errorf("log options = %+v", d.LogConfig.Options)
+	}
+	if d.CommandMasked || len(d.Command) != 4 || d.Command[3] != "--api-key=k3y-in-argv" || len(d.Entrypoint) != 3 {
+		t.Errorf("an Admin's command = %v entrypoint = %v masked = %v, want them whole", d.Command, d.Entrypoint, d.CommandMasked)
 	}
 }
 
@@ -1251,7 +1263,7 @@ func TestContainerInspectOfAViewerMasksEveryVariableValue(t *testing.T) {
 	if rec.code != http.StatusOK {
 		t.Fatalf("status = %d: %s\n%s", rec.code, rec.body, f.logs)
 	}
-	for _, leak := range []string{"hunter2", "prod\""} {
+	for _, leak := range []string{"hunter2", "prod\"", "k3y-in-argv", "ep-secret"} {
 		if strings.Contains(string(rec.body), leak) {
 			t.Fatalf("a Viewer's inspect carries %q: %s", leak, rec.body)
 		}
@@ -1272,6 +1284,9 @@ func TestContainerInspectOfAnAdminCarriesTheFullDocument(t *testing.T) {
 	d := decode[inspectBody](t, rec)
 	if d.Masked || len(d.Inspect.Config.Env) != 2 || d.Inspect.Config.Env[0] != "DB_PASSWORD=hunter2" || d.Inspect.Config.Env[1] != "MODE=prod" {
 		t.Errorf("inspect = %+v", d)
+	}
+	if !strings.Contains(string(rec.body), "k3y-in-argv") || !strings.Contains(string(rec.body), "ep-secret") {
+		t.Errorf("an Admin's inspect lost the command line: %s", rec.body)
 	}
 }
 

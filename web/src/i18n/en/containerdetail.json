@@ -53,7 +53,8 @@
       "command": "Command",
       "entrypoint": "Entrypoint",
       "workingDir": "Working directory",
-      "user": "User"
+      "user": "User",
+      "masked": "The command line is hidden, as it can hold a password. Needs the reveal secrets permission to show it."
     },
     "ports": {
       "title": "Ports",

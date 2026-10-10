@@ -976,7 +976,7 @@
         "additionalProperties": false,
         "properties": {
           "command": {
-            "description": "The command (Cmd)",
+            "description": "The command (Cmd). Withheld, as the single entry \u003chidden\u003e, unless the caller holds secrets.reveal on this environment: a command line often carries a password or token",
             "items": {
               "type": "string"
             },
@@ -985,11 +985,16 @@
               "null"
             ]
           },
+          "commandMasked": {
+            "description": "True when command or entrypoint was withheld because the caller may not reveal secrets on this environment",
+            "type": "boolean"
+          },
           "created": {
             "format": "date-time",
             "type": "string"
           },
           "entrypoint": {
+            "description": "The entrypoint. Withheld, as the single entry \u003chidden\u003e, on the same terms as command",
             "items": {
               "type": "string"
             },
@@ -1058,7 +1063,7 @@
             "$ref": "#/components/schemas/ContainerLogConfigBody"
           },
           "masked": {
-            "description": "True when any value was withheld from env or logConfig.options",
+            "description": "True when any value was withheld from env, logConfig.options, command or entrypoint",
             "type": "boolean"
           },
           "mounts": {
@@ -1196,6 +1201,7 @@
           "restartCount",
           "command",
           "entrypoint",
+          "commandMasked",
           "restartPolicy",
           "restartMaxRetries",
           "ports",
@@ -1218,7 +1224,7 @@
         "properties": {
           "inspect": {
             "additionalProperties": {},
-            "description": "The engine's inspect document, with the environment variables' values and the log driver's option values replaced by \u003chidden\u003e unless the caller holds secrets.reveal",
+            "description": "The engine's inspect document, with the environment variables' values, the log driver's option values and the command line replaced by \u003chidden\u003e unless the caller holds secrets.reveal",
             "type": "object"
           },
           "masked": {
@@ -8385,7 +8391,7 @@
     },
     "/api/env/{envId}/containers/{containerId}": {
       "get": {
-        "description": "Everything the container detail page shows, read live from the container's engine: state, health, image, command, ports, mounts, networks with their aliases, restart policy, labels, environment variables and log driver. The container lives on one node, named by nodeId (the nodeId of its row in the containers list); it may be left out on an environment of one node and is required on a swarm (422 node_required). The values of the environment variables and of the log driver's options can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env and logConfig.options then list the names with masked true and no value, and masked at the top says something was withheld. 404 container_not_found when the engine has no such container (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. Needs containers.read (Viewer) on the environment.",
+        "description": "Everything the container detail page shows, read live from the container's engine: state, health, image, command, ports, mounts, networks with their aliases, restart policy, labels, environment variables and log driver. The container lives on one node, named by nodeId (the nodeId of its row in the containers list); it may be left out on an environment of one node and is required on a swarm (422 node_required). The values of the environment variables and of the log driver's options can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env and logConfig.options then list the names with masked true and no value, and masked at the top says something was withheld. The command and the entrypoint can carry credentials too (a password on the command line): without secrets.reveal each is the single entry \u003chidden\u003e and commandMasked is true. 404 container_not_found when the engine has no such container (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. Needs containers.read (Viewer) on the environment.",
         "operationId": "getContainer",
         "parameters": [
           {
@@ -8459,7 +8465,7 @@
     },
     "/api/env/{envId}/containers/{containerId}/inspect": {
       "get": {
-        "description": "The engine's inspect document of the container as it is, for the Inspect tab. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). The environment variables' values and the log driver's option values can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder \u003chidden\u003e on the server, and masked says something was. Needs containers.read (Viewer) on the environment.",
+        "description": "The engine's inspect document of the container as it is, for the Inspect tab. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). The environment variables' values, the log driver's option values and the command line (Config.Cmd, Config.Entrypoint, Path, Args and the command of Config.Healthcheck.Test) can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder \u003chidden\u003e on the server, and masked says something was. Needs containers.read (Viewer) on the environment.",
         "operationId": "inspectContainer",
         "parameters": [
           {

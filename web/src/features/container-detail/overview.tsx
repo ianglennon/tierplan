@@ -6,7 +6,7 @@ import { Link } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 
 import { type ContainerDetail, containerDetailQuery } from "@/api/container-detail";
-import { KeyValueTable } from "@/components/key-value-table";
+import { type KeyValueRow, KeyValueTable } from "@/components/key-value-table";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
@@ -81,11 +81,17 @@ function useMissing() {
 }
 
 // ImageCard is the image and how the container starts. Long commands wrap in mono
-// rather than truncate, so they can be read and copied whole.
+// rather than truncate, so they can be read and copied whole. A command line can
+// carry a password, so the server withholds it from a caller without secrets.reveal
+// (commandMasked); it is then drawn as a masked value, as an environment value is.
 function ImageCard({ detail }: { detail: ContainerDetail }) {
   const t = useT();
   const missing = useMissing();
   const text = (v: string | undefined) => v || missing;
+  const argvRow = (key: string, argv: string[] | null | undefined): KeyValueRow =>
+    detail.commandMasked && (argv ?? []).length > 0
+      ? { key, masked: true }
+      : { key, value: text((argv ?? []).join(" ")) };
   return (
     <SettingsCard title={t("containerdetail.imageCommand.title")}>
       <KeyValueTable
@@ -93,18 +99,15 @@ function ImageCard({ detail }: { detail: ContainerDetail }) {
         empty=""
         rows={[
           { key: t("containerdetail.imageCommand.image"), value: text(detail.image) },
-          {
-            key: t("containerdetail.imageCommand.command"),
-            value: text((detail.command ?? []).join(" ")),
-          },
-          {
-            key: t("containerdetail.imageCommand.entrypoint"),
-            value: text((detail.entrypoint ?? []).join(" ")),
-          },
+          argvRow(t("containerdetail.imageCommand.command"), detail.command),
+          argvRow(t("containerdetail.imageCommand.entrypoint"), detail.entrypoint),
           { key: t("containerdetail.imageCommand.workingDir"), value: text(detail.workingDir) },
           { key: t("containerdetail.imageCommand.user"), value: text(detail.user) },
         ]}
       />
+      {detail.commandMasked ? (
+        <p className="text-sm text-muted-foreground">{t("containerdetail.imageCommand.masked")}</p>
+      ) : null}
     </SettingsCard>
   );
 }

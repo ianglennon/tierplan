@@ -229,12 +229,13 @@ type ContainerDetailBody struct {
 	Error    string `json:"error,omitempty" doc:"The engine's last start error"`
 	Restarts int    `json:"restartCount" doc:"How many times the engine has restarted it"`
 
-	Command     []string `json:"command" doc:"The command (Cmd)"`
-	Entrypoint  []string `json:"entrypoint"`
-	WorkingDir  string   `json:"workingDir,omitempty"`
-	User        string   `json:"user,omitempty"`
-	StopTimeout *int     `json:"stopTimeout,omitempty" doc:"Seconds the container's own setting waits before a kill; absent when it sets none"`
-	StopSignal  string   `json:"stopSignal,omitempty"`
+	Command       []string `json:"command" doc:"The command (Cmd). Withheld, as the single entry <hidden>, unless the caller holds secrets.reveal on this environment: a command line often carries a password or token"`
+	Entrypoint    []string `json:"entrypoint" doc:"The entrypoint. Withheld, as the single entry <hidden>, on the same terms as command"`
+	CommandMasked bool     `json:"commandMasked" doc:"True when command or entrypoint was withheld because the caller may not reveal secrets on this environment"`
+	WorkingDir    string   `json:"workingDir,omitempty"`
+	User          string   `json:"user,omitempty"`
+	StopTimeout   *int     `json:"stopTimeout,omitempty" doc:"Seconds the container's own setting waits before a kill; absent when it sets none"`
+	StopSignal    string   `json:"stopSignal,omitempty"`
 
 	RestartPolicy     string `json:"restartPolicy" enum:"no,always,on-failure,unless-stopped"`
 	RestartMaxRetries int    `json:"restartMaxRetries" doc:"The on-failure maximum; 0 when none is set"`
@@ -246,7 +247,7 @@ type ContainerDetailBody struct {
 
 	Env       []redact.EnvVar        `json:"env" doc:"The environment variables by name. Their values are withheld unless the caller holds secrets.reveal on this environment"`
 	LogConfig ContainerLogConfigBody `json:"logConfig"`
-	Masked    bool                   `json:"masked" doc:"True when any value was withheld from env or logConfig.options"`
+	Masked    bool                   `json:"masked" doc:"True when any value was withheld from env, logConfig.options, command or entrypoint"`
 
 	IsSelf   bool   `json:"isSelf" doc:"True for the container Bayplan itself runs in"`
 	SelfKind string `json:"selfKind" enum:",server,agent" doc:"server for the container Bayplan itself runs in, agent for a Bayplan agent's container, empty otherwise"`
@@ -264,7 +265,7 @@ type ContainerDetailOutput struct {
 // ContainerInspectBody is the raw inspect document of one container.
 type ContainerInspectBody struct {
 	Masked  bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
-	Inspect map[string]any `json:"inspect" doc:"The engine's inspect document, with the environment variables' values and the log driver's option values replaced by <hidden> unless the caller holds secrets.reveal"`
+	Inspect map[string]any `json:"inspect" doc:"The engine's inspect document, with the environment variables' values, the log driver's option values and the command line replaced by <hidden> unless the caller holds secrets.reveal"`
 }
 
 // ContainerInspectOutput wraps ContainerInspectBody for huma.
@@ -303,6 +304,7 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 		Description: "Everything the container detail page shows, read live from the container's engine: state, health, image, command, ports, mounts, networks with their aliases, restart policy, labels, environment variables and log driver. " +
 			"The container lives on one node, named by nodeId (the nodeId of its row in the containers list); it may be left out on an environment of one node and is required on a swarm (422 node_required). " +
 			"The values of the environment variables and of the log driver's options can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env and logConfig.options then list the names with masked true and no value, and masked at the top says something was withheld. " +
+			"The command and the entrypoint can carry credentials too (a password on the command line): without secrets.reveal each is the single entry <hidden> and commandMasked is true. " +
 			"404 container_not_found when the engine has no such container (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. " +
 			"Needs containers.read (Viewer) on the environment.",
 		Tags: []string{"environments"},
@@ -326,7 +328,7 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 		Summary: "One container's raw inspect document",
 		Description: "The engine's inspect document of the container as it is, for the Inspect tab. " +
 			"The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). " +
-			"The environment variables' values and the log driver's option values can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. " +
+			"The environment variables' values, the log driver's option values and the command line (Config.Cmd, Config.Entrypoint, Path, Args and the command of Config.Healthcheck.Test) can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. " +
 			"Needs containers.read (Viewer) on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermContainersRead, Scope: rbac.ScopeEnvironment},
@@ -530,18 +532,22 @@ func inspectOnNode(ctx context.Context, d ContainersDeps, envID, wantNode, conta
 func containerDetailBody(c dockerx.ContainerDetail, nodeID string, node envs.NodeRef, self, reveal bool) ContainerDetailBody {
 	env := redact.Env(c.Env, reveal)
 	opts := redact.Options(c.LogConfig.Options, reveal)
+	// The command line is where credentials are passed (--requirepass, a DSN), so it
+	// is withheld like an environment value.
+	cmd, cmdMasked := redact.Argv(c.Cmd, reveal)
+	entrypoint, entrypointMasked := redact.Argv(c.Entrypoint, reveal)
 	b := ContainerDetailBody{
 		Node: node.Name, NodeID: nodeID, ReadOnly: node.ReadOnly,
 		ID: c.ID, Name: c.Name, Image: c.Image, ImageID: c.ImageID, Created: engineTime(c.Created),
 		State: c.Status, Health: c.Health, Started: engineTime(c.StartedAt), Finished: engineTime(c.FinishedAt),
 		ExitCode: c.ExitCode, OOM: c.OOMKilled, Error: c.Error, Restarts: c.RestartCount,
-		Command: c.Cmd, Entrypoint: c.Entrypoint, WorkingDir: c.WorkingDir, User: c.User,
+		Command: cmd, Entrypoint: entrypoint, CommandMasked: cmdMasked || entrypointMasked, WorkingDir: c.WorkingDir, User: c.User,
 		StopTimeout: c.StopTimeout, StopSignal: c.StopSignal,
 		RestartPolicy: c.RestartPolicy, RestartMaxRetries: c.RestartMaxRetries,
 		Ports: make([]ContainerPortBody, 0, len(c.Ports)), Mounts: make([]ContainerMountBody, 0, len(c.Mounts)),
 		Networks: make([]ContainerNetworkBody, 0, len(c.Networks)), Labels: c.Labels,
 		Env: env, LogConfig: ContainerLogConfigBody{Type: c.LogConfig.Type, Options: opts},
-		Masked: !reveal && (len(env) > 0 || len(opts) > 0),
+		Masked: !reveal && (len(env) > 0 || len(opts) > 0 || cmdMasked || entrypointMasked),
 		IsSelf: self, SelfKind: selfKindOf(self, c.Labels),
 		Project: c.Labels[labelProject], Stack: c.Labels[labelStack], Service: c.Labels[labelService],
 	}

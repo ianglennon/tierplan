@@ -6,6 +6,7 @@ package redact_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -455,5 +456,86 @@ func TestMaskVolumeInspectOfAnythingThatIsNotAJSONObjectIsAnErrorNeverAPassthrou
 		if err == nil || out != nil || masked {
 			t.Errorf("MaskVolumeInspect(%q) = %q, %v, %v; want an error and no output", raw, out, masked, err)
 		}
+	}
+}
+
+// WR-04: a command line is where credentials are passed (--requirepass, -p<password>, a
+// DSN), so it is withheld from a caller who may not reveal secrets, like an environment
+// value.
+const argvFixture = `{"Id":"abc","Path":"redis-server","Args":["--requirepass","hunter2"],` +
+	`"State":{"Status":"running"},` +
+	`"Config":{"Image":"redis","Cmd":["redis-server","--requirepass","hunter2"],"Entrypoint":["docker-entrypoint.sh","-p","s3cret"],` +
+	`"Healthcheck":{"Test":["CMD-SHELL","mysqladmin ping -uroot -pHunter3"],"Interval":30000000000},"Env":[]}}`
+
+func TestMaskContainerInspectWithholdsTheCommandLineEverywhereTheDocumentCarriesIt(t *testing.T) {
+	out, masked, err := redact.MaskContainerInspect([]byte(argvFixture), false)
+	if err != nil {
+		t.Fatalf("MaskContainerInspect: %v", err)
+	}
+	if !masked {
+		t.Error("masked = false, want true")
+	}
+	for _, leak := range []string{"hunter2", "s3cret", "Hunter3", "redis-server", "docker-entrypoint", "mysqladmin"} {
+		if strings.Contains(string(out), leak) {
+			t.Errorf("output carries %q: %s", leak, out)
+		}
+	}
+	var got struct {
+		ID     string `json:"Id"`
+		Path   string
+		Args   []string
+		Config struct {
+			Image       string
+			Cmd         []string
+			Entrypoint  []string
+			Healthcheck struct {
+				Test     []string
+				Interval json.Number
+			}
+		}
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	hidden := []string{"<hidden>"}
+	if got.Path != "<hidden>" || !slices.Equal(got.Args, hidden) || !slices.Equal(got.Config.Cmd, hidden) || !slices.Equal(got.Config.Entrypoint, hidden) {
+		t.Errorf("Path/Args/Cmd/Entrypoint = %q %v %v %v, want the placeholder", got.Path, got.Args, got.Config.Cmd, got.Config.Entrypoint)
+	}
+	if want := []string{"CMD-SHELL", "<hidden>"}; !slices.Equal(got.Config.Healthcheck.Test, want) {
+		t.Errorf("Healthcheck.Test = %v, want %v: the mode stays, the command goes", got.Config.Healthcheck.Test, want)
+	}
+	if got.ID != "abc" || got.Config.Image != "redis" || got.Config.Healthcheck.Interval != "30000000000" {
+		t.Errorf("the rest of the document changed: %+v", got)
+	}
+}
+
+func TestMaskContainerInspectWithRevealKeepsTheCommandLine(t *testing.T) {
+	out, masked, err := redact.MaskContainerInspect([]byte(argvFixture), true)
+	if err != nil || masked || string(out) != argvFixture {
+		t.Fatalf("reveal = %q masked=%v err=%v", out, masked, err)
+	}
+}
+
+func TestMaskContainerInspectLeavesAnEmptyOrAbsentCommandAndANoneHealthCheckUnmasked(t *testing.T) {
+	doc := `{"Id":"abc","Path":"","Args":[],"Config":{"Cmd":null,"Entrypoint":[],"Healthcheck":{"Test":["NONE"]},"Env":[]}}`
+	out, masked, err := redact.MaskContainerInspect([]byte(doc), false)
+	if err != nil || masked {
+		t.Fatalf("out=%q masked=%v err=%v; nothing was withheld", out, masked, err)
+	}
+	if !strings.Contains(string(out), `"NONE"`) || strings.Contains(string(out), "hidden") {
+		t.Errorf("a NONE health check or an empty command was changed: %s", out)
+	}
+}
+
+func TestArgvWithholdsANonEmptyCommandUnlessTheCallerMayReveal(t *testing.T) {
+	cmd := []string{"redis-server", "--requirepass", "hunter2"}
+	if got, masked := redact.Argv(cmd, false); !masked || !slices.Equal(got, []string{"<hidden>"}) {
+		t.Errorf("Argv(cmd, false) = %v, %v; want the placeholder, masked", got, masked)
+	}
+	if got, masked := redact.Argv(cmd, true); masked || !slices.Equal(got, cmd) {
+		t.Errorf("Argv(cmd, true) = %v, %v; want the command, not masked", got, masked)
+	}
+	if got, masked := redact.Argv([]string{}, false); masked || got == nil || len(got) != 0 {
+		t.Errorf("Argv(empty, false) = %v, %v; want an empty list, not masked", got, masked)
 	}
 }

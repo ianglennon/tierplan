@@ -40,6 +40,7 @@ function detail(extra: Partial<ContainerDetail> = {}): ContainerDetail {
     restartCount: 0,
     command: [],
     entrypoint: [],
+    commandMasked: false,
     restartPolicy: "no",
     restartMaxRetries: 0,
     ports: [],

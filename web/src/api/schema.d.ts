@@ -581,7 +581,7 @@ export interface paths {
         };
         /**
          * One container: its state and configuration
-         * @description Everything the container detail page shows, read live from the container's engine: state, health, image, command, ports, mounts, networks with their aliases, restart policy, labels, environment variables and log driver. The container lives on one node, named by nodeId (the nodeId of its row in the containers list); it may be left out on an environment of one node and is required on a swarm (422 node_required). The values of the environment variables and of the log driver's options can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env and logConfig.options then list the names with masked true and no value, and masked at the top says something was withheld. 404 container_not_found when the engine has no such container (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. Needs containers.read (Viewer) on the environment.
+         * @description Everything the container detail page shows, read live from the container's engine: state, health, image, command, ports, mounts, networks with their aliases, restart policy, labels, environment variables and log driver. The container lives on one node, named by nodeId (the nodeId of its row in the containers list); it may be left out on an environment of one node and is required on a swarm (422 node_required). The values of the environment variables and of the log driver's options can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env and logConfig.options then list the names with masked true and no value, and masked at the top says something was withheld. The command and the entrypoint can carry credentials too (a password on the command line): without secrets.reveal each is the single entry <hidden> and commandMasked is true. 404 container_not_found when the engine has no such container (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. Needs containers.read (Viewer) on the environment.
          */
         get: operations["getContainer"];
         put?: never;
@@ -601,7 +601,7 @@ export interface paths {
         };
         /**
          * One container's raw inspect document
-         * @description The engine's inspect document of the container as it is, for the Inspect tab. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). The environment variables' values and the log driver's option values can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. Needs containers.read (Viewer) on the environment.
+         * @description The engine's inspect document of the container as it is, for the Inspect tab. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). The environment variables' values, the log driver's option values and the command line (Config.Cmd, Config.Entrypoint, Path, Args and the command of Config.Healthcheck.Test) can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. Needs containers.read (Viewer) on the environment.
          */
         get: operations["inspectContainer"];
         put?: never;
@@ -2488,10 +2488,13 @@ export interface components {
             nodeId: string;
         };
         ContainerDetailBody: {
-            /** @description The command (Cmd) */
+            /** @description The command (Cmd). Withheld, as the single entry <hidden>, unless the caller holds secrets.reveal on this environment: a command line often carries a password or token */
             command: string[] | null;
+            /** @description True when command or entrypoint was withheld because the caller may not reveal secrets on this environment */
+            commandMasked: boolean;
             /** Format: date-time */
             created?: string;
+            /** @description The entrypoint. Withheld, as the single entry <hidden>, on the same terms as command */
             entrypoint: string[] | null;
             /** @description The environment variables by name. Their values are withheld unless the caller holds secrets.reveal on this environment */
             env: components["schemas"]["EnvVar"][] | null;
@@ -2522,7 +2525,7 @@ export interface components {
                 [key: string]: string;
             };
             logConfig: components["schemas"]["ContainerLogConfigBody"];
-            /** @description True when any value was withheld from env or logConfig.options */
+            /** @description True when any value was withheld from env, logConfig.options, command or entrypoint */
             masked: boolean;
             mounts: components["schemas"]["ContainerMountBody"][] | null;
             /** @description The container name without the leading slash */
@@ -2581,7 +2584,7 @@ export interface components {
             workingDir?: string;
         };
         ContainerInspectBody: {
-            /** @description The engine's inspect document, with the environment variables' values and the log driver's option values replaced by <hidden> unless the caller holds secrets.reveal */
+            /** @description The engine's inspect document, with the environment variables' values, the log driver's option values and the command line replaced by <hidden> unless the caller holds secrets.reveal */
             inspect: {
                 [key: string]: unknown;
             };

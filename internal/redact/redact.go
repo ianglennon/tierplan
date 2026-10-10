@@ -76,6 +76,18 @@ func Env(env []string, reveal bool) []EnvVar {
 	return out
 }
 
+// Argv withholds a command line from a caller who may not reveal secrets. A command,
+// an entrypoint or a health check is routinely where a password or token is passed
+// (--requirepass, -p<password>, --api-key=, a DSN), so it is treated like an
+// environment value: with reveal false a non-empty argv becomes one Placeholder and
+// masked is true; an empty one has nothing to withhold and stays as it is.
+func Argv(argv []string, reveal bool) (out []string, masked bool) {
+	if reveal || len(argv) == 0 {
+		return argv, false
+	}
+	return []string{Placeholder}, true
+}
+
 // CanReveal says whether p may see secret values on envID: exactly when the
 // Checker allows secrets.reveal there, which an Admin, an Operator granted the
 // extra and an instance admin hold. A missing Checker or principal, and any
@@ -92,7 +104,10 @@ func CanReveal(ctx context.Context, c *rbac.Checker, p *rbac.Principal, envID st
 // false. Otherwise the value of every Config.Env entry ("NAME=value" becomes
 // "NAME=<hidden>") is replaced by Placeholder and the rest of the document is kept
 // as it was, re-encoded with two-space indentation; every HostConfig.LogConfig.Config
-// option value is replaced the same way. masked is true when anything was
+// option value is replaced the same way. The command line is withheld too, wherever
+// the document carries it: Config.Cmd, Config.Entrypoint, Path and Args become one
+// Placeholder when they are not empty, and the command of Config.Healthcheck.Test is
+// replaced while its mode (CMD, CMD-SHELL, NONE) stays. masked is true when anything was
 // replaced. Numbers keep their exact digits. A document that is not a JSON object
 // is an error, never passed through, so a malformed answer cannot carry a value
 // past the mask.
@@ -104,7 +119,26 @@ func MaskContainerInspect(raw []byte, reveal bool) (out []byte, masked bool, err
 	if err != nil {
 		return nil, false, err
 	}
+	if maskArgv(doc, "Args") {
+		masked = true
+	}
+	if path, ok := doc["Path"].(string); ok && path != "" {
+		doc["Path"] = Placeholder
+		masked = true
+	}
 	if cfg, ok := doc["Config"].(map[string]any); ok {
+		for _, key := range []string{"Cmd", "Entrypoint"} {
+			if maskArgv(cfg, key) {
+				masked = true
+			}
+		}
+		if hc, ok := cfg["Healthcheck"].(map[string]any); ok {
+			if test, ok := hc["Test"].([]any); ok && len(test) > 1 {
+				// The first element is the mode, not a secret; the rest is the command.
+				hc["Test"] = []any{test[0], Placeholder}
+				masked = true
+			}
+		}
 		if env, ok := cfg["Env"].([]any); ok {
 			for i, e := range env {
 				kv, isString := e.(string)
@@ -134,6 +168,26 @@ func MaskContainerInspect(raw []byte, reveal bool) (out []byte, masked bool, err
 	}
 	out, err = encodeObject(doc, "container inspect")
 	return out, masked, err
+}
+
+// maskArgv replaces the array at m[key] by one Placeholder when it has any element.
+// Anything else at that key (absent, null, empty) has nothing to withhold. It reports
+// whether it replaced something.
+func maskArgv(m map[string]any, key string) bool {
+	switch v := m[key].(type) {
+	case []any:
+		if len(v) > 0 {
+			m[key] = []any{Placeholder}
+			return true
+		}
+	case string:
+		// Not a shape the engine sends for an argv: withhold rather than pass it on.
+		if v != "" {
+			m[key] = []any{Placeholder}
+			return true
+		}
+	}
+	return false
 }
 
 // MaskVolumeInspect prepares the raw inspect document of a volume for a browser. With
