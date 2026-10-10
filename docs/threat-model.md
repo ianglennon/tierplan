@@ -2,7 +2,7 @@
 
 This describes what Bayplan protects against in its first three builds (install, sign-in and a read-only view of the local Docker host in Phase 1; remote hosts and swarms through agents in Phase 2; users, teams, roles, encrypted backups, restore and key rotation in Phase 3), what it does not, and the risks that remain. Threat IDs (T-01-nn, T-02-nn, T-03-nn) refer to the plans in which each mitigation was designed and tested.
 
-Phase 4 widens what an agent forwards: container actions, logs, shells, and network and volume changes. This revision covers that agent boundary (the agent section, boundary table and residual risk 10). The rest of Phase 4, Bayplan's own write endpoints and the browser shell, is described here when that phase is complete.
+Phase 4 widens what an agent forwards: container actions, logs, shells, and network and volume changes. This revision covers the agent boundary (the agent section and residual risk 10) and Bayplan's own Docker access ("Docker access is narrow and typed"), with their rows in the boundary table. The browser shell and the rest of Phase 4 are described here when that phase is complete.
 
 ## The headline
 
@@ -24,7 +24,7 @@ Phase 2 adds remote hosts through agents, which widens the same statement to **e
 |----------|-----------------|---------------|
 | Browser to API | Sign-in, sessions, every change the UI makes | Server-side sessions, CSRF token, Origin check, strict CSP, per-route permission policy |
 | Internet to setup and sign-in | The setup token, passwords | Setup token gate, rate limits, account lockout, one error for every sign-in failure |
-| Bayplan to the Docker socket | Every Docker API call | Read-only typed facade, `unix://` only, privilege drop to UID 1000 |
+| Bayplan to the Docker socket | Every Docker API call | Typed facade with a pinned method set (reads plus a closed set of container, network and volume changes, no create of containers, services or images and no passthrough), per-permission and audited write endpoints, `unix://` only, privilege drop to UID 1000 |
 | The `/data` volume | The database, the master key, the setup token file, the TLS key | File modes 0600, ownership by UID 1000, key never logged, backups documented |
 | Reverse proxy to Bayplan | Client addresses, scheme | Forwarded headers believed only from `BAYPLAN_TRUSTED_PROXIES` |
 | Agent to Bayplan, `/agent/connect` | The join token (once), the agent's signed challenge, every Docker answer, update and uninstall messages | Verified TLS, per-environment CA and key-based authentication inside the tunnel, handshake limits, throttled audit of refusals |
@@ -38,7 +38,16 @@ Phase 2 adds remote hosts through agents, which widens the same statement to **e
 
 ## What Phase 1 builds in
 
-**Docker access is narrow and read-only (T-01-64, T-01-65, T-01-66).** All Docker calls go through one package, `internal/dockerx`, which exports typed read methods only. A reflection test pins that method set and bans write families; a lint rule keeps the Docker client out of every other package. `DOCKER_HOST` accepts `unix://` paths only, and the environment never chooses the API version or TLS settings. Engines Bayplan does not support (older than Docker 24, rootless, Docker Desktop, Podman) are detected and refused with a reason rather than treated as supported (T-01-80). Phase 1 has no state-changing Docker endpoints, and the interface has no row actions (T-01-85).
+**Docker access is narrow and typed (T-01-64, T-01-65, T-01-66; widened in Phase 4 by T-04-01 to T-04-05).** All Docker calls go through one package, `internal/dockerx`, and a lint rule keeps the Docker client out of every other package. The package exports typed methods only, none of which takes or returns a Docker library type, and a reflection test pins the exact method set. A pattern in the same test refuses names in the write and passthrough families (create, remove, start, stop, kill, exec, update, prune, raw, passthrough, plugins, swarm init/join/leave/unlock); each Phase 4 method that has to carry such a word is listed and reviewed by name. `DOCKER_HOST` accepts `unix://` paths only, and the environment never chooses the API version or TLS settings. Engines Bayplan does not support (older than Docker 24, rootless, Docker Desktop, Podman) are detected and refused with a reason rather than treated as supported (T-01-80).
+
+Phase 1 was read only. Since Phase 4 the facade also changes things, through the same closed set of calls an agent forwards (see below):
+
+- **Containers:** start, stop, restart, kill, pause and unpause, from a fixed set of verbs, with a stop timeout and a signal; and remove, with force and the container's anonymous volumes as the only options.
+- **Networks:** create (bridge, overlay, macvlan and ipvlan only, with no way to ask for an ingress, config-only or config-from network), connect a container with only an alias and fixed addresses, disconnect without force, and delete.
+- **Volumes:** create, and delete without force.
+- **Shell:** an exec with only a terminal, a user, a working directory and a command. It cannot be privileged or carry environment variables. No API route opens one yet; the browser shell arrives later in Phase 4.
+
+The facade has no method to create or change a container, service or image, pull an image, or send a raw request, so the API cannot reach one through Bayplan's code. Every write endpoint checks a permission per environment before it calls Docker: `containers.control` and `containers.remove` (Operator), `networks.connect` (Operator), `networks.manage` and `volumes.create` (Admin), and `volumes.delete` (an extra; removing a container's anonymous volumes needs it too). A bulk request names at most 25 targets. Each target is audited, failures included, and a write is never retried after a dropped connection. Bayplan's own server and agent containers can be stopped, killed, restarted, paused or removed only one at a time, with the container's name typed and checked on the server, and a bulk request skips them for those actions. Network and volume deletes re-read what uses them just before the call and refuse one still in use. **The local host has no read-only switch:** unlike an agent, the socket Bayplan mounts is managed through these endpoints by anyone holding the permissions above. Do not mount the socket on a host Bayplan should only watch; give that host an agent with `BAYPLAN_AGENT_READ_ONLY=true` instead.
 
 **Default-deny authorisation (T-01-04, T-01-29, T-01-30, T-01-31, T-01-34).** Every route declares a requirement. Registering one without a requirement panics at startup, and a startup check walks the router to prove each route is guarded. The policy engine denies anything not explicitly granted, resolves the environment before the permission check, and writes an audit entry for every denial; if that write fails the request fails. Hiding a control in the UI is only convenience (T-01-58): the server decides.
 
