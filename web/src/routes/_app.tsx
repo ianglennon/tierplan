@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { createFileRoute, Outlet, redirect, useRouter } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
+import { useState } from "react";
 
-import { setCsrfToken, setUnauthorizedHandler } from "@/api/client";
-import { loadInstance } from "@/api/instance";
-import { queryClient } from "@/api/query-client";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider, SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -16,14 +13,9 @@ import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
 import { EnvPalette } from "@/features/environments/env-palette";
 import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { useAccessRefetch } from "@/hooks/use-access-refetch";
-import {
-  meQueryOptions,
-  UnauthenticatedError,
-  useAnyEnvironmentPermission,
-  useMe,
-  usePermission,
-} from "@/hooks/use-me";
+import { useAnyEnvironmentPermission, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
+import { requireSession, useSessionExpiry } from "@/lib/require-session";
 import { getSidebarOpen, setSidebarOpen } from "@/lib/sidebar-state";
 
 // ShellBody is everything right of the sidebar: the 48px header, the page and,
@@ -66,7 +58,6 @@ function ShellBody() {
 
 function AppLayout() {
   const t = useT();
-  const router = useRouter();
   const [open, setOpen] = useState(getSidebarOpen);
 
   // A 403 or 404 on a later request can mean the user's access changed: read
@@ -74,27 +65,8 @@ function AppLayout() {
   // still see (D-10).
   useAccessRefetch();
 
-  // A 401 on any later signed-in request means the session ended (expired,
-  // revoked or signed out elsewhere): go to sign-in, which brings the browser
-  // back to this page afterwards, and then drop everything the session cached
-  // so nothing from it survives for the next person (WR-15). One-shot, so a
-  // burst of failing requests navigates once.
-  useEffect(() => {
-    setUnauthorizedHandler((path) => {
-      setUnauthorizedHandler(null);
-      setCsrfToken(null);
-      void router
-        .navigate({
-          to: "/login",
-          search: { next: path === "/" ? undefined : path, expired: true },
-          replace: true,
-        })
-        // Clear only once the signed-in pages are gone (the same order as the
-        // user menu's logout), so no observer refetches into the cleared cache.
-        .then(() => queryClient.clear());
-    });
-    return () => setUnauthorizedHandler(null);
-  }, [router]);
+  // A 401 on any later signed-in request sends the browser to sign-in and back.
+  useSessionExpiry();
 
   return (
     <TooltipProvider>
@@ -127,23 +99,7 @@ function AppLayout() {
 }
 
 export const Route = createFileRoute("/_app")({
-  // Every signed-in page needs to know who is signed in. A fresh install goes
-  // to the wizard first, and a visitor without a session goes to sign-in with
-  // the page they asked for remembered in `next`.
-  beforeLoad: async ({ location }) => {
-    const instance = await loadInstance(30_000);
-    if (instance.needsSetup) throw redirect({ to: "/setup" });
-    try {
-      await queryClient.ensureQueryData(meQueryOptions);
-    } catch (err) {
-      if (err instanceof UnauthenticatedError) {
-        throw redirect({
-          to: "/login",
-          search: { next: location.href === "/" ? undefined : location.href },
-        });
-      }
-      throw err;
-    }
-  },
+  // Every signed-in page needs to know who is signed in (see requireSession).
+  beforeLoad: requireSession,
   component: AppLayout,
 });
