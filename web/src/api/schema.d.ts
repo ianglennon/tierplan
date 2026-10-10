@@ -572,6 +572,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/containers/{containerId}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A page of earlier log lines
+         * @description Up to tail lines of the container's log that were written before until, oldest first, for "Load earlier lines". It does not follow the log. until is an RFC 3339 time or Unix seconds and is exclusive; leave it out for the newest lines. since, when given, is the earliest time to look back to. startOfLogs is true when fewer than tail lines came back because the log has no more, and false when more may be earlier (including when the page was cut to a size limit, newest lines kept). To page without losing a line that shares its timestamp with the one before, ask for until one nanosecond after the oldest line held and drop the lines already held by timestamp and text. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). sid is the viewer's ID, the one its live stream uses: a viewer is audited once however many pages it reads. Lines are returned as the application wrote them and are never masked. Needs containers.read (Viewer) on the environment.
+         */
+        get: operations["getContainerLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/events": {
         parameters: {
             query?: never;
@@ -2495,6 +2515,12 @@ export interface components {
             /** @description The log driver, for example json-file; empty when the engine did not say */
             type: string;
         };
+        ContainerLogsBody: {
+            /** @description The lines, oldest first. t is the engine's timestamp (UTC, nine digits), s is o for stdout and e for stderr, m is the text as written */
+            lines: components["schemas"]["LogLine"][] | null;
+            /** @description True when there are no earlier lines than these */
+            startOfLogs: boolean;
+        };
         ContainerMountBody: {
             /** @description The path inside the container */
             destination: string;
@@ -3245,6 +3271,11 @@ export interface components {
             probe?: components["schemas"]["ProbeResult"];
             /** @description The Docker socket path Bayplan was configured with */
             socketPath: string;
+        };
+        LogLine: {
+            m: string;
+            s: string;
+            t: string;
         };
         LoginBody: {
             /** @description Sent as X-CSRF-Token on every mutating request */
@@ -5539,6 +5570,52 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContainerInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getContainerLogs: {
+        parameters: {
+            query: {
+                /** @description The node the container is on; see the container detail route */
+                nodeId?: string;
+                /** @description The viewer's ID: 16 to 64 letters, digits, dashes or underscores */
+                sid: string;
+                /** @description Only lines written before this time: an RFC 3339 time or Unix seconds. Left out, the newest lines */
+                until?: string;
+                /** @description Do not look further back than this time: an RFC 3339 time or Unix seconds */
+                since?: string;
+                /** @description How many lines at most; 500 by default */
+                tail?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerLogsBody"];
                 };
             };
             /** @description Error */

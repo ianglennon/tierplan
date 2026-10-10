@@ -736,13 +736,41 @@ func TestLogPageAnswersTheLinesBeforeUntilOldestFirstAndSaysWhenThereAreMore(t *
 	if len(all.Lines) != 6 || !all.StartOfLogs {
 		t.Fatalf("page = %d lines, startOfLogs %v, want the 6 earlier lines and the start", len(all.Lines), all.StartOfLogs)
 	}
+	// The engine applies a tail before an until, so a tail with an until would answer
+	// the wrong lines: the page asks for a window of time instead.
 	qs := f.fake.LogQueries()
 	last := qs[len(qs)-1]
-	if last.Get("follow") != "0" && last.Get("follow") != "" {
+	if last.Get("follow") == "1" {
 		t.Errorf("a page followed the log: %v", last)
 	}
-	if last.Get("tail") != "50" {
-		t.Errorf("tail = %q, want 50", last.Get("tail"))
+	if last.Get("tail") != "" || last.Get("until") == "" {
+		t.Errorf("the page asked the engine %v, want an until and no tail", last)
+	}
+}
+
+func TestLogPageFindsEarlierLinesFarBackWithoutReadingTheWholeLogFirst(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	f.fake.AppendLogs("web",
+		dockertest.FakeLogLine{Text: "ancient 1", Time: old},
+		dockertest.FakeLogLine{Text: "ancient 2", Time: old.Add(time.Second)},
+		dockertest.FakeLogLine{Text: "recent", Time: old.Add(90 * 24 * time.Hour)})
+	got := f.page(t, webID, "sid="+sidA+"&tail=2&until="+old.Add(91*24*time.Hour).Format(time.RFC3339Nano))
+	if len(got.Lines) != 2 || got.Lines[0].M != "ancient 2" || got.Lines[1].M != "recent" || got.StartOfLogs {
+		t.Fatalf("page = %+v, want the last two lines and not the start", got)
+	}
+	again := f.page(t, webID, "sid="+sidA+"&tail=2&until="+got.Lines[0].T)
+	if len(again.Lines) != 1 || again.Lines[0].M != "ancient 1" || !again.StartOfLogs {
+		t.Fatalf("second page = %+v, want ancient 1 and the start", again)
+	}
+	// The first page needed several windows; each is a read bounded by a since, and
+	// only the last one is not.
+	qs := f.fake.LogQueries()
+	if len(qs) < 3 {
+		t.Fatalf("%d engine reads, want the windows to widen", len(qs))
+	}
+	if qs[0].Get("since") == "" {
+		t.Errorf("the first read had no since: %v", qs[0])
 	}
 }
 

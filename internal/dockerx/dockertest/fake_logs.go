@@ -136,7 +136,7 @@ func (f *Fake) LogQueries() []url.Values {
 }
 
 // serveLogs answers GET /containers/{id}/logs: the lines of the container written so
-// far, filtered by stdout, stderr, since, until and tail, each with the engine's
+// far, filtered by stdout, stderr, tail, since and until (in the order the engine applies them), each with the engine's
 // timestamp when timestamps=1; and with follow=1 the lines appended after, until
 // EndLogs, the client leaving or the daemon stopping. A container with a TTY
 // (FakeInspect.Tty) is answered raw, with CR LF line ends; any other is multiplexed
@@ -207,12 +207,14 @@ func (f *Fake) serveLogs(w http.ResponseWriter, r *http.Request, p string, cfg F
 
 	l.mu.Lock()
 	b := l.buf(c.ID)
+	// Like the engine, the tail is taken from the end of the log first and since and
+	// until are applied to those lines, so a tail with an until can answer fewer
+	// lines than asked. Until is inclusive.
 	var first []FakeLogLine
 	for _, line := range b.lines {
-		if !want(line.Stream) || (hasSince && line.Time.Before(since)) || (hasUntil && !line.Time.Before(until)) {
-			continue
+		if want(line.Stream) {
+			first = append(first, line)
 		}
-		first = append(first, line)
 	}
 	sent := len(b.lines)
 	if t := q.Get("tail"); t != "" && t != "all" {
@@ -220,6 +222,14 @@ func (f *Fake) serveLogs(w http.ResponseWriter, r *http.Request, p string, cfg F
 			first = first[len(first)-n:]
 		}
 	}
+	kept := first[:0:0]
+	for _, line := range first {
+		if (hasSince && line.Time.Before(since)) || (hasUntil && line.Time.After(until)) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	first = kept
 	if follow {
 		l.follows++
 	}

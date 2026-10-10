@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -94,6 +95,8 @@ type logParams struct {
 	// last line the client has, normalised to the engine's layout: the stream resumes
 	// there and sends nothing at or before it.
 	since, until, tail, after string
+	// follow keeps the engine's log open for the lines written from now on.
+	follow bool
 }
 
 // RegisterLogs registers the live log stream of a container under /api/env/{envId}/.
@@ -118,12 +121,217 @@ func RegisterLogs(r *httpx.Router, d LogsDeps) {
 	r.Guarded(http.MethodGet, "/api/env/{envId}/containers/{containerId}/logs/stream", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		serveLogStream(w, req, d, lim, mem)
 	}))
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getContainerLogs", Method: http.MethodGet, Path: "/api/env/{envId}/containers/{containerId}/logs",
+		Summary: "A page of earlier log lines",
+		Description: "Up to tail lines of the container's log that were written before until, oldest first, for \"Load earlier lines\". It does not follow the log. " +
+			"until is an RFC 3339 time or Unix seconds and is exclusive; leave it out for the newest lines. since, when given, is the earliest time to look back to. " +
+			"startOfLogs is true when fewer than tail lines came back because the log has no more, and false when more may be earlier (including when the page was cut to a size limit, newest lines kept). " +
+			"To page without losing a line that shares its timestamp with the one before, ask for until one nanosecond after the oldest line held and drop the lines already held by timestamp and text. " +
+			"The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). " +
+			"sid is the viewer's ID, the one its live stream uses: a viewer is audited once however many pages it reads. " +
+			"Lines are returned as the application wrote them and are never masked. Needs containers.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, need, func(ctx context.Context, in *ContainerLogsInput) (*ContainerLogsOutput, error) {
+		return getContainerLogs(ctx, d, mem, in)
+	})
+}
+
+// ContainerLogsInput is the path and query of a page of earlier log lines.
+type ContainerLogsInput struct {
+	EnvironmentPathInput
+	ContainerID string `path:"containerId" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" maxLength:"128" doc:"The container ID or name"`
+	NodeID      string `query:"nodeId" maxLength:"128" doc:"The node the container is on; see the container detail route"`
+	SID         string `query:"sid" required:"true" pattern:"^[A-Za-z0-9_-]{16,64}$" doc:"The viewer's ID: 16 to 64 letters, digits, dashes or underscores"`
+	Until       string `query:"until" maxLength:"40" doc:"Only lines written before this time: an RFC 3339 time or Unix seconds. Left out, the newest lines"`
+	Since       string `query:"since" maxLength:"40" doc:"Do not look further back than this time: an RFC 3339 time or Unix seconds"`
+	Tail        int    `query:"tail" default:"500" minimum:"1" maximum:"2000" doc:"How many lines at most; 500 by default"`
+	UserAgent   string `header:"User-Agent" hidden:"true"`
+}
+
+// ContainerLogsBody is a page of log lines.
+type ContainerLogsBody struct {
+	Lines       []LogLine `json:"lines" doc:"The lines, oldest first. t is the engine's timestamp (UTC, nine digits), s is o for stdout and e for stderr, m is the text as written"`
+	StartOfLogs bool      `json:"startOfLogs" doc:"True when there are no earlier lines than these"`
+}
+
+// ContainerLogsOutput wraps ContainerLogsBody for huma.
+type ContainerLogsOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ContainerLogsBody
+}
+
+const (
+	// defaultPageBytes is the most one page of earlier lines holds, in bytes of log
+	// text (the timestamp and the line).
+	defaultPageBytes = 8 << 20
+	// pageTimeout bounds one page, however many windows it takes.
+	pageTimeout = 30 * time.Second
+	// pageFirstWindow is how far back the first read of a page looks; each read that
+	// finds too few lines looks pageWindowGrowth times further, until a read with no
+	// lower bound at all. An engine applies a tail before an until, so a page cannot
+	// ask for "the last N lines before T": it reads a window of time instead, and a
+	// quiet log costs a few small reads while a busy one costs one.
+	pageFirstWindow  = 10 * time.Minute
+	pageWindowGrowth = 8
+	pageMaxWindow    = 400 * 24 * time.Hour
+)
+
+// parseLogBound reads a since or until: an RFC 3339 time or Unix seconds with an
+// optional fraction.
+func parseLogBound(v string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+		return t.UTC(), nil
+	}
+	if !logUnixTime.MatchString(v) {
+		return time.Time{}, errors.New("not a time")
+	}
+	sec, frac, _ := strings.Cut(v, ".")
+	secs, err := strconv.ParseInt(sec, 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var nanos int64
+	if frac != "" {
+		nanos, _ = strconv.ParseInt((frac + "000000000")[:9], 10, 64)
+	}
+	return time.Unix(secs, nanos).UTC(), nil
+}
+
+// logPageRing keeps the newest lines offered, up to a count and a size.
+type logPageRing struct {
+	maxLines, maxBytes int
+	lines              []LogLine
+	size               int
+	// seen counts every line offered; cut says lines were dropped for the size limit.
+	seen int
+	cut  bool
+}
+
+func (r *logPageRing) add(l LogLine) {
+	r.seen++
+	r.lines = append(r.lines, l)
+	r.size += len(l.T) + len(l.M)
+	for len(r.lines) > r.maxLines {
+		r.drop()
+	}
+	for r.size > r.maxBytes && len(r.lines) > 1 {
+		r.drop()
+		r.cut = true
+	}
+}
+
+func (r *logPageRing) drop() {
+	r.size -= len(r.lines[0].T) + len(r.lines[0].M)
+	r.lines[0] = LogLine{}
+	r.lines = r.lines[1:]
+}
+
+// getContainerLogs answers a page of earlier lines (see the route's description).
+func getContainerLogs(ctx context.Context, d LogsDeps, mem *logAuditMemory, in *ContainerLogsInput) (*ContainerLogsOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	var until, since time.Time
+	var hasUntil, hasSince bool
+	var err error
+	if in.Until != "" {
+		if until, err = parseLogBound(in.Until); err != nil {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemValidationFailed, "until must be an RFC 3339 time or Unix seconds")
+		}
+		hasUntil = true
+	}
+	if in.Since != "" {
+		if since, err = parseLogBound(in.Since); err != nil {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemValidationFailed, "since must be an RFC 3339 time or Unix seconds")
+		}
+		hasSince = true
+	}
+	agg, nodeID, _, err := resolveContainerNode(ctx, d.Aggregator, d.Log, env.ID, in.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	budget := d.MaxPageBytes
+	if budget <= 0 {
+		budget = defaultPageBytes
+	}
+	untilStamp := ""
+	top := time.Now().UTC()
+	if hasUntil {
+		untilStamp, top = until.Format(logTimeLayout), until
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, pageTimeout)
+	defer cancel()
+	var ring *logPageRing
+	final := false
+	opened := false
+	for w := pageFirstWindow; ; w *= pageWindowGrowth {
+		params := logParams{sid: in.SID, nodeID: nodeID}
+		if hasUntil {
+			params.until = untilStamp
+		}
+		low := top.Add(-w)
+		switch {
+		case hasSince && !low.After(since):
+			low, final = since, true
+		case w > pageMaxWindow:
+			final = true
+		}
+		if !final || hasSince {
+			params.since = low.Format(logTimeLayout)
+		}
+		ring = &logPageRing{maxLines: in.Tail, maxBytes: budget}
+		rc, tty, err := openLogs(ctx, d, env.ID, nodeID, in.ContainerID, params)
+		if err != nil {
+			return nil, err
+		}
+		if !opened {
+			opened = true
+			fullID, name := logContainerRow(agg, nodeID, in.ContainerID)
+			auditLogsViewed(ctx, d, mem, p, env.ID, fullID, name, nodeID, logParams{sid: in.SID, since: in.Since, tail: strconv.Itoa(in.Tail)}, in.UserAgent)
+		}
+		err = pumpLogs(ctx, rc, tty, func(l LogLine) {
+			if untilStamp != "" && l.T >= untilStamp {
+				return
+			}
+			ring.add(l)
+		})
+		_ = rc.Close()
+		if err != nil {
+			return nil, snapshotProblem(d.Log, env.ID, err)
+		}
+		if final || ring.seen >= in.Tail || ring.cut {
+			break
+		}
+	}
+	lines := ring.lines
+	if lines == nil {
+		lines = []LogLine{}
+	}
+	return &ContainerLogsOutput{CacheControl: "no-store", Body: ContainerLogsBody{
+		Lines:       lines,
+		StartOfLogs: final && !ring.cut && ring.seen < in.Tail,
+	}}, nil
+}
+
+// logContainerRow finds the full ID and the name of the container a route was asked
+// about in the aggregate; without a row both are what was asked.
+func logContainerRow(agg envs.Aggregate, nodeID, containerID string) (fullID, name string) {
+	for _, row := range agg.Containers {
+		if row.NodeID == nodeID && (row.ID == containerID || (len(containerID) >= minSelfIDLen && strings.HasPrefix(row.ID, containerID)) || row.Name == containerID) {
+			return row.ID, row.Name
+		}
+	}
+	return containerID, containerID
 }
 
 // parseLogParams reads and checks the query. The error is a sentence for the 422.
 func parseLogParams(req *http.Request) (logParams, error) {
 	q := req.URL.Query()
-	var p logParams
+	p := logParams{follow: true}
 	p.sid = q.Get("sid")
 	if !logSID.MatchString(p.sid) {
 		return p, errors.New("sid must be 16 to 64 letters, digits, dashes or underscores")
@@ -173,7 +381,7 @@ func parseLogParams(req *http.Request) (logParams, error) {
 // openLogs opens the engine's log for the container on the node and maps what can go
 // wrong to the problem to answer before the stream starts.
 func openLogs(ctx context.Context, d LogsDeps, envID, nodeID, containerID string, p logParams) (rc io.ReadCloser, tty bool, err error) {
-	opts := dockerx.LogOptions{Since: p.since, Until: p.until, Tail: p.tail, Follow: true}
+	opts := dockerx.LogOptions{Since: p.since, Until: p.until, Tail: p.tail, Follow: p.follow}
 	err = d.Aggregator.OnNode(ctx, envID, nodeID, func(c *dockerx.Client) error {
 		var e error
 		rc, tty, e = c.ContainerLogs(ctx, containerID, opts)
@@ -248,13 +456,7 @@ func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *s
 	}
 	defer func() { run.stop() }()
 
-	fullID, name := containerID, containerID
-	for _, row := range agg.Containers {
-		if row.NodeID == nodeID && (row.ID == containerID || (len(containerID) >= minSelfIDLen && strings.HasPrefix(row.ID, containerID)) || row.Name == containerID) {
-			fullID, name = row.ID, row.Name
-			break
-		}
-	}
+	fullID, name := logContainerRow(agg, nodeID, containerID)
 	auditLogsViewed(ctx, d, mem, p, env.ID, fullID, name, nodeID, params, req.UserAgent())
 
 	// A stream lives for hours, so the server's other timeouts must not apply to it.
