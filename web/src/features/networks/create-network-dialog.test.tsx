@@ -298,6 +298,7 @@ const row = (name: string, subnets: string[], extra: Partial<NetworkRow> = {}): 
   nodeId: "node-1-id",
   subnets,
   created: "2026-10-01T10:00:00Z",
+  builtIn: false,
   ...extra,
 });
 

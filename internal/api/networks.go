@@ -30,6 +30,12 @@ const (
 	problemIPRangeOutsideSubnet  = "iprange_outside_subnet"
 	problemAttachableOverlayOnly = "attachable_overlay_only"
 	problemOverlayNeedsSwarm     = "overlay_needs_swarm"
+
+	problemNetworkBuiltin  = "network_builtin"
+	problemNetworkInUse    = "network_in_use"
+	problemNetworkNotFound = "network_not_found"
+	problemNodeUnreachable = codeNodeUnreachable
+	codeRemoved            = "removed"
 )
 
 // NetworksDeps are the dependencies of the network routes.
@@ -71,6 +77,15 @@ type NetworkCreateBody struct {
 	Name string `json:"name" doc:"The network name"`
 }
 
+// NetworkDeleteInput is the path and query of the delete route.
+type NetworkDeleteInput struct {
+	EnvironmentPathInput
+	NetworkID string `path:"networkId" maxLength:"128" doc:"The network ID: the id of a row of the networks list"`
+	NodeID    string `query:"nodeId" maxLength:"128" doc:"The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
 // NetworkCreateOutput wraps NetworkCreateBody for huma.
 type NetworkCreateOutput struct {
 	CacheControl string `header:"Cache-Control"`
@@ -101,6 +116,25 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
 			return createNetwork(ctx, d, p, env.ID, in)
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "deleteNetwork", Method: http.MethodDelete, Path: "/api/env/{envId}/networks/{networkId}",
+		Summary: "Delete a network",
+		Description: "Deletes one network, once and never retried. " +
+			"404 network_not_found when the network is not there (already gone). " +
+			"409 network_builtin for bridge, host, none, ingress, docker_gwbridge and any network with the ingress flag. " +
+			"A local-scope network on a swarm is named by nodeId, the nodeId of its row (422 node_required when two nodes have one with that ID). " +
+			"Needs networks.manage (Admin) on the environment. Every attempt on a network that exists is audited as network.removed, " +
+			"with result failure and the code when it was refused.",
+		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
+	}, rbac.Requirement{Perm: rbac.PermNetworksManage, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *NetworkDeleteInput) (*struct{}, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			return nil, deleteNetwork(ctx, d, p, env.ID, in)
 		})
 }
 
@@ -206,9 +240,17 @@ func validateAddressing(subnet, gateway, ipRange string) error {
 // networkCreateProblem turns the error of a create into the audit code and the problem
 // the SPA understands.
 func networkCreateProblem(log *slog.Logger, envID, name string, err error) (string, error) {
-	switch {
-	case dockerx.IsConflict(err):
+	if dockerx.IsConflict(err) {
 		return problemNameTaken, httpx.Problem(http.StatusConflict, problemNameTaken, "A network named "+name+" already exists.")
+	}
+	return networkWriteProblem(log, envID, err)
+}
+
+// networkWriteProblem is the part of a network write's failure that every write shares:
+// a read-only host, a node that is not connected, an agent's policy refusal, and
+// anything else as a failed action.
+func networkWriteProblem(log *slog.Logger, envID string, err error) (string, error) {
+	switch {
 	case errors.Is(err, envs.ErrHostReadOnly):
 		return codeHostReadOnly, httpx.Problem(http.StatusConflict, codeHostReadOnly,
 			"This host is read-only. Its owner turned changes off on the host itself, so Bayplan can only read from it.")
@@ -222,13 +264,9 @@ func networkCreateProblem(log *slog.Logger, envID, name string, err error) (stri
 	return codeActionFailed, snapshotProblem(log, envID, err)
 }
 
-// auditNetwork writes the row of one network attempt. A row that cannot be written is
-// logged: the network has been made or refused, and the caller must still be told which.
+// auditNetwork writes the row of one network create attempt. A row that cannot be written
+// is logged: the network has been made or refused, and the caller must still be told which.
 func auditNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent, action, targetID, name, node, scope string, spec dockerx.NetworkCreateSpec, code string) {
-	result, reason := audit.ResultSuccess, ""
-	if code != codeCreated {
-		result, reason = audit.ResultFailure, code
-	}
 	details := map[string]string{
 		"name": name, "driver": spec.Driver, "scope": scope, "code": code,
 		"internal": strconv.FormatBool(spec.Internal), "attachable": strconv.FormatBool(spec.Attachable),
@@ -243,6 +281,16 @@ func auditNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID,
 	if spec.Gateway != "" {
 		details["gateway"] = spec.Gateway
 	}
+	recordNetwork(ctx, d, p, envID, userAgent, action, targetID, name, code, details)
+}
+
+// recordNetwork writes one audit row of a network action: a success when code is
+// codeCreated or codeRemoved, else a failure whose reason is the code.
+func recordNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent, action, targetID, name, code string, details map[string]string) {
+	result, reason := audit.ResultSuccess, ""
+	if code != codeCreated && code != codeRemoved {
+		result, reason = audit.ResultFailure, code
+	}
 	if err := d.Audit.Record(ctx, audit.Entry{
 		Actor: p.AuditActor(), Action: action, TargetType: networkTargetType, TargetID: targetID,
 		EnvID: envID, Result: result, Reason: reason,
@@ -250,4 +298,97 @@ func auditNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID,
 	}); err != nil {
 		d.Log.Error("could not audit a network action", "action", action, "network", name, "error", err)
 	}
+}
+
+// findNetwork is the row of the network networkID in an aggregate. A swarm-scoped network
+// is listed once, so it is found by its ID. A local one is on one node, named by nodeID
+// when given; with no nodeID and the same ID on two nodes the caller must say which.
+func findNetwork(agg envs.Aggregate, networkID, nodeID string) (envs.NetworkRow, error) {
+	var found []envs.NetworkRow
+	for _, n := range agg.Networks {
+		if n.ID != networkID {
+			continue
+		}
+		if n.Scope != dockerx.ScopeSwarm && nodeID != "" && n.NodeID != nodeID {
+			continue
+		}
+		found = append(found, n)
+	}
+	switch len(found) {
+	case 0:
+		return envs.NetworkRow{}, httpx.Problem(http.StatusNotFound, problemNetworkNotFound,
+			"This network does not exist. It may have been removed.")
+	case 1:
+		return found[0], nil
+	}
+	return envs.NetworkRow{}, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
+		"More than one node has a network with this ID. Say which one (nodeId).")
+}
+
+// deleteNetwork removes one network. The built-in networks are refused before anything is
+// sent. The removal goes where the network belongs: a swarm-scoped one through a manager,
+// a local one to its own node, once and never retried (P2 D-42). Every attempt on a
+// network that exists is audited.
+func deleteNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID string, in *NetworkDeleteInput) error {
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return snapshotProblem(d.Log, envID, err)
+	}
+	row, err := findNetwork(agg, in.NetworkID, in.NodeID)
+	if err != nil {
+		return err
+	}
+	node := ""
+	if row.Scope != dockerx.ScopeSwarm {
+		node = row.NodeID
+	}
+	refuse := func(status int, code, detail string) error {
+		recordRemoved(ctx, d, p, envID, in.UserAgent, row, node, code)
+		return httpx.Problem(status, code, detail)
+	}
+	if dockerx.IsBuiltinNetwork(row.Name, row.Ingress) {
+		return refuse(http.StatusConflict, problemNetworkBuiltin, row.Name+" is built in and can't be deleted.")
+	}
+
+	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	remove := func(c *dockerx.Client) error { return c.NetworkRemove(writeCtx, row.ID) }
+	if row.Scope == dockerx.ScopeSwarm {
+		err = d.Aggregator.WriteOnManager(writeCtx, envID, remove)
+	} else {
+		err = d.Aggregator.WriteOnNode(writeCtx, envID, row.NodeID, remove)
+	}
+	if err != nil {
+		code, problem := networkRemoveProblem(d.Log, envID, row.Name, err)
+		recordRemoved(ctx, d, p, envID, in.UserAgent, row, node, code)
+		return problem
+	}
+	recordRemoved(ctx, d, p, envID, in.UserAgent, row, node, codeRemoved)
+	return nil
+}
+
+// networkRemoveProblem turns the error of a remove into the audit code and the problem the
+// SPA understands. An engine that says the network is gone is a 404, and one that says
+// something is attached, which can happen when a container joins between the check and
+// the call, is network_in_use and never a generic failure.
+func networkRemoveProblem(log *slog.Logger, envID, name string, err error) (string, error) {
+	switch {
+	case dockerx.IsNotFound(err):
+		return problemNetworkNotFound, httpx.Problem(http.StatusNotFound, problemNetworkNotFound,
+			name+" is already gone.")
+	case dockerx.IsNetworkInUse(err):
+		return problemNetworkInUse, httpx.Problem(http.StatusConflict, problemNetworkInUse,
+			name+" is still in use. Disconnect or remove what uses it, then try again.")
+	}
+	return networkWriteProblem(log, envID, err)
+}
+
+// recordRemoved audits one removal attempt of a network that exists: name, driver, scope
+// and, for a local network, the node.
+func recordRemoved(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent string, row envs.NetworkRow, node, code string) {
+	details := map[string]string{"name": row.Name, "driver": row.Driver, "scope": row.Scope, "code": code}
+	if node != "" {
+		details["node"] = node
+	}
+	recordNetwork(ctx, d, p, envID, userAgent, audit.ActionNetworkRemoved, row.ID, row.Name, code, details)
 }

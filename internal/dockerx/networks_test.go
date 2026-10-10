@@ -137,3 +137,64 @@ func TestNetworkCreateATakenNameIsAConflictAndTheCreatedNetworkIsListed(t *testi
 		t.Fatalf("networks = %+v, want the created one", snap.Networks)
 	}
 }
+
+func TestIsBuiltinNetworkNamesTheFiveAndAnythingWithTheIngressFlag(t *testing.T) {
+	for _, name := range []string{"bridge", "host", "none", "ingress", "docker_gwbridge"} {
+		if !dockerx.IsBuiltinNetwork(name, false) {
+			t.Errorf("%s is not reported built in", name)
+		}
+	}
+	if !dockerx.IsBuiltinNetwork("my-mesh", true) {
+		t.Error("a network with the ingress flag is built in whatever it is called")
+	}
+	for _, name := range []string{"app-net", "bridge2", "Bridge", ""} {
+		if dockerx.IsBuiltinNetwork(name, false) {
+			t.Errorf("%q is reported built in", name)
+		}
+	}
+}
+
+func TestNetworkRemoveSendsOneDeleteAndTheNetworkLeavesTheList(t *testing.T) {
+	c, fake := networkFake(t)
+	id, _, err := c.NetworkCreate(context.Background(), dockerx.NetworkCreateSpec{Name: "app-net", Driver: "bridge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.NetworkRemove(context.Background(), id); err != nil {
+		t.Fatalf("NetworkRemove = %v", err)
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"POST /networks/create", "DELETE /networks/" + id}) {
+		t.Fatalf("writes = %v, want a create then one delete and no retry", got)
+	}
+	snap, err := c.Snapshot(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range snap.Networks {
+		if n.ID == id {
+			t.Fatalf("the removed network is still listed: %+v", snap.Networks)
+		}
+	}
+	if err := c.NetworkRemove(context.Background(), id); !dockerx.IsNotFound(err) {
+		t.Fatalf("a second remove = %v, want not found", err)
+	}
+}
+
+func TestNetworkRemoveOfANetworkWithAContainerIsTheEnginesInUseRefusal(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		Networks: []dockertest.FakeNetwork{{ID: "n9", Name: "app-net", Driver: "bridge", Scope: "local"}},
+		Containers: []dockertest.FakeContainer{{ID: "c1", Names: []string{"/web"}, State: "exited",
+			Networks: map[string]dockertest.FakeEndpoint{"app-net": {NetworkID: "n9"}}}},
+	})
+	c := newClient(t, fake)
+	err := c.NetworkRemove(context.Background(), "n9")
+	if err == nil || !dockerx.IsNetworkInUse(err) {
+		t.Fatalf("NetworkRemove = %v, want the in-use refusal", err)
+	}
+	if dockerx.IsNetworkInUse(errors.New("agent_policy_denied: DELETE /networks/n9")) {
+		t.Error("a policy refusal is not an in-use refusal")
+	}
+	if dockerx.IsNetworkInUse(nil) {
+		t.Error("no error is not an in-use refusal")
+	}
+}

@@ -188,6 +188,7 @@ type NetworkItem struct {
 	Scope   string   `json:"scope" doc:"local, or swarm for a cluster-wide network"`
 	Subnets []string `json:"subnets" doc:"The IPAM subnets in CIDR notation; empty when the network has none"`
 	Created string   `json:"created,omitempty" format:"date-time"`
+	BuiltIn bool     `json:"builtIn" doc:"True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted"`
 }
 
 // ContainerListBody and its siblings are a capped list with the full total.
@@ -511,7 +512,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			}
 			rows := filterNode(agg.Networks, in.Node, func(n envs.NetworkRow) string { return n.Node })
 			items, total, truncated := capRows(rows, func(n envs.NetworkRow) NetworkItem {
-				return NetworkItem{Node: n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created)}
+				return NetworkItem{Node: n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created), BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress)}
 			})
 			return &NetworkListOutput{CacheControl: "no-store", Body: NetworkListBody{
 				Items: items, Total: total, Truncated: truncated,

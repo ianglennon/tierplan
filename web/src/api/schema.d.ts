@@ -636,6 +636,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/networks/{networkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a network
+         * @description Deletes one network, once and never retried. 404 network_not_found when the network is not there (already gone). 409 network_builtin for bridge, host, none, ingress, docker_gwbridge and any network with the ingress flag. A local-scope network on a swarm is named by nodeId, the nodeId of its row (422 node_required when two nodes have one with that ID). Needs networks.manage (Admin) on the environment. Every attempt on a network that exists is audited as network.removed, with result failure and the code when it was refused.
+         */
+        delete: operations["deleteNetwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/reconnect": {
         parameters: {
             query?: never;
@@ -3163,6 +3183,8 @@ export interface components {
             subnet?: string;
         };
         NetworkItem: {
+            /** @description True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted */
+            builtIn: boolean;
             /** Format: date-time */
             created?: string;
             driver: string;
@@ -5234,6 +5256,41 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["NetworkCreateBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteNetwork: {
+        parameters: {
+            query?: {
+                /** @description The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the id of a row of the networks list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

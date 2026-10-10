@@ -429,11 +429,13 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // ContainerDetail (Phase 4, RES-01) is a read: one inspect by ID, typed.
 // NetworkCreate (Phase 4, RES-06) takes a typed spec of a name, one of four drivers and
 // its addressing; it cannot express an ingress, config-only or config-from network.
-var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkCreate", "Probe", "RestartPolicies", "Snapshot", "StartExec"}
+// NetworkRemove (Phase 4, RES-06) removes one network by ID, once; it takes no path and
+// no options, and the API refuses a built-in or an in-use network before it is called.
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerOwnership", "ContainerRemove", "Events", "NetworkCreate", "NetworkRemove", "Probe", "RestartPolicies", "Snapshot", "StartExec"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
-var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove", "NetworkCreate"}
+var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 
@@ -701,9 +703,11 @@ func TestSnapshotRowsCannotCarryEnvironmentVariablesLabelsOrMounts(t *testing.T)
 	// and network attachments for the search and the usage rules of networks and
 	// volumes. It never has a variable or a command. The API's container list sends
 	// an allowlist and never these fields; TestListsNeverCarryLabelsMountsOrVariables
-	// proves it (T-04-29).
+	// proves it (T-04-29). A NetworkRow keeps its labels (plan 04-13) for the same
+	// reason: the owner column and the search read the stack and project labels, and the
+	// list sends only the owner.
 	banned := regexp.MustCompile(`(?i)^(labels?|env|environment|mounts?|binds?|command|cmd|entrypoint|options|attachments|containers)$`)
-	internal := map[string]bool{"ContainerRow.Labels": true, "ContainerRow.Mounts": true}
+	internal := map[string]bool{"ContainerRow.Labels": true, "ContainerRow.Mounts": true, "NetworkRow.Labels": true}
 	for _, v := range []any{dockerx.ContainerRow{}, dockerx.ImageRow{}, dockerx.VolumeRow{}, dockerx.NetworkRow{}} {
 		typ := reflect.TypeOf(v)
 		for i := range typ.NumField() {

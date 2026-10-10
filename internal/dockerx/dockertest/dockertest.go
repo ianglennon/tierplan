@@ -289,6 +289,12 @@ type FakeNetwork struct {
 	Scope   string
 	Subnets []string
 	Created time.Time
+	// Labels, Internal, Attachable and Ingress are what /networks reports for the
+	// network.
+	Labels     map[string]string
+	Internal   bool
+	Attachable bool
+	Ingress    bool
 }
 
 func (c FakeConfig) withDefaults() FakeConfig {
@@ -334,6 +340,9 @@ type Fake struct {
 	// those requests (fake_networks.go).
 	nets       []FakeNetwork
 	netCreates []network.CreateRequest
+	// netGone are the IDs of networks removed through the fake; withoutNetworks
+	// leaves them out of every list.
+	netGone map[string]bool
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
@@ -456,7 +465,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -724,7 +733,10 @@ func (c FakeConfig) volumeList() volume.ListResponse {
 func (c FakeConfig) networkList() []network.Summary {
 	out := make([]network.Summary, 0, len(c.Networks))
 	for _, fn := range c.Networks {
-		n := network.Summary{Network: network.Network{ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created}}
+		n := network.Summary{Network: network.Network{
+			ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created,
+			Labels: fn.Labels, Internal: fn.Internal, Attachable: fn.Attachable, Ingress: fn.Ingress,
+		}}
 		for _, sub := range fn.Subnets {
 			n.IPAM.Config = append(n.IPAM.Config, network.IPAMConfig{Subnet: netip.MustParsePrefix(sub)})
 		}

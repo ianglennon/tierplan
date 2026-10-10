@@ -3583,6 +3583,10 @@
       "NetworkItem": {
         "additionalProperties": false,
         "properties": {
+          "builtIn": {
+            "description": "True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted",
+            "type": "boolean"
+          },
           "created": {
             "format": "date-time",
             "type": "string"
@@ -3626,7 +3630,8 @@
           "name",
           "driver",
           "scope",
-          "subnets"
+          "subnets",
+          "builtIn"
         ],
         "type": "object"
       },
@@ -7598,6 +7603,65 @@
           }
         },
         "summary": "Create a network",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/networks/{networkId}": {
+      "delete": {
+        "description": "Deletes one network, once and never retried. 404 network_not_found when the network is not there (already gone). 409 network_builtin for bridge, host, none, ingress, docker_gwbridge and any network with the ingress flag. A local-scope network on a swarm is named by nodeId, the nodeId of its row (422 node_required when two nodes have one with that ID). Needs networks.manage (Admin) on the environment. Every attempt on a network that exists is audited as network.removed, with result failure and the code when it was refused.",
+        "operationId": "deleteNetwork",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The network ID: the id of a row of the networks list",
+            "in": "path",
+            "name": "networkId",
+            "required": true,
+            "schema": {
+              "description": "The network ID: the id of a row of the networks list",
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "description": "The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster",
+            "explode": false,
+            "in": "query",
+            "name": "nodeId",
+            "schema": {
+              "description": "The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a network",
         "tags": [
           "environments"
         ]

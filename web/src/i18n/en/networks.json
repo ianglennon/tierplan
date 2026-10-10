@@ -65,6 +65,19 @@
         "many": "This overlaps {{count}} networks: {{first}}, {{second}} and {{more}} more. Containers on both networks may not reach each other. You can still create it."
       }
     },
+    "delete": {
+      "action": "Delete…",
+      "title": "Delete {{name}}?",
+      "body": "Containers can no longer use it. This can't be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete network",
+      "pending": "Deleting…",
+      "done": "Deleted network {{name}}.",
+      "gone": "{{name}} is already gone.",
+      "builtin": "{{name}} is built in and can't be deleted.",
+      "inUse": "{{name}} is still in use. Disconnect or remove what uses it, then try again.",
+      "label": "Delete network {{name}}"
+    },
     "errors": {
       "nameRequired": "Enter a name.",
       "nameInvalid": "Use letters, numbers, dot, dash or underscore.",

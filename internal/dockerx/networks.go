@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 )
@@ -121,4 +123,44 @@ func ipamOf(spec NetworkCreateSpec) (*network.IPAM, error) {
 		cfg.IPRange = p.Masked()
 	}
 	return &network.IPAM{Config: []network.IPAMConfig{cfg}}, nil
+}
+
+// builtinNetworks are the networks the engine and the swarm make themselves. Their
+// names are exactly these five (RESEARCH Pitfall 7).
+var builtinNetworks = []string{"bridge", "host", "none", "ingress", "docker_gwbridge"}
+
+// IsBuiltinNetwork reports whether a network is one the engine or the swarm made and
+// that can never be deleted: one of the five built-in names, or any network that
+// carries the ingress flag, whatever it is called.
+func IsBuiltinNetwork(name string, ingress bool) bool {
+	return ingress || slices.Contains(builtinNetworks, name)
+}
+
+// NetworkRemove removes the network id once and never retries: a remove whose answer
+// was lost may have happened (P2 D-42). The caller checks that nothing uses the
+// network; the engine's own refusal of a network with active endpoints is
+// IsNetworkInUse.
+func (c *Client) NetworkRemove(ctx context.Context, id string) error {
+	if _, err := c.cur().NetworkRemove(ctx, id, client.NetworkRemoveOptions{}); err != nil {
+		return fmt.Errorf("remove network on %s: %w", c.t.Describe(), err)
+	}
+	return nil
+}
+
+// IsNetworkInUse reports whether err is the engine refusing to remove a network that
+// something still uses. Older engines answer 409 and newer ones 403 with the words
+// "has active endpoints"; a swarm manager says the network is in use by a service. A
+// 403 that is an agent's policy refusal is not one of these.
+func IsNetworkInUse(err error) bool {
+	if err == nil {
+		return false
+	}
+	if cerrdefs.IsConflict(err) {
+		return true
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "agent_policy_denied") {
+		return false
+	}
+	return strings.Contains(msg, "active endpoints") || strings.Contains(msg, "is in use by")
 }

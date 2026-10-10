@@ -12,6 +12,7 @@ import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { CreateNetworkDialog } from "@/features/networks/create-network-dialog";
+import { DeleteNetworkDialog } from "@/features/networks/delete-network-dialog";
 import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
 import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
@@ -36,6 +37,7 @@ export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
   const manage = useNeeds("networks.manage", envId);
   const swarm = useEnvIsSwarm(envId);
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<NetworkRow | null>(null);
   const nodeColumn = useNodeColumn<NetworkRow>();
   const query = useQuery({ ...networksQuery(envId, swarm ? node : undefined), enabled: allowed });
   // The create dialog checks the subnet against every node's networks and offers
@@ -81,6 +83,29 @@ export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
       header: t(`${key}.columns.created`),
       cell: (n) => <RelativeTime value={n.created} />,
     },
+    {
+      id: "actions",
+      header: <span className="sr-only">{t("actions.column")}</span>,
+      className: "w-px px-1 text-end",
+      cell: (n) => {
+        // Who may delete comes first; then what makes the network undeletable.
+        const reason =
+          manage.reason ?? (n.builtIn ? t("networks.delete.builtin", { name: n.name }) : undefined);
+        return (
+          <NeedsTooltip reason={reason}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="max-md:h-11"
+              aria-label={t("networks.delete.label", { name: n.name })}
+              onClick={reason ? undefined : () => setDeleting(n)}
+            >
+              {t("networks.delete.action")}
+            </Button>
+          </NeedsTooltip>
+        );
+      },
+    },
   ];
 
   if (!allowed) return <NoPermission />;
@@ -109,6 +134,9 @@ export function NetworkList({ envId, node, onNodeChange }: NetworkListProps) {
           </div>
         }
       />
+      {manage.allowed ? (
+        <DeleteNetworkDialog envId={envId} network={deleting} onClose={() => setDeleting(null)} />
+      ) : null}
       {manage.allowed ? (
         <CreateNetworkDialog
           envId={envId}

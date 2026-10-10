@@ -87,6 +87,12 @@ type NetworkRow struct {
 	Scope   string
 	Subnets []string
 	Created time.Time
+	// Labels is every label of the network. It feeds the owner column and the
+	// search and is never sent to a browser whole.
+	Labels map[string]string
+	// Internal, Attachable and IPv6 are the network's flags; Ingress marks the
+	// swarm's routing mesh network, whatever it is named.
+	Internal, Attachable, IPv6, Ingress bool
 }
 
 // Counts are the dashboard tiles. Every one is derived from the lists of the
@@ -158,7 +164,10 @@ func (c *Client) Snapshot(ctx context.Context, swarmManager bool) (Snapshot, err
 	}
 	snap.Networks = make([]NetworkRow, 0, len(ns.Items))
 	for _, n := range ns.Items {
-		row := NetworkRow{ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: []string{}, Created: n.Created.UTC()}
+		row := NetworkRow{
+			ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: []string{}, Created: n.Created.UTC(),
+			Labels: maps.Clone(n.Labels), Internal: n.Internal, Attachable: n.Attachable, IPv6: n.EnableIPv6, Ingress: n.Ingress,
+		}
 		for _, cfg := range n.IPAM.Config {
 			if cfg.Subnet.IsValid() {
 				row.Subnets = append(row.Subnets, cfg.Subnet.String())

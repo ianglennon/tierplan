@@ -477,3 +477,115 @@ func TestCreateNetworkIsNeverRetriedOnAnotherManagerWhenTheAnswerIsLost(t *testi
 		t.Fatalf("audit rows = %+v, want one failure", rows)
 	}
 }
+
+// Network delete (plan 04-13, RES-06, D-41, D-51, P2 D-42). Same harness as the create.
+
+func deleteEngine() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Networks: []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+			{ID: "ho0", Name: "host", Driver: "host", Scope: "local"},
+			{ID: "mesh0", Name: "my-mesh", Driver: "overlay", Scope: "local", Ingress: true},
+			{ID: "app0", Name: "app-net", Driver: "bridge", Scope: "local", Subnets: []string{"10.20.0.0/24"}},
+		},
+	}
+}
+
+// deleteNet sends a delete as the signed-in admin once the monitor has seen the node.
+func (f *envFix) deleteNet(t *testing.T, e envBody, id string) *envRec {
+	t.Helper()
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	return f.req(t, http.MethodDelete, "/api/env/"+e.ID+"/networks/"+id, "")
+}
+
+func TestDeleteNetworkAnUnusedOneAsAnEnvAdminAnswers204AuditsOnceAndASecondIs404(t *testing.T) {
+	f, e := dashEnv(t, deleteEngine())
+	f.addUser(t, "netadmin", false)
+	f.addEnvRole(t, "netadmin", e.ID, "admin")
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	cookie, csrf := f.signIn(t, "netadmin", false)
+	rec := f.call(t, authReq{method: http.MethodDelete, path: "/api/env/" + e.ID + "/networks/app0", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"DELETE /networks/app0"}) {
+		t.Fatalf("writes = %v, want one delete", w)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %+v, want one", rows)
+	}
+	r := rows[0]
+	if r.Action != audit.ActionNetworkRemoved || r.Result != string(audit.ResultSuccess) || r.TargetType != "network" || r.TargetID != "app0" || r.EnvID != e.ID {
+		t.Errorf("audit row = %+v", r)
+	}
+	for k, want := range map[string]string{"name": "app-net", "node": e.ID, "driver": "bridge", "scope": "local", "code": "removed"} {
+		if r.Details[k] != want {
+			t.Errorf("detail %s = %q, want %q (%+v)", k, r.Details[k], want, r.Details)
+		}
+	}
+	list := decode[listBody[networkItem]](t, f.get(t, e, "networks"))
+	if slices.ContainsFunc(list.Items, func(n networkItem) bool { return n.Name == "app-net" }) {
+		t.Fatalf("the list still holds app-net: %+v", list.Items)
+	}
+
+	again := f.deleteNet(t, e, "app0")
+	if again.code != http.StatusNotFound || again.ptyp != "network_not_found" {
+		t.Fatalf("a second delete: %d %q, want 404 network_not_found: %s", again.code, again.ptyp, again.body)
+	}
+	if w := f.fake.Writes(); len(w) != 1 {
+		t.Fatalf("a delete of a network that is gone reached the engine: %v", w)
+	}
+}
+
+func TestDeleteNetworkABuiltInOneIs409NetworkBuiltinSendsNothingAndIsAudited(t *testing.T) {
+	f, e := dashEnv(t, deleteEngine())
+	for _, id := range []string{"br0", "ho0", "mesh0"} {
+		rec := f.deleteNet(t, e, id)
+		if rec.code != http.StatusConflict || rec.ptyp != "network_builtin" {
+			t.Fatalf("%s: %d %q, want 409 network_builtin: %s", id, rec.code, rec.ptyp, rec.body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a built-in network reached the engine: %v", w)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 3 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "network_builtin" || rows[0].Details["name"] != "bridge" {
+		t.Fatalf("audit rows = %+v, want three failures named network_builtin", rows)
+	}
+}
+
+func TestDeleteNetworkAnOperatorAndAViewerAreRefusedAndNothingIsSent(t *testing.T) {
+	f, e := dashEnv(t, deleteEngine())
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	f.addUser(t, "operator", false)
+	f.addEnvRole(t, "operator", e.ID, "operator")
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	for _, who := range []string{"viewer", "operator"} {
+		cookie, csrf := f.signIn(t, who, false)
+		rec := f.call(t, authReq{method: http.MethodDelete, path: "/api/env/" + e.ID + "/networks/app0", cookie: cookie, csrf: csrf})
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s: status = %d, want 403: %s", who, rec.Code, rec.Body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("a refused caller reached the engine: %v", w)
+	}
+	if rows := f.networkAudits(t); len(rows) != 0 {
+		t.Fatalf("network audit rows = %+v, want none", rows)
+	}
+	denied := f.audits(t, audit.ActionPermissionDenied)
+	if len(denied) == 0 || denied[len(denied)-1].TargetID != "DELETE /api/env/{envId}/networks/{networkId}" {
+		t.Fatalf("the refusal was not audited as permission.denied: %+v", denied)
+	}
+}
+
+func TestDeleteNetworkAnUnknownEnvironmentIs404(t *testing.T) {
+	f, _ := dashEnv(t, deleteEngine())
+	rec := f.req(t, http.MethodDelete, "/api/env/nope/networks/app0", "")
+	if rec.code != http.StatusNotFound || rec.ptyp != "environment_not_found" {
+		t.Fatalf("%d %q, want 404 environment_not_found", rec.code, rec.ptyp)
+	}
+}
