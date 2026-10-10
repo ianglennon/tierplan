@@ -111,6 +111,14 @@ export function createLogStream(options: LogStreamOptions): LogStream {
     const body = parse<ContainerLogState>(event);
     if (body) options.onContainerState?.(body);
   });
+  // The server ended the stream on purpose. Closing the connection here is what keeps
+  // the browser from reconnecting into the refusal that follows.
+  source.addEventListener("closed", (event) => {
+    if (disposed) return;
+    const body = parse<{ reason?: string }>(event);
+    source.close();
+    report({ status: "closed", reason: body?.reason === "access_lost" ? "access_lost" : "failed" });
+  });
   source.addEventListener("error", () => {
     if (disposed) return;
     // readyState 2 is the browser giving up (a refusal such as 401, 404 or 429, or a

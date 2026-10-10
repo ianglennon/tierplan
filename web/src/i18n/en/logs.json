@@ -3,6 +3,7 @@
     "surface": "Logs for {{name}}",
     "stderr": "stderr",
     "empty": "No log output yet",
-    "loading": "Loading logs"
+    "loading": "Loading logs",
+    "accessLost": "Your access changed. Logs were closed."
   }
 }

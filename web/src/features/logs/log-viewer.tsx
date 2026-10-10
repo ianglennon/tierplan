@@ -114,15 +114,17 @@ export function LogViewer({ envId, containerId, nodeId, name }: LogViewerProps) 
             </div>
           ) : (
             <div className="relative min-w-full" style={{ height: virtualizer.getTotalSize() }}>
-              {virtualizer.getVirtualItems().map((row) => (
-                <div
-                  key={row.key}
-                  className="absolute top-0 left-0 min-w-full"
-                  style={{ transform: `translateY(${row.start}px)` }}
-                >
-                  <LogLineRow line={buffer.at(row.index)} stderrLabel={t("logs.stderr")} />
-                </div>
-              ))}
+              {virtualizer.getVirtualItems().map((row) =>
+                row.index < buffer.length ? (
+                  <div
+                    key={row.key}
+                    className="absolute top-0 left-0 min-w-full"
+                    style={{ transform: `translateY(${row.start}px)` }}
+                  >
+                    <LogLineRow line={buffer.at(row.index)} stderrLabel={t("logs.stderr")} />
+                  </div>
+                ) : null,
+              )}
             </div>
           )}
         </div>
@@ -132,6 +134,11 @@ export function LogViewer({ envId, containerId, nodeId, name }: LogViewerProps) 
           </p>
         ) : null}
       </div>
+      {state.status === "closed" && state.reason === "access_lost" ? (
+        <p role="status" className="rounded-lg border bg-muted px-3 py-2 text-sm">
+          {t("logs.accessLost")}
+        </p>
+      ) : null}
     </div>
   );
 }
