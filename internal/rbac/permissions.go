@@ -55,6 +55,7 @@ const (
 	PermSecretsReveal         Perm = "secrets.reveal"
 	PermVolumesDelete         Perm = "volumes.delete"
 	PermJanitorPolicy         Perm = "janitor.policy"
+	PermShellsManage          Perm = "shells.manage"
 )
 
 // Registry is a list of permissions. The Checker consults one, so a test can
@@ -96,6 +97,7 @@ var defaultRegistry = Registry{
 	{Name: PermSecretsReveal, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Reveal secret values"},
 	{Name: PermVolumesDelete, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Delete volumes"},
 	{Name: PermJanitorPolicy, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Change cleanup policy"},
+	{Name: PermShellsManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "See and end other people's shells"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.

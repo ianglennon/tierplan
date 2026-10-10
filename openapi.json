@@ -4932,6 +4932,70 @@
         ],
         "type": "object"
       },
+      "ShellItemBody": {
+        "additionalProperties": false,
+        "properties": {
+          "container": {
+            "description": "The container's name",
+            "type": "string"
+          },
+          "containerId": {
+            "description": "The container's full ID",
+            "type": "string"
+          },
+          "id": {
+            "description": "The session's ID, the one to end it by",
+            "type": "string"
+          },
+          "idleSeconds": {
+            "description": "Seconds since anything was typed into or printed by the shell",
+            "format": "int64",
+            "type": "integer"
+          },
+          "node": {
+            "description": "The name of the node the container is on",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "When the session was opened",
+            "format": "date-time",
+            "type": "string"
+          },
+          "user": {
+            "description": "The name of the person it belongs to",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "user",
+          "containerId",
+          "container",
+          "node",
+          "startedAt",
+          "idleSeconds"
+        ],
+        "type": "object"
+      },
+      "ShellListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Oldest first; empty when there are none",
+            "items": {
+              "$ref": "#/components/schemas/ShellItemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "ShellOpenBody": {
         "additionalProperties": false,
         "properties": {
@@ -7734,6 +7798,106 @@
         "summary": "Preview what removing or changing one of the environment's grants takes away",
         "tags": [
           "grants"
+        ]
+      }
+    },
+    "/api/env/{envId}/active-shells": {
+      "get": {
+        "description": "Every browser shell that is open on the environment, whoever opened it, oldest first: the person, the container, its node, when it was opened and how long it has sat unused. A shell that is waiting for its browser to attach is listed too. Needs shells.manage on the environment (env Admin or instance admin).",
+        "operationId": "listActiveShells",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List every open shell on an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/active-shells/{shellId}": {
+      "delete": {
+        "description": "Closes an open shell on the environment at once. Its browser is told it was ended by an administrator (reason ended_by_admin). 404 shell_not_found when it already closed, or belongs to another environment. A process the person left running in the container keeps running. Needs shells.manage on the environment (env Admin or instance admin). Audited as shell.ended by the administrator, naming the owner, and the shell's own shell.closed row carries the reason ended_by_admin.",
+        "operationId": "endShell",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The session's ID",
+            "in": "path",
+            "name": "shellId",
+            "required": true,
+            "schema": {
+              "description": "The session's ID",
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "End someone's shell",
+        "tags": [
+          "environments"
         ]
       }
     },

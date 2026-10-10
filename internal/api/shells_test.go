@@ -907,3 +907,164 @@ func TestShellAccessAShellOfSomeoneWhoKeepsTheirAccessIsLeftAlone(t *testing.T) 
 		t.Fatalf("%d sessions open, want the one that was left alone", len(got))
 	}
 }
+
+// Who has which shell open (plan 04-25, D-37, T-04-94 to T-04-96).
+
+type activeShell struct {
+	ID          string    `json:"id"`
+	User        string    `json:"user"`
+	ContainerID string    `json:"containerId"`
+	Container   string    `json:"container"`
+	Node        string    `json:"node"`
+	StartedAt   time.Time `json:"startedAt"`
+	IdleSeconds int64     `json:"idleSeconds"`
+}
+
+type shellList struct {
+	Items []activeShell `json:"items"`
+}
+
+func (f *shellFix) activePath(id string) string {
+	p := "/api/env/" + f.env.ID + "/active-shells"
+	if id != "" {
+		p += "/" + id
+	}
+	return p
+}
+
+// as sends a request as a signed-in user.
+func (f *shellFix) as(t *testing.T, method, path, cookie, csrf string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(t, authReq{method: method, path: path, cookie: cookie, csrf: csrf})
+}
+
+// onlyShellID is the ID of the one shell that is open, found from the registry.
+func (f *shellFix) onlyShellID(t *testing.T) string {
+	t.Helper()
+	got := f.shellsReg.List(shells.Filter{})
+	if len(got) != 1 {
+		t.Fatalf("%d shells open, want 1", len(got))
+	}
+	return got[0].ID
+}
+
+func TestActiveShellsAnEnvAdminSeesATeammatesOpenShellAndAnOperatorIsRefused(t *testing.T) {
+	f := newShellFix(t, nil)
+	cookie, csrf := f.operatorWithShell(t, "olive")
+	c := f.openAs(t, cookie, csrf)
+	sendBinary(t, c, "echo hi\n")
+	readUntilBinary(t, c, "hi")
+
+	f.addEnvUser(t, "ada", f.env.ID, "admin")
+	adaCookie, adaCSRF := f.signIn(t, "ada", false)
+	rec := f.as(t, http.MethodGet, f.activePath(""), adaCookie, adaCSRF)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	got := decodeRec[shellList](t, rec).Items
+	if len(got) != 1 {
+		t.Fatalf("items = %+v, want olive's one shell", got)
+	}
+	s := got[0]
+	if s.User != "olive" || s.Container != "web" || s.ID != f.onlyShellID(t) || s.ContainerID != webID || s.Node == "" ||
+		s.StartedAt.IsZero() || s.IdleSeconds < 0 || s.IdleSeconds > 5 {
+		t.Errorf("item = %+v, want olive's shell in web, started, idle for a moment", s)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+
+	// The Operator who owns the shell may not list the environment's shells, nor end one.
+	if rec := f.as(t, http.MethodGet, f.activePath(""), cookie, csrf); rec.Code != http.StatusForbidden {
+		t.Errorf("an Operator's list: %d, want 403", rec.Code)
+	}
+	if rec := f.as(t, http.MethodDelete, f.activePath(s.ID), cookie, csrf); rec.Code != http.StatusForbidden {
+		t.Errorf("an Operator's end: %d, want 403", rec.Code)
+	}
+	if n := len(f.shellsReg.List(shells.Filter{})); n != 1 {
+		t.Errorf("%d shells open after the refused end, want 1", n)
+	}
+}
+
+func TestActiveShellsAnAdminEndingAShellClosesItTellsItsBrowserAndAuditsBothSides(t *testing.T) {
+	f := newShellFix(t, nil)
+	cookie, csrf := f.operatorWithShell(t, "olive")
+	c := f.openAs(t, cookie, csrf)
+	id := f.onlyShellID(t)
+
+	f.addEnvUser(t, "ada", f.env.ID, "admin")
+	adaCookie, adaCSRF := f.signIn(t, "ada", false)
+	if rec := f.as(t, http.MethodDelete, f.activePath(id), adaCookie, adaCSRF); rec.Code != http.StatusNoContent {
+		t.Fatalf("end: %d %s", rec.Code, rec.Body)
+	}
+	if ctl := readControl(t, c, "closed"); ctl.Reason != "ended_by_admin" {
+		t.Errorf("closed frame = %+v, want reason ended_by_admin", ctl)
+	}
+	drain(t, c)
+
+	rows := f.waitShellRows(t, 3)
+	var opened, ended, closed *shellAuditRow
+	for i := range rows {
+		switch rows[i].Action {
+		case audit.ActionShellOpened:
+			opened = &rows[i]
+		case audit.ActionShellEnded:
+			ended = &rows[i]
+		case audit.ActionShellClosed:
+			closed = &rows[i]
+		}
+	}
+	if opened == nil || ended == nil || closed == nil {
+		t.Fatalf("rows = %+v, want shell.opened, shell.ended and shell.closed", rows)
+	}
+	if ended.Actor != "id-ada" || ended.Target != webID || ended.Env != f.env.ID || ended.Result != "success" ||
+		ended.Details["owner"] != "olive" || ended.Details["container"] != "web" || ended.Details["sid"] != id || ended.Details["node"] == "" {
+		t.Errorf("ended row = %+v, want ada ending olive's shell in web", ended)
+	}
+	if closed.Actor != "id-olive" || closed.Details["reason"] != "ended_by_admin" {
+		t.Errorf("closed row = %+v, want olive's shell closed with reason ended_by_admin", closed)
+	}
+
+	// A second end of the same shell finds it gone.
+	rec := f.as(t, http.MethodDelete, f.activePath(id), adaCookie, adaCSRF)
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "shell_not_found" {
+		t.Errorf("second end: %d %s, want 404 shell_not_found", rec.Code, rec.Body)
+	}
+	if got := decodeRec[shellList](t, f.as(t, http.MethodGet, f.activePath(""), adaCookie, adaCSRF)).Items; len(got) != 0 {
+		t.Errorf("items = %+v after the end, want none", got)
+	}
+	if n := len(f.shellAudits(t)); n != 3 {
+		t.Errorf("%d shell rows, want 3: the second end writes none", n)
+	}
+}
+
+func TestActiveShellsAnAdminOfAnotherEnvironmentCannotSeeOrEndThisOnesShells(t *testing.T) {
+	f := newShellFix(t, nil)
+	f.inst.Apply("Bayplan", "https://example.com/bayplan")
+	other, rec := f.addAgent(t)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("add the second environment: %d %s", rec.code, rec.body)
+	}
+	cookie, csrf := f.operatorWithShell(t, "olive")
+	c := f.openAs(t, cookie, csrf)
+	id := f.onlyShellID(t)
+
+	f.addEnvUser(t, "bea", other.ID, "admin")
+	beaCookie, beaCSRF := f.signIn(t, "bea", false)
+	// Bea administers the other environment: her own list is empty, and the ID of a
+	// shell of this one answers as a shell that is not there.
+	list := f.as(t, http.MethodGet, "/api/env/"+other.ID+"/active-shells", beaCookie, beaCSRF)
+	if list.Code != http.StatusOK || len(decodeRec[shellList](t, list).Items) != 0 {
+		t.Errorf("her list: %d %s, want an empty list", list.Code, list.Body)
+	}
+	end := f.as(t, http.MethodDelete, "/api/env/"+other.ID+"/active-shells/"+id, beaCookie, beaCSRF)
+	if end.Code != http.StatusNotFound || problemType(t, end) != "shell_not_found" {
+		t.Errorf("her end: %d %s, want 404 shell_not_found", end.Code, end.Body)
+	}
+	// And she has no say over this environment at all.
+	if rec := f.as(t, http.MethodGet, f.activePath(""), beaCookie, beaCSRF); rec.Code != http.StatusNotFound {
+		t.Errorf("her list of this environment: %d, want 404", rec.Code)
+	}
+	sendBinary(t, c, "echo alive\n")
+	readUntilBinary(t, c, "alive")
+}

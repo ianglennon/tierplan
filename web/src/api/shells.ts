@@ -165,3 +165,76 @@ export function useUpdateShellSettings() {
     },
   });
 }
+
+export type ShellItem = components["schemas"]["ShellItemBody"];
+
+// ShellEndError is a shell the server would not end, with the problem type it named
+// (shell_not_found when it had already closed), or status 0 when it could not be reached.
+export class ShellEndError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`DELETE shells failed (${status})`);
+    this.name = "ShellEndError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// Open shells change as people work and close tabs, so the lists are read again every 15
+// seconds and when the window is focused (D-37). There is no stream for them.
+export const SHELLS_POLL_MS = 15_000;
+
+// activeShellsKey is the cache key of every open shell on an environment, under the
+// environment's own key.
+export function activeShellsKey(envId: string) {
+  return ["env", envId, "active-shells"] as const;
+}
+
+// activeShellsQuery lists every open shell on the environment, whoever opened it. It is
+// for someone who holds shells.manage there.
+export const activeShellsQuery = (envId: string) =>
+  queryOptions({
+    queryKey: activeShellsKey(envId),
+    queryFn: async (): Promise<ShellItem[]> => {
+      const { data } = await api.GET("/api/env/{envId}/active-shells", {
+        params: { path: { envId } },
+      });
+      if (!data) throw new Error("GET /api/env/{envId}/active-shells failed");
+      return data.items ?? [];
+    },
+    refetchInterval: SHELLS_POLL_MS,
+    refetchOnWindowFocus: true,
+    retry: 1,
+  });
+
+async function endShellRequest(
+  call: () => Promise<{ error?: unknown; response: Response }>,
+): Promise<void> {
+  try {
+    const { error, response } = await call();
+    if (response.ok) return;
+    const problem = readProblem(error, response);
+    throw new ShellEndError(problem.status, problem.type);
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof ShellEndError ? e : new ShellEndError(0);
+  }
+}
+
+// useEndShell ends someone's shell on the environment at once (shells.manage). A shell
+// that had already closed is a ShellEndError of type shell_not_found, and the lists are
+// read again either way, so the row that is gone goes.
+export function useEndShell(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, ShellEndError, { id: string }>({
+    mutationFn: ({ id }) =>
+      endShellRequest(() =>
+        api.DELETE("/api/env/{envId}/active-shells/{shellId}", {
+          params: { path: { envId, shellId: id } },
+        }),
+      ),
+    retry: false,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: activeShellsKey(envId) }),
+  });
+}

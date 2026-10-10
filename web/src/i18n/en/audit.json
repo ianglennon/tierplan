@@ -189,7 +189,8 @@
       },
       "shell": {
         "opened": "Container shell opened",
-        "closed": "Container shell closed"
+        "closed": "Container shell closed",
+        "ended": "Container shell ended by an administrator"
       }
     },
     "coalesced": {

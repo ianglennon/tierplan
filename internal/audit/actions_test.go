@@ -123,6 +123,9 @@ var phase4DetailKeys = map[string][]string{
 	// ended (plan 04-25).
 	audit.ActionShellOpened: {"container", "node", "sid", "command", "user", "workdir"},
 	audit.ActionShellClosed: {"container", "node", "sid", "duration_ms", "exit_code", "still_running", "reason", "owner"},
+	// An administrator ending someone else's shell is its own row, with the admin as the
+	// actor and the session's owner named (plan 04-25, D-37).
+	audit.ActionShellEnded: {"container", "node", "sid", "owner"},
 }
 
 func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -154,7 +157,7 @@ func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"network.connected": audit.ActionNetworkConnected, "network.disconnected": audit.ActionNetworkDisconnected,
 		"volume.created": audit.ActionVolumeCreated, "volume.removed": audit.ActionVolumeRemoved,
 		"logs.viewed": audit.ActionLogsViewed, "logs.downloaded": audit.ActionLogsDownloaded,
-		"shell.opened": audit.ActionShellOpened, "shell.closed": audit.ActionShellClosed,
+		"shell.opened": audit.ActionShellOpened, "shell.closed": audit.ActionShellClosed, "shell.ended": audit.ActionShellEnded,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

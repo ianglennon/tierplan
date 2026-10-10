@@ -372,6 +372,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/active-shells": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every open shell on an environment
+         * @description Every browser shell that is open on the environment, whoever opened it, oldest first: the person, the container, its node, when it was opened and how long it has sat unused. A shell that is waiting for its browser to attach is listed too. Needs shells.manage on the environment (env Admin or instance admin).
+         */
+        get: operations["listActiveShells"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/active-shells/{shellId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * End someone's shell
+         * @description Closes an open shell on the environment at once. Its browser is told it was ended by an administrator (reason ended_by_admin). 404 shell_not_found when it already closed, or belongs to another environment. A process the person left running in the container keeps running. Needs shells.manage on the environment (env Admin or instance admin). Audited as shell.ended by the administrator, naming the owner, and the shell's own shell.closed row carries the reason ended_by_admin.
+         */
+        delete: operations["endShell"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/adopt-cluster": {
         parameters: {
             query?: never;
@@ -3944,6 +3984,32 @@ export interface components {
             /** @description The lower-cased username */
             username: string;
         };
+        ShellItemBody: {
+            /** @description The container's name */
+            container: string;
+            /** @description The container's full ID */
+            containerId: string;
+            /** @description The session's ID, the one to end it by */
+            id: string;
+            /**
+             * Format: int64
+             * @description Seconds since anything was typed into or printed by the shell
+             */
+            idleSeconds: number;
+            /** @description The name of the node the container is on */
+            node: string;
+            /**
+             * Format: date-time
+             * @description When the session was opened
+             */
+            startedAt: string;
+            /** @description The name of the person it belongs to */
+            user: string;
+        };
+        ShellListBody: {
+            /** @description Oldest first; empty when there are none */
+            items: components["schemas"]["ShellItemBody"][] | null;
+        };
         ShellOpenBody: {
             /**
              * Format: int64
@@ -5338,6 +5404,71 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ImpactBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listActiveShells: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    endShell: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The session's ID */
+                shellId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

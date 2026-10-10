@@ -133,8 +133,11 @@ type Info struct {
 	ContainerID, ContainerName string
 	Image                      string
 	User, WorkingDir           string
-	State                      State
-	CreatedAt, LastActivity    time.Time
+	// Owner is the name of the person the session belongs to, as it was when they
+	// opened it.
+	Owner                   string
+	State                   State
+	CreatedAt, LastActivity time.Time
 }
 
 // Filter narrows List. An empty field matches everything.
@@ -436,12 +439,7 @@ func (r *Registry) List(f Filter) []Info {
 			(f.ContainerID != "" && s.ContainerID != f.ContainerID) {
 			continue
 		}
-		out = append(out, Info{
-			ID: s.ID, UserID: s.UserID, EnvID: s.EnvID, NodeID: s.NodeID, Node: s.Node,
-			ContainerID: s.ContainerID, ContainerName: s.ContainerName, Image: s.Image,
-			User: s.User, WorkingDir: s.WorkingDir, State: s.state,
-			CreatedAt: s.CreatedAt, LastActivity: time.Unix(0, s.lastActivity.Load()),
-		})
+		out = append(out, infoOf(s))
 	}
 	r.mu.Unlock()
 	slices.SortFunc(out, func(a, b Info) int {
@@ -453,6 +451,19 @@ func (r *Registry) List(f Filter) []Info {
 	return out
 }
 
+// Get returns the facts of one open session, or false when there is none: it ended,
+// or it never existed.
+func (r *Registry) Get(id string) (Info, bool) {
+	r.mu.Lock()
+	s := r.byID[id]
+	var in Info
+	if s != nil {
+		in = infoOf(s)
+	}
+	r.mu.Unlock()
+	return in, s != nil
+}
+
 func compareStrings(a, b string) int {
 	switch {
 	case a < b:
@@ -461,4 +472,14 @@ func compareStrings(a, b string) int {
 		return 1
 	}
 	return 0
+}
+
+// infoOf copies a session's facts. The registry's lock is held.
+func infoOf(s *Session) Info {
+	return Info{
+		ID: s.ID, UserID: s.UserID, EnvID: s.EnvID, NodeID: s.NodeID, Node: s.Node,
+		ContainerID: s.ContainerID, ContainerName: s.ContainerName, Image: s.Image,
+		User: s.User, WorkingDir: s.WorkingDir, Owner: s.Actor.Name, State: s.state,
+		CreatedAt: s.CreatedAt, LastActivity: time.Unix(0, s.lastActivity.Load()),
+	}
 }

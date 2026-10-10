@@ -37,6 +37,7 @@ const (
 	problemContainerNotRunning  = "container_not_running"
 	problemNoShell              = "no_shell"
 	problemShellLimitReached    = "shell_limit_reached"
+	problemShellNotFound        = "shell_not_found"
 
 	// shellStartTimeout bounds creating the exec and attaching to it.
 	shellStartTimeout = 30 * time.Second
@@ -178,6 +179,7 @@ func RegisterShells(r *httpx.Router, d ShellsDeps) {
 	}))
 
 	registerShellPreference(r, d)
+	registerShellSessions(r, d)
 }
 
 // userKey is the identity a session is bound to: the kind of principal and its ID.
@@ -485,3 +487,117 @@ func auditShellClosed(d ShellsDeps, s *shells.Session, reason string, res shells
 }
 
 var _ ShellsSource = (*envs.Aggregator)(nil)
+
+// ShellItemBody is one open shell in a list.
+type ShellItemBody struct {
+	ID          string    `json:"id" doc:"The session's ID, the one to end it by"`
+	User        string    `json:"user" doc:"The name of the person it belongs to"`
+	ContainerID string    `json:"containerId" doc:"The container's full ID"`
+	Container   string    `json:"container" doc:"The container's name"`
+	Node        string    `json:"node" doc:"The name of the node the container is on"`
+	StartedAt   time.Time `json:"startedAt" doc:"When the session was opened"`
+	IdleSeconds int64     `json:"idleSeconds" doc:"Seconds since anything was typed into or printed by the shell"`
+}
+
+// ShellListBody is a list of open shells.
+type ShellListBody struct {
+	Items []ShellItemBody `json:"items" doc:"Oldest first; empty when there are none"`
+}
+
+// ShellListOutput wraps ShellListBody for huma.
+type ShellListOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ShellListBody
+}
+
+// ActiveShellsInput is the path of GET .../active-shells.
+type ActiveShellsInput struct {
+	EnvironmentPathInput
+}
+
+// EndShellInput is the path of DELETE .../active-shells/{shellId} and of DELETE
+// .../shells/{shellId}.
+type EndShellInput struct {
+	EnvironmentPathInput
+	ShellID string `path:"shellId" pattern:"^[A-Za-z0-9_-]{1,64}$" maxLength:"64" doc:"The session's ID"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// shellItems turns the registry's facts into the list a route answers.
+func shellItems(d ShellsDeps, infos []shells.Info) []ShellItemBody {
+	now := d.Registry.Now()
+	out := make([]ShellItemBody, 0, len(infos))
+	for _, in := range infos {
+		out = append(out, ShellItemBody{
+			ID: in.ID, User: in.Owner, ContainerID: in.ContainerID, Container: in.ContainerName, Node: in.Node,
+			StartedAt: in.CreatedAt.UTC(), IdleSeconds: max(int64(now.Sub(in.LastActivity)/time.Second), 0),
+		})
+	}
+	return out
+}
+
+func shellNotFound() error {
+	return httpx.Problem(http.StatusNotFound, problemShellNotFound, "This shell is already closed.")
+}
+
+// registerShellSessions registers the lists of open shells and the ends of them: the
+// administrator's, of everyone's on the environment (shells.manage), each a route of
+// its own so the route harness judges it by one requirement (D-37, T-04-94).
+func registerShellSessions(r *httpx.Router, d ShellsDeps) {
+	manage := rbac.Requirement{Perm: rbac.PermShellsManage, Scope: rbac.ScopeEnvironment}
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listActiveShells", Method: http.MethodGet, Path: "/api/env/{envId}/active-shells",
+		Summary: "List every open shell on an environment",
+		Description: "Every browser shell that is open on the environment, whoever opened it, oldest first: the person, the container, its node, when it was opened and how long it has sat unused. " +
+			"A shell that is waiting for its browser to attach is listed too. Needs shells.manage on the environment (env Admin or instance admin).",
+		Tags: []string{"environments"},
+	}, manage, func(ctx context.Context, in *ActiveShellsInput) (*ShellListOutput, error) {
+		env := httpx.EnvFrom(ctx)
+		if env == nil {
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		if d.Registry == nil {
+			return nil, httpx.Problem(http.StatusServiceUnavailable, problemShellUnavailable, "Shells are not available on this server.")
+		}
+		return &ShellListOutput{CacheControl: "no-store", Body: ShellListBody{
+			Items: shellItems(d, d.Registry.List(shells.Filter{EnvID: env.ID})),
+		}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "endShell", Method: http.MethodDelete, Path: "/api/env/{envId}/active-shells/{shellId}",
+		Summary: "End someone's shell", DefaultStatus: http.StatusNoContent,
+		Description: "Closes an open shell on the environment at once. Its browser is told it was ended by an administrator (reason ended_by_admin). " +
+			"404 shell_not_found when it already closed, or belongs to another environment. A process the person left running in the container keeps running. " +
+			"Needs shells.manage on the environment (env Admin or instance admin). Audited as shell.ended by the administrator, naming the owner, and the shell's own shell.closed row carries the reason ended_by_admin.",
+		Tags: []string{"environments"},
+	}, manage, func(ctx context.Context, in *EndShellInput) (*struct{}, error) {
+		p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+		if p == nil || env == nil {
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		if d.Registry == nil || d.Audit == nil {
+			return nil, httpx.Problem(http.StatusServiceUnavailable, problemShellUnavailable, "Shells are not available on this server.")
+		}
+		// A session of another environment answers as a missing one (T-04-94).
+		info, ok := d.Registry.Get(in.ShellID)
+		if !ok || info.EnvID != env.ID {
+			return nil, shellNotFound()
+		}
+		if _, ok := d.Registry.End(info.ID, shells.ReasonEndedByAdmin); !ok {
+			return nil, shellNotFound() // it ended between the look and the end
+		}
+		// The shell is already ended, which is the safe side of a failed write.
+		if err := d.Audit.Record(ctx, audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionShellEnded, TargetType: logTargetType, TargetID: info.ContainerID,
+			EnvID: env.ID, Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+			Details: map[string]string{"container": info.ContainerName, "node": info.NodeID, "sid": info.ID, "owner": info.Owner},
+		}); err != nil {
+			d.Log.Error("could not audit an administrator ending a shell", "container", info.ContainerID, "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		return nil, nil
+	})
+}

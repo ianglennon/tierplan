@@ -41,6 +41,7 @@ import { Route as AppSettingsAccessTeamsTeamIdRouteImport } from './routes/_app/
 import { Route as AppSettingsAccessUsersUserIdRouteImport } from './routes/_app/settings/access/users_.$userId'
 import { Route as AppSettingsEnvironmentsEnvIdIndexRouteImport } from './routes/_app/settings/environments_.$envId.index'
 import { Route as AppSettingsEnvironmentsEnvIdAccessRouteImport } from './routes/_app/settings/environments_.$envId.access'
+import { Route as AppSettingsEnvironmentsEnvIdShellsRouteImport } from './routes/_app/settings/environments_.$envId.shells'
 import { Route as PopoutEnvIdContainersContainerIdLogsRouteImport } from './routes/popout.$envId.containers.$containerId.logs'
 import { Route as PopoutEnvIdContainersContainerIdShellRouteImport } from './routes/popout.$envId.containers.$containerId.shell'
 import { Route as AppEnvEnvIdContainersContainerIdIndexRouteImport } from './routes/_app/env/$envId/containers_.$containerId.index'
@@ -220,6 +221,12 @@ const AppSettingsEnvironmentsEnvIdAccessRoute =
     path: '/access',
     getParentRoute: () => AppSettingsEnvironmentsEnvIdRoute,
   } as any)
+const AppSettingsEnvironmentsEnvIdShellsRoute =
+  AppSettingsEnvironmentsEnvIdShellsRouteImport.update({
+    id: '/shells',
+    path: '/shells',
+    getParentRoute: () => AppSettingsEnvironmentsEnvIdRoute,
+  } as any)
 const PopoutEnvIdContainersContainerIdLogsRoute =
   PopoutEnvIdContainersContainerIdLogsRouteImport.update({
     id: '/popout/$envId/containers/$containerId/logs',
@@ -318,6 +325,7 @@ export interface FileRoutesByFullPath {
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  '/settings/environments/$envId/shells': typeof AppSettingsEnvironmentsEnvIdShellsRoute
   '/popout/$envId/containers/$containerId/logs': typeof PopoutEnvIdContainersContainerIdLogsRoute
   '/popout/$envId/containers/$containerId/shell': typeof PopoutEnvIdContainersContainerIdShellRoute
   '/settings/environments/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
@@ -355,6 +363,7 @@ export interface FileRoutesByTo {
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  '/settings/environments/$envId/shells': typeof AppSettingsEnvironmentsEnvIdShellsRoute
   '/popout/$envId/containers/$containerId/logs': typeof PopoutEnvIdContainersContainerIdLogsRoute
   '/popout/$envId/containers/$containerId/shell': typeof PopoutEnvIdContainersContainerIdShellRoute
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdIndexRoute
@@ -401,6 +410,7 @@ export interface FileRoutesById {
   '/_app/settings/access/teams_/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/_app/settings/access/users_/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/_app/settings/environments_/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  '/_app/settings/environments_/$envId/shells': typeof AppSettingsEnvironmentsEnvIdShellsRoute
   '/popout/$envId/containers/$containerId/logs': typeof PopoutEnvIdContainersContainerIdLogsRoute
   '/popout/$envId/containers/$containerId/shell': typeof PopoutEnvIdContainersContainerIdShellRoute
   '/_app/settings/environments_/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
@@ -447,6 +457,7 @@ export interface FileRouteTypes {
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
+    | '/settings/environments/$envId/shells'
     | '/popout/$envId/containers/$containerId/logs'
     | '/popout/$envId/containers/$containerId/shell'
     | '/settings/environments/$envId/'
@@ -484,6 +495,7 @@ export interface FileRouteTypes {
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
+    | '/settings/environments/$envId/shells'
     | '/popout/$envId/containers/$containerId/logs'
     | '/popout/$envId/containers/$containerId/shell'
     | '/settings/environments/$envId'
@@ -529,6 +541,7 @@ export interface FileRouteTypes {
     | '/_app/settings/access/teams_/$teamId'
     | '/_app/settings/access/users_/$userId'
     | '/_app/settings/environments_/$envId/access'
+    | '/_app/settings/environments_/$envId/shells'
     | '/popout/$envId/containers/$containerId/logs'
     | '/popout/$envId/containers/$containerId/shell'
     | '/_app/settings/environments_/$envId/'
@@ -779,6 +792,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsEnvironmentsEnvIdAccessRouteImport
       parentRoute: typeof AppSettingsEnvironmentsEnvIdRoute
     }
+    '/_app/settings/environments_/$envId/shells': {
+      id: '/_app/settings/environments_/$envId/shells'
+      path: '/shells'
+      fullPath: '/settings/environments/$envId/shells'
+      preLoaderRoute: typeof AppSettingsEnvironmentsEnvIdShellsRouteImport
+      parentRoute: typeof AppSettingsEnvironmentsEnvIdRoute
+    }
     '/popout/$envId/containers/$containerId/logs': {
       id: '/popout/$envId/containers/$containerId/logs'
       path: '/popout/$envId/containers/$containerId/logs'
@@ -880,6 +900,7 @@ const AppSettingsAccessRouteWithChildren =
 
 interface AppSettingsEnvironmentsEnvIdRouteChildren {
   AppSettingsEnvironmentsEnvIdAccessRoute: typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  AppSettingsEnvironmentsEnvIdShellsRoute: typeof AppSettingsEnvironmentsEnvIdShellsRoute
   AppSettingsEnvironmentsEnvIdIndexRoute: typeof AppSettingsEnvironmentsEnvIdIndexRoute
 }
 
@@ -887,6 +908,8 @@ const AppSettingsEnvironmentsEnvIdRouteChildren: AppSettingsEnvironmentsEnvIdRou
   {
     AppSettingsEnvironmentsEnvIdAccessRoute:
       AppSettingsEnvironmentsEnvIdAccessRoute,
+    AppSettingsEnvironmentsEnvIdShellsRoute:
+      AppSettingsEnvironmentsEnvIdShellsRoute,
     AppSettingsEnvironmentsEnvIdIndexRoute:
       AppSettingsEnvironmentsEnvIdIndexRoute,
   }

@@ -60,7 +60,9 @@ const (
 	ReasonAccessLost = "access_lost"
 	// ReasonEndedByAdmin and ReasonServerShutdown are given to Registry.End and
 	// CloseAll by whoever ends the session from outside.
-	ReasonEndedByAdmin   = "ended_by_admin"
+	ReasonEndedByAdmin = "ended_by_admin"
+	// ReasonEndedByUser is a shell its own user ended from the list of their shells.
+	ReasonEndedByUser    = "ended_by_user"
 	ReasonServerShutdown = "server_shutdown"
 )
 

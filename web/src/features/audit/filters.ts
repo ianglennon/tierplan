@@ -104,6 +104,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "logs.downloaded",
   "shell.opened",
   "shell.closed",
+  "shell.ended",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped

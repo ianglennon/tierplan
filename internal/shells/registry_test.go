@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
 )
 
@@ -520,5 +521,31 @@ func TestOpensAtTheSameTimeCannotSlipUnderTheCap(t *testing.T) {
 	wg.Wait()
 	if made.Load() != limit || refused.Load() != tries-limit || r.CountForUser("user:ann") != limit {
 		t.Fatalf("made %d, refused %d, held %d; want %d, %d, %d", made.Load(), refused.Load(), r.CountForUser("user:ann"), limit, tries-limit, limit)
+	}
+}
+
+func TestGetAndListNameTheOwnerAndGetIsGoneOnceTheSessionEnds(t *testing.T) {
+	r := NewRegistry(newFakeClock())
+	s := newSession("ann")
+	s.Actor = audit.Actor{Type: audit.ActorUser, ID: "ann", Name: "ann"}
+	s.EnvID, s.ContainerName = "env1", "web"
+	s = r.Create(s, newFakeExec(), 0)
+
+	in, ok := r.Get(s.ID)
+	if !ok || in.Owner != "ann" || in.ContainerName != "web" || in.EnvID != "env1" || in.State != StatePending {
+		t.Fatalf("Get = %+v, %v, want ann's pending shell in web", in, ok)
+	}
+	if got := r.List(Filter{EnvID: "env1"}); len(got) != 1 || got[0].Owner != "ann" {
+		t.Errorf("List = %+v, want the one shell with its owner named", got)
+	}
+	if _, ok := r.Get("nope"); ok {
+		t.Error("Get found a session that was never made")
+	}
+	r.End(s.ID, ReasonEndedByAdmin)
+	if _, ok := r.Get(s.ID); ok {
+		t.Error("Get still finds a session that ended")
+	}
+	if got := r.List(Filter{ContainerID: s.ContainerID}); len(got) != 0 {
+		t.Errorf("List = %+v after the end, want none", got)
 	}
 }
