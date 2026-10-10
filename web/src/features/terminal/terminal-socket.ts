@@ -48,6 +48,12 @@ export interface TerminalSocket {
 
 const OPEN = 1;
 
+// A frame is an ArrayBuffer by its tag as well as its constructor, since one made in
+// another realm (a worker, an iframe) is not an instance of this window's.
+function isArrayBuffer(v: unknown): v is ArrayBuffer {
+  return v instanceof ArrayBuffer || Object.prototype.toString.call(v) === "[object ArrayBuffer]";
+}
+
 function isControl(v: unknown): v is TerminalControl {
   if (typeof v !== "object" || v === null) return false;
   const c = v as Record<string, unknown>;
@@ -88,7 +94,7 @@ export function createTerminalSocket(o: TerminalSocketOptions): TerminalSocket {
       }
       return;
     }
-    if (data instanceof ArrayBuffer) o.onData(new Uint8Array(data));
+    if (isArrayBuffer(data)) o.onData(new Uint8Array(data));
     else if (ArrayBuffer.isView(data)) {
       o.onData(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
     }
