@@ -589,3 +589,139 @@ func TestDeleteNetworkAnUnknownEnvironmentIs404(t *testing.T) {
 		t.Fatalf("%d %q, want 404 environment_not_found", rec.code, rec.ptyp)
 	}
 }
+
+// The networks list says what uses each network, who owns it and whether it can go (plan
+// 04-13 task 2, D-40, D-41).
+
+type networkListItem struct {
+	Node               string   `json:"node"`
+	NodeID             string   `json:"nodeId"`
+	ID                 string   `json:"id"`
+	Name               string   `json:"name"`
+	Driver             string   `json:"driver"`
+	Scope              string   `json:"scope"`
+	Subnets            []string `json:"subnets"`
+	AttachedContainers int      `json:"attachedContainers"`
+	AttachedServices   int      `json:"attachedServices"`
+	Owner              string   `json:"owner"`
+	OwnerKind          string   `json:"ownerKind"`
+	BuiltIn            bool     `json:"builtIn"`
+	Internal           bool     `json:"internal"`
+	Attachable         bool     `json:"attachable"`
+	IPv6               bool     `json:"ipv6"`
+}
+
+func listEngine() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Networks: []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+			{ID: "app0", Name: "app-net", Driver: "bridge", Scope: "local", Subnets: []string{"10.20.0.0/24"}, Internal: true,
+				Labels: map[string]string{"com.docker.stack.namespace": "shop"}},
+			{ID: "prj0", Name: "blog_default", Driver: "macvlan", Scope: "local", Subnets: []string{"192.168.5.0/24", "192.168.6.0/24"}, Attachable: true,
+				Labels: map[string]string{"com.docker.compose.project": "blog"}},
+			{ID: "lone0", Name: "lonely", Driver: "bridge", Scope: "local"},
+		},
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/web"}, State: "running", Networks: map[string]dockertest.FakeEndpoint{"app-net": {NetworkID: "app0"}}},
+			{ID: "c2", Names: []string{"/db"}, State: "exited", Networks: map[string]dockertest.FakeEndpoint{"app-net": {NetworkID: "app0"}}},
+			{ID: "c3", Names: []string{"/blog"}, State: "running", Networks: map[string]dockertest.FakeEndpoint{"blog_default": {NetworkID: "prj0"}, "bridge": {NetworkID: "br0"}}},
+		},
+	}
+}
+
+func listNets(t *testing.T, f *envFix, e envBody, query string) listBody[networkListItem] {
+	t.Helper()
+	rec := f.get(t, e, "networks"+query)
+	if rec.code != http.StatusOK {
+		t.Fatalf("GET networks%s: %d %s", query, rec.code, rec.body)
+	}
+	return decode[listBody[networkListItem]](t, rec)
+}
+
+func netByName(t *testing.T, items []networkListItem, name string) networkListItem {
+	t.Helper()
+	for _, n := range items {
+		if n.Name == name {
+			return n
+		}
+	}
+	t.Fatalf("no network %q in %+v", name, items)
+	return networkListItem{}
+}
+
+func TestNetworkListCountsContainersOnAnyStateNamesTheOwnerAndFlagsTheBuiltIns(t *testing.T) {
+	f, e := dashEnv(t, listEngine())
+	list := listNets(t, f, e, "")
+	if list.Total != 4 {
+		t.Fatalf("total = %d: %+v", list.Total, list.Items)
+	}
+	app := netByName(t, list.Items, "app-net")
+	if app.AttachedContainers != 2 || app.AttachedServices != 0 || app.Owner != "shop" || app.OwnerKind != "stack" || !app.Internal || app.BuiltIn || app.Attachable {
+		t.Errorf("app-net = %+v, want a stopped container counted too, stack shop, internal", app)
+	}
+	blog := netByName(t, list.Items, "blog_default")
+	if blog.AttachedContainers != 1 || blog.Owner != "blog" || blog.OwnerKind != "project" || !blog.Attachable || len(blog.Subnets) != 2 {
+		t.Errorf("blog_default = %+v", blog)
+	}
+	if br := netByName(t, list.Items, "bridge"); !br.BuiltIn || br.AttachedContainers != 1 || br.Owner != "" {
+		t.Errorf("bridge = %+v, want built in with the one container on it", br)
+	}
+	if lone := netByName(t, list.Items, "lonely"); lone.AttachedContainers != 0 || lone.AttachedServices != 0 || lone.BuiltIn {
+		t.Errorf("lonely = %+v, want nothing attached", lone)
+	}
+	names := make([]string, 0, len(list.Items))
+	for _, n := range list.Items {
+		names = append(names, n.Name)
+	}
+	if !slices.IsSorted(names) {
+		t.Errorf("order = %v, want by name", names)
+	}
+}
+
+func TestNetworkListSearchMatchesNameDriverSubnetAndOwnerBeforeTheTotal(t *testing.T) {
+	f, e := dashEnv(t, listEngine())
+	for q, want := range map[string][]string{
+		"app":         {"app-net"},
+		"MACVLAN":     {"blog_default"},
+		"192.168.6":   {"blog_default"},
+		"10.20.0.0/2": {"app-net"},
+		"shop":        {"app-net"},
+		"blog":        {"blog_default"},
+		"bridge":      {"app-net", "bridge", "lonely"},
+		"no-such":     nil,
+	} {
+		list := listNets(t, f, e, "?q="+q)
+		var got []string
+		for _, n := range list.Items {
+			got = append(got, n.Name)
+		}
+		if !slices.Equal(got, want) || list.Total != len(want) {
+			t.Errorf("q=%s: %v (total %d), want %v", q, got, list.Total, want)
+		}
+	}
+	if rec := f.get(t, e, "networks?q="+strings.Repeat("a", 129)); rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("a 129 character search: %d, want 422", rec.code)
+	}
+}
+
+func TestNetworkListOnASwarmCountsTheServicesThatMentionAnOverlayEvenWithNoTasks(t *testing.T) {
+	s := newSwarmFix(t)
+	list := decode[listBody[networkListItem]](t, s.get(t, s.env.ID, "networks"))
+	ovl := netByName(t, list.Items, "ovl")
+	if ovl.AttachedServices != 2 || ovl.Node != "Cluster" || ovl.Scope != "swarm" {
+		t.Errorf("ovl = %+v, want both services counted, the one with 0 replicas too", ovl)
+	}
+	for _, n := range list.Items {
+		if n.Name == "bridge" && n.AttachedServices != 0 {
+			t.Errorf("a local bridge on %s counts services: %+v", n.Node, n)
+		}
+	}
+	keys := make([]string, 0, len(list.Items))
+	for _, n := range list.Items {
+		keys = append(keys, n.Name+"\x00"+n.ID+"\x00"+n.Node)
+	}
+	if !slices.IsSorted(keys) {
+		t.Errorf("order = %q, want name, then ID, then node", keys)
+	}
+}

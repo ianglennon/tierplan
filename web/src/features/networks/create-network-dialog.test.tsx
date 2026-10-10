@@ -260,7 +260,7 @@ describe("CreateNetworkDialog (common fields)", () => {
 
 describe("NetworkList create button", () => {
   it("shows an env Admin an enabled Create network button that opens the dialog", async () => {
-    render(wrap(<NetworkList envId={ENV} onNodeChange={() => {}} />));
+    render(wrap(<NetworkList envId={ENV} onNodeChange={() => {}} onSearchChange={() => {}} />));
     const button = await screen.findByRole("button", { name: "Create network" });
     expect(button.getAttribute("aria-disabled")).toBeNull();
     fireEvent.click(button);
@@ -269,7 +269,7 @@ describe("NetworkList create button", () => {
 
   it("shows an Operator the button disabled with Needs Admin, and a click opens nothing", async () => {
     me = makeMe({ envs: { [ENV]: "operator" } });
-    render(wrap(<NetworkList envId={ENV} onNodeChange={() => {}} />));
+    render(wrap(<NetworkList envId={ENV} onNodeChange={() => {}} onSearchChange={() => {}} />));
     const button = await screen.findByRole("button", { name: "Create network" });
     await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
     expect(button.getAttribute("aria-describedby")).toBeTruthy();
@@ -280,7 +280,7 @@ describe("NetworkList create button", () => {
 
   it("shows a Viewer the same disabled button", async () => {
     me = makeMe({ envs: { [ENV]: "viewer" } });
-    render(wrap(<NetworkList envId={ENV} onNodeChange={() => {}} />));
+    render(wrap(<NetworkList envId={ENV} onNodeChange={() => {}} onSearchChange={() => {}} />));
     const button = await screen.findByRole("button", { name: "Create network" });
     await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
   });
@@ -589,7 +589,11 @@ describe("NetworkList create dialog on a swarm list narrowed to one node", () =>
       nodes: ["node-1"],
       notReporting: [],
     });
-    render(wrap(<NetworkList envId={ENV} node="node-1" onNodeChange={() => {}} />));
+    render(
+      wrap(
+        <NetworkList envId={ENV} node="node-1" onNodeChange={() => {}} onSearchChange={() => {}} />,
+      ),
+    );
     fireEvent.click(await screen.findByRole("button", { name: "Create network" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "Driver" }), { key: "Enter" });

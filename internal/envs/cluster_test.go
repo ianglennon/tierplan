@@ -798,3 +798,33 @@ func (l *lateReaper) Observe(ctx context.Context, envID string, list dockerx.Clu
 		r.Observe(ctx, envID, list, answering)
 	}
 }
+
+// The service references of the last read are kept, so the networks list can count the
+// services that mention a network without asking a manager (plan 04-13 task 2, D-41).
+func TestARefreshKeepsTheServiceReferencesOfTheManagersAnswer(t *testing.T) {
+	services := []dockertest.FakeService{
+		{ID: "s1", Name: "web", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"ovl-id"},
+			Mounts: []dockertest.FakeServiceMount{{Type: "volume", Source: "data"}}},
+		{ID: "s2", Name: "idle", Mode: "replicated", Running: 0, Desired: 0, Networks: []string{"ovl-id"}},
+	}
+	s := newSwarmRig(t, managerNodes(), services)
+	if err := s.c.Refresh(context.Background(), s.env.ID); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	st, ok := s.c.Cached(s.env.ID)
+	if !ok || len(st.ServiceRefs) != 2 {
+		t.Fatalf("state = %+v (%v), want two service references", st, ok)
+	}
+	if !reflect.DeepEqual(st.ServiceRefs, st.Read.ServiceRefs) {
+		t.Errorf("ServiceRefs = %+v, want the read's %+v", st.ServiceRefs, st.Read.ServiceRefs)
+	}
+	var idle dockerx.ServiceRef
+	for _, r := range st.ServiceRefs {
+		if r.Name == "idle" {
+			idle = r
+		}
+	}
+	if len(idle.Networks) != 1 || idle.Networks[0] != "ovl-id" {
+		t.Errorf("idle = %+v, want the network it mentions with no task running", idle)
+	}
+}

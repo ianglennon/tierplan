@@ -6,6 +6,7 @@ package dockerx_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -196,5 +197,77 @@ func TestNetworkRemoveOfANetworkWithAContainerIsTheEnginesInUseRefusal(t *testin
 	}
 	if dockerx.IsNetworkInUse(nil) {
 		t.Error("no error is not an in-use refusal")
+	}
+}
+
+// Service references (plan 04-13 task 2, D-41, RESEARCH Pattern 8): what a swarm service
+// mentions, whatever its tasks are doing.
+
+func refsManager() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		Networks: []dockertest.FakeNetwork{
+			{ID: "ovl-id-1", Name: "ovl", Driver: "overlay", Scope: "swarm"},
+			{ID: "ovl-id-2", Name: "other", Driver: "overlay", Scope: "swarm"},
+		},
+		ServiceRows: []dockertest.FakeService{
+			{ID: "s2", Name: "web", Mode: "replicated", Running: 1, Desired: 1,
+				Networks: []string{"ovl-id-1"},
+				Mounts:   []dockertest.FakeServiceMount{{Type: "volume", Source: "data"}, {Type: "bind", Source: "/srv/x"}, {Type: "tmpfs"}}},
+			// Named by name in the spec, and scaled to zero: it still mentions the network.
+			{ID: "s1", Name: "idle", Mode: "replicated", Running: 0, Desired: 0, Networks: []string{"other"}},
+			{ID: "s3", Name: "plain", Mode: "global", Running: 3, Desired: 3},
+		},
+	}
+}
+
+func TestServiceRefsListsEachServicesNetworksAndVolumeMountsByIDWhateverItsTasksDo(t *testing.T) {
+	fake := dockertest.NewFake(t, refsManager())
+	got, err := newClient(t, fake).ServiceRefs(context.Background())
+	if err != nil {
+		t.Fatalf("ServiceRefs: %v", err)
+	}
+	want := []dockerx.ServiceRef{
+		{ID: "s1", Name: "idle", Networks: []string{"ovl-id-2"}, Volumes: []string{}},
+		{ID: "s3", Name: "plain", Networks: []string{}, Volumes: []string{}},
+		{ID: "s2", Name: "web", Networks: []string{"ovl-id-1"}, Volumes: []string{"data"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ServiceRefs = %+v, want %+v (sorted by name, names resolved to IDs, only volume mounts)", got, want)
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Fatalf("a read wrote: %v", w)
+	}
+}
+
+func TestClusterCarriesTheServiceRefsOfTheSameRead(t *testing.T) {
+	got, err := newClient(t, dockertest.NewFake(t, refsManager())).Cluster(context.Background())
+	if err != nil {
+		t.Fatalf("Cluster: %v", err)
+	}
+	if len(got.ServiceRefs) != 3 || got.ServiceRefs[2].Name != "web" || got.ServiceRefs[2].Networks[0] != "ovl-id-1" {
+		t.Fatalf("ServiceRefs = %+v", got.ServiceRefs)
+	}
+}
+
+func TestNetworkRowsCarryLabelsAndFlags(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Networks: []dockertest.FakeNetwork{
+		{ID: "n1", Name: "mesh", Driver: "overlay", Scope: "swarm", Ingress: true},
+		{ID: "n2", Name: "app", Driver: "bridge", Scope: "local", Internal: true, Attachable: true,
+			Labels: map[string]string{"com.docker.stack.namespace": "shop"}},
+	}})
+	snap, err := newClient(t, fake).Snapshot(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]dockerx.NetworkRow{}
+	for _, n := range snap.Networks {
+		by[n.Name] = n
+	}
+	if !by["mesh"].Ingress || by["mesh"].Internal {
+		t.Errorf("mesh = %+v", by["mesh"])
+	}
+	if a := by["app"]; !a.Internal || !a.Attachable || a.Ingress || a.Labels["com.docker.stack.namespace"] != "shop" {
+		t.Errorf("app = %+v", a)
 	}
 }

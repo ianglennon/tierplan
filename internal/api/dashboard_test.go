@@ -838,14 +838,24 @@ type swarmFix struct {
 func newSwarmFix(t *testing.T) *swarmFix {
 	t.Helper()
 	f := newAgentFix(t)
+	// The cluster reader of a real server: the networks routes read the services a
+	// network is mentioned by from it. The router is built again to hear of it.
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.tclk.Now, Publisher: f.brk, Events: f.hub})
+	f.svc.WithClusters(f.clusters)
+	f.h = f.build(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	mgr := func(i int) (dockertest.FakeConfig, *wire.Facts) {
 		name := fmt.Sprintf("mgr-%d", i)
 		return dockertest.FakeConfig{
 			Hostname: name, SwarmState: "active", SwarmControl: true, Nodes: 3, Services: 2,
 			Containers: []dockertest.FakeContainer{{ID: fmt.Sprintf("m%d", i), Names: []string{"/web"}, State: "running"}},
-			Images:     []dockertest.FakeImage{{ID: "sha256:" + strings.Repeat("a", 64), RepoTags: []string{"nginx:1"}, Size: 5}},
-			Volumes:    []dockertest.FakeVolume{{Name: "data", Driver: "local"}},
+			// Two services mention the overlay; one of them is scaled to zero.
+			ServiceRows: []dockertest.FakeService{
+				{ID: "svc-web", Name: "web", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"ovl"}},
+				{ID: "svc-idle", Name: "idle", Mode: "replicated", Running: 0, Desired: 0, Networks: []string{"ovl"}},
+			},
+			Images:  []dockertest.FakeImage{{ID: "sha256:" + strings.Repeat("a", 64), RepoTags: []string{"nginx:1"}, Size: 5}},
+			Volumes: []dockertest.FakeVolume{{Name: "data", Driver: "local"}},
 			Networks: []dockertest.FakeNetwork{
 				{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"},
 				{ID: fmt.Sprintf("br%d", i), Name: "bridge", Driver: "bridge", Scope: "local"},

@@ -119,6 +119,8 @@ type authFixture struct {
 	// a real session.
 	agentSvc   *agents.Service
 	liveAgents api.AgentSessions
+	// clusters is the cluster reader of a swarm fixture; nil elsewhere.
+	clusters *envs.Clusters
 	// agentCluster says which agent leads a swarm, for the role in the node list.
 	agentCluster api.AgentCluster
 	// updater and serverVersion are what the agent update routes use, when set.
@@ -235,9 +237,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 	}
 	if f.envSvc != nil && f.agg != nil {
-		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
-		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Audit: f.aud, Log: log})
+		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Log: log})
 	}
 	if f.envSvc != nil && f.agg != nil && f.hub != nil {
 		api.RegisterEvents(r, api.EventsDeps{Aggregator: f.agg, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, MaxLifetime: f.eventsMaxLifetime, Log: log})
