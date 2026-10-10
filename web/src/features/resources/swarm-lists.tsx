@@ -2,11 +2,10 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { z } from "zod";
-
 import { environmentsQuery, summaryQuery } from "@/api/environments";
 import { type Column, TruncatedText } from "@/features/resources/resource-table";
 import { useT } from "@/i18n/use-t";
+import { z } from "@/lib/zod-config";
 
 // The list routes' search: the node the list is narrowed to, so a filtered list
 // is a link. The server matches it exactly against the names it reports and

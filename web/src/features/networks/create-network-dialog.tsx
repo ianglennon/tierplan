@@ -5,8 +5,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronRight, TriangleAlert } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
-import { z } from "zod";
-
 import { type NetworkRequestError, useCreateNetwork } from "@/api/networks";
 import type { NetworkRow } from "@/api/resources";
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
@@ -43,6 +41,7 @@ import {
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { z } from "@/lib/zod-config";
 
 // The drivers a network can be created with, in the order the select lists them.
 export const DRIVERS = ["bridge", "overlay", "macvlan", "ipvlan"] as const;

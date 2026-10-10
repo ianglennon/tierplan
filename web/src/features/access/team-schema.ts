@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { z } from "zod";
+import { z } from "@/lib/zod-config";
 
 // The team name rule the Create team dialog and the General card share, so a
 // name is judged the same way wherever it is typed. It is UX only: the server

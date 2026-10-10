@@ -5,8 +5,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { z } from "zod";
-
 import { createTeam, type Team, teamsQuery } from "@/api/teams";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -24,6 +22,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { TEAM_KEY, TEAM_NAME_FIELD_CODE, teamNameRule } from "@/features/access/team-schema";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
+import { z } from "@/lib/zod-config";
 
 // Validation here is UX only: the server checks the name again.
 const createTeamSchema = z.object({ name: teamNameRule });

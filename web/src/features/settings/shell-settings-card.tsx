@@ -4,8 +4,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { z } from "zod";
-
 import { type ShellSettings, useShellSettings, useUpdateShellSettings } from "@/api/shells";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -17,6 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
+import { z } from "@/lib/zod-config";
 
 // The ranges the server enforces again (D-29, D-31). Messages are i18n keys, never
 // literals (D-65).

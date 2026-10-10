@@ -6,8 +6,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Lock } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
-import { z } from "zod";
-
 import {
   type BackupSchedule,
   backupInfoQuery,
@@ -40,6 +38,7 @@ import { SettingsCard } from "@/features/environments/settings-card";
 import { useT } from "@/i18n/use-t";
 import { formatAbsolute, formatBytes } from "@/lib/format";
 import { toastSuccess } from "@/lib/toast";
+import { z } from "@/lib/zod-config";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";

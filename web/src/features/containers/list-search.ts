@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { z } from "zod";
-
 import { nodeSearchSchema } from "@/features/resources/swarm-lists";
+import { z } from "@/lib/zod-config";
 
 // The status chips, in the order they show and in the order a comma list is
 // written, so the same choice is always the same link (D-02).

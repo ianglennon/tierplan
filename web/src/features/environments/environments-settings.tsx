@@ -7,7 +7,6 @@ import { Link, useRouter } from "@tanstack/react-router";
 import { Server } from "lucide-react";
 import { type RefObject, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { z } from "zod";
 import { api } from "@/api/client";
 import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
 import { readProblem } from "@/api/problem";
@@ -52,6 +51,7 @@ import { UnknownAgentsCard } from "@/features/environments/unknown-agents-card";
 import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
+import { z } from "@/lib/zod-config";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";

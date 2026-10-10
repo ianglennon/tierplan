@@ -6,8 +6,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff } from "lucide-react";
 import { type ReactNode, type RefObject, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { z } from "zod";
-
 import { api, setCsrfToken } from "@/api/client";
 import { readProblem } from "@/api/problem";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -32,6 +30,7 @@ import { PASSWORD_KEYS, passwordSchema } from "@/features/setup/schemas";
 import { type Me, meQueryOptions } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
+import { z } from "@/lib/zod-config";
 
 // Validation here is UX only: the server checks the current password and the
 // whole policy again. Messages are i18n keys, never literals (D-65). The new

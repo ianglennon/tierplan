@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { z } from "zod";
-
 import type { EventDTO } from "@/features/dashboard/events";
+import { z } from "@/lib/zod-config";
 
 // The types the Events page filters by. A row of Bayplan's own has no chip and
 // shows under "none selected" only.

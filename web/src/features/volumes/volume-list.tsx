@@ -5,8 +5,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ChevronsDownUp, ChevronsUpDown, HardDrive, Plus } from "lucide-react";
 import { useId, useMemo, useState } from "react";
-import { z } from "zod";
-
 import { networksQuery, type VolumeRow, volumesQuery } from "@/api/resources";
 import { sizeKey, useVolumeSizes } from "@/api/volumes";
 import { NoPermission } from "@/components/full-page-state";
@@ -62,6 +60,7 @@ import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { formatBytes } from "@/lib/format";
 import { toastError, toastSuccess } from "@/lib/toast";
+import { z } from "@/lib/zod-config";
 
 // The usage filter, as it is written in the URL. Without it every volume is listed.
 export const USAGE_VALUES = ["used", "unused"] as const;

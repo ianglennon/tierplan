@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { z } from "zod";
-
 import { apiUrl } from "@/lib/base-path";
+import { z } from "@/lib/zod-config";
 
 // The audit log's filters live in the URL (D-43), so a filtered view is
 // linkable and survives a refresh. This file is the one place that knows how

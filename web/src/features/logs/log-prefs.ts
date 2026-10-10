@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { z } from "zod";
+import { z } from "@/lib/zod-config";
 
 // How a person likes to read logs, kept per browser (D-19) and never holding a line of
 // any log. The address can override each choice, so a link or a pop-out opens the way

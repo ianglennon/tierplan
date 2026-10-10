@@ -5,8 +5,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { z } from "zod";
-
 import {
   BackupExportError,
   backupInfoQuery,
@@ -22,6 +20,7 @@ import { PasswordField } from "@/features/backup/password-field";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
+import { z } from "@/lib/zod-config";
 
 // Validation here is UX only: the server checks the length again. Messages are
 // i18n keys, never literals (D-65), and {min} is filled in where they are shown.

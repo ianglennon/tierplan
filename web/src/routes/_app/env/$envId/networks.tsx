@@ -2,13 +2,12 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { createFileRoute } from "@tanstack/react-router";
-import { z } from "zod";
-
 import { MAX_QUERY } from "@/features/containers/list-search";
 import { NetworkList } from "@/features/networks/network-list";
 import { nodeSearchSchema } from "@/features/resources/swarm-lists";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
+import { z } from "@/lib/zod-config";
 
 function Networks() {
   const { envId } = Route.useParams();

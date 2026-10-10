@@ -5,8 +5,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { TriangleAlert } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
-import { z } from "zod";
-
 import type { NetworkRow, VolumeRow } from "@/api/resources";
 import { useCreateVolume, type VolumeRequestError } from "@/api/volumes";
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
@@ -40,6 +38,7 @@ import {
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { z } from "@/lib/zod-config";
 
 // The kinds of volume the Type select offers. None is a plain volume of the driver.
 export const TYPES = ["none", "nfs", "smb", "host"] as const satisfies readonly PresetType[];
