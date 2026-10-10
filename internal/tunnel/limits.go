@@ -431,7 +431,8 @@ var (
 // when p is not the start of a request at all, for example the next piece of a body,
 // or a first write too short to hold the whole request line, so the caller keeps what
 // it knew. The decision is made from the request line the server itself wrote, never
-// from anything the agent sends (T-04-14).
+// from anything the agent sends (T-04-14). The caller stops asking once an exec start
+// has been written, because the bytes after that are a person's keystrokes.
 func startsStreamRequest(p []byte) (kind streamKind, ok bool) {
 	head := p
 	if len(head) > 1024 {
