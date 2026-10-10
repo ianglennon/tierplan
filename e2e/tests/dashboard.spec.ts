@@ -92,7 +92,11 @@ test("the tiles equal the engine's counts and a new network appears live", async
   for (const list of lists) {
     await page.goto(at(`/env/${envId}/${list.path}`));
     await expect(page.getByRole("heading", { name: list.title, level: 1 })).toBeVisible();
-    await expect(page.getByText(countText(list.n, list.noun), { exact: true })).toBeVisible();
+    // A list that groups its rows (volumes, by stack) repeats a count in each group
+    // header, so the page's own caption is the first match.
+    await expect(
+      page.getByText(countText(list.n, list.noun), { exact: true }).first(),
+    ).toBeVisible();
   }
 });
 
