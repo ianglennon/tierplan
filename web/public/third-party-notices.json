@@ -615,6 +615,11 @@
     "licence": "MIT"
   },
   {
+    "name": "@tanstack/react-virtual",
+    "version": "3.14.13",
+    "licence": "MIT"
+  },
+  {
     "name": "@tanstack/router-core",
     "version": "1.171.34",
     "licence": "MIT"
@@ -622,6 +627,11 @@
   {
     "name": "@tanstack/store",
     "version": "0.11.2",
+    "licence": "MIT"
+  },
+  {
+    "name": "@tanstack/virtual-core",
+    "version": "3.17.11",
     "licence": "MIT"
   },
   {
