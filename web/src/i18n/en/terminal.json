@@ -51,7 +51,8 @@
       "idle_one": "Session closed after {{count}} minute without activity.",
       "idle_other": "Session closed after {{count}} minutes without activity.",
       "access_lost": "Your access changed. This session was closed.",
-      "ended_by_admin": "An administrator ended this session."
+      "ended_by_admin": "An administrator ended this session.",
+      "ended_by_user": "You ended this session from your list of open shells."
     },
     "disconnected": {
       "heading": "Disconnected",

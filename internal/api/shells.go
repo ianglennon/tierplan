@@ -515,6 +515,12 @@ type ActiveShellsInput struct {
 	EnvironmentPathInput
 }
 
+// MyShellsInput is the path and query of GET .../shells.
+type MyShellsInput struct {
+	EnvironmentPathInput
+	ContainerID string `query:"containerId" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" maxLength:"128" doc:"Only the shells in this container: its ID or name. Left out, every shell the caller has open on the environment"`
+}
+
 // EndShellInput is the path of DELETE .../active-shells/{shellId} and of DELETE
 // .../shells/{shellId}.
 type EndShellInput struct {
@@ -546,6 +552,59 @@ func shellNotFound() error {
 // its own so the route harness judges it by one requirement (D-37, T-04-94).
 func registerShellSessions(r *httpx.Router, d ShellsDeps) {
 	manage := rbac.Requirement{Perm: rbac.PermShellsManage, Scope: rbac.ScopeEnvironment}
+	exec := rbac.Requirement{Perm: rbac.PermContainersExec, Scope: rbac.ScopeEnvironment}
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listMyShells", Method: http.MethodGet, Path: "/api/env/{envId}/shells",
+		Summary: "List the caller's own open shells",
+		Description: "The shells the caller has open on the environment, oldest first, and only those: other people's are never listed here, whatever the caller's role. " +
+			"With containerId, only the ones in that container. Needs containers.exec on the environment.",
+		Tags: []string{"environments"},
+	}, exec, func(ctx context.Context, in *MyShellsInput) (*ShellListOutput, error) {
+		p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+		if p == nil || env == nil {
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		if d.Registry == nil {
+			return nil, httpx.Problem(http.StatusServiceUnavailable, problemShellUnavailable, "Shells are not available on this server.")
+		}
+		mine := d.Registry.List(shells.Filter{EnvID: env.ID, UserID: userKey(p)})
+		if want := in.ContainerID; want != "" {
+			kept := mine[:0]
+			for _, s := range mine {
+				if s.ContainerID == want || s.ContainerName == want || (len(want) >= minSelfIDLen && strings.HasPrefix(s.ContainerID, want)) {
+					kept = append(kept, s)
+				}
+			}
+			mine = kept
+		}
+		return &ShellListOutput{CacheControl: "no-store", Body: ShellListBody{Items: shellItems(d, mine)}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "endMyShell", Method: http.MethodDelete, Path: "/api/env/{envId}/shells/{shellId}",
+		Summary: "End one of the caller's own shells", DefaultStatus: http.StatusNoContent,
+		Description: "Closes one of the caller's own open shells at once; its browser is told it was ended by the user (reason ended_by_user) and its shell.closed row says the same. " +
+			"404 shell_not_found when it already closed, belongs to another environment, or belongs to someone else: the answer is the same for all three. Needs containers.exec on the environment.",
+		Tags: []string{"environments"},
+	}, exec, func(ctx context.Context, in *EndShellInput) (*struct{}, error) {
+		p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+		if p == nil || env == nil {
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		if d.Registry == nil {
+			return nil, httpx.Problem(http.StatusServiceUnavailable, problemShellUnavailable, "Shells are not available on this server.")
+		}
+		// Someone else's session answers as a missing one (T-04-95).
+		info, ok := d.Registry.Get(in.ShellID)
+		if !ok || info.EnvID != env.ID || info.UserID != userKey(p) {
+			return nil, shellNotFound()
+		}
+		if _, ok := d.Registry.End(info.ID, shells.ReasonEndedByUser); !ok {
+			return nil, shellNotFound()
+		}
+		return nil, nil
+	})
 
 	httpx.Register(r, huma.Operation{
 		OperationID: "listActiveShells", Method: http.MethodGet, Path: "/api/env/{envId}/active-shells",

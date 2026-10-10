@@ -74,6 +74,8 @@ interface Sent {
   body?: unknown;
 }
 let sent: Sent[];
+// The shells the person has open, as the server lists them; null answers that it cannot.
+let mineShells: Array<Record<string, unknown>> | null;
 let me: ReturnType<typeof makeMe>;
 let openAnswer: () => Response | Promise<Response>;
 let actionAnswer: () => Response | Promise<Response>;
@@ -95,6 +97,7 @@ function session() {
 
 beforeEach(() => {
   sent = [];
+  mineShells = null;
   sessionCount = 0;
   me = makeMe({ envs: { [ENV]: "operator" }, extras: { [ENV]: ["containers.exec"] } });
   openAnswer = session;
@@ -129,6 +132,9 @@ beforeEach(() => {
       if (url.pathname === "/api/me") return Response.json(me);
       if (url.pathname === `/api/env/${ENV}/containers/web-id/shell`) return openAnswer();
       if (url.pathname === `/api/env/${ENV}/containers/actions`) return actionAnswer();
+      if (url.pathname === `/api/env/${ENV}/shells` && mineShells) {
+        return Response.json({ items: mineShells });
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -464,8 +470,10 @@ describe("what is typed and printed", () => {
     expect(storageWrites.mock.calls.flat().join(" ")).not.toContain("hunter2");
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
-    // No request carried it: the only traffic after the socket opened is the socket.
-    expect(sent.slice(before)).toEqual([]);
+    // No request carried it: the only traffic after the socket opened is the socket, and
+    // the page asking again which shells the person has open (a GET with no body).
+    const own = (x: Sent) => x.method === "GET" && x.path === `/api/env/${ENV}/shells`;
+    expect(sent.slice(before).filter((x) => !own(x))).toEqual([]);
     expect(ws.inputText()).toBe("export TOKEN=hunter2\n");
   });
 });
@@ -855,6 +863,7 @@ describe("a session the server ended (plan 04-23, D-29, P3 D-10)", () => {
   const cases = [
     ["access_lost", "Your access changed. This session was closed."],
     ["ended_by_admin", "An administrator ended this session."],
+    ["ended_by_user", "You ended this session from your list of open shells."],
   ] as const;
 
   it.each(cases)(
@@ -1091,5 +1100,33 @@ describe("the toolbar (plan 04-24, D-33)", () => {
     expect(set.mock.calls.map((c) => c[0])).toEqual(["bayplan-terminal-font-size"]);
     expect(JSON.stringify(set.mock.calls)).not.toContain("hunter2");
     expect(sessionStorage.length).toBe(0);
+  });
+});
+
+describe("the person's other open shells (plan 04-25, D-31, D-37)", () => {
+  const open = (id: string) => ({
+    id,
+    user: "olive",
+    containerId: "web-id",
+    container: "web",
+    node: "n1",
+    startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    idleSeconds: 0,
+  });
+
+  it("shows Your shells (n) in the panel's header when they have shells open in this container", async () => {
+    mineShells = [open("a"), open("b")];
+    renderPanel();
+    expect(await screen.findByRole("button", { name: "Your shells (2)" })).toBeTruthy();
+    // The launcher is still there under it.
+    expect(screen.getByRole("button", { name: "Open shell" })).toBeTruthy();
+  });
+
+  it("shows no Your shells button when they have none", async () => {
+    mineShells = [];
+    renderPanel();
+    await screen.findByRole("button", { name: "Open shell" });
+    await waitFor(() => expect(sent.some((x) => x.path === `/api/env/${ENV}/shells`)).toBe(true));
+    expect(screen.queryByRole("button", { name: /^Your shells/ })).toBeNull();
   });
 });

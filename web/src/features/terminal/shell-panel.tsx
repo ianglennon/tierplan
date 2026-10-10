@@ -33,6 +33,7 @@ import {
   type TerminalToolbarHandle,
   useTerminalPrefs,
 } from "@/features/terminal/terminal-toolbar";
+import { YourShellsPopover } from "@/features/terminal/your-shells-popover";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { withBase } from "@/lib/base-path";
@@ -110,7 +111,7 @@ interface PanelState {
 
 // The reasons the server closes a session with that have a message of their own. Any
 // other reason is shown as a plain disconnect.
-const CLOSED_REASONS = new Set(["idle", "access_lost", "ended_by_admin"]);
+const CLOSED_REASONS = new Set(["idle", "access_lost", "ended_by_admin", "ended_by_user"]);
 
 // The size the shell starts at; the terminal sends its real size as soon as it has
 // fitted its box and the socket is open.
@@ -143,7 +144,19 @@ function failureCopyKey(e: ShellOpenError): string {
 // losing the connection ends it, and nothing ever re-attaches (D-30): "Reconnect
 // shell" and "Start a new session" open a fresh one. Nothing typed or printed is
 // logged, kept in the page's storage or sent anywhere but the socket.
-export function ShellPanel({
+export function ShellPanel(props: ShellPanelProps) {
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Empty, and so not there at all, unless the person has shells open (D-31). */}
+      <div className="flex justify-end empty:hidden">
+        <YourShellsPopover envId={props.envId} containerId={props.containerId} />
+      </div>
+      <ShellPanelBody {...props} />
+    </div>
+  );
+}
+
+function ShellPanelBody({
   envId,
   containerId,
   nodeId,
@@ -160,6 +173,11 @@ export function ShellPanel({
   const open = useOpenShell();
   const queryClient = useQueryClient();
   const preference = useShellPreference(image);
+  // The person's own list of shells changes when this panel opens or loses one.
+  const refreshMine = useCallback(
+    () => void queryClient.invalidateQueries({ queryKey: ["env", envId, "shells"] }),
+    [queryClient, envId],
+  );
   const remembered = useMemo(() => choiceOf(preference.data), [preference.data]);
   const [state, setState] = useState<PanelState>({ phase: "launcher" });
   const socket = useRef<TerminalSocket | null>(null);
@@ -238,6 +256,7 @@ export function ShellPanel({
           },
         });
         sessionId = session.sessionId;
+        refreshMine();
         ran = {
           shell: asked.shell === "custom" ? asked.command : asked.shell,
           user: session.user,
@@ -265,6 +284,7 @@ export function ShellPanel({
 
       const onControl = (c: TerminalControl) => {
         if (c.type === "exit") {
+          refreshMine();
           setState((s) => ({ ...s, phase: "ended", exitCode: c.code }));
         } else if (c.type === "idle_warning") {
           setWarned(true);
@@ -274,6 +294,7 @@ export function ShellPanel({
           drop();
           setState({ phase: "launcher", failure: new ShellOpenError(409, "no_shell") });
         } else if (c.type === "closed") {
+          refreshMine();
           // Whoever lost the right to a shell should see what else changed with it.
           if (c.reason === "access_lost") void queryClient.invalidateQueries({ queryKey: ["me"] });
           setState((s) =>
@@ -307,7 +328,18 @@ export function ShellPanel({
       socket.current = sock;
       setState({ phase: "connecting", sessionId, ran });
     },
-    [needs.allowed, drop, open, queryClient, image, envId, containerId, nodeId, createSocket],
+    [
+      needs.allowed,
+      drop,
+      open,
+      queryClient,
+      refreshMine,
+      image,
+      envId,
+      containerId,
+      nodeId,
+      createSocket,
+    ],
   );
 
   // End session closes the socket, which ends the exec on the server (D-30), and goes
@@ -317,7 +349,8 @@ export function ShellPanel({
     held.current = [];
     setWarned(false);
     setState({ phase: "launcher" });
-  }, [drop]);
+    refreshMine();
+  }, [drop, refreshMine]);
 
   const openWindow = useCallback(() => {
     window.open(

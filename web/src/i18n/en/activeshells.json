@@ -35,6 +35,17 @@
       "done": "Ended {{user}}'s shell.",
       "gone": "Shell already closed.",
       "failed": "Couldn't end the shell. Try again."
+    },
+    "yours": {
+      "trigger": "Your shells ({{count}})",
+      "heading": "Your open shells",
+      "label": "Your open shells",
+      "end": "End session",
+      "ending": "Ending…",
+      "endFor": "End session in {{container}}",
+      "ended": "Session ended.",
+      "gone": "Shell already closed.",
+      "failed": "Couldn't end the shell. Try again."
     }
   }
 }

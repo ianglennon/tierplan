@@ -238,3 +238,45 @@ export function useEndShell(envId: string) {
     onSettled: () => queryClient.invalidateQueries({ queryKey: activeShellsKey(envId) }),
   });
 }
+
+// myShellsKey is the cache key of the caller's own shells on an environment, narrowed to
+// one container (an empty string is all of them).
+export function myShellsKey(envId: string, containerId = "") {
+  return ["env", envId, "shells", containerId] as const;
+}
+
+// myShellsQuery lists the shells the signed-in user has open, in one container or on the
+// whole environment. It is theirs alone whatever their role (D-37), and needs the shell
+// permission, which is why it is asked for only when the person has it.
+export const myShellsQuery = (envId: string, containerId = "", enabled = true) =>
+  queryOptions({
+    queryKey: myShellsKey(envId, containerId),
+    queryFn: async (): Promise<ShellItem[]> => {
+      const { data } = await api.GET("/api/env/{envId}/shells", {
+        params: { path: { envId }, query: containerId ? { containerId } : {} },
+      });
+      if (!data) throw new Error("GET /api/env/{envId}/shells failed");
+      return data.items ?? [];
+    },
+    enabled,
+    refetchInterval: SHELLS_POLL_MS,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+
+// useEndMyShell ends one of the signed-in user's own shells. A shell that had already
+// closed is a ShellEndError of type shell_not_found, and the lists are read again either
+// way.
+export function useEndMyShell(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, ShellEndError, { id: string }>({
+    mutationFn: ({ id }) =>
+      endShellRequest(() =>
+        api.DELETE("/api/env/{envId}/shells/{shellId}", {
+          params: { path: { envId, shellId: id } },
+        }),
+      ),
+    retry: false,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["env", envId, "shells"] }),
+  });
+}

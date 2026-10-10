@@ -9377,6 +9377,118 @@
         ]
       }
     },
+    "/api/env/{envId}/shells": {
+      "get": {
+        "description": "The shells the caller has open on the environment, oldest first, and only those: other people's are never listed here, whatever the caller's role. With containerId, only the ones in that container. Needs containers.exec on the environment.",
+        "operationId": "listMyShells",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the shells in this container: its ID or name. Left out, every shell the caller has open on the environment",
+            "explode": false,
+            "in": "query",
+            "name": "containerId",
+            "schema": {
+              "description": "Only the shells in this container: its ID or name. Left out, every shell the caller has open on the environment",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the caller's own open shells",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/shells/{shellId}": {
+      "delete": {
+        "description": "Closes one of the caller's own open shells at once; its browser is told it was ended by the user (reason ended_by_user) and its shell.closed row says the same. 404 shell_not_found when it already closed, belongs to another environment, or belongs to someone else: the answer is the same for all three. Needs containers.exec on the environment.",
+        "operationId": "endMyShell",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The session's ID",
+            "in": "path",
+            "name": "shellId",
+            "required": true,
+            "schema": {
+              "description": "The session's ID",
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "End one of the caller's own shells",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/summary": {
       "get": {
         "description": "The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. On a swarm the counts are the cluster's totals over the nodes that answered, with each node's own counts in byNode; notReporting names the nodes that did not, and while it is not empty the totals are not the whole cluster. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",

@@ -820,6 +820,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/shells": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the caller's own open shells
+         * @description The shells the caller has open on the environment, oldest first, and only those: other people's are never listed here, whatever the caller's role. With containerId, only the ones in that container. Needs containers.exec on the environment.
+         */
+        get: operations["listMyShells"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/shells/{shellId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * End one of the caller's own shells
+         * @description Closes one of the caller's own open shells at once; its browser is told it was ended by the user (reason ended_by_user) and its shell.closed row says the same. 404 shell_not_found when it already closed, belongs to another environment, or belongs to someone else: the answer is the same for all three. Needs containers.exec on the environment.
+         */
+        delete: operations["endMyShell"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/summary": {
         parameters: {
             query?: never;
@@ -6324,6 +6364,74 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listMyShells: {
+        parameters: {
+            query?: {
+                /** @description Only the shells in this container: its ID or name. Left out, every shell the caller has open on the environment */
+                containerId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    endMyShell: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The session's ID */
+                shellId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

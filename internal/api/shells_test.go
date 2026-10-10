@@ -1068,3 +1068,132 @@ func TestActiveShellsAnAdminOfAnotherEnvironmentCannotSeeOrEndThisOnesShells(t *
 	sendBinary(t, c, "echo alive\n")
 	readUntilBinary(t, c, "alive")
 }
+
+// A person's own shells (plan 04-25, D-31, D-37, T-04-95).
+
+func (f *shellFix) minePath(id, query string) string {
+	p := "/api/env/" + f.env.ID + "/shells"
+	if id != "" {
+		p += "/" + id
+	}
+	return p + query
+}
+
+func TestMyShellsListOnlyTheCallersOwnSessionsNarrowedByContainerAndHoldsSeveral(t *testing.T) {
+	f := newShellFix(t, nil)
+	oliveCookie, oliveCSRF := f.operatorWithShell(t, "olive")
+	f.openAs(t, oliveCookie, oliveCSRF)
+	f.openAs(t, oliveCookie, oliveCSRF) // several at once, up to the cap (D-31)
+	omarCookie, omarCSRF := f.operatorWithShell(t, "omar")
+	f.openAs(t, omarCookie, omarCSRF)
+	f.attach(t, f.session(t)) // the instance admin's own, which no one else's list holds
+
+	list := func(query string) []activeShell {
+		t.Helper()
+		rec := f.as(t, http.MethodGet, f.minePath("", query), oliveCookie, oliveCSRF)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list %q: %d %s", query, rec.Code, rec.Body)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store", cc)
+		}
+		return decodeRec[shellList](t, rec).Items
+	}
+	all := list("")
+	if len(all) != 2 || all[0].User != "olive" || all[1].User != "olive" || all[0].ID == all[1].ID {
+		t.Fatalf("olive's list = %+v, want her two shells and nobody else's", all)
+	}
+	if got := list("?containerId=web"); len(got) != 2 || got[0].Container != "web" {
+		t.Errorf("by name = %+v, want both in web", got)
+	}
+	if got := list("?containerId=" + webID[:12]); len(got) != 2 {
+		t.Errorf("by short ID = %+v, want both in web", got)
+	}
+	if got := list("?containerId=db"); len(got) != 0 {
+		t.Errorf("db = %+v, want none: she has no shell there", got)
+	}
+	// The administrator's own list is theirs alone, though they could list everyone's.
+	rec := f.req(t, http.MethodGet, f.minePath("", ""), "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("admin list: %d %s", rec.code, rec.body)
+	}
+	if got := decode[shellList](t, rec).Items; len(got) != 1 || got[0].User != "admin" {
+		t.Errorf("the administrator's own list = %+v, want one shell, theirs", got)
+	}
+}
+
+func TestMyShellsAreRefusedToAnOperatorWithoutTheShellPermissionAndToAViewer(t *testing.T) {
+	f := newShellFix(t, nil)
+	f.addEnvUser(t, "plain", f.env.ID, "operator")
+	plainCookie, plainCSRF := f.signIn(t, "plain", false)
+	f.addEnvUser(t, "vera", f.env.ID, "viewer")
+	veraCookie, veraCSRF := f.signIn(t, "vera", false)
+	for _, who := range []struct{ name, cookie, csrf string }{{"operator", plainCookie, plainCSRF}, {"viewer", veraCookie, veraCSRF}} {
+		if rec := f.as(t, http.MethodGet, f.minePath("", ""), who.cookie, who.csrf); rec.Code != http.StatusForbidden {
+			t.Errorf("%s list: %d, want 403", who.name, rec.Code)
+		}
+		if rec := f.as(t, http.MethodDelete, f.minePath("x", ""), who.cookie, who.csrf); rec.Code != http.StatusForbidden {
+			t.Errorf("%s end: %d, want 403", who.name, rec.Code)
+		}
+	}
+}
+
+func TestMyShellsEndingYourOwnTellsItsBrowserAndRecordsEndedByUserAndASecondEndFindsItGone(t *testing.T) {
+	f := newShellFix(t, nil)
+	cookie, csrf := f.operatorWithShell(t, "olive")
+	c := f.openAs(t, cookie, csrf)
+	id := f.onlyShellID(t)
+
+	if rec := f.as(t, http.MethodDelete, f.minePath(id, ""), cookie, csrf); rec.Code != http.StatusNoContent {
+		t.Fatalf("end: %d %s", rec.Code, rec.Body)
+	}
+	if ctl := readControl(t, c, "closed"); ctl.Reason != "ended_by_user" {
+		t.Errorf("closed frame = %+v, want reason ended_by_user", ctl)
+	}
+	drain(t, c)
+	rows := f.waitShellRows(t, 2)
+	if rows[1].Action != audit.ActionShellClosed || rows[1].Details["reason"] != "ended_by_user" || rows[1].Actor != "id-olive" {
+		t.Errorf("closed row = %+v, want olive's shell closed with reason ended_by_user", rows[1])
+	}
+	rec := f.as(t, http.MethodDelete, f.minePath(id, ""), cookie, csrf)
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "shell_not_found" {
+		t.Errorf("second end: %d %s, want 404 shell_not_found", rec.Code, rec.Body)
+	}
+	if n := len(f.shellAudits(t)); n != 2 {
+		t.Errorf("%d shell rows, want 2: ending your own writes no shell.ended row", n)
+	}
+}
+
+func TestMyShellsAnotherUsersIdAnswersShellNotFoundAndLeavesTheirSessionRunning(t *testing.T) {
+	f := newShellFix(t, nil)
+	oliveCookie, oliveCSRF := f.operatorWithShell(t, "olive")
+	c := f.openAs(t, oliveCookie, oliveCSRF)
+	id := f.onlyShellID(t)
+
+	omarCookie, omarCSRF := f.operatorWithShell(t, "omar")
+	missing := f.as(t, http.MethodDelete, f.minePath("nope", ""), omarCookie, omarCSRF)
+	theirs := f.as(t, http.MethodDelete, f.minePath(id, ""), omarCookie, omarCSRF)
+	// The answer to another person's session is the answer to one that is not there.
+	type answer struct{ Type, Title, Detail string }
+	said := func(rec *httptest.ResponseRecorder) (int, answer) {
+		var a answer
+		if err := json.Unmarshal(rec.Body.Bytes(), &a); err != nil {
+			t.Fatalf("decode %s: %v", rec.Body, err)
+		}
+		return rec.Code, a
+	}
+	theirsCode, theirsAnswer := said(theirs)
+	missingCode, missingAnswer := said(missing)
+	if theirsCode != http.StatusNotFound || theirsAnswer.Type != "shell_not_found" || theirsCode != missingCode || theirsAnswer != missingAnswer {
+		t.Errorf("another's session: %d %+v; a missing one: %d %+v; want the same 404 shell_not_found", theirsCode, theirsAnswer, missingCode, missingAnswer)
+	}
+	// Even an administrator ends someone else's through the administrator's route only.
+	if rec := f.req(t, http.MethodDelete, f.minePath(id, ""), ""); rec.code != http.StatusNotFound || rec.ptyp != "shell_not_found" {
+		t.Errorf("an administrator through the own-session route: %d %s, want 404 shell_not_found", rec.code, rec.body)
+	}
+	sendBinary(t, c, "echo still\n")
+	readUntilBinary(t, c, "still")
+	if n := len(f.shellsReg.List(shells.Filter{})); n != 1 {
+		t.Errorf("%d shells open, want olive's one still running", n)
+	}
+}
