@@ -59,11 +59,10 @@ func newRig(t *testing.T, ctl Controls, exec Exec) *rig {
 	t.Cleanup(srv.Close)
 	dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer dcancel()
-	c, resp, err := websocket.Dial(dctx, "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	c, _, err := websocket.Dial(dctx, "ws"+strings.TrimPrefix(srv.URL, "http"), nil) //nolint:bodyclose // a WebSocket upgrade response has no body to close
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	_ = resp
 	r.client = c
 	t.Cleanup(func() { _ = c.CloseNow() })
 	return r
