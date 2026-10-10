@@ -33,6 +33,7 @@ import {
 import {
   createLogStream,
   fetchLogPage,
+  type LogStream,
   type LogStreamState,
   makeViewerId,
   plusNanosecond,
@@ -42,6 +43,7 @@ import { counterText, LogToolbar } from "@/features/logs/log-toolbar";
 import { searchLines } from "@/features/logs/search";
 import { UnreadableNotice } from "@/features/logs/unreadable-notice";
 import { useT } from "@/i18n/use-t";
+import { withBase } from "@/lib/base-path";
 
 // Rows drawn beyond the visible ones, so a fast scroll does not show a blank.
 const OVERSCAN = 20;
@@ -71,6 +73,43 @@ export interface LogViewerProps {
   // the More menu that stand in for them on a narrow screen.
   actions?: ReactNode;
   moreItems?: ReactNode;
+  // This is the pop-out window: it does not offer another pop-out, and it closes its
+  // stream when it has been hidden for a minute and opens it again when seen (D-22).
+  popout?: boolean;
+}
+
+// How long a hidden pop-out keeps its stream before it lets it go.
+export const HIDDEN_POPOUT_MS = 60_000;
+
+// popoutLogsUrl is the address of the logs pop-out, with the range, the search and the
+// toggles carried in the query the way the route reads them. A text that would read as
+// a number, a boolean or JSON is quoted, since the router parses every value as JSON
+// first; the address is under the base path.
+export function popoutLogsUrl(
+  envId: string,
+  containerId: string,
+  nodeId: string | undefined,
+  view: LogViewParams,
+): string {
+  const text = (v: string): string => {
+    try {
+      JSON.parse(v);
+      return JSON.stringify(v);
+    } catch {
+      return v;
+    }
+  };
+  const q = new URLSearchParams();
+  if (nodeId) q.set("node", text(nodeId));
+  if (view.since) q.set("since", text(view.since));
+  if (view.q) q.set("q", text(view.q));
+  if (view.ts !== undefined) q.set("ts", String(view.ts));
+  if (view.utc !== undefined) q.set("utc", String(view.utc));
+  if (view.wrap !== undefined) q.set("wrap", String(view.wrap));
+  const query = q.toString();
+  return withBase(
+    `/popout/${encodeURIComponent(envId)}/containers/${encodeURIComponent(containerId)}/logs${query ? `?${query}` : ""}`,
+  );
 }
 
 // The theme the page is in: the dark class on the root.
@@ -112,6 +151,7 @@ export function LogViewer({
   onParamsChange,
   actions,
   moreItems,
+  popout = false,
 }: LogViewerProps) {
   const t = useT();
   // The viewer's own ID: made once, sent on every stream and page of this viewer, so
@@ -124,6 +164,7 @@ export function LogViewer({
   const everLive = useRef(false);
   // Bumped by Retry to open the stream again for the same viewer.
   const [openCount, setOpenCount] = useState(0);
+  const streamRef = useRef<LogStream | null>(null);
   // Set when the engine cannot read this container's log back (D-25).
   const [unreadable, setUnreadable] = useState<UnreadableInfo | null>(null);
   const theme = useTheme();
@@ -193,8 +234,30 @@ export function LogViewer({
         else if (what === "restarted") buffer.pushMarker("restarted", at);
       },
     });
-    return () => stream.close();
+    streamRef.current = stream;
+    return () => {
+      streamRef.current = null;
+      stream.close();
+    };
   }, [buffer, envId, containerId, nodeId, sid, sinceKey, openCount]);
+
+  // A pop-out nobody can see lets its stream go after a minute and takes it up again
+  // from the last line when it is seen (D-22). The Logs tab keeps its stream.
+  useEffect(() => {
+    if (!popout) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onVisibility = () => {
+      clearTimeout(timer);
+      if (document.hidden) timer = setTimeout(() => streamRef.current?.suspend(), HIDDEN_POPOUT_MS);
+      else streamRef.current?.resume();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    if (document.hidden) onVisibility();
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [popout]);
 
   // ---- search ----
   const [queryInput, setQueryInput] = useState(view.q ?? "");
@@ -424,6 +487,18 @@ export function LogViewer({
   const [downloadOpen, setDownloadOpen] = useState(false);
   const downloadTarget = { envId, containerId, nodeId };
   const onShowChange = (next: ShowRange) => change({ since: formatShow(next) });
+  // The window opens with what is on screen, so it reads the same: the range, the search
+  // and the toggles, as they are now (not only the ones the address holds).
+  const openPopout = () => {
+    const url = popoutLogsUrl(envId, containerId, nodeId, {
+      since: sinceKey || undefined,
+      q: queryInput || undefined,
+      ts: timestamps,
+      utc: view.utc ?? prefs.utc,
+      wrap,
+    });
+    window.open(url, "_blank", "popup,noopener,width=1100,height=760");
+  };
 
   const renderRow = (index: number) => {
     if (index < topCount) {
@@ -514,6 +589,7 @@ export function LogViewer({
             {actions}
           </>
         }
+        onOpenPopout={popout ? undefined : openPopout}
         moreItems={
           <>
             <DropdownMenuItem onSelect={() => setDownloadOpen(true)}>

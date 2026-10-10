@@ -58,6 +58,10 @@
       "body": "Check the connection and try again.",
       "retry": "Retry"
     },
+    "popout": {
+      "open": "Open in new window",
+      "title": "{{name}} logs"
+    },
     "download": {
       "trigger": "Download…",
       "title": "Download logs",

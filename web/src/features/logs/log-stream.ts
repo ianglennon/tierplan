@@ -69,6 +69,13 @@ export interface LogStream {
   // Ends the stream and closes the connection. Nothing is reported after it, and a
   // second call does nothing.
   close: () => void;
+  // Closes the connection of a stream nobody is looking at, keeping what it knows so
+  // that resume can pick up from the last line. A suspended stream retries nothing.
+  suspend: () => void;
+  // Opens the connection again after suspend, from the last line, saying it is
+  // reconnecting until the server answers. It does nothing for a stream that is not
+  // suspended.
+  resume: () => void;
 }
 
 const SID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -159,6 +166,7 @@ export function createLogStream(options: LogStreamOptions): LogStream {
   let disposed = false;
   let everLive = false;
   let attempt = 0;
+  let suspended = false;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let source: EventSourceLike;
 
@@ -214,7 +222,7 @@ export function createLogStream(options: LogStreamOptions): LogStream {
 
   const refused = async (): Promise<void> => {
     const status = await probe();
-    if (disposed) return;
+    if (disposed || suspended) return;
     if (status === 404 || status === 409) {
       options.onInterrupted?.();
       report({ status: "closed", reason: "failed" });
@@ -231,7 +239,7 @@ export function createLogStream(options: LogStreamOptions): LogStream {
     const after = resume && newest ? newest : undefined;
     source = create(logStreamUrl({ ...options, after }));
     const mine = source;
-    const live = (): boolean => !disposed && source === mine;
+    const live = (): boolean => !disposed && !suspended && source === mine;
 
     mine.addEventListener("ready", (event) => {
       if (!live()) return;
@@ -308,6 +316,19 @@ export function createLogStream(options: LogStreamOptions): LogStream {
       disposed = true;
       clearTimeout(retry);
       source.close();
+    },
+    suspend: () => {
+      if (disposed || suspended) return;
+      suspended = true;
+      clearTimeout(retry);
+      source.close();
+    },
+    resume: () => {
+      if (disposed || !suspended) return;
+      suspended = false;
+      attempt = 0;
+      if (everLive) report({ status: "reconnecting" });
+      reopen();
     },
   };
 }

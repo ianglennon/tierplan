@@ -41,6 +41,7 @@ import { Route as AppSettingsAccessTeamsTeamIdRouteImport } from './routes/_app/
 import { Route as AppSettingsAccessUsersUserIdRouteImport } from './routes/_app/settings/access/users_.$userId'
 import { Route as AppSettingsEnvironmentsEnvIdIndexRouteImport } from './routes/_app/settings/environments_.$envId.index'
 import { Route as AppSettingsEnvironmentsEnvIdAccessRouteImport } from './routes/_app/settings/environments_.$envId.access'
+import { Route as PopoutEnvIdContainersContainerIdLogsRouteImport } from './routes/popout.$envId.containers.$containerId.logs'
 import { Route as AppEnvEnvIdContainersContainerIdIndexRouteImport } from './routes/_app/env/$envId/containers_.$containerId.index'
 import { Route as AppEnvEnvIdContainersContainerIdInspectRouteImport } from './routes/_app/env/$envId/containers_.$containerId.inspect'
 import { Route as AppEnvEnvIdContainersContainerIdLogsRouteImport } from './routes/_app/env/$envId/containers_.$containerId.logs'
@@ -217,6 +218,12 @@ const AppSettingsEnvironmentsEnvIdAccessRoute =
     path: '/access',
     getParentRoute: () => AppSettingsEnvironmentsEnvIdRoute,
   } as any)
+const PopoutEnvIdContainersContainerIdLogsRoute =
+  PopoutEnvIdContainersContainerIdLogsRouteImport.update({
+    id: '/popout/$envId/containers/$containerId/logs',
+    path: '/popout/$envId/containers/$containerId/logs',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AppEnvEnvIdContainersContainerIdIndexRoute =
   AppEnvEnvIdContainersContainerIdIndexRouteImport.update({
     id: '/',
@@ -297,6 +304,7 @@ export interface FileRoutesByFullPath {
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  '/popout/$envId/containers/$containerId/logs': typeof PopoutEnvIdContainersContainerIdLogsRoute
   '/settings/environments/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/containers/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
@@ -331,6 +339,7 @@ export interface FileRoutesByTo {
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  '/popout/$envId/containers/$containerId/logs': typeof PopoutEnvIdContainersContainerIdLogsRoute
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/containers/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
@@ -374,6 +383,7 @@ export interface FileRoutesById {
   '/_app/settings/access/teams_/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/_app/settings/access/users_/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/_app/settings/environments_/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
+  '/popout/$envId/containers/$containerId/logs': typeof PopoutEnvIdContainersContainerIdLogsRoute
   '/_app/settings/environments_/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/_app/env/$envId/containers_/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/_app/env/$envId/containers_/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
@@ -417,6 +427,7 @@ export interface FileRouteTypes {
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
+    | '/popout/$envId/containers/$containerId/logs'
     | '/settings/environments/$envId/'
     | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/containers/$containerId/logs'
@@ -451,6 +462,7 @@ export interface FileRouteTypes {
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
+    | '/popout/$envId/containers/$containerId/logs'
     | '/settings/environments/$envId'
     | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/containers/$containerId/logs'
@@ -493,6 +505,7 @@ export interface FileRouteTypes {
     | '/_app/settings/access/teams_/$teamId'
     | '/_app/settings/access/users_/$userId'
     | '/_app/settings/environments_/$envId/access'
+    | '/popout/$envId/containers/$containerId/logs'
     | '/_app/settings/environments_/$envId/'
     | '/_app/env/$envId/containers_/$containerId/inspect'
     | '/_app/env/$envId/containers_/$containerId/logs'
@@ -510,6 +523,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   SetupRoute: typeof SetupRoute
   WelcomeRoute: typeof WelcomeRoute
+  PopoutEnvIdContainersContainerIdLogsRoute: typeof PopoutEnvIdContainersContainerIdLogsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -737,6 +751,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings/environments/$envId/access'
       preLoaderRoute: typeof AppSettingsEnvironmentsEnvIdAccessRouteImport
       parentRoute: typeof AppSettingsEnvironmentsEnvIdRoute
+    }
+    '/popout/$envId/containers/$containerId/logs': {
+      id: '/popout/$envId/containers/$containerId/logs'
+      path: '/popout/$envId/containers/$containerId/logs'
+      fullPath: '/popout/$envId/containers/$containerId/logs'
+      preLoaderRoute: typeof PopoutEnvIdContainersContainerIdLogsRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_app/env/$envId/containers_/$containerId/': {
       id: '/_app/env/$envId/containers_/$containerId/'
@@ -972,6 +993,8 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   SetupRoute: SetupRoute,
   WelcomeRoute: WelcomeRoute,
+  PopoutEnvIdContainersContainerIdLogsRoute:
+    PopoutEnvIdContainersContainerIdLogsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

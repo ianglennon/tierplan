@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronUp,
   Ellipsis,
+  ExternalLink,
   Regex,
   Search,
   SlidersHorizontal,
@@ -17,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -71,6 +73,10 @@ export interface LogToolbarProps {
   // no More menu.
   actions?: ReactNode;
   moreItems?: ReactNode;
+  // Opens the log in a window of its own. The button comes last in the second row, and
+  // is an item of the More menu under 768px; without it there is none (the pop-out
+  // does not offer a pop-out).
+  onOpenPopout?: () => void;
 }
 
 // The toggles the arrow keys move between.
@@ -149,7 +155,7 @@ export function LogToolbar(p: LogToolbarProps) {
                 {viewToggles}
               </PopoverContent>
             </Popover>
-            {p.moreItems ? (
+            {p.moreItems || p.onOpenPopout ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button type="button" variant="outline" size="sm" className="max-md:h-11">
@@ -157,7 +163,14 @@ export function LogToolbar(p: LogToolbarProps) {
                     {t("logs.more")}
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">{p.moreItems}</DropdownMenuContent>
+                <DropdownMenuContent align="end">
+                  {p.moreItems}
+                  {p.onOpenPopout ? (
+                    <DropdownMenuItem onSelect={p.onOpenPopout}>
+                      {t("logs.popout.open")}
+                    </DropdownMenuItem>
+                  ) : null}
+                </DropdownMenuContent>
               </DropdownMenu>
             ) : null}
           </>
@@ -167,6 +180,12 @@ export function LogToolbar(p: LogToolbarProps) {
             {p.live ? <LiveChip state={p.live} /> : null}
             <span className="flex-1" />
             {p.actions}
+            {p.onOpenPopout ? (
+              <Button type="button" variant="outline" size="sm" onClick={p.onOpenPopout}>
+                <ExternalLink aria-hidden="true" />
+                {t("logs.popout.open")}
+              </Button>
+            ) : null}
           </>
         )}
       </div>
