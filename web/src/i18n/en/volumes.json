@@ -157,6 +157,15 @@
     "results": {
       "title": "Delete results",
       "volume": "Volume"
+    },
+    "sizes": {
+      "button": "Calculate sizes",
+      "calculating": "Calculating…",
+      "calculatingNodes_one": "Calculating on {{count}} node…",
+      "calculatingNodes_other": "Calculating on {{count}} nodes…",
+      "done": "Sizes updated.",
+      "error": "Couldn't calculate sizes. Try again.",
+      "failedOn": "Couldn't calculate on {{node}}."
     }
   }
 }

@@ -4,14 +4,17 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/sync/errgroup"
@@ -59,6 +62,9 @@ type VolumesDeps struct {
 	Checker *rbac.Checker
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// SizesTimeout is how long one node may take to calculate its volume sizes. Zero means
+	// 60 seconds.
+	SizesTimeout time.Duration
 }
 
 // VolumeCreateRequest is the body of POST /api/env/{envId}/volumes.
@@ -133,12 +139,73 @@ type VolumeDeleteOutput struct {
 	Body         VolumeDeleteResponse
 }
 
+// sizesTimeout is how long one node may take to walk its volumes (T-04-60).
+const sizesTimeout = 60 * time.Second
+
+// sizesParallel is how many nodes calculate their sizes at once (T-04-60).
+const sizesParallel = 4
+
+// VolumeSizesInput is the path and query of the sizes route.
+type VolumeSizesInput struct {
+	EnvironmentPathInput
+	NodeID string `query:"nodeId" maxLength:"128" doc:"Only this node: the nodeId of a row of the volumes list. Left out, every reporting node"`
+}
+
+// VolumeSizeEntry is the size of one volume on one node.
+type VolumeSizeEntry struct {
+	Name     string `json:"name" doc:"The volume name"`
+	Size     int64  `json:"size" doc:"Bytes the volume takes, or -1 when the engine cannot say, as for a volume of a driver other than local"`
+	RefCount int64  `json:"refCount" doc:"How many containers reference the volume, or -1 when the engine does not count them"`
+}
+
+// VolumeSizesNodeBody is what one node answered.
+type VolumeSizesNodeBody struct {
+	NodeID string            `json:"nodeId" doc:"The node ID, as in the volumes list"`
+	Node   string            `json:"node" doc:"The node's display name"`
+	OK     bool              `json:"ok" doc:"False when the node could not calculate its sizes; error says why and sizes is empty"`
+	Error  string            `json:"error,omitempty" doc:"Why the node could not calculate, in a plain sentence"`
+	Sizes  []VolumeSizeEntry `json:"sizes" doc:"The node's volumes with their sizes, sorted by name"`
+}
+
+// VolumeSizesBody is the answer to the sizes route.
+type VolumeSizesBody struct {
+	Nodes []VolumeSizesNodeBody `json:"nodes" doc:"One entry per node asked, sorted by display name then ID. One node failing never fails the others"`
+}
+
+// VolumeSizesOutput wraps VolumeSizesBody for huma.
+type VolumeSizesOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         VolumeSizesBody
+}
+
 // RegisterVolumes registers the volume routes. A write goes to one node, is never
 // retried (P2 D-42), and every attempt is audited.
 func RegisterVolumes(r *httpx.Router, d VolumesDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
+	httpx.Register(r, huma.Operation{
+		OperationID: "volumeSizes", Method: http.MethodGet, Path: "/api/env/{envId}/volumes/sizes",
+		Summary: "Calculate the sizes of the volumes, per node",
+		Description: "Asks the engine of every node that answered (or only the one named by nodeId) for the disk usage of its volumes and answers one entry per node. " +
+			"This makes the engine walk every volume's files, which can take long on a host with large volumes, so the SPA asks only when the user presses Calculate sizes and never on a timer. " +
+			"At most 4 nodes calculate at once, each for at most 60 seconds; a node that fails or runs out of time answers ok false with an error, and the others are unaffected. " +
+			"A volume's size is -1 when the engine cannot say. " +
+			"503 node_unavailable when nodeId is not a connected node of the environment. Needs volumes.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermVolumesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *VolumeSizesInput) (*VolumeSizesOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := volumeSizes(ctx, d, env.ID, in.NodeID)
+			if err != nil {
+				return nil, err
+			}
+			return &VolumeSizesOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
 	httpx.Register(r, huma.Operation{
 		OperationID: "createVolume", Method: http.MethodPost, Path: "/api/env/{envId}/volumes",
 		Summary: "Create a volume",
@@ -180,6 +247,67 @@ func RegisterVolumes(r *httpx.Router, d VolumesDeps) {
 			}
 			return deleteVolumes(ctx, d, p, env.ID, in)
 		})
+}
+
+// volumeSizes asks the nodes of the environment for the disk usage of their volumes, a few
+// at once and each under its own time limit, and answers what each said. A node that
+// fails is an entry of its own and never fails the request.
+func volumeSizes(ctx context.Context, d VolumesDeps, envID, nodeID string) (VolumeSizesBody, error) {
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return VolumeSizesBody{}, snapshotProblem(d.Log, envID, err)
+	}
+	nodes := slices.Clone(agg.Nodes)
+	if nodeID != "" {
+		nodes = slices.DeleteFunc(nodes, func(n envs.NodeRef) bool { return n.ID != nodeID })
+		if len(nodes) == 0 {
+			return VolumeSizesBody{}, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+		}
+	}
+	slices.SortFunc(nodes, func(a, b envs.NodeRef) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
+	})
+	limit := d.SizesTimeout
+	if limit <= 0 {
+		limit = sizesTimeout
+	}
+	out := make([]VolumeSizesNodeBody, len(nodes))
+	var g errgroup.Group
+	g.SetLimit(sizesParallel)
+	for i, n := range nodes {
+		out[i] = VolumeSizesNodeBody{NodeID: n.ID, Node: n.Name, Sizes: []VolumeSizeEntry{}}
+		g.Go(func() error {
+			nodeCtx, cancel := context.WithTimeout(ctx, limit)
+			defer cancel()
+			var usage map[string]dockerx.VolumeUsage
+			err := d.Aggregator.OnNode(nodeCtx, envID, n.ID, func(c *dockerx.Client) error {
+				var e error
+				usage, e = c.VolumeSizes(nodeCtx)
+				return e
+			})
+			if err != nil {
+				d.Log.Warn("could not calculate volume sizes", "environment", envID, "node", n.ID, "error", err)
+				out[i].Error = sizesError(err)
+				return nil
+			}
+			out[i].OK = true
+			for _, name := range slices.Sorted(maps.Keys(usage)) {
+				out[i].Sizes = append(out[i].Sizes, VolumeSizeEntry{Name: name, Size: usage[name].Size, RefCount: usage[name].RefCount})
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // every goroutine returns nil: a failure is an entry of its own
+	return VolumeSizesBody{Nodes: out}, nil
+}
+
+// sizesError words why a node could not calculate its sizes.
+func sizesError(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "The node took too long to calculate its volume sizes."
+	}
+	_, detail := actionError(err)
+	return detail
 }
 
 // createVolume checks the request, finds the node the volume belongs on, checks that the

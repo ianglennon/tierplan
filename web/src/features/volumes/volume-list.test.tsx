@@ -27,6 +27,7 @@ let swarmEnv: boolean;
 let urls: string[];
 let search: VolumeSearch;
 let changes: VolumeSearchPatch[];
+let sizesNodes: unknown[] | null;
 
 const volume = (name: string, extra: Record<string, unknown> = {}) => ({
   name,
@@ -48,6 +49,7 @@ beforeEach(() => {
   urls = [];
   search = {};
   changes = [];
+  sizesNodes = null;
   volumes = [
     volume("appdata", { usedByContainers: 2, project: "shop" }),
     volume("cache", { project: "shop" }),
@@ -77,6 +79,11 @@ beforeEach(() => {
           nodes: ["node-1", "node-2"],
           notReporting: [],
         });
+      }
+      if (url.pathname === `/api/env/${ENV}/volumes/sizes`) {
+        return sizesNodes === null
+          ? Response.json({ title: "boom", status: 500 }, { status: 500 })
+          : Response.json({ nodes: sizesNodes });
       }
       if (url.pathname === "/api/environments") {
         return Response.json({
@@ -284,5 +291,110 @@ describe("VolumeList selection", () => {
       await screen.findByText("In use by 2 containers. Remove what uses it first."),
     ).toBeTruthy();
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+describe("VolumeList sizes", () => {
+  const node = (nodeId: string, name: string, extra: Record<string, unknown> = {}) => ({
+    nodeId,
+    node: name,
+    ok: true,
+    sizes: [],
+    ...extra,
+  });
+
+  it("asks for no sizes until Calculate sizes is pressed, then fills the Size column in binary units", async () => {
+    sizesNodes = [
+      node("node-1-id", "node-1", {
+        sizes: [
+          { name: "appdata", size: 1288490189, refCount: 2 },
+          { name: "cache", size: 0, refCount: 0 },
+          { name: "loose", size: -1, refCount: -1 },
+        ],
+      }),
+    ];
+    mount();
+    await screen.findByText("appdata");
+    expect(urls.some((u) => u.includes("/volumes/sizes"))).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Calculate sizes" }));
+    expect(await within(await row("appdata")).findByText("1.2 GiB")).toBeTruthy();
+    expect(within(await row("cache")).getByText("0 B")).toBeTruthy();
+    // The engine could not say how big this one is.
+    expect(within(await row("loose")).queryByText(/iB|\bB\b/)).toBeNull();
+    expect(await screen.findByText("Sizes updated.")).toBeTruthy();
+    expect(urls.filter((u) => u.includes("/volumes/sizes"))).toHaveLength(1);
+  });
+
+  it("shows Calculating… with the list still usable while it works", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inner = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (new URL(req.url).pathname.endsWith("/volumes/sizes")) await gate;
+        return inner(req);
+      }),
+    );
+    sizesNodes = [node("node-1-id", "node-1")];
+    mount();
+    await screen.findByText("appdata");
+    fireEvent.click(screen.getByRole("button", { name: "Calculate sizes" }));
+    const busy = await screen.findByRole("button", { name: /Calculating…/ });
+    expect(busy.hasAttribute("disabled")).toBe(true);
+    // A row can still be chosen while it works.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select cache" }));
+    expect(await screen.findByText("1 selected")).toBeTruthy();
+    release?.();
+    expect(await screen.findByRole("button", { name: "Calculate sizes" })).toBeTruthy();
+  });
+
+  it("says how many nodes it is calculating on, on a swarm", async () => {
+    swarmEnv = true;
+    sizesNodes = [node("node-1-id", "node-1"), node("node-2-id", "node-2")];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inner = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (new URL(req.url).pathname.endsWith("/volumes/sizes")) await gate;
+        return inner(req);
+      }),
+    );
+    mount();
+    await screen.findByText("appdata");
+    fireEvent.click(screen.getByRole("button", { name: "Calculate sizes" }));
+    expect(await screen.findByRole("button", { name: "Calculating on 2 nodes…" })).toBeTruthy();
+    release?.();
+  });
+
+  it("shows a dash with Couldn't calculate on {node}. for the rows of a node that failed, and sizes for the others", async () => {
+    sizesNodes = [
+      node("node-1-id", "node-1", { sizes: [{ name: "appdata", size: 2048, refCount: 2 }] }),
+      node("node-2-id", "node-2", { ok: false, error: "The node took too long." }),
+    ];
+    mount();
+    await screen.findByText("appdata");
+    fireEvent.click(screen.getByRole("button", { name: "Calculate sizes" }));
+    expect(await within(await row("appdata")).findByText("2 KiB")).toBeTruthy();
+    const failed = within(await row("logs")).getByRole("button", {
+      name: "— Couldn't calculate on node-2.",
+    });
+    fireEvent.focus(failed);
+    expect((await screen.findAllByText("Couldn't calculate on node-2.")).length).toBeGreaterThan(0);
+  });
+
+  it("says so in a toast when the request fails, and keeps the dashes", async () => {
+    sizesNodes = null;
+    mount();
+    await screen.findByText("appdata");
+    fireEvent.click(screen.getByRole("button", { name: "Calculate sizes" }));
+    expect(await screen.findByText("Couldn't calculate sizes. Try again.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Calculate sizes" })).toBeTruthy();
   });
 });

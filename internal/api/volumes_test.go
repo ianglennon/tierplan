@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
@@ -851,4 +852,186 @@ func TestSwarmVolumeDeletingOneNodesCopyLeavesTheSameNameOnTheOtherNode(t *testi
 		}
 		return len(rows) == 1 && rows[0].NodeID == s.w.id
 	})
+}
+
+// Volume sizes, on request (plan 04-18 task 1, D-47, T-04-60).
+
+type volumeSizesNode struct {
+	NodeID string `json:"nodeId"`
+	Node   string `json:"node"`
+	OK     bool   `json:"ok"`
+	Error  string `json:"error"`
+	Sizes  []struct {
+		Name     string `json:"name"`
+		Size     int64  `json:"size"`
+		RefCount int64  `json:"refCount"`
+	} `json:"sizes"`
+}
+
+type volumeSizesBody struct {
+	Nodes []volumeSizesNode `json:"nodes"`
+}
+
+func sizesEngine() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Volumes: []dockertest.FakeVolume{
+			{Name: "big", Driver: "local", Size: 3 << 30},
+			{Name: "small", Driver: "local", Size: 4096},
+			{Name: "share", Driver: "nfs"},
+		},
+		Containers: []dockertest.FakeContainer{{ID: "c1", Names: []string{"/web"}, State: "running", Mounts: []string{"big"}}},
+	}
+}
+
+func TestVolumeSizesAnswerOneEntryForTheNodeWithEveryVolumesSizeAndTheListNeverAsksTheEngine(t *testing.T) {
+	f, e := dashEnv(t, sizesEngine())
+	// Listing and summarising never make the engine walk its volumes.
+	listVolumes(t, f, e, "")
+	if rec := f.get(t, e, "summary"); rec.code != http.StatusOK {
+		t.Fatalf("summary: %d %s", rec.code, rec.body)
+	}
+	if n := f.fake.DiskUsageCalls(); n != 0 {
+		t.Fatalf("the engine was asked for disk usage %d times by reads of the lists, want 0", n)
+	}
+
+	rec := f.get(t, e, "volumes/sizes")
+	if rec.code != http.StatusOK {
+		t.Fatalf("sizes: %d %s", rec.code, rec.body)
+	}
+	got := decode[volumeSizesBody](t, rec)
+	if len(got.Nodes) != 1 || !got.Nodes[0].OK || got.Nodes[0].NodeID != e.ID || got.Nodes[0].Node != "node-1" {
+		t.Fatalf("nodes = %+v, want one ok entry for node-1", got.Nodes)
+	}
+	sizes := map[string][2]int64{}
+	var order []string
+	for _, s := range got.Nodes[0].Sizes {
+		sizes[s.Name] = [2]int64{s.Size, s.RefCount}
+		order = append(order, s.Name)
+	}
+	want := map[string][2]int64{"big": {3 << 30, 1}, "small": {4096, 0}, "share": {-1, 0}}
+	for name, w := range want {
+		if sizes[name] != w {
+			t.Errorf("%s = %v, want %v (size, refCount)", name, sizes[name], w)
+		}
+	}
+	if !slices.IsSorted(order) {
+		t.Errorf("sizes are in the order %v, want sorted by name", order)
+	}
+	if n := f.fake.DiskUsageCalls(); n != 1 {
+		t.Errorf("the engine was asked for disk usage %d times, want once", n)
+	}
+}
+
+func TestVolumeSizesAreTheSameFromAnEngineThatAnswersTheLegacyShape(t *testing.T) {
+	cfg := sizesEngine()
+	cfg.APIVersion = "1.51"
+	f, e := dashEnv(t, cfg)
+	rec := f.get(t, e, "volumes/sizes")
+	if rec.code != http.StatusOK {
+		t.Fatalf("sizes: %d %s", rec.code, rec.body)
+	}
+	got := decode[volumeSizesBody](t, rec)
+	if len(got.Nodes) != 1 || !got.Nodes[0].OK || len(got.Nodes[0].Sizes) != 3 || got.Nodes[0].Sizes[0].Name != "big" || got.Nodes[0].Sizes[0].Size != 3<<30 {
+		t.Fatalf("nodes = %+v, want the same three sizes as from the new shape", got.Nodes)
+	}
+}
+
+func TestVolumeSizesANodeThatFailsOrRunsOutOfTimeIsAnEntryOfItsOwnWithAnError(t *testing.T) {
+	cfg := sizesEngine()
+	cfg.DiskUsageFail = true
+	f, e := dashEnv(t, cfg)
+	rec := f.get(t, e, "volumes/sizes")
+	if rec.code != http.StatusOK {
+		t.Fatalf("a failing node must not fail the request: %d %s", rec.code, rec.body)
+	}
+	got := decode[volumeSizesBody](t, rec)
+	if len(got.Nodes) != 1 || got.Nodes[0].OK || got.Nodes[0].Error == "" || len(got.Nodes[0].Sizes) != 0 {
+		t.Fatalf("nodes = %+v, want one entry, ok false, an error, no sizes", got.Nodes)
+	}
+
+	// A node that takes longer than its limit is the same.
+	cfg = sizesEngine()
+	cfg.DiskUsageDelay = 30 * time.Second
+	f, e = dashEnv(t, cfg)
+	f.volumeSizesTimeout = 200 * time.Millisecond
+	f.h = f.build(t)
+	start := time.Now()
+	rec = f.get(t, e, "volumes/sizes")
+	if rec.code != http.StatusOK {
+		t.Fatalf("a slow node must not fail the request: %d %s", rec.code, rec.body)
+	}
+	got = decode[volumeSizesBody](t, rec)
+	if len(got.Nodes) != 1 || got.Nodes[0].OK || !strings.Contains(got.Nodes[0].Error, "too long") {
+		t.Fatalf("nodes = %+v, want a timed-out entry", got.Nodes)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("the request took %v, want it cut at the node's limit", took)
+	}
+}
+
+func TestVolumeSizesOnASwarmAnswerEveryNodeAndANodeIdLimitsItToOne(t *testing.T) {
+	s := newSwarmFix(t)
+	rec := s.get(t, s.env.ID, "volumes/sizes")
+	if rec.code != http.StatusOK {
+		t.Fatalf("sizes: %d %s", rec.code, rec.body)
+	}
+	got := decode[volumeSizesBody](t, rec)
+	if len(got.Nodes) != 3 {
+		t.Fatalf("nodes = %+v, want the three nodes", got.Nodes)
+	}
+	var names []string
+	for _, n := range got.Nodes {
+		names = append(names, n.Node)
+		if !n.OK {
+			t.Errorf("%+v, want every node ok", n)
+		}
+	}
+	if !slices.Equal(names, []string{"mgr-1", "mgr-2", "wrk-1"}) {
+		t.Errorf("nodes are %v, want them by display name", names)
+	}
+	if got.Nodes[0].Sizes[0].Name != "data" || len(got.Nodes[2].Sizes) != 0 {
+		t.Errorf("sizes = %+v, want data on the managers and nothing on the worker", got.Nodes)
+	}
+
+	one := decode[volumeSizesBody](t, s.get(t, s.env.ID, "volumes/sizes?nodeId="+s.m2.id))
+	if len(one.Nodes) != 1 || one.Nodes[0].NodeID != s.m2.id {
+		t.Fatalf("nodeId filter: %+v, want only %s", one.Nodes, s.m2.id)
+	}
+	if calls := s.m1.fake.DiskUsageCalls(); calls != 1 {
+		t.Errorf("m1 was asked %d times, want once (the all-nodes call only)", calls)
+	}
+	if rec := s.get(t, s.env.ID, "volumes/sizes?nodeId=nobody"); rec.code != http.StatusServiceUnavailable || rec.ptyp != "node_unavailable" {
+		t.Errorf("unknown node: %d %q, want 503 node_unavailable", rec.code, rec.ptyp)
+	}
+}
+
+func TestVolumeSizesOnASwarmWithOneNodeFailingTheOthersStillAnswer(t *testing.T) {
+	s := newSwarmFix(t)
+	s.w.fake.Reconfigure(dockertest.FakeConfig{Hostname: "wrk-1", SwarmState: "active", DiskUsageFail: true})
+	got := decode[volumeSizesBody](t, s.get(t, s.env.ID, "volumes/sizes"))
+	if len(got.Nodes) != 3 {
+		t.Fatalf("nodes = %+v", got.Nodes)
+	}
+	for _, n := range got.Nodes {
+		if (n.Node == "wrk-1") == n.OK {
+			t.Errorf("%+v: only the worker should have failed", n)
+		}
+	}
+}
+
+func TestVolumeSizesNeedVolumesReadAndAnUnknownEnvironmentIs404(t *testing.T) {
+	f, e := dashEnv(t, sizesEngine())
+	if rec := f.req(t, http.MethodGet, "/api/env/no-such-env/volumes/sizes", ""); rec.code != http.StatusNotFound {
+		t.Errorf("unknown environment: %d, want 404", rec.code)
+	}
+	f.addUser(t, "nobody", false)
+	cookie, csrf := f.signIn(t, "nobody", false)
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/volumes/sizes", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
+		t.Errorf("a user with no role: %d, want 404 or 403", rec.Code)
+	}
+	if n := f.fake.DiskUsageCalls(); n != 0 {
+		t.Errorf("the engine was asked %d times by callers who may not read", n)
+	}
 }

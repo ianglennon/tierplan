@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/api/types/volume"
 )
 
@@ -176,4 +177,74 @@ func (c FakeConfig) withoutVolumes(gone map[string]bool) FakeConfig {
 	}
 	c.Volumes = slices.DeleteFunc(slices.Clone(c.Volumes), func(v FakeVolume) bool { return gone[v.Name] })
 	return c
+}
+
+var _ = registerFakeHandler((*Fake).serveSystemDF)
+
+// serveSystemDF answers GET /system/df for the volumes: with the shape of the API version
+// the request names, the way a real daemon does. From API 1.52 that is VolumeUsage with the
+// totals and the verbose items; before it, the legacy Volumes list. Each volume carries its
+// UsageData: the size it was given (-1 for a driver other than local) and how many of the
+// daemon's containers mount it.
+func (f *Fake) serveSystemDF(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodGet || p != "/system/df" {
+		return false
+	}
+	f.mu.Lock()
+	f.dfCalls++
+	f.mu.Unlock()
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	if cfg.DiskUsageDelay > 0 {
+		select {
+		case <-time.After(cfg.DiskUsageDelay):
+		case <-r.Context().Done():
+			return true
+		}
+	}
+	if cfg.DiskUsageFail {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "df: cannot walk the volumes"})
+		return true
+	}
+	vols := make([]volume.Volume, 0, len(cfg.Volumes))
+	var total int64
+	for _, fv := range cfg.Volumes {
+		v := fv.asVolume()
+		size := fv.Size
+		if fv.Driver != "" && fv.Driver != "local" {
+			size = -1
+		}
+		refs := int64(0)
+		for _, c := range cfg.Containers {
+			if slices.Contains(c.Mounts, fv.Name) {
+				refs++
+			}
+		}
+		v.UsageData = &volume.UsageData{Size: size, RefCount: refs}
+		if size > 0 {
+			total += size
+		}
+		vols = append(vols, v)
+	}
+	version := cfg.APIVersion
+	if m := versionPrefix.FindStringSubmatch(r.URL.Path); m != nil {
+		version = m[1] + "." + m[2]
+	}
+	if cmpAPI(version, "1.52") < 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"LayersSize": 0, "Volumes": vols})
+		return true
+	}
+	writeJSON(w, http.StatusOK, system.DiskUsage{VolumeUsage: &volume.DiskUsage{
+		TotalCount: int64(len(vols)), TotalSize: total, Items: vols,
+	}})
+	return true
+}
+
+// DiskUsageCalls is how many GET /system/df requests the daemon has been sent.
+func (f *Fake) DiskUsageCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.dfCalls
 }

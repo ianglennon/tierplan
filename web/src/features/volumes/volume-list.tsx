@@ -2,11 +2,12 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronsDownUp, ChevronsUpDown, Plus } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, HardDrive, Plus } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { z } from "zod";
 
 import { networksQuery, type VolumeRow, volumesQuery } from "@/api/resources";
+import { sizeKey, useVolumeSizes } from "@/api/volumes";
 import { NoPermission } from "@/components/full-page-state";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
@@ -27,7 +28,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type BulkReport, BulkResultDialog } from "@/features/containers/bulk-result-dialog";
 import { SearchBox } from "@/features/containers/container-list";
 import { GROUP_VALUES, type GroupBy, MAX_QUERY } from "@/features/containers/list-search";
@@ -56,6 +59,8 @@ import { DeleteVolumesDialog } from "@/features/volumes/delete-volumes-dialog";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
+import { formatBytes } from "@/lib/format";
+import { toastError, toastSuccess } from "@/lib/toast";
 
 // The usage filter, as it is written in the URL. Without it every volume is listed.
 export const USAGE_VALUES = ["used", "unused"] as const;
@@ -222,6 +227,34 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
   });
   const envName = useEnvName(envId);
   const missing = t("dashboard.time.missing");
+  // Sizes are worked out when asked and kept until asked again: the engine walks every
+  // volume's files to answer, so no refresh does it (D-47).
+  const sizing = useVolumeSizes(envId);
+  const calculate = () =>
+    sizing.mutate(undefined, {
+      onSuccess: () => toastSuccess(t("volumes.sizes.done")),
+      onError: () => toastError(t("volumes.sizes.error")),
+    });
+  const sizeCell = (v: VolumeRow) => {
+    const size = sizing.data?.sizes.get(sizeKey(v.nodeId, v.name));
+    if (size !== undefined) return <span className="tabular-nums">{formatBytes(size)}</span>;
+    const failedNode = sizing.data?.failed.get(v.nodeId);
+    if (failedNode === undefined) return missing;
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="cursor-help rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={`${missing} ${t("volumes.sizes.failedOn", { node: failedNode })}`}
+          >
+            {missing}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{t("volumes.sizes.failedOn", { node: failedNode })}</TooltipContent>
+      </Tooltip>
+    );
+  };
 
   // Grouping by node means nothing on a standalone host, which has one.
   const by: GroupBy = search.group === "node" && !swarm ? "stack" : (search.group ?? "stack");
@@ -326,7 +359,7 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
       // Sizes are worked out on demand; until they are, a dash.
       id: "size",
       header: t("volumes.list.columns.size"),
-      cell: () => missing,
+      cell: sizeCell,
     },
     {
       id: "created",
@@ -385,6 +418,23 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
       onClick: () => setDeleting({ rows: selectedRows, open: true }),
     },
   ];
+
+  const nodeCount = data?.nodes?.length ?? 0;
+  const sizesButton = (
+    <Button
+      variant="outline"
+      className="max-md:h-11"
+      disabled={sizing.isPending}
+      onClick={calculate}
+    >
+      {sizing.isPending ? <Spinner aria-hidden="true" /> : <HardDrive aria-hidden="true" />}
+      {sizing.isPending
+        ? swarm && nodeCount > 1
+          ? t("volumes.sizes.calculatingNodes", { count: nodeCount })
+          : t("volumes.sizes.calculating")
+        : t("volumes.sizes.button")}
+    </Button>
+  );
 
   const createButton = (className?: string) => (
     <NeedsTooltip reason={create.reason}>
@@ -533,7 +583,12 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
         toolbar={toolbar}
         empty={empty}
         getRowKey={rowKeyOf}
-        captionExtra={<div className="ml-auto">{createButton()}</div>}
+        captionExtra={
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {sizesButton}
+            {createButton()}
+          </div>
+        }
         select={select}
         bulkBar={
           selection.selected.size > 0 ? (

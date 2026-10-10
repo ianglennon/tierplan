@@ -162,3 +162,51 @@ export function useDeleteVolumes(envId: string) {
     onSettled: () => refreshLists(queryClient, envId),
   });
 }
+
+export type VolumeSizesNode = components["schemas"]["VolumeSizesNodeBody"];
+
+// VolumeSizes is what Calculate sizes found: each volume's size in bytes by node ID and
+// name (absent while the engine cannot say), and the nodes that could not calculate, by
+// node ID with their display name.
+export interface VolumeSizes {
+  sizes: Map<string, number>;
+  failed: Map<string, string>;
+  // How many nodes were asked.
+  asked: number;
+}
+
+// sizeKey is the key of one volume's size: the same name on two nodes is two volumes.
+export function sizeKey(nodeId: string, name: string): string {
+  return `${nodeId}\u0000${name}`;
+}
+
+// readVolumeSizes asks for the sizes of the volumes of every node of the environment, or
+// of the one node named. It is a plain request and never a polled query, because it
+// makes each engine walk its volumes.
+export async function readVolumeSizes(envId: string, nodeId?: string): Promise<VolumeSizes> {
+  const res = await api.GET("/api/env/{envId}/volumes/sizes", {
+    params: { path: { envId }, query: nodeId ? { nodeId } : undefined },
+  });
+  if (!res.data) throw new Error("GET volumes/sizes failed");
+  const nodes = res.data.nodes ?? [];
+  const out: VolumeSizes = { sizes: new Map(), failed: new Map(), asked: nodes.length };
+  for (const node of nodes) {
+    if (!node.ok) {
+      out.failed.set(node.nodeId, node.node);
+      continue;
+    }
+    for (const s of node.sizes ?? []) {
+      if (s.size >= 0) out.sizes.set(sizeKey(node.nodeId, s.name), s.size);
+    }
+  }
+  return out;
+}
+
+// useVolumeSizes is Calculate sizes. It is run by a press and never again by itself: the
+// answer stays until the next press.
+export function useVolumeSizes(envId: string) {
+  return useMutation<VolumeSizes, Error, string | undefined>({
+    mutationFn: (nodeId) => readVolumeSizes(envId, nodeId),
+    retry: false,
+  });
+}

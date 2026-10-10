@@ -88,3 +88,34 @@ func (c *Client) VolumeRemove(ctx context.Context, name string) error {
 	}
 	return nil
 }
+
+// VolumeUsage is what the engine's disk usage report says about one volume.
+type VolumeUsage struct {
+	// Size is the bytes the volume takes, or -1 when the engine cannot say (a volume of a
+	// driver other than local).
+	Size int64
+	// RefCount is how many containers reference the volume, or -1 when the engine does
+	// not count them.
+	RefCount int64
+}
+
+// VolumeSizes asks the engine for the disk usage of its volumes and answers it by volume
+// name. The engine walks every volume's files to answer, which can take long on a host with
+// large ones (and on an engine older than API 1.52 it computes the usage of images,
+// containers and the build cache too, whatever is asked), so callers ask on request only,
+// never on a refresh.
+func (c *Client) VolumeSizes(ctx context.Context) (map[string]VolumeUsage, error) {
+	res, err := c.cur().DiskUsage(ctx, client.DiskUsageOptions{Volumes: true, Verbose: true})
+	if err != nil {
+		return nil, fmt.Errorf("volume disk usage on %s: %w", c.t.Describe(), err)
+	}
+	out := make(map[string]VolumeUsage, len(res.Volumes.Items))
+	for _, v := range res.Volumes.Items {
+		u := VolumeUsage{Size: -1, RefCount: -1}
+		if v.UsageData != nil {
+			u = VolumeUsage{Size: v.UsageData.Size, RefCount: v.UsageData.RefCount}
+		}
+		out[v.Name] = u
+	}
+	return out, nil
+}

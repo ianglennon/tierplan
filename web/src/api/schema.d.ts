@@ -824,6 +824,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/volumes/sizes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Calculate the sizes of the volumes, per node
+         * @description Asks the engine of every node that answered (or only the one named by nodeId) for the disk usage of its volumes and answers one entry per node. This makes the engine walk every volume's files, which can take long on a host with large volumes, so the SPA asks only when the user presses Calculate sizes and never on a timer. At most 4 nodes calculate at once, each for at most 60 seconds; a node that fails or runs out of time answers ok false with an error, and the others are unaffected. A volume's size is -1 when the engine cannot say. 503 node_unavailable when nodeId is not a connected node of the environment. Needs volumes.read (Viewer) on the environment.
+         */
+        get: operations["volumeSizes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments": {
         parameters: {
             query?: never;
@@ -4295,6 +4315,36 @@ export interface components {
             /** @description True when total is more than the rows returned */
             truncated: boolean;
         };
+        VolumeSizeEntry: {
+            /** @description The volume name */
+            name: string;
+            /**
+             * Format: int64
+             * @description How many containers reference the volume, or -1 when the engine does not count them
+             */
+            refCount: number;
+            /**
+             * Format: int64
+             * @description Bytes the volume takes, or -1 when the engine cannot say, as for a volume of a driver other than local
+             */
+            size: number;
+        };
+        VolumeSizesBody: {
+            /** @description One entry per node asked, sorted by display name then ID. One node failing never fails the others */
+            nodes: components["schemas"]["VolumeSizesNodeBody"][] | null;
+        };
+        VolumeSizesNodeBody: {
+            /** @description Why the node could not calculate, in a plain sentence */
+            error?: string;
+            /** @description The node's display name */
+            node: string;
+            /** @description The node ID, as in the volumes list */
+            nodeId: string;
+            /** @description False when the node could not calculate its sizes; error says why and sizes is empty */
+            ok: boolean;
+            /** @description The node's volumes with their sizes, sorted by name */
+            sizes: components["schemas"]["VolumeSizeEntry"][] | null;
+        };
         WarningBody: {
             /**
              * Format: int64
@@ -5995,6 +6045,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VolumeDeleteResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    volumeSizes: {
+        parameters: {
+            query?: {
+                /** @description Only this node: the nodeId of a row of the volumes list. Left out, every reporting node */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeSizesBody"];
                 };
             };
             /** @description Error */

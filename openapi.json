@@ -6044,6 +6044,88 @@
         ],
         "type": "object"
       },
+      "VolumeSizeEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The volume name",
+            "type": "string"
+          },
+          "refCount": {
+            "description": "How many containers reference the volume, or -1 when the engine does not count them",
+            "format": "int64",
+            "type": "integer"
+          },
+          "size": {
+            "description": "Bytes the volume takes, or -1 when the engine cannot say, as for a volume of a driver other than local",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "size",
+          "refCount"
+        ],
+        "type": "object"
+      },
+      "VolumeSizesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "nodes": {
+            "description": "One entry per node asked, sorted by display name then ID. One node failing never fails the others",
+            "items": {
+              "$ref": "#/components/schemas/VolumeSizesNodeBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "nodes"
+        ],
+        "type": "object"
+      },
+      "VolumeSizesNodeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "description": "Why the node could not calculate, in a plain sentence",
+            "type": "string"
+          },
+          "node": {
+            "description": "The node's display name",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node ID, as in the volumes list",
+            "type": "string"
+          },
+          "ok": {
+            "description": "False when the node could not calculate its sizes; error says why and sizes is empty",
+            "type": "boolean"
+          },
+          "sizes": {
+            "description": "The node's volumes with their sizes, sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/VolumeSizeEntry"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "nodeId",
+          "node",
+          "ok",
+          "sizes"
+        ],
+        "type": "object"
+      },
       "WarningBody": {
         "additionalProperties": false,
         "properties": {
@@ -8891,6 +8973,68 @@
           }
         },
         "summary": "Delete volumes",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/volumes/sizes": {
+      "get": {
+        "description": "Asks the engine of every node that answered (or only the one named by nodeId) for the disk usage of its volumes and answers one entry per node. This makes the engine walk every volume's files, which can take long on a host with large volumes, so the SPA asks only when the user presses Calculate sizes and never on a timer. At most 4 nodes calculate at once, each for at most 60 seconds; a node that fails or runs out of time answers ok false with an error, and the others are unaffected. A volume's size is -1 when the engine cannot say. 503 node_unavailable when nodeId is not a connected node of the environment. Needs volumes.read (Viewer) on the environment.",
+        "operationId": "volumeSizes",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this node: the nodeId of a row of the volumes list. Left out, every reporting node",
+            "explode": false,
+            "in": "query",
+            "name": "nodeId",
+            "schema": {
+              "description": "Only this node: the nodeId of a row of the volumes list. Left out, every reporting node",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VolumeSizesBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Calculate the sizes of the volumes, per node",
         "tags": [
           "environments"
         ]

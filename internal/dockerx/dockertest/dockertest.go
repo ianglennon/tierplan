@@ -106,6 +106,12 @@ type FakeConfig struct {
 	Images     []FakeImage
 	Volumes    []FakeVolume
 	Networks   []FakeNetwork
+	// DiskUsageFail makes GET /system/df answer 500, as an engine does when a volume's files
+	// cannot be walked.
+	DiskUsageFail bool
+	// DiskUsageDelay is how long GET /system/df takes to answer, so a test can make the
+	// per-node time limit trip. It ends early when the caller gives up.
+	DiskUsageDelay time.Duration
 	// BusyVolumes are volumes the daemon refuses to remove as in use although no container
 	// in its list mounts them, as when a container starts between a check and the call.
 	BusyVolumes []string
@@ -295,6 +301,9 @@ type FakeVolume struct {
 	Labels    map[string]string
 	// Options are the driver options the volume was created with.
 	Options map[string]string
+	// Size is the bytes /system/df reports for the volume. A volume of a driver other than
+	// local reports -1, "not available", whatever is set here.
+	Size int64
 }
 
 // FakeNetwork is one entry of /networks.
@@ -377,6 +386,8 @@ type Fake struct {
 	volCreates []volume.CreateRequest
 	// volGone are the names of the volumes removed through the fake.
 	volGone map[string]bool
+	// dfCalls counts the GET /system/df requests the fake answered or refused.
+	dfCalls int
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex

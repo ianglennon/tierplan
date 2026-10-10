@@ -159,3 +159,51 @@ func TestSnapshotVolumesCarryTheirLabelsAndWhetherDockerMadeThemWithoutAName(t *
 		t.Errorf("anon = %+v, want anonymous", got["anon"])
 	}
 }
+
+// Volume sizes (plan 04-18, D-47).
+
+func sizesFake(t *testing.T, api string) *dockerx.Client {
+	t.Helper()
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		APIVersion: api,
+		Volumes: []dockertest.FakeVolume{
+			{Name: "big", Driver: "local", Size: 1 << 20},
+			{Name: "empty", Driver: "local"},
+			{Name: "share", Driver: "nfs", Size: 99},
+		},
+		Containers: []dockertest.FakeContainer{{ID: "c1", Names: []string{"/web"}, State: "running", Mounts: []string{"big"}}},
+	})
+	return newClient(t, fake)
+}
+
+func TestVolumeSizesReadsTheSizeAndTheReferenceCountOfEveryVolumeOnTheNewAndTheLegacyShape(t *testing.T) {
+	for _, api := range []string{"1.52", "1.51"} {
+		t.Run("API "+api, func(t *testing.T) {
+			got, err := sizesFake(t, api).VolumeSizes(context.Background())
+			if err != nil {
+				t.Fatalf("VolumeSizes: %v", err)
+			}
+			want := map[string]dockerx.VolumeUsage{
+				"big":   {Size: 1 << 20, RefCount: 1},
+				"empty": {Size: 0, RefCount: 0},
+				// A driver other than local cannot say how big it is.
+				"share": {Size: -1, RefCount: 0},
+			}
+			if len(got) != len(want) {
+				t.Fatalf("sizes = %+v, want %+v", got, want)
+			}
+			for name, w := range want {
+				if got[name] != w {
+					t.Errorf("%s = %+v, want %+v", name, got[name], w)
+				}
+			}
+		})
+	}
+}
+
+func TestVolumeSizesAnEngineThatCannotWalkItsVolumesIsAnError(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{DiskUsageFail: true})
+	if _, err := newClient(t, fake).VolumeSizes(context.Background()); err == nil {
+		t.Fatal("VolumeSizes = nil error, want the engine's refusal")
+	}
+}
