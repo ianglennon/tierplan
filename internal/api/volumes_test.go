@@ -1274,7 +1274,7 @@ func TestVolumeInspectAHolderOfSecretsRevealGetsTheDocumentAsTheEngineSentIt(t *
 		t.Error("masked = true for an instance admin")
 	}
 	opts, _ := got.Inspect["Options"].(map[string]any)
-	if opts["type"] != "cifs" || !strings.Contains(opts["o"].(string), shareSecret) {
+	if o, _ := opts["o"].(string); opts["type"] != "cifs" || !strings.Contains(o, shareSecret) {
 		t.Errorf("Options = %v, want the real values", opts)
 	}
 }
