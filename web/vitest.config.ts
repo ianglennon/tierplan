@@ -16,6 +16,9 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
+    // Stylesheets are empty text in tests unless named here. The log palette test reads
+    // index.css as text to keep it in step with the colours in code.
+    css: { include: [/src\/index\.css\?raw$/] },
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
   },
 });

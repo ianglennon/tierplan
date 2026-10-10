@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { stripAnsi } from "@/features/logs/ansi";
+
 export interface SearchOptions {
   regex: boolean;
   caseSensitive: boolean;
@@ -30,15 +32,6 @@ export interface LineSource {
 const MAX_SEARCHED_CHARS = 20_000;
 // And finds no more than this many matches in one line.
 const MAX_RANGES_PER_LINE = 100;
-
-// Colour and cursor codes (CSI) and operating system commands (OSC, which carry links
-// and titles). What is left is the text a person reads, and what search looks in.
-// biome-ignore lint/suspicious/noControlCharactersInRegex: the escape byte is the point
-const ANSI = /\u001b\[[0-9;:?<=>]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g;
-
-export function stripAnsi(text: string): string {
-  return text.includes("\u001b") ? text.replace(ANSI, "") : text;
-}
 
 // A matcher finds the [start, end) ranges of a query in one text.
 type Matcher = (text: string) => Array<[number, number]>;

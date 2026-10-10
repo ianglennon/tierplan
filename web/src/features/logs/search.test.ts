@@ -3,7 +3,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import { rangesIn, searchLines, stripAnsi } from "@/features/logs/search";
+import { stripAnsi } from "@/features/logs/ansi";
+import { rangesIn, searchLines } from "@/features/logs/search";
 
 // Search over the lines already loaded (plan 04-20, D-17): plain text, regular
 // expressions and case, on the text a person sees.

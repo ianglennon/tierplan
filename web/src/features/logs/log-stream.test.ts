@@ -200,3 +200,24 @@ describe("plusNanosecond", () => {
     expect(plusNanosecond("not a stamp")).toBe("not a stamp");
   });
 });
+
+describe("a log the engine cannot read", () => {
+  it("reports the driver and its options, closes the connection and closes the stream", () => {
+    const onUnreadable = vi.fn();
+    const { source, states } = open({ onUnreadable });
+    source.sendFrame("unreadable", { driver: "none", options: [{ name: "tag", masked: true }] });
+    expect(onUnreadable).toHaveBeenCalledWith({
+      driver: "none",
+      options: [{ name: "tag", masked: true }],
+    });
+    expect(source.closed).toBe(true);
+    expect(states.at(-1)).toEqual({ status: "closed", reason: "unreadable" });
+  });
+
+  it("copes with a body that is not what it should be", () => {
+    const onUnreadable = vi.fn();
+    const { source } = open({ onUnreadable });
+    source.sendFrame("unreadable", { driver: 7, options: "nope" });
+    expect(onUnreadable).toHaveBeenCalledWith({ driver: "", options: [] });
+  });
+});

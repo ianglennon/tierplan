@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import type { LogLineData } from "@/features/logs/log-buffer";
 import { LogViewer } from "@/features/logs/log-viewer";
@@ -563,8 +564,10 @@ describe("search", () => {
       { t: "2026-10-09T12:00:00.000000000Z", s: "o", m: "\u001b[31mred\u001b[0m alert" },
     ]);
     await typed("red alert");
+    // The match spans the two colours, so it is drawn in two pieces that read as one.
     expect(Array.from(surface().querySelectorAll("mark")).map((m) => m.textContent)).toEqual([
-      "red alert",
+      "red",
+      " alert",
     ]);
   });
 
@@ -816,4 +819,87 @@ describe("the buffer cap", () => {
     // Sixty thousand lines in, only the ones in view are drawn.
     expect(surface().querySelectorAll("[data-stream]").length).toBeLessThan(200);
   }, 20_000);
+});
+
+describe("colour", () => {
+  const ESC = "\u001b";
+
+  it("draws colour codes as styled text through custom properties, never as markup", async () => {
+    renderViewer();
+    await connect();
+    await send([
+      {
+        t: "2026-10-09T12:00:00.000000000Z",
+        s: "o",
+        m: `${ESC}[31mred${ESC}[0m plain ${ESC}[1mbold${ESC}[0m ${ESC}]8;;https://evil.test${"\u0007"}link${ESC}]8;;${"\u0007"} <b>x</b>`,
+      },
+    ]);
+    const row = surface().querySelector("[data-stream]") as HTMLElement;
+    expect(row.textContent).toBe("red plain bold link <b>x</b>");
+    const red = within(row).getByText("red");
+    expect(red.style.getPropertyValue("--log-fg")).toBe("var(--ansi-1)");
+    expect(red.style.color).toBe("var(--log-fg)");
+    expect(within(row).getByText("bold").className).toContain("font-semibold");
+    expect(row.querySelector("a")).toBeNull();
+    expect(row.querySelector("b")).toBeNull();
+    expect(row.innerHTML).not.toContain(ESC);
+    expect(row.innerHTML).not.toContain("evil.test");
+  });
+
+  it("leaves a colour too faint for the surface out, so the text stays readable", async () => {
+    renderViewer();
+    await connect();
+    await send([
+      { t: "2026-10-09T12:00:00.000000000Z", s: "o", m: `${ESC}[38;2;250;250;250mfaint${ESC}[0m` },
+    ]);
+    expect(within(surface()).getByText("faint").getAttribute("style")).toBeNull();
+  });
+});
+
+describe("a log Docker cannot read back", () => {
+  async function unreadable(options: Array<{ name: string; value?: string; masked: boolean }>) {
+    render(
+      <TooltipProvider>
+        <LogViewer envId="e1" containerId="web-id" nodeId="n1" name="web" />
+      </TooltipProvider>,
+    );
+    await act(async () => {
+      source().open();
+      source().sendFrame("unreadable", { driver: "none", options });
+    });
+  }
+
+  it("shows the notice naming the driver in place of the viewer and the toolbar, and closes the stream", async () => {
+    await unreadable([{ name: "tag", masked: true }]);
+    expect(screen.getByText("Docker can't read these logs back")).toBeTruthy();
+    expect(
+      screen.getByText("This container sends its logs to none, so Docker has none to show."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("log")).toBeNull();
+    expect(screen.queryByRole("toolbar")).toBeNull();
+    expect(source().closed).toBe(true);
+    // Information, not an error.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("lists the driver's options, with a value hidden unless the server sent it", async () => {
+    await unreadable([
+      { name: "syslog-address", masked: true },
+      { name: "tag", value: "web", masked: false },
+    ]);
+    expect(screen.getByText("Driver options")).toBeTruthy();
+    expect(screen.getByText("syslog-address")).toBeTruthy();
+    expect(screen.getByText("tag")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("web");
+    // The holder of secrets.reveal can show a value they were sent.
+    const show = screen.getAllByRole("button", { name: /Show value/ });
+    expect(show).toHaveLength(1);
+    fireEvent.click(show[0] as HTMLElement);
+    expect(screen.getByText("web")).toBeTruthy();
+  });
+
+  it("says nothing of options when there are none", async () => {
+    await unreadable([]);
+    expect(screen.queryByText("Driver options")).toBeNull();
+  });
 });

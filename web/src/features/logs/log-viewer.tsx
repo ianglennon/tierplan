@@ -16,6 +16,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { Theme } from "@/features/logs/ansi";
 import { type BufferedLine, clockTime, LogBuffer, stampDay } from "@/features/logs/log-buffer";
 import { DayDividerRow, LINE_HEIGHT_PX, LogLineRow } from "@/features/logs/log-line";
 import {
@@ -33,9 +34,11 @@ import {
   type LogStreamState,
   makeViewerId,
   plusNanosecond,
+  type UnreadableInfo,
 } from "@/features/logs/log-stream";
 import { counterText, LogToolbar } from "@/features/logs/log-toolbar";
 import { searchLines } from "@/features/logs/search";
+import { UnreadableNotice } from "@/features/logs/unreadable-notice";
 import { useT } from "@/i18n/use-t";
 
 // Rows drawn beyond the visible ones, so a fast scroll does not show a blank.
@@ -68,6 +71,22 @@ export interface LogViewerProps {
   moreItems?: ReactNode;
 }
 
+// The theme the page is in: the dark class on the root.
+function readTheme(): Theme {
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+
+// useTheme follows the page's theme as it changes.
+function useTheme(): Theme {
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  useEffect(() => {
+    const watch = new MutationObserver(() => setTheme(readTheme()));
+    watch.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => watch.disconnect();
+  }, []);
+  return theme;
+}
+
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
   useEffect(() => {
@@ -98,6 +117,9 @@ export function LogViewer({
   const [sid] = useState(makeViewerId);
   const [buffer] = useState(() => new LogBuffer());
   const [state, setState] = useState<LogStreamState>({ status: "connecting" });
+  // Set when the engine cannot read this container's log back (D-25).
+  const [unreadable, setUnreadable] = useState<UnreadableInfo | null>(null);
+  const theme = useTheme();
   const version = useSyncExternalStore(buffer.subscribe, buffer.getVersion);
   const scrollRef = useRef<HTMLDivElement>(null);
   const following = useRef(true);
@@ -136,6 +158,7 @@ export function LogViewer({
     setPaused(false);
     setStartReached(false);
     setEarlier("idle");
+    setUnreadable(null);
     const range = streamRange(parseShow(sinceKey || undefined), new Date());
     const stream = createLogStream({
       envId,
@@ -145,6 +168,7 @@ export function LogViewer({
       ...range,
       onLines: (lines) => buffer.push(lines),
       onState: setState,
+      onUnreadable: setUnreadable,
       onContainerState: ({ state: what, at }) => {
         // A reconnect to a stopped container is told again; the row is shown once.
         if (what === "stopped" && buffer.last?.marker !== "stopped")
@@ -425,10 +449,14 @@ export function LogViewer({
         markerLabel={markerLabel}
         time={timestamps ? { utc, label: timeLabel } : undefined}
         wrap={wrap}
+        theme={theme}
         highlight={hit ? { ranges: hit.ranges, current: code >> 1 === currentLine } : undefined}
       />
     );
   };
+
+  // The notice takes the place of the viewer and its toolbar: the tab keeps its place.
+  if (unreadable) return <UnreadableNotice info={unreadable} />;
 
   return (
     <div className="flex flex-col gap-2">

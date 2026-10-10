@@ -56,6 +56,12 @@
       "title": "Couldn't load logs.",
       "body": "Check the connection and try again.",
       "retry": "Retry"
+    },
+    "unreadable": {
+      "title": "Docker can't read these logs back",
+      "body": "This container sends its logs to {{driver}}, so Docker has none to show.",
+      "options": "Driver options",
+      "noOptions": "No driver options."
     }
   }
 }

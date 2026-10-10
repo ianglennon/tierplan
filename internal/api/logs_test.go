@@ -885,12 +885,17 @@ func unreadableEngine() dockertest.FakeConfig {
 	cfg := logsEngine()
 	cfg.Containers = append(cfg.Containers,
 		dockertest.FakeContainer{ID: "cccccccccccc33333333333333333333333333333333333333333333333333", Names: []string{"/quiet"}, Image: "alpine", State: "running", Status: "Up 1 hour",
-			Inspect: dockertest.FakeInspect{LogType: "none", LogOptions: map[string]string{"tag": "web", "syslog-address": "tcp://user:pw@10.0.0.9:514"}}},
+			Inspect: dockertest.FakeInspect{LogType: "none", LogOptions: map[string]string{"tag": "web", "syslog-address": syslogAddr}}},
 		dockertest.FakeContainer{ID: "dddddddddddd44444444444444444444444444444444444444444444444444", Names: []string{"/sys"}, Image: "alpine", State: "running", Status: "Up 1 hour",
 			Inspect: dockertest.FakeInspect{LogType: "syslog", LogOptions: map[string]string{"syslog-address": "tcp://10.0.0.9:514"}}},
 	)
 	return cfg
 }
+
+// A made-up address with a made-up password, to prove a value is never sent unmasked.
+//
+//nolint:gosec // G101: not a credential
+const syslogAddr = "tcp://user:pw@10.0.0.9:514"
 
 const (
 	quietID = "cccccccccccc33333333333333333333333333333333333333333333333333"
@@ -939,7 +944,7 @@ func TestLogStreamUnreadableMasksTheOptionValuesForAViewerAndShowsThemToAHolderO
 	if err := json.Unmarshal([]byte(nextEvent(t, admin, "unreadable", 5*time.Second).data), &shown); err != nil {
 		t.Fatal(err)
 	}
-	if shown.Options[0].Masked || shown.Options[0].Value != "tcp://user:pw@10.0.0.9:514" {
+	if shown.Options[0].Masked || shown.Options[0].Value != syslogAddr {
 		t.Errorf("a revealer saw %+v, want the value", shown.Options[0])
 	}
 

@@ -1,38 +1,75 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import type { CSSProperties } from "react";
+
+import { type AnsiSpan, ansiToSpans, type Theme } from "@/features/logs/ansi";
 import { type BufferedLine, stampTime } from "@/features/logs/log-buffer";
-import { stripAnsi } from "@/features/logs/search";
 import { cn } from "@/lib/utils";
 
 // The height of a row. The virtualiser sizes every row by it, so the line height of
 // the text is the same number (UI-SPEC "Typography", log lines).
 export const LINE_HEIGHT_PX = 20;
 
-// A run of text in one style.
-export interface TextSpan {
-  text: string;
+// A run of text in one style, and whether a search match covers it.
+export interface StyledSpan extends AnsiSpan {
   mark?: "match" | "current";
 }
 
-// markSpans cuts text at the edges of the ranges, which are [start, end) offsets into
-// the text, and flags the pieces inside one. With no ranges the text is one span.
+// markSpans cuts the spans at the edges of the ranges, which are [start, end) offsets
+// into the text of all the spans together, and flags the pieces inside one. With no
+// ranges the spans come back as they were.
 export function markSpans(
-  text: string,
+  spans: readonly AnsiSpan[],
   ranges: ReadonlyArray<readonly [number, number]> | undefined,
   current: boolean,
-): TextSpan[] {
-  if (!ranges || ranges.length === 0) return [{ text }];
-  const out: TextSpan[] = [];
+): StyledSpan[] {
+  if (!ranges || ranges.length === 0) return spans.slice();
+  const out: StyledSpan[] = [];
   let at = 0;
-  for (const [start, end] of ranges) {
-    if (start > at) out.push({ text: text.slice(at, start) });
-    if (end > start)
-      out.push({ text: text.slice(start, end), mark: current ? "current" : "match" });
-    at = Math.max(at, end);
+  for (const span of spans) {
+    const end = at + span.text.length;
+    let from = at;
+    for (const [rs, re] of ranges) {
+      const a = Math.max(rs, from);
+      const b = Math.min(re, end);
+      if (b <= a) continue;
+      if (a > from) out.push({ ...span, text: span.text.slice(from - at, a - at) });
+      out.push({
+        ...span,
+        text: span.text.slice(a - at, b - at),
+        mark: current ? "current" : "match",
+      });
+      from = b;
+    }
+    if (from < end) out.push({ ...span, text: span.text.slice(from - at) });
+    at = end;
   }
-  if (at < text.length) out.push({ text: text.slice(at) });
   return out;
+}
+
+// The CSS value of one of our colours: a palette variable, the page's own colour, or a
+// #rrggbb that ansi.ts has already checked.
+function cssColour(c: string): string {
+  const idx = /^ansi-(\d+)$/.exec(c);
+  if (idx) return `var(--ansi-${idx[1]})`;
+  if (c === "foreground" || c === "background") return `var(--${c})`;
+  return c;
+}
+
+// Colour reaches the page only as custom properties, so what a program printed is never
+// a style string of its own: the value is one of ours (T-04-68).
+function spanStyle(s: StyledSpan): CSSProperties | undefined {
+  const style: Record<string, string> = {};
+  if (s.fg && s.mark !== "current") {
+    style["--log-fg"] = cssColour(s.fg);
+    style.color = "var(--log-fg)";
+  }
+  if (s.bg && !s.mark) {
+    style["--log-bg"] = cssColour(s.bg);
+    style.backgroundColor = "var(--log-bg)";
+  }
+  return Object.keys(style).length > 0 ? (style as CSSProperties) : undefined;
 }
 
 export interface LogLineHighlight {
@@ -52,6 +89,8 @@ export interface LogLineRowProps {
   time?: { utc: boolean; label: string };
   wrap?: boolean;
   highlight?: LogLineHighlight;
+  // Which palette the colour in the line is checked against.
+  theme?: Theme;
 }
 
 // One line of a log: a stream gutter that is always as wide as the word "stderr" so
@@ -70,6 +109,7 @@ export function LogLineRow({
   time,
   wrap = false,
   highlight,
+  theme = "light",
 }: LogLineRowProps) {
   if (line.marker) {
     // The container started again or stopped: not a line of the log, so it is set
@@ -86,7 +126,11 @@ export function LogLineRow({
     );
   }
   const stderr = line.s === "e";
-  const spans = markSpans(stripAnsi(line.m), highlight?.ranges, highlight?.current === true);
+  const spans = markSpans(
+    ansiToSpans(line.m, theme),
+    highlight?.ranges,
+    highlight?.current === true,
+  );
   return (
     <div
       data-stream={stderr ? "stderr" : "stdout"}
@@ -111,15 +155,23 @@ export function LogLineRow({
         </time>
       ) : null}
       <span className="ps-2">
-        {spans.map((s, i) =>
-          s.mark ? (
+        {spans.map((s, i) => {
+          const classes = cn(
+            s.bold && "font-semibold",
+            s.dim && !s.fg && "text-muted-foreground",
+            s.underline && "underline",
+          );
+          // The spans of one line are drawn once and in order, so the position is
+          // the identity.
+          return s.mark ? (
             <mark
-              // The spans of one line are drawn once and in order.
               // biome-ignore lint/suspicious/noArrayIndexKey: positions are the identity
               key={i}
               data-match={s.mark}
+              style={spanStyle(s)}
               className={cn(
                 "rounded-xs text-inherit",
+                classes,
                 s.mark === "current" ? "bg-foreground text-background" : "bg-foreground/18",
               )}
             >
@@ -127,9 +179,11 @@ export function LogLineRow({
             </mark>
           ) : (
             // biome-ignore lint/suspicious/noArrayIndexKey: positions are the identity
-            <span key={i}>{s.text}</span>
-          ),
-        )}
+            <span key={i} style={spanStyle(s)} className={classes || undefined}>
+              {s.text}
+            </span>
+          );
+        })}
       </span>
     </div>
   );

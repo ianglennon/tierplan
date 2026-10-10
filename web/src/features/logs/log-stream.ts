@@ -11,11 +11,19 @@ import { apiUrl } from "@/lib/base-path";
 // "reconnecting" is the browser retrying a stream that had been live. "closed" is
 // final: the server said so (access_lost) or the browser gave up (failed).
 export type LogStreamStatus = "connecting" | "live" | "reconnecting" | "closed";
-export type LogCloseReason = "access_lost" | "failed";
+export type LogCloseReason = "access_lost" | "failed" | "unreadable";
 
 export interface LogStreamState {
   status: LogStreamStatus;
   reason?: LogCloseReason;
+}
+
+// What the server says when the engine cannot read a container's log back (D-25): the
+// log driver and its options. A value is present only for a caller who may reveal
+// secrets; for anyone else `masked` is set and there is no value to find.
+export interface UnreadableInfo {
+  driver: string;
+  options: Array<{ name: string; value?: string; masked: boolean }>;
 }
 
 // What the container itself is doing, as the server tells it when the engine ends
@@ -43,6 +51,8 @@ export interface LogStreamOptions {
   onState: (state: LogStreamState) => void;
   onReady?: (info: { tty: boolean }) => void;
   onContainerState?: (state: ContainerLogState) => void;
+  // The engine cannot read this container's log. The stream is closed.
+  onUnreadable?: (info: UnreadableInfo) => void;
   // The real EventSource unless a test supplies one.
   createSource?: (url: string) => EventSourceLike;
 }
@@ -128,6 +138,18 @@ export function createLogStream(options: LogStreamOptions): LogStream {
     const body = parse<{ reason?: string }>(event);
     source.close();
     report({ status: "closed", reason: body?.reason === "access_lost" ? "access_lost" : "failed" });
+  });
+  // The log cannot be read back: not an error, and nothing to retry, so the connection
+  // is closed here or the browser would reconnect into the same answer.
+  source.addEventListener("unreadable", (event) => {
+    if (disposed) return;
+    const body = parse<Partial<UnreadableInfo>>(event);
+    source.close();
+    options.onUnreadable?.({
+      driver: typeof body?.driver === "string" ? body.driver : "",
+      options: Array.isArray(body?.options) ? body.options : [],
+    });
+    report({ status: "closed", reason: "unreadable" });
   });
   source.addEventListener("error", () => {
     if (disposed) return;
