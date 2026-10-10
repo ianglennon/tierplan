@@ -219,6 +219,23 @@ func (a *Aggregator) Snapshot(ctx context.Context, envID string) (Aggregate, Hea
 	return oneNode(snap, st, ref, st.Probe.Type == dockerx.TypeSwarmManager), h, nil
 }
 
+// FreshSnapshot is Snapshot after the cached snapshot of every node of the environment
+// has been dropped, so each node is asked again now. A delete uses it to see what is
+// attached at this moment, not a few seconds ago.
+func (a *Aggregator) FreshSnapshot(ctx context.Context, envID string) (Aggregate, Health, error) {
+	in, err := a.svc.Input(ctx, envID, a.now())
+	if err != nil {
+		return Aggregate{}, Health{}, err
+	}
+	if in.Kind == KindLocal {
+		a.snaps.Invalidate(in.EnvID)
+	}
+	for _, ag := range connectedAgents(in) {
+		a.snaps.Invalidate(ag.TargetKey())
+	}
+	return a.Snapshot(ctx, envID)
+}
+
 // nodeOf is the node a single target's rows come from: the host name its agent
 // reported, or for the local socket the engine's own.
 func nodeOf(in RollupInput, key string, st Status) NodeRef {

@@ -304,6 +304,9 @@ func recordNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	}
 }
 
+// errNoSuchNetwork is findNetwork's answer when no listed network has the ID.
+var errNoSuchNetwork = errors.New("api: no such network")
+
 // findNetwork is the row of the network networkID in an aggregate. A swarm-scoped network
 // is listed once, so it is found by its ID. A local one is on one node, named by nodeID
 // when given; with no nodeID and the same ID on two nodes the caller must say which.
@@ -320,8 +323,7 @@ func findNetwork(agg envs.Aggregate, networkID, nodeID string) (envs.NetworkRow,
 	}
 	switch len(found) {
 	case 0:
-		return envs.NetworkRow{}, httpx.Problem(http.StatusNotFound, problemNetworkNotFound,
-			"This network does not exist. It may have been removed.")
+		return envs.NetworkRow{}, errNoSuchNetwork
 	case 1:
 		return found[0], nil
 	}
@@ -342,7 +344,14 @@ func deleteNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	if err != nil {
 		// A node that did not answer may be the one that holds it: it is not gone then,
 		// it is out of reach.
-		return err
+		if !errors.Is(err, errNoSuchNetwork) {
+			return err
+		}
+		if len(agg.NotReporting) > 0 {
+			return httpx.Problem(http.StatusConflict, problemNodeUnreachable,
+				"Can't find this network: "+joinMore(agg.NotReporting, 3)+" didn't answer. Try again when it's back.")
+		}
+		return httpx.Problem(http.StatusNotFound, problemNetworkNotFound, "This network does not exist. It may have been removed.")
 	}
 	node := ""
 	if row.Scope != dockerx.ScopeSwarm {
@@ -354,6 +363,15 @@ func deleteNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	}
 	if dockerx.IsBuiltinNetwork(row.Name, row.Ingress) {
 		return refuse(http.StatusConflict, problemNetworkBuiltin, row.Name+" is built in and can't be deleted.")
+	}
+	code, status, detail, err := d.usedBy(ctx, envID, row)
+	if err != nil {
+		// The environment itself could not be read: say it as every read does.
+		recordRemoved(ctx, d, p, envID, in.UserAgent, row, node, codeActionFailed)
+		return snapshotProblem(d.Log, envID, err)
+	}
+	if code != "" {
+		return refuse(status, code, detail)
 	}
 
 	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
@@ -469,4 +487,85 @@ func (u networkUsage) of(n envs.NetworkRow) (containers, services int) {
 		return u.wide[n.ID], u.services[n.ID]
 	}
 	return u.local[[2]string{n.NodeID, n.ID}], 0
+}
+
+// maxNamedUsers is how many users a refusal names before it says how many more there are.
+const maxNamedUsers = 5
+
+// usedBy decides whether a network may be deleted now, from what is true now and not from
+// the list the caller saw: every node's containers are read again, and on a swarm the
+// service specs are read from a manager. It returns an empty code when nothing uses the
+// network. Otherwise it returns the problem code, its status and its words:
+//
+//   - node_unreachable when a node that could hold an attachment did not answer, or the
+//     manager could not be asked for the services, so the picture is incomplete;
+//   - network_not_found when the network is no longer there;
+//   - network_in_use naming up to maxNamedUsers users.
+//
+// A swarm-scoped network can be attached on any node, so every expected node must answer;
+// a local network only on its own node, which must answer. A service spec counts even
+// when it has no running task (Pitfall 7).
+func (d NetworksDeps) usedBy(ctx context.Context, envID string, row envs.NetworkRow) (code string, status int, detail string, err error) {
+	fresh, _, err := d.Aggregator.FreshSnapshot(ctx, envID)
+	if err != nil {
+		return "", 0, "", err
+	}
+	swarmScoped := row.Scope == dockerx.ScopeSwarm
+	switch {
+	case swarmScoped && len(fresh.NotReporting) > 0:
+		return problemNodeUnreachable, http.StatusConflict,
+			"Can't tell whether " + row.Name + " is in use: " + joinMore(fresh.NotReporting, 3) + " didn't answer. Try again when it's back.", nil
+	case !swarmScoped && !slices.ContainsFunc(fresh.Nodes, func(n envs.NodeRef) bool { return n.ID == row.NodeID }):
+		return problemNodeUnreachable, http.StatusConflict,
+			"Can't tell whether " + row.Name + " is in use: " + row.Node + " didn't answer. Try again when it's back.", nil
+	}
+	if !slices.ContainsFunc(fresh.Networks, func(n envs.NetworkRow) bool {
+		return n.ID == row.ID && (swarmScoped || n.NodeID == row.NodeID)
+	}) {
+		return problemNetworkNotFound, http.StatusNotFound, row.Name + " is already gone.", nil
+	}
+
+	var users []string
+	for _, c := range fresh.Containers {
+		if !swarmScoped && c.NodeID != row.NodeID {
+			continue
+		}
+		if slices.ContainsFunc(c.Networks, func(cn dockerx.ContainerNet) bool { return cn.NetworkID == row.ID }) {
+			users = append(users, "container "+c.Name)
+		}
+	}
+	if swarmScoped && (fresh.Target.Probe.Type == dockerx.TypeSwarmManager || fresh.Target.Probe.Type == dockerx.TypeSwarmWorker) {
+		var refs []dockerx.ServiceRef
+		if d.Clusters == nil {
+			return problemNodeUnreachable, http.StatusConflict, "Can't tell whether " + row.Name + " is in use: no manager answered. Try again when one is back.", nil
+		}
+		readCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+		defer cancel()
+		if err := d.Clusters.ClusterRead(readCtx, envID, func(c *dockerx.Client) error {
+			var e error
+			refs, e = c.ServiceRefs(readCtx)
+			return e
+		}); err != nil {
+			d.Log.Warn("could not read the services before a network delete", "environment", envID, "error", err)
+			return problemNodeUnreachable, http.StatusConflict, "Can't tell whether " + row.Name + " is in use: no manager answered. Try again when one is back.", nil
+		}
+		for _, ref := range refs {
+			if slices.Contains(ref.Networks, row.ID) {
+				users = append(users, "service "+ref.Name)
+			}
+		}
+	}
+	if len(users) == 0 {
+		return "", 0, "", nil
+	}
+	return problemNetworkInUse, http.StatusConflict,
+		row.Name + " is still in use by " + joinMore(users, maxNamedUsers) + ". Disconnect or remove what uses it, then try again.", nil
+}
+
+// joinMore names up to limit of items, then how many more there are.
+func joinMore(items []string, limit int) string {
+	if len(items) <= limit {
+		return strings.Join(items, ", ")
+	}
+	return strings.Join(items[:limit], ", ") + " and " + strconv.Itoa(len(items)-limit) + " more"
 }
