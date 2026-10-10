@@ -725,3 +725,205 @@ func TestNetworkListOnASwarmCountsTheServicesThatMentionAnOverlayEvenWithNoTasks
 		t.Errorf("order = %q, want name, then ID, then node", keys)
 	}
 }
+
+// The in-use check before every delete (plan 04-13 task 3, D-41, T-04-45, Pitfall 7).
+
+// deletesOn lists, per agent, the network deletes its daemon served, in a swarm fixture.
+func (s *swarmFix) deletesOn() map[string][]string {
+	out := map[string][]string{}
+	for name, a := range map[string]*agentConn{"m1": s.m1, "m2": s.m2, "w": s.w} {
+		var dels []string
+		for _, w := range a.fake.Writes() {
+			if strings.HasPrefix(w, "DELETE /networks/") {
+				dels = append(dels, w)
+			}
+		}
+		out[name] = dels
+	}
+	return out
+}
+
+func (s *swarmFix) noDeletes(t *testing.T) {
+	t.Helper()
+	if got := s.deletesOn(); len(got["m1"])+len(got["m2"])+len(got["w"]) != 0 {
+		t.Fatalf("a refused delete reached an engine: %v", got)
+	}
+}
+
+func (s *swarmFix) del(t *testing.T, id, nodeID string) *envRec {
+	t.Helper()
+	path := "/api/env/" + s.env.ID + "/networks/" + id
+	if nodeID != "" {
+		path += "?nodeId=" + nodeID
+	}
+	return s.req(t, http.MethodDelete, path, "")
+}
+
+func TestDeleteNetworkWithAStoppedContainerAttachedIs409InUseNamingItAndNothingIsSent(t *testing.T) {
+	f, e := dashEnv(t, listEngine())
+	rec := f.deleteNet(t, e, "app0")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	for _, name := range []string{"web", "db"} {
+		if !strings.Contains(string(rec.body), name) {
+			t.Errorf("the detail does not name %s: %s", name, rec.body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("an in-use network reached the engine: %v", w)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "network_in_use" || rows[0].Details["name"] != "app-net" {
+		t.Fatalf("audit rows = %+v, want one failure named network_in_use", rows)
+	}
+}
+
+func TestDeleteNetworkReadsTheContainersLiveAndNotTheCachedList(t *testing.T) {
+	cfg := listEngine()
+	cfg.Containers = nil
+	f, e := dashEnv(t, cfg)
+	// The list is read and cached while nothing is attached.
+	if list := listNets(t, f, e, ""); netByName(t, list.Items, "app-net").AttachedContainers != 0 {
+		t.Fatalf("list = %+v", list.Items)
+	}
+	// A container joins; the cached list does not know yet.
+	cfg.Containers = listEngine().Containers
+	f.fake.Reconfigure(cfg)
+	rec := f.deleteNet(t, e, "app0")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("the delete trusted a stale list and reached the engine: %v", w)
+	}
+}
+
+func TestDeleteNetworkNamesAtMostFiveUsers(t *testing.T) {
+	cfg := listEngine()
+	cfg.Containers = nil
+	for i := range 8 {
+		cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
+			ID: fmt.Sprintf("u%d", i), Names: []string{fmt.Sprintf("/user-%d", i)}, State: "exited",
+			Networks: map[string]dockertest.FakeEndpoint{"app-net": {NetworkID: "app0"}},
+		})
+	}
+	f, e := dashEnv(t, cfg)
+	rec := f.deleteNet(t, e, "app0")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+	named := 0
+	for i := range 8 {
+		if strings.Contains(string(rec.body), fmt.Sprintf("user-%d", i)) {
+			named++
+		}
+	}
+	if named != 5 || !strings.Contains(string(rec.body), "3 more") {
+		t.Fatalf("named %d users, want 5 and '3 more': %s", named, rec.body)
+	}
+}
+
+func TestDeleteNetworkADaemonRefusalForAnAttachmentTheListMissedIsInUseNeverAGenericFailure(t *testing.T) {
+	cfg := listEngine()
+	// This endpoint is not tied to the network by ID in the list, as when a container
+	// joins between the check and the call; the daemon still sees it.
+	cfg.Containers = []dockertest.FakeContainer{{ID: "late", Names: []string{"/late"}, State: "running",
+		Networks: map[string]dockertest.FakeEndpoint{"app-net": {}}}}
+	f, e := dashEnv(t, cfg)
+	rec := f.deleteNet(t, e, "app0")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"DELETE /networks/app0"}) {
+		t.Fatalf("writes = %v, want the one delete the daemon refused", w)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 1 || rows[0].Reason != "network_in_use" || rows[0].Result != string(audit.ResultFailure) {
+		t.Fatalf("audit rows = %+v", rows)
+	}
+}
+
+func TestDeleteNetworkAnOverlayThatOnlyAScaledToZeroServiceMentionsIs409InUseWithoutAnyCachedRead(t *testing.T) {
+	s := newSwarmFix(t)
+	if _, ok := s.clusters.Cached(s.env.ID); ok {
+		t.Fatal("the cluster was read before the test began")
+	}
+	rec := s.del(t, "ovl", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	for _, name := range []string{"web", "idle"} {
+		if !strings.Contains(string(rec.body), name) {
+			t.Errorf("the detail does not name service %s: %s", name, rec.body)
+		}
+	}
+	s.noDeletes(t)
+}
+
+func TestDeleteNetworkAnOverlayNothingMentionsIsRemovedOnceThroughAManager(t *testing.T) {
+	s := newSwarmFix(t)
+	rec := s.post(t, `{"name":"spare","driver":"overlay"}`)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.code, rec.body)
+	}
+	id := decode[networkCreated](t, rec).ID
+	rec = s.del(t, id, "")
+	if rec.code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rec.code, rec.body)
+	}
+	got := s.deletesOn()
+	if len(got["m1"])+len(got["m2"])+len(got["w"]) != 1 || len(got["w"]) != 0 {
+		t.Fatalf("deletes = %v, want exactly one, on a manager", got)
+	}
+	audits := s.networkAudits(t)
+	last := audits[len(audits)-1]
+	if last.Action != audit.ActionNetworkRemoved || last.Details["scope"] != "swarm" || last.Details["name"] != "spare" || last.Details["code"] != "removed" {
+		t.Fatalf("audit = %+v", last)
+	}
+	if _, has := last.Details["node"]; has {
+		t.Errorf("a cluster network names no node: %+v", last.Details)
+	}
+}
+
+func TestDeleteNetworkWhenANodeThatCouldHoldAnAttachmentDidNotAnswerIs409NodeUnreachable(t *testing.T) {
+	s := newSwarmFix(t)
+	list := decode[listBody[networkListItem]](t, s.get(t, s.env.ID, "networks"))
+	var brw networkListItem
+	for _, n := range list.Items {
+		if n.Name == "bridge" && n.ID == "brw" {
+			brw = n
+		}
+	}
+	if brw.ID == "" {
+		t.Fatalf("the worker's bridge is not listed: %+v", list.Items)
+	}
+	// The worker stops answering list calls after the list above was cached.
+	s.w.fake.Reconfigure(dockertest.FakeConfig{Hostname: "wrk-1", SwarmState: "active", PolicyDeny: true})
+
+	for name, rec := range map[string]*envRec{
+		"a swarm-wide overlay": s.del(t, "ovl", ""),
+		"the worker's bridge":  s.del(t, "brw", brw.NodeID),
+	} {
+		if rec.code != http.StatusConflict || rec.ptyp != "node_unreachable" {
+			t.Errorf("%s: %d %q, want 409 node_unreachable: %s", name, rec.code, rec.ptyp, rec.body)
+		}
+	}
+	s.noDeletes(t)
+}
+
+func TestDeleteNetworkALocalBridgeOnASwarmNodeGoesToThatNodeOnly(t *testing.T) {
+	s := newSwarmFix(t)
+	rec := s.post(t, fmt.Sprintf(`{"name":"br-w","driver":"bridge","nodeId":%q}`, s.w.id))
+	if rec.code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.code, rec.body)
+	}
+	id := decode[networkCreated](t, rec).ID
+	if rec := s.del(t, id, s.w.id); rec.code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rec.code, rec.body)
+	}
+	got := s.deletesOn()
+	if len(got["w"]) != 1 || len(got["m1"])+len(got["m2"]) != 0 {
+		t.Fatalf("deletes = %v, want one, on the worker", got)
+	}
+}
