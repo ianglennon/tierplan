@@ -501,7 +501,9 @@ func recordNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	if code != codeCreated && code != codeRemoved {
 		result, reason = audit.ResultFailure, code
 	}
-	if err := d.Audit.Record(ctx, audit.Entry{
+	wctx, cancel := doneActionAuditContext(ctx)
+	defer cancel()
+	if err := d.Audit.Record(wctx, audit.Entry{
 		Actor: p.AuditActor(), Action: action, TargetType: networkTargetType, TargetID: targetID,
 		EnvID: envID, Result: result, Reason: reason,
 		IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,

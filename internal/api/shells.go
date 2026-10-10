@@ -649,7 +649,9 @@ func registerShellSessions(r *httpx.Router, d ShellsDeps) {
 			return nil, shellNotFound() // it ended between the look and the end
 		}
 		// The shell is already ended, which is the safe side of a failed write.
-		if err := d.Audit.Record(ctx, audit.Entry{
+		wctx, cancel := doneActionAuditContext(ctx)
+		defer cancel()
+		if err := d.Audit.Record(wctx, audit.Entry{
 			Actor: p.AuditActor(), Action: audit.ActionShellEnded, TargetType: logTargetType, TargetID: info.ContainerID,
 			EnvID: env.ID, Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
 			Details: map[string]string{"container": info.ContainerName, "node": info.NodeID, "sid": info.ID, "owner": info.Owner},

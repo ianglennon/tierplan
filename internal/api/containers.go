@@ -677,6 +677,14 @@ func requireVolumesDelete(ctx context.Context, d ContainersDeps, p *rbac.Princip
 	return httpx.Problem(http.StatusForbidden, "forbidden", "Removing anonymous volumes needs the delete volumes permission")
 }
 
+// doneActionAuditContext is the context for the audit row of a change that has
+// already been made or refused. It keeps the request's values but not its
+// cancellation, with a deadline of its own: a browser that closed while the change
+// ran must not leave the change without a record.
+func doneActionAuditContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), actionAuditTimeout)
+}
+
 // auditTargets writes one audit row per target, in request order, once every target has
 // answered, so the rows of one bulk read in the order the targets were sent. extra is
 // added to every row.
@@ -705,7 +713,7 @@ func auditTargets(ctx context.Context, d ContainersDeps, p *rbac.Principal, envI
 		// The action has already happened, so its row must outlive a browser that went away
 		// while it ran (a restart waits out the stop timeout): a cancelled request would
 		// otherwise leave an action with no record.
-		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), actionAuditTimeout)
+		wctx, cancel := doneActionAuditContext(ctx)
 		err := d.Audit.Record(wctx, audit.Entry{
 			Actor: p.AuditActor(), Action: action, TargetType: containerTargetType, TargetID: t.ID,
 			EnvID: envID, Result: result, Reason: reason,

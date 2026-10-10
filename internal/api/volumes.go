@@ -631,7 +631,9 @@ func auditVolume(ctx context.Context, d VolumesDeps, p *rbac.Principal, envID, u
 	if code != codeCreated {
 		result, reason = audit.ResultFailure, code
 	}
-	if err := d.Audit.Record(ctx, audit.Entry{
+	wctx, cancel := doneActionAuditContext(ctx)
+	defer cancel()
+	if err := d.Audit.Record(wctx, audit.Entry{
 		Actor: p.AuditActor(), Action: audit.ActionVolumeCreated, TargetType: volumeTargetType, TargetID: spec.Name,
 		EnvID: envID, Result: result, Reason: reason,
 		IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
@@ -842,7 +844,9 @@ func auditVolumeRemoved(ctx context.Context, d VolumesDeps, p *rbac.Principal, e
 	if bulkID != "" {
 		details["bulk"] = bulkID
 	}
-	if err := d.Audit.Record(ctx, audit.Entry{
+	wctx, cancel := doneActionAuditContext(ctx)
+	defer cancel()
+	if err := d.Audit.Record(wctx, audit.Entry{
 		Actor: p.AuditActor(), Action: audit.ActionVolumeRemoved, TargetType: volumeTargetType, TargetID: t.Name,
 		EnvID: envID, Result: result, Reason: reason,
 		IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
