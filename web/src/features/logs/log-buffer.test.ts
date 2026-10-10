@@ -98,4 +98,68 @@ describe("LogBuffer", () => {
     expect(b.droppedCount).toBe(1);
     expect(b.at(0).m).toBe("line 1");
   });
+
+  describe("prepend", () => {
+    const at = (n: number, m: string): LogLineData => ({
+      t: `2026-10-09T12:00:${String(n).padStart(2, "0")}.000000000Z`,
+      s: "o",
+      m,
+    });
+    const texts = (b: LogBuffer) => Array.from({ length: b.length }, (_, i) => b.at(i).m);
+
+    it("puts a page of earlier lines above the held ones, numbered below them", () => {
+      const b = new LogBuffer();
+      b.push([at(5, "five"), at(6, "six")]);
+      const added = b.prepend([at(1, "one"), at(2, "two")]);
+      expect(added).toBe(2);
+      expect(texts(b)).toEqual(["one", "two", "five", "six"]);
+      const seqs = Array.from({ length: 4 }, (_, i) => b.at(i).seq);
+      expect(new Set(seqs).size).toBe(4);
+      expect(seqs.slice(0, 2).every((n) => n < 0)).toBe(true);
+      // A later line still gets a number past the end.
+      b.push([at(7, "seven")]);
+      expect(b.at(4).seq).toBeGreaterThan(b.at(3).seq);
+      expect(b.pushed).toBe(3);
+    });
+
+    it("keeps pages in order when it is done twice", () => {
+      const b = new LogBuffer();
+      b.push([at(9, "nine")]);
+      b.prepend([at(5, "five"), at(6, "six")]);
+      b.prepend([at(1, "one"), at(2, "two")]);
+      expect(texts(b)).toEqual(["one", "two", "five", "six", "nine"]);
+    });
+
+    it("drops the lines of the page that are already held at the oldest stamp, by text", () => {
+      const b = new LogBuffer();
+      b.push([at(5, "tick"), at(5, "tick"), at(6, "six")]);
+      const added = b.prepend([
+        at(1, "one"),
+        at(5, "other"),
+        at(5, "tick"),
+        at(5, "tick"),
+        at(5, "tick"),
+      ]);
+      // Two of the three ticks are the held ones; the third and "other" share the stamp
+      // but are new.
+      expect(added).toBe(3);
+      expect(texts(b)).toEqual(["one", "other", "tick", "tick", "tick", "six"]);
+    });
+
+    it("adds nothing for a page that is only what is held", () => {
+      const b = new LogBuffer();
+      b.push([at(5, "tick")]);
+      expect(b.prepend([at(5, "tick")])).toBe(0);
+      expect(b.length).toBe(1);
+    });
+
+    it("counts what the cap pushes out of the top", () => {
+      const b = new LogBuffer(4);
+      b.push([at(8, "a"), at(9, "b")]);
+      b.prepend([at(1, "x"), at(2, "y"), at(3, "z")]);
+      expect(b.length).toBe(4);
+      expect(b.droppedCount).toBe(1);
+      expect(texts(b)).toEqual(["y", "z", "a", "b"]);
+    });
+  });
 });

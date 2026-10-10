@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { api } from "@/api/client";
 import type { EventSourceLike } from "@/features/dashboard/events";
 import type { LogLineData } from "@/features/logs/log-buffer";
 import { apiUrl } from "@/lib/base-path";
@@ -34,6 +35,10 @@ export interface LogStreamOptions {
   sid: string;
   // How many of the last lines to start with; the server's own default is 500.
   tail?: number | "all";
+  // A time range, as ISO times: lines from since on, up to until if given. A range
+  // that ends is not followed past its end.
+  since?: string;
+  until?: string;
   onLines: (lines: LogLineData[]) => void;
   onState: (state: LogStreamState) => void;
   onReady?: (info: { tty: boolean }) => void;
@@ -61,11 +66,16 @@ export function makeViewerId(): string {
 }
 
 export function logStreamUrl(
-  o: Pick<LogStreamOptions, "envId" | "containerId" | "nodeId" | "sid" | "tail">,
+  o: Pick<
+    LogStreamOptions,
+    "envId" | "containerId" | "nodeId" | "sid" | "tail" | "since" | "until"
+  >,
 ): string {
   const q = new URLSearchParams({ sid: o.sid });
   if (o.nodeId) q.set("nodeId", o.nodeId);
   if (o.tail !== undefined) q.set("tail", String(o.tail));
+  if (o.since) q.set("since", o.since);
+  if (o.until) q.set("until", o.until);
   return apiUrl(
     `/api/env/${encodeURIComponent(o.envId)}/containers/${encodeURIComponent(o.containerId)}/logs/stream?${q}`,
   );
@@ -137,4 +147,45 @@ export function createLogStream(options: LogStreamOptions): LogStream {
       source.close();
     },
   };
+}
+
+// plusNanosecond is the stamp of a line one nanosecond later. "Everything before this
+// moment" is exclusive, so asking for the page before a line at T by T + 1 ns takes in
+// the lines that share T with it; the buffer then drops the ones it holds (Pitfall 12).
+export function plusNanosecond(t: string): string {
+  const m = /^(.*T\d\d:\d\d:\d\d)\.(\d{1,9})Z$/.exec(t);
+  if (!m) return t;
+  const frac = Number((m[2] as string).padEnd(9, "0")) + 1;
+  if (frac < 1e9) return `${m[1]}.${String(frac).padStart(9, "0")}Z`;
+  const next = new Date(`${m[1]}Z`).getTime() + 1000;
+  return `${new Date(next).toISOString().slice(0, 19)}.000000000Z`;
+}
+
+export interface LogPage {
+  lines: LogLineData[];
+  // True when no earlier line exists.
+  startOfLogs: boolean;
+}
+
+export interface LogPageOptions {
+  envId: string;
+  containerId: string;
+  nodeId?: string;
+  sid: string;
+  // Only lines written before this stamp.
+  until: string;
+  tail?: number;
+}
+
+// fetchLogPage reads a page of earlier lines (GET .../logs), oldest first. It throws
+// when the server refuses or cannot be reached.
+export async function fetchLogPage(o: LogPageOptions): Promise<LogPage> {
+  const res = await api.GET("/api/env/{envId}/containers/{containerId}/logs", {
+    params: {
+      path: { envId: o.envId, containerId: o.containerId },
+      query: { sid: o.sid, until: o.until, tail: o.tail ?? 500, nodeId: o.nodeId },
+    },
+  });
+  if (!res.data) throw new Error(`Could not read earlier log lines (${res.response.status})`);
+  return { lines: res.data.lines as LogLineData[], startOfLogs: res.data.startOfLogs };
 }

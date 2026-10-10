@@ -6,6 +6,56 @@
     "loading": "Loading logs",
     "accessLost": "Your access changed. Logs were closed.",
     "restarted": "Container restarted {{time}}",
-    "stopped": "Container stopped {{time}}. Waiting for it to start."
+    "stopped": "Container stopped {{time}}. Waiting for it to start.",
+    "toolbar": "Log view options",
+    "show": {
+      "label": "Show",
+      "lines": "Last 500 lines",
+      "5m": "Last 5 minutes",
+      "1h": "Last hour",
+      "24h": "Last 24 hours",
+      "all": "All",
+      "custom": "Custom…"
+    },
+    "range": {
+      "title": "Custom range",
+      "from": "From",
+      "to": "To (optional)",
+      "cancel": "Cancel",
+      "apply": "Apply range",
+      "invalid": "The end must be after the start."
+    },
+    "search": {
+      "label": "Search logs",
+      "placeholder": "Search loaded lines",
+      "matchCase": "Match case",
+      "regex": "Use regular expression",
+      "none": "No matches",
+      "count": "{{current}} of {{total}}",
+      "previous": "Previous match",
+      "next": "Next match",
+      "only": "Only matching lines",
+      "invalid": "That isn't a valid pattern."
+    },
+    "wrap": "Wrap",
+    "timestamps": "Timestamps",
+    "utc": "UTC",
+    "view": "View",
+    "more": "More",
+    "time": "Time",
+    "timeUtc": "Time (UTC)",
+    "loadEarlier": "Load earlier lines",
+    "loadingEarlier": "Loading earlier lines…",
+    "startOfLogs": "Start of logs",
+    "bufferCap": "Older lines were dropped to keep this fast. Download the logs to get everything.",
+    "paused": "Auto-scroll paused",
+    "jump": "Jump to latest",
+    "jumpNew_one": "Jump to latest ({{count}} new)",
+    "jumpNew_other": "Jump to latest ({{count}} new)",
+    "loadError": {
+      "title": "Couldn't load logs.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry"
+    }
   }
 }

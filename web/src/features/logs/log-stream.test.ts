@@ -10,6 +10,7 @@ import {
   type LogStreamState,
   logStreamUrl,
   makeViewerId,
+  plusNanosecond,
 } from "@/features/logs/log-stream";
 
 // The connection to a container's log stream (plan 04-19, OBS-01, D-24, P3 D-10).
@@ -169,5 +170,33 @@ describe("closing", () => {
     stream.close();
     stream.close();
     expect(source.closed).toBe(true);
+  });
+});
+
+describe("a range", () => {
+  it("is asked for with since and until", () => {
+    const { source } = open({
+      since: "2026-10-09T10:00:00.000Z",
+      until: "2026-10-09T11:00:00.000Z",
+      tail: 50000,
+    });
+    const url = new URL(source.url, "http://x");
+    expect(url.searchParams.get("since")).toBe("2026-10-09T10:00:00.000Z");
+    expect(url.searchParams.get("until")).toBe("2026-10-09T11:00:00.000Z");
+    expect(url.searchParams.get("tail")).toBe("50000");
+  });
+});
+
+describe("plusNanosecond", () => {
+  it("adds one nanosecond to an engine stamp, carrying into the second", () => {
+    expect(plusNanosecond("2026-10-09T12:00:00.000000000Z")).toBe("2026-10-09T12:00:00.000000001Z");
+    expect(plusNanosecond("2026-10-09T12:00:00.123456789Z")).toBe("2026-10-09T12:00:00.123456790Z");
+    expect(plusNanosecond("2026-10-09T12:59:59.999999999Z")).toBe("2026-10-09T13:00:00.000000000Z");
+    expect(plusNanosecond("2026-12-31T23:59:59.999999999Z")).toBe("2027-01-01T00:00:00.000000000Z");
+  });
+
+  it("pads a stamp that has fewer digits and leaves anything else alone", () => {
+    expect(plusNanosecond("2026-10-09T12:00:00.5Z")).toBe("2026-10-09T12:00:00.500000001Z");
+    expect(plusNanosecond("not a stamp")).toBe("not a stamp");
   });
 });

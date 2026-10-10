@@ -434,6 +434,33 @@ describe("the Logs tab", () => {
     );
     expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("data-active")).toBeNull();
   });
+
+  it("opens the way its address says: range, search and toggles (D-22)", async () => {
+    renderAt(
+      `/env/${ENV}/containers/web-id/logs?node=n1&since=1h&q=boom&ts=true&utc=true&wrap=true`,
+    );
+    await screen.findByRole("log", { name: "Logs for web" });
+    const source = FakeEventSource.instances.find((i) => i.url.includes("/logs/stream"));
+    const url = new URL(source?.url ?? "", "http://x");
+    expect(url.searchParams.get("tail")).toBe("50000");
+    expect(url.searchParams.get("since")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Show" }).textContent).toContain("Last hour");
+    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("boom");
+    for (const name of ["Timestamps", "UTC", "Wrap"]) {
+      expect(screen.getByRole("button", { name }).getAttribute("aria-pressed")).toBe("true");
+    }
+  });
+
+  it("writes a change into the address, replacing the entry and keeping the node", async () => {
+    const router = renderAt(`/env/${ENV}/containers/web-id/logs?node=n1`);
+    await screen.findByRole("log", { name: "Logs for web" });
+    const before = router.history.length;
+    fireEvent.click(screen.getByRole("button", { name: "Wrap" }));
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({ node: "n1", wrap: true }),
+    );
+    expect(router.history.length).toBe(before);
+  });
 });
 
 describe("the Inspect tab", () => {

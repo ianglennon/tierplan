@@ -39,6 +39,10 @@ export class LogBuffer {
   // removed from the array once they outnumber the cap, so a drop is not a copy.
   private start = 0;
   private nextSeq = 0;
+  // Lines added at the top take the numbers below zero, counting down, so they sort
+  // before everything held and never collide with a number in use.
+  private prevSeq = -1;
+  private pushedLines = 0;
   private dropped = 0;
   private version = 0;
   private listeners = new Set<Listener>();
@@ -65,9 +69,17 @@ export class LogBuffer {
     return this.length > 0 ? this.at(0).seq : this.nextSeq;
   }
 
+  // How many lines have ever been pushed at the end since the buffer was made. It
+  // only grows, so the difference between two readings is how many lines arrived
+  // between them, whatever was dropped meanwhile.
+  get pushed(): number {
+    return this.pushedLines;
+  }
+
   push(lines: readonly LogLineData[]): void {
     if (lines.length === 0) return;
     for (const l of lines) this.items.push({ ...l, seq: this.nextSeq++ });
+    this.pushedLines += lines.length;
     this.trim();
     this.bump();
   }
@@ -98,10 +110,61 @@ export class LogBuffer {
     this.bump();
   }
 
+  // Adds a page of earlier lines at the top (Load earlier lines). The page may repeat
+  // lines already held at the oldest line's stamp: a request for "everything before
+  // this moment" is made one nanosecond late so no line sharing that stamp is missed
+  // (Pitfall 12), and the lines already held are told apart by stamp and text, each
+  // text counted, so two identical lines written at the same nanosecond are both kept.
+  // Returns how many lines were added.
+  prepend(page: readonly LogLineData[]): number {
+    let first: BufferedLine | undefined;
+    for (let i = 0; i < this.length; i++) {
+      const l = this.at(i);
+      if (!l.marker) {
+        first = l;
+        break;
+      }
+    }
+    const held = new Map<string, number>();
+    if (first) {
+      for (let i = 0; i < this.length; i++) {
+        const l = this.at(i);
+        if (l.marker) continue;
+        if (l.t !== first.t) break;
+        const k = `${l.s}\u0000${l.m}`;
+        held.set(k, (held.get(k) ?? 0) + 1);
+      }
+    }
+    const fresh: LogLineData[] = [];
+    for (const l of page) {
+      if (first && l.t > first.t) continue;
+      if (first && l.t === first.t) {
+        const k = `${l.s}\u0000${l.m}`;
+        const n = held.get(k) ?? 0;
+        if (n > 0) {
+          held.set(k, n - 1);
+          continue;
+        }
+      }
+      fresh.push(l);
+    }
+    if (fresh.length === 0) return 0;
+    const added: BufferedLine[] = new Array(fresh.length);
+    for (let i = fresh.length - 1; i >= 0; i--) {
+      added[i] = { ...(fresh[i] as LogLineData), seq: this.prevSeq-- };
+    }
+    this.items = added.concat(this.items.slice(this.start));
+    this.start = 0;
+    this.trim();
+    this.bump();
+    return fresh.length;
+  }
+
   clear(): void {
     this.items = [];
     this.start = 0;
     this.dropped = 0;
+    this.prevSeq = -1;
     this.bump();
   }
 
@@ -119,6 +182,41 @@ export class LogBuffer {
     for (const l of this.listeners) l();
   }
 }
+
+// The time of day of a line's stamp, HH:mm:ss.SSS, in the browser's time zone or in
+// UTC. The engine's stamp has nine digits; a millisecond is all that is shown.
+export function stampTime(t: string, utc: boolean): string {
+  const d = new Date(t.replace(/(\.\d{3})\d*Z$/, "$1Z"));
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return utc
+    ? `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}.${p(d.getUTCMilliseconds(), 3)}`
+    : `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
+// The calendar day of a line's stamp as YYYY-MM-DD in the chosen zone: two lines are
+// on the same day when these are equal.
+export function stampDay(t: string, utc: boolean): string {
+  // A day never changes inside a minute in any time zone, so the first 16 characters
+  // (to the minute) are the cache key and a log of thousands of lines parses a date
+  // once per minute, not once per line.
+  const key = `${utc ? "u" : "l"}${t.slice(0, 16)}`;
+  const hit = dayCache.get(key);
+  if (hit !== undefined) return hit;
+  const d = new Date(t.replace(/(\.\d{3})\d*Z$/, "$1Z"));
+  let day = "";
+  if (!Number.isNaN(d.getTime())) {
+    const p = (n: number) => String(n).padStart(2, "0");
+    day = utc
+      ? `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`
+      : `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  if (dayCache.size > 5000) dayCache.clear();
+  dayCache.set(key, day);
+  return day;
+}
+
+const dayCache = new Map<string, string>();
 
 // clockTime is the hour and minute of an ISO time in the browser's time zone, as
 // HH:MM, for the words on a marker row.
