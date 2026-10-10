@@ -46,7 +46,8 @@ import volumes from "./en/volumes.json";
 // Each later plan adds its own namespace file (setup, auth, shell, env,
 // dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, containers, containerdetail, networks, volumes, logs, terminal) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
-// holds the containers list copy. Keys are shaped
+// holds the containers list copy, and the "terminal" namespace the browser shell's
+// (never "shell", which is the app chrome's). Keys are shaped
 // area.screen.element. Plural keys use the i18next _one and _other suffixes.
 export const resources = {
   en: {
