@@ -84,4 +84,18 @@ describe("LogBuffer", () => {
     expect(b.length).toBe(0);
     expect(b.droppedCount).toBe(0);
   });
+
+  it("holds a marker row between lines, numbered like a line, and counts it towards the cap", () => {
+    const b = new LogBuffer(4);
+    b.push(lines(2));
+    b.pushMarker("stopped", "2026-10-09T12:34:56.000Z");
+    b.pushMarker("restarted", "2026-10-09T12:40:00.000Z");
+    expect(b.length).toBe(4);
+    expect(b.at(2).marker).toBe("stopped");
+    expect(b.last?.marker).toBe("restarted");
+    expect(b.at(2).seq).toBe(2);
+    b.push(lines(1, 2));
+    expect(b.droppedCount).toBe(1);
+    expect(b.at(0).m).toBe("line 1");
+  });
 });

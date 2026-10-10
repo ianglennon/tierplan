@@ -59,6 +59,9 @@ type LogsSource interface {
 	snapshotReader
 	// OnNode runs fn against the engine of a node; see envs.Aggregator.OnNode.
 	OnNode(ctx context.Context, envID, nodeID string, fn func(*dockerx.Client) error) error
+	// Events subscribes to the merged event feed of an environment; the stream watches
+	// it for the start of the container it follows. See envs.Aggregator.Events.
+	Events(ctx context.Context, envID string) (backlog []envs.NodeEvent, ch <-chan envs.NodeEvent, cancel func())
 }
 
 // LogsDeps are the dependencies of the log stream route.
@@ -228,17 +231,19 @@ func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *s
 	}
 
 	// The engine request lives as long as the stream; it is cancelled when the handler
-	// returns, which also closes the log reader. Opening it gets its own time limit.
+	// returns, which also closes the log reader.
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	openTimer := time.AfterFunc(logOpenTimeout, cancel)
-	logs, tty, err := openLogs(streamCtx, d, env.ID, nodeID, containerID, params)
-	openTimer.Stop()
+	// The container's own events are subscribed before the log is opened, so a start
+	// between the two is not missed (D-20).
+	_, events, cancelEvents := d.Aggregator.Events(streamCtx, env.ID)
+	defer cancelEvents()
+	run, tty, err := openLogRun(streamCtx, d, env.ID, nodeID, containerID, params)
 	if err != nil {
 		writeProblemError(w, err)
 		return
 	}
-	defer func() { _ = logs.Close() }()
+	defer func() { run.stop() }()
 
 	fullID, name := containerID, containerID
 	for _, row := range agg.Containers {
@@ -281,30 +286,46 @@ func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *s
 		return
 	}
 
-	// The pump reads the engine into a small channel, so a slow browser slows the
-	// read instead of growing a buffer.
-	lines := make(chan LogLine, 256)
-	var pumpErr error
-	go func() {
-		defer close(lines)
-		pumpErr = pumpLogs(streamCtx, logs, tty, func(l LogLine) {
-			if params.after != "" && l.T != "" && l.T <= params.after {
-				return
-			}
-			select {
-			case lines <- l:
-			case <-streamCtx.Done():
-			}
-		})
-	}()
-
-	var b batcher
+	var (
+		b     batcher
+		track logTrack
+		// seam is set while the lines of a reopened log may still repeat ones already
+		// sent; see logSeam.
+		seam *logSeam
+		// lines is the current run's channel; nil once the run has ended.
+		lines = run.lines
+	)
 	flush := func() bool {
 		if b.empty() {
 			return true
 		}
 		batch := b.take()
 		return send("log", batch[len(batch)-1].T, map[string][]LogLine{"lines": batch})
+	}
+	// follow reopens the log after the container started again: from the last line
+	// sent, with no repeat of it, and tells the viewer (D-20). False means the stream
+	// should end; the browser then reconnects through the whole policy.
+	follow := func(at time.Time) bool {
+		if !flush() {
+			return false
+		}
+		run.stop()
+		again := params
+		again.after, again.tail = "", ""
+		if track.stamp != "" {
+			again.since = track.stamp
+		}
+		next, _, err := openLogRun(streamCtx, d, env.ID, nodeID, containerID, again)
+		if err != nil {
+			d.Log.Warn("could not follow a container's log across its restart", "container", fullID, "error", err)
+			return false
+		}
+		run, lines = next, next.lines
+		seam = track.seam()
+		if at.IsZero() {
+			at = time.Now()
+		}
+		return send("state", "", map[string]string{"state": "restarted", "at": at.UTC().Format(time.RFC3339Nano)})
 	}
 	flushTick := time.NewTicker(batchInterval)
 	defer flushTick.Stop()
@@ -320,15 +341,29 @@ func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *s
 			// The browser reconnects through the whole policy and resumes.
 			flush()
 			return
+		case ev, open := <-events:
+			if !open {
+				events = nil
+				continue
+			}
+			// Only a start of this container matters: a restart is a stop (the log
+			// ends and the viewer is told) and a start. A "restart" event follows its
+			// start, so acting on it too would reopen twice.
+			if ev.Type != "container" || ev.Action != "start" || !eventIsFor(ev.ActorID, fullID, containerID) {
+				continue
+			}
+			if !follow(ev.Time) {
+				return
+			}
 		case l, open := <-lines:
 			if !open {
 				if !flush() {
 					return
 				}
-				if pumpErr != nil {
+				if run.err != nil && !errors.Is(run.err, context.Canceled) {
 					// The connection to the engine broke: end the response, so the
 					// browser reconnects and resumes from the last line it has.
-					d.Log.Warn("a container log stream ended with an error", "container", fullID, "error", pumpErr)
+					d.Log.Warn("a container log stream ended with an error", "container", fullID, "error", run.err)
 					return
 				}
 				if !send("state", "", map[string]string{"state": "stopped", "at": time.Now().UTC().Format(time.RFC3339Nano)}) {
@@ -337,6 +372,13 @@ func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *s
 				lines = nil
 				continue
 			}
+			if params.after != "" && l.T != "" && l.T <= params.after {
+				continue
+			}
+			if seam.skip(l) {
+				continue
+			}
+			track.note(l)
 			if b.add(l) && !flush() {
 				return
 			}
@@ -355,6 +397,110 @@ func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *s
 			}
 		}
 	}
+}
+
+// eventIsFor says whether the actor of a container event is the container a stream
+// follows: its full ID, or the unambiguous prefix the route was asked with.
+func eventIsFor(actor, fullID, asked string) bool {
+	return actor == fullID || (len(asked) >= minSelfIDLen && strings.HasPrefix(actor, asked))
+}
+
+// logRun is one read of the engine's log. The engine ends it when the container
+// stops; a container that starts again needs a new one.
+type logRun struct {
+	cancel context.CancelFunc
+	rc     io.ReadCloser
+	// lines carries the lines read, oldest first, and is closed when the read ends;
+	// err is why, and is only valid after that. nil means a clean end.
+	lines chan LogLine
+	err   error
+}
+
+// openLogRun opens the engine's log and starts reading it into a small channel, so a
+// slow browser slows the read instead of growing a buffer. The run lives as long as
+// ctx, or until stop.
+func openLogRun(ctx context.Context, d LogsDeps, envID, nodeID, containerID string, p logParams) (*logRun, bool, error) {
+	runCtx, cancel := context.WithCancel(ctx)
+	// Opening gets its own time limit.
+	openTimer := time.AfterFunc(logOpenTimeout, cancel)
+	rc, tty, err := openLogs(runCtx, d, envID, nodeID, containerID, p)
+	openTimer.Stop()
+	if err != nil {
+		cancel()
+		return nil, false, err
+	}
+	r := &logRun{cancel: cancel, rc: rc, lines: make(chan LogLine, 256)}
+	go func() {
+		defer close(r.lines)
+		r.err = pumpLogs(runCtx, rc, tty, func(l LogLine) {
+			select {
+			case r.lines <- l:
+			case <-runCtx.Done():
+			}
+		})
+	}()
+	return r, tty, nil
+}
+
+// stop ends the read and releases the engine's follow.
+func (r *logRun) stop() {
+	r.cancel()
+	_ = r.rc.Close()
+}
+
+// logTrack remembers the newest stamp sent and the lines sent with exactly that stamp,
+// so a reopened log can skip them.
+type logTrack struct {
+	stamp string
+	// at holds the key of every line sent with stamp.
+	at []string
+}
+
+func logLineKey(l LogLine) string { return l.S + "\x00" + l.M }
+
+func (t *logTrack) note(l LogLine) {
+	if l.T != t.stamp {
+		t.stamp, t.at = l.T, t.at[:0]
+	}
+	t.at = append(t.at, logLineKey(l))
+}
+
+// seam is what skip needs to tell the lines a reopened log repeats from new ones.
+func (t *logTrack) seam() *logSeam {
+	if t.stamp == "" {
+		return nil
+	}
+	s := &logSeam{stamp: t.stamp, counts: make(map[string]int, len(t.at))}
+	for _, k := range t.at {
+		s.counts[k]++
+	}
+	return s
+}
+
+// logSeam drops from a reopened log the lines already sent: everything before the
+// newest stamp, and at that stamp as many lines of each text as were sent. Comparing
+// the text as well as the stamp is what keeps a second line written at the very same
+// nanosecond. A nil seam skips nothing.
+type logSeam struct {
+	stamp  string
+	counts map[string]int
+}
+
+func (s *logSeam) skip(l LogLine) bool {
+	if s == nil || l.T == "" {
+		return false
+	}
+	switch {
+	case l.T < s.stamp:
+		return true
+	case l.T == s.stamp:
+		k := logLineKey(l)
+		if s.counts[k] > 0 {
+			s.counts[k]--
+			return true
+		}
+	}
+	return false
 }
 
 // auditLogsViewed writes the logs.viewed row of a stream, once per viewer: a

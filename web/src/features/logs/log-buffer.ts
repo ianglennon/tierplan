@@ -20,7 +20,13 @@ export interface LogLineData {
 // older lines are dropped from the top.
 export interface BufferedLine extends LogLineData {
   seq: number;
+  // Set on a row that is not a line of the log but a mark the viewer put between lines:
+  // the container started again, or stopped. t is when, m is empty.
+  marker?: ContainerMarker;
 }
+
+// What a marker row says happened to the container (D-20).
+export type ContainerMarker = "restarted" | "stopped";
 
 type Listener = () => void;
 
@@ -62,6 +68,12 @@ export class LogBuffer {
   push(lines: readonly LogLineData[]): void {
     if (lines.length === 0) return;
     for (const l of lines) this.items.push({ ...l, seq: this.nextSeq++ });
+    this.trim();
+    this.bump();
+  }
+
+  // Drops the oldest rows past the cap and counts them.
+  private trim(): void {
     const excess = this.length - this.cap;
     if (excess > 0) {
       this.start += excess;
@@ -71,6 +83,18 @@ export class LogBuffer {
         this.start = 0;
       }
     }
+  }
+
+  // The newest row held, if any.
+  get last(): BufferedLine | undefined {
+    return this.length > 0 ? this.at(this.length - 1) : undefined;
+  }
+
+  // Adds a marker row (the container restarted or stopped) after the lines held. at is
+  // when it happened, as an ISO time. The lines are kept (D-20).
+  pushMarker(kind: ContainerMarker, at: string): void {
+    this.items.push({ t: at, s: "o", m: "", seq: this.nextSeq++, marker: kind });
+    this.trim();
     this.bump();
   }
 
@@ -94,4 +118,12 @@ export class LogBuffer {
     this.version++;
     for (const l of this.listeners) l();
   }
+}
+
+// clockTime is the hour and minute of an ISO time in the browser's time zone, as
+// HH:MM, for the words on a marker row.
+export function clockTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }

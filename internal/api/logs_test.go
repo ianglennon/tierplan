@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,10 +63,14 @@ func logsEngine() dockertest.FakeConfig {
 func newLogsFix(t *testing.T, cfg dockertest.FakeConfig, tune func(*envFix)) *logsFix {
 	t.Helper()
 	f := newEnvFix(t, cfg)
+	// The stream follows a container across its restarts through the events hub.
+	f.hub = envs.NewHub(f.mon, f.snaps, slog.New(slog.DiscardHandler), time.Now)
+	t.Cleanup(f.hub.Close)
+	f.agg = envs.NewAggregator(f.svc, f.snaps, f.hub, f.clk.now)
 	if tune != nil {
 		tune(f)
-		f.h = f.build(t)
 	}
+	f.h = f.build(t)
 	e := f.add(t)
 	// A read goes only to a node the monitor has seen online.
 	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
@@ -520,4 +526,161 @@ func TestLogStreamOfABusyAgentIs503StreamBusyAndIsNotAudited(t *testing.T) {
 	if rec.code != http.StatusServiceUnavailable {
 		t.Errorf("second try = %d, want 503 again, not 429", rec.code)
 	}
+}
+
+// Following a container across its restarts (plan 04-20, D-20).
+
+func logStateOf(t *testing.T, fr frame) (state, at string) {
+	t.Helper()
+	var body struct{ State, At string }
+	if err := json.Unmarshal([]byte(fr.data), &body); err != nil {
+		t.Fatalf("state data %q: %v", fr.data, err)
+	}
+	return body.State, body.At
+}
+
+func TestLogStopSendsStateStoppedAndTheStreamWaitsForTheContainerToStart(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), func(f *envFix) { f.logsHeartbeat = 30 * time.Millisecond })
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "last words"})
+	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
+	readLines(t, c, 1)
+	f.fake.EndLogs("web")
+	if state, _ := logStateOf(t, nextEvent(t, c, "state", 5*time.Second)); state != "stopped" {
+		t.Fatalf("state = %q, want stopped", state)
+	}
+	// Nothing ends the stream: it beats and waits.
+	beats := 0
+	deadline := time.After(5 * time.Second)
+	for beats < 2 {
+		select {
+		case fr, ok := <-c.frames:
+			if !ok || fr.event == "closed" {
+				t.Fatal("the stream ended after the container did; it should wait")
+			}
+			if fr.comment == "heartbeat" {
+				beats++
+			}
+		case <-deadline:
+			t.Fatalf("only %d heartbeats", beats)
+		}
+	}
+}
+
+func TestLogRestartReopensTheLogFromTheLastLineAndNeverRepeatsOrLosesOne(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	at := time.Date(2026, 10, 9, 12, 0, 0, 7, time.UTC)
+	f.fake.AppendLogs("web",
+		dockertest.FakeLogLine{Text: "first run 1", Time: at},
+		dockertest.FakeLogLine{Text: "first run 2", Time: at.Add(time.Second)})
+	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
+	readLines(t, c, 2)
+	f.fake.EndLogs("web")
+	if state, _ := logStateOf(t, nextEvent(t, c, "state", 5*time.Second)); state != "stopped" {
+		t.Fatalf("state = %q, want stopped", state)
+	}
+
+	// The container starts again. Its log keeps the old lines; the new run writes one
+	// at the very stamp of the last line sent, and another after it.
+	f.fake.StartLogs("web")
+	f.fake.AppendLogs("web",
+		dockertest.FakeLogLine{Text: "same stamp, new text", Time: at.Add(time.Second)},
+		dockertest.FakeLogLine{Text: "second run", Time: at.Add(2 * time.Second)})
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: webID, Attributes: map[string]string{"name": "web"}})
+	state, when := logStateOf(t, nextEvent(t, c, "state", 5*time.Second))
+	if state != "restarted" {
+		t.Fatalf("state = %q, want restarted", state)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, when); err != nil {
+		t.Errorf("at = %q is not a time: %v", when, err)
+	}
+	got, _ := readLines(t, c, 2)
+	if got[0].M != "same stamp, new text" || got[1].M != "second run" {
+		t.Fatalf("lines after the restart = %+v, want the two new ones and none of the first run", got)
+	}
+	// The reopened read starts at the last line sent and takes no tail.
+	qs := f.fake.LogQueries()
+	last := qs[len(qs)-1]
+	if last.Get("tail") != "" || last.Get("since") == "" || last.Get("follow") != "1" {
+		t.Errorf("the reopen asked the engine %v, want a follow since the last line and no tail", last)
+	}
+	// And it follows: a line of the new run arrives.
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "still going", Time: at.Add(3 * time.Second)})
+	if more, _ := readLines(t, c, 1); more[0].M != "still going" {
+		t.Errorf("followed line = %+v", more[0])
+	}
+}
+
+func TestLogRestartKeepsTwoIdenticalLinesWrittenAtTheSameNanosecond(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	at := time.Date(2026, 10, 9, 12, 0, 0, 7, time.UTC)
+	f.fake.AppendLogs("web",
+		dockertest.FakeLogLine{Text: "tick", Time: at},
+		dockertest.FakeLogLine{Text: "tick", Time: at})
+	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
+	readLines(t, c, 2)
+	f.fake.EndLogs("web")
+	nextEvent(t, c, "state", 5*time.Second)
+	f.fake.StartLogs("web")
+	// A third identical line at the same stamp was written by the new run.
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "tick", Time: at})
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: webID})
+	nextEvent(t, c, "state", 5*time.Second)
+	got, _ := readLines(t, c, 1)
+	if got[0].M != "tick" {
+		t.Fatalf("got %+v, want the one new tick", got)
+	}
+	if fr, ok := c.next(200 * time.Millisecond); ok && fr.event == "log" {
+		t.Errorf("a repeat of the first run arrived: %+v", fr)
+	}
+}
+
+func TestLogRestartIgnoresTheEventsOfOtherContainers(t *testing.T) {
+	f := newLogsFix(t, logsEngine(), nil)
+	f.fake.AppendLogs("web", dockertest.FakeLogLine{Text: "a"})
+	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
+	readLines(t, c, 1)
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: dbID})
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "network", Action: "start", ActorID: webID})
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: webID})
+	for {
+		fr, ok := c.next(300 * time.Millisecond)
+		if !ok {
+			break
+		}
+		if fr.event == "state" {
+			t.Fatalf("an event of another container or action moved the stream: %+v", fr)
+		}
+	}
+	if n := len(f.fake.LogQueries()); n != 1 {
+		t.Errorf("the engine's log was opened %d times, want 1", n)
+	}
+}
+
+// spyEvents counts the event subscriptions that are open.
+type spyEvents struct {
+	api.LogsSource
+	open atomic.Int32
+}
+
+func (s *spyEvents) Events(ctx context.Context, envID string) ([]envs.NodeEvent, <-chan envs.NodeEvent, func()) {
+	backlog, ch, cancel := s.LogsSource.Events(ctx, envID)
+	s.open.Add(1)
+	return backlog, ch, func() {
+		s.open.Add(-1)
+		cancel()
+	}
+}
+
+func TestLogRestartCancelsItsEventSubscriptionWhenTheStreamEnds(t *testing.T) {
+	spy := &spyEvents{}
+	f := newLogsFix(t, logsEngine(), func(f *envFix) {
+		f.logsWrap = func(src api.LogsSource) api.LogsSource { spy.LogsSource = src; return spy }
+	})
+	c := f.open(t, f.cookie, webID, "sid="+sidA, "")
+	nextEvent(t, c, "ready", 5*time.Second)
+	if n := spy.open.Load(); n != 1 {
+		t.Fatalf("%d event subscriptions while the stream is open, want 1", n)
+	}
+	c.close()
+	waitFor(t, "the subscription to be cancelled", func() bool { return spy.open.Load() == 0 })
 }

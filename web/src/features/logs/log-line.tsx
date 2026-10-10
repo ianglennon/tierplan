@@ -16,7 +16,30 @@ export const LINE_HEIGHT_PX = 20;
 //
 // The text is a React text node: it is never read as markup, never linkified and never
 // shortened (T-04-67).
-export function LogLineRow({ line, stderrLabel }: { line: BufferedLine; stderrLabel: string }) {
+export function LogLineRow({
+  line,
+  stderrLabel,
+  markerLabel,
+}: {
+  line: BufferedLine;
+  stderrLabel: string;
+  // What a marker row says, already translated; used only for marker rows.
+  markerLabel: (line: BufferedLine) => string;
+}) {
+  if (line.marker) {
+    // The container started again or stopped: not a line of the log, so it is set
+    // apart by hairlines and drawn in the muted colour.
+    return (
+      <div
+        data-marker={line.marker}
+        className="flex h-5 w-full min-w-full items-center gap-3 px-3 text-xs text-muted-foreground"
+      >
+        <span aria-hidden="true" className="h-px flex-1 bg-border" />
+        <span className="shrink-0">{markerLabel(line)}</span>
+        <span aria-hidden="true" className="h-px flex-1 bg-border" />
+      </div>
+    );
+  }
   const stderr = line.s === "e";
   return (
     <div

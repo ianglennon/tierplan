@@ -228,3 +228,56 @@ describe("the end of the stream", () => {
     expect(screen.queryByText("Live")).toBeNull();
   });
 });
+
+describe("a container that stops and starts", () => {
+  const clock = (iso: string) => {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const state = async (what: string, at: string) => {
+    await act(async () => {
+      source().sendFrame("state", { state: what, at });
+    });
+  };
+
+  it("adds the stop row when the container stops and keeps every line", async () => {
+    renderViewer();
+    await connect();
+    await send(lines(3));
+    await state("stopped", "2026-10-09T12:34:56.000Z");
+    const surface = screen.getByRole("log");
+    expect(surface.textContent).toContain("line 2");
+    expect(
+      screen.getByText(
+        `Container stopped ${clock("2026-10-09T12:34:56.000Z")}. Waiting for it to start.`,
+      ),
+    ).toBeTruthy();
+    expect(surface.querySelector('[data-marker="stopped"]')).not.toBeNull();
+  });
+
+  it("adds a divider when the container restarts, keeps the buffer and follows the new run", async () => {
+    renderViewer();
+    await connect();
+    await send(lines(3));
+    await state("stopped", "2026-10-09T12:34:56.000Z");
+    await state("restarted", "2026-10-09T12:40:00.000Z");
+    await send(lines(2, 3));
+    const surface = screen.getByRole("log");
+    expect(
+      screen.getByText(`Container restarted ${clock("2026-10-09T12:40:00.000Z")}`),
+    ).toBeTruthy();
+    expect(surface.querySelector('[data-marker="restarted"]')).not.toBeNull();
+    for (const n of [0, 1, 2, 3, 4]) expect(surface.textContent).toContain(`line ${n}`);
+    // Five lines and two marker rows; the view moved to the end.
+    expect(surface.scrollTop).toBe(7 * LINE);
+  });
+
+  it("shows the stop row once when a reconnect is told the container is still stopped", async () => {
+    renderViewer();
+    await connect();
+    await send(lines(1));
+    await state("stopped", "2026-10-09T12:34:56.000Z");
+    await state("stopped", "2026-10-09T12:35:30.000Z");
+    expect(screen.getByRole("log").querySelectorAll('[data-marker="stopped"]')).toHaveLength(1);
+  });
+});

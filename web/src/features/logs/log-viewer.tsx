@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 
 import { LiveChip } from "@/components/live-chip";
 import { Skeleton } from "@/components/ui/skeleton";
-import { LogBuffer } from "@/features/logs/log-buffer";
+import { type BufferedLine, clockTime, LogBuffer } from "@/features/logs/log-buffer";
 import { LINE_HEIGHT_PX, LogLineRow } from "@/features/logs/log-line";
 import { createLogStream, type LogStreamState, makeViewerId } from "@/features/logs/log-stream";
 import { useT } from "@/i18n/use-t";
@@ -54,6 +54,12 @@ export function LogViewer({ envId, containerId, nodeId, name }: LogViewerProps) 
       tail: OPEN_TAIL,
       onLines: (lines) => buffer.push(lines),
       onState: setState,
+      onContainerState: ({ state: what, at }) => {
+        // A reconnect to a stopped container is told again; the row is shown once.
+        if (what === "stopped" && buffer.last?.marker !== "stopped")
+          buffer.pushMarker("stopped", at);
+        else if (what === "restarted") buffer.pushMarker("restarted", at);
+      },
     });
     return () => stream.close();
   }, [buffer, envId, containerId, nodeId, sid]);
@@ -83,6 +89,8 @@ export function LogViewer({ envId, containerId, nodeId, name }: LogViewerProps) 
     following.current = el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_SLACK_PX;
   };
 
+  const markerLabel = (line: BufferedLine) =>
+    t(line.marker === "stopped" ? "logs.stopped" : "logs.restarted", { time: clockTime(line.t) });
   const connected = state.status === "live" || state.status === "reconnecting";
   return (
     <div className="flex flex-col gap-2">
@@ -121,7 +129,11 @@ export function LogViewer({ envId, containerId, nodeId, name }: LogViewerProps) 
                     className="absolute top-0 left-0 min-w-full"
                     style={{ transform: `translateY(${row.start}px)` }}
                   >
-                    <LogLineRow line={buffer.at(row.index)} stderrLabel={t("logs.stderr")} />
+                    <LogLineRow
+                      line={buffer.at(row.index)}
+                      stderrLabel={t("logs.stderr")}
+                      markerLabel={markerLabel}
+                    />
                   </div>
                 ) : null,
               )}

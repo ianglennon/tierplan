@@ -4,6 +4,8 @@
     "stderr": "stderr",
     "empty": "No log output yet",
     "loading": "Loading logs",
-    "accessLost": "Your access changed. Logs were closed."
+    "accessLost": "Your access changed. Logs were closed.",
+    "restarted": "Container restarted {{time}}",
+    "stopped": "Container stopped {{time}}. Waiting for it to start."
   }
 }

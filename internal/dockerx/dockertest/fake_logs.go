@@ -106,6 +106,21 @@ func (f *Fake) EndLogs(container string) {
 	b.signal()
 }
 
+// StartLogs begins a new run of the log of a container after EndLogs, as its start
+// does: a follow opened from now on stays open for the lines appended after.
+func (f *Fake) StartLogs(container string) {
+	id := container
+	if c, ok := f.config().resolveContainer(container); ok {
+		id = c.ID
+	}
+	l := &f.logs
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := l.buf(id)
+	b.ended = false
+	b.signal()
+}
+
 // LogFollows is how many follow requests for a log are open now.
 func (f *Fake) LogFollows() int {
 	f.logs.mu.Lock()
