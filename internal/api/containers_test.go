@@ -337,6 +337,7 @@ func TestContainerActionOnAReadOnlyHostIsHostReadOnlyAuditedAndNothingIsSent(t *
 		EngineID: "ENG:ro", Hostname: "node-1", EngineReachable: true, Policy: wire.PolicyFacts{ReadOnly: true},
 	})
 	f.whenState(t, env.ID, "online")
+	f.whenProbed(t, envs.AgentTarget(a.id))
 
 	rec := f.actOn(t, env.ID, actionJSON("stop", [2]string{a.id, webID}))
 	if rec.code != http.StatusOK {
@@ -362,6 +363,7 @@ func TestContainerActionAnAgentThatRefusesByPolicyIsAgentPolicyDenied(t *testing
 	cfg.PolicyDeny = true
 	a := f.connect(t, env, cfg, nil)
 	f.whenState(t, env.ID, "online")
+	f.whenProbed(t, envs.AgentTarget(a.id))
 
 	rec := f.actOn(t, env.ID, actionJSON("stop", [2]string{a.id, webID}))
 	if rec.code != http.StatusOK {
@@ -785,6 +787,7 @@ func TestContainerActionsOnTwoNodesWithSameNamedContainersActOnExactlyTheNodeNam
 	alpha := f.connect(t, env, box("alpha", alphaWeb), swarmNode("alpha", true))
 	bravo := f.connect(t, env, box("bravo", bravoWeb), swarmNode("bravo", true))
 	f.whenState(t, env.ID, "online")
+	f.whenProbed(t, envs.AgentTarget(alpha.id), envs.AgentTarget(bravo.id))
 
 	rec := f.actOn(t, env.ID, actionJSON("stop", [2]string{bravo.id, "web"}))
 	if rec.code != http.StatusOK {
@@ -994,6 +997,7 @@ func TestOwnContainerADroppedAgentConnectionIsRecordedAsConnectionLost(t *testin
 	cfg.DropWrites = true
 	a := f.connect(t, env, cfg, nil)
 	f.whenState(t, env.ID, "online")
+	f.whenProbed(t, envs.AgentTarget(a.id))
 
 	rec := f.actOn(t, env.ID, withConfirm(actionJSON("stop", [2]string{a.id, "bayplan-agent"}), "bayplan-agent"))
 	if rec.code != http.StatusOK {
