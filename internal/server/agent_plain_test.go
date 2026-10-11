@@ -243,8 +243,14 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if !strings.Contains(log.String(), "enrolled with Bayplan") {
-		t.Errorf("the agent's log does not say it enrolled:\n%s", log.String())
+	// The server marks the session online once it has sent the welcome, and the
+	// agent logs its enrolment when the welcome arrives, so the line can trail the
+	// status by a moment on a loaded machine.
+	for !strings.Contains(log.String(), "enrolled with Bayplan") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the agent's log does not say it enrolled:\n%s", log.String())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	if !strings.Contains(log.String(), "allow_insecure=true") {
 		t.Errorf("the agent's start line does not show allow_insecure=true:\n%s", log.String())
