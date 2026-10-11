@@ -103,7 +103,7 @@ export function Terminal({
   register,
 }: TerminalProps) {
   const t = useT();
-  const host = useRef<HTMLElement>(null);
+  const host = useRef<HTMLDivElement>(null);
   const xterm = useRef<XTerm | null>(null);
   const search = useRef<SearchAddon | null>(null);
   const refitNow = useRef<() => void>(() => {});
@@ -321,12 +321,16 @@ export function Terminal({
 
   return (
     <div className="relative h-full min-h-64 w-full">
+      {/* The border and padding sit on this box, not on the element xterm is opened
+          in: the fit addon measures that element's parent and subtracts only xterm's
+          own padding, so padding here would leave the last row half cut off. */}
       <section
-        ref={host}
         aria-label={label}
         style={{ backgroundColor: theme.background }}
         className="h-full min-h-64 w-full overflow-hidden rounded-md border p-2"
-      />
+      >
+        <div ref={host} className="h-full w-full" />
+      </section>
       {searching ? (
         <search
           aria-label={t("terminal.search.label")}
