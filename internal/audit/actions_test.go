@@ -128,6 +128,42 @@ var phase4DetailKeys = map[string][]string{
 	audit.ActionShellEnded: {"container", "node", "sid", "owner"},
 }
 
+// phase5DetailKeys maps every Phase 5 action to the detail keys the plans that record
+// it must use, for the same reason as phase3DetailKeys. A pull records one row per node:
+// the normalised reference, the digest it resolved to, the node, which credential was used
+// (anonymous until a credential is chosen), the code of a refusal, the layer a failure
+// stopped on and the job ID as bulk (plan 05-01, D-31).
+var phase5DetailKeys = map[string][]string{
+	audit.ActionImagePulled: {"ref", "digest", "node", "credential", "layer", "code", "bulk"},
+}
+
+func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase5DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase5DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{"image.pulled": audit.ActionImagePulled} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	f := newFixture(t)
 	for action, keys := range phase4DetailKeys {

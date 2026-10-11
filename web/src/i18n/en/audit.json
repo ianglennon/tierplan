@@ -183,6 +183,9 @@
         "created": "Volume created",
         "removed": "Volume removed"
       },
+      "image": {
+        "pulled": "Image pulled"
+      },
       "logs": {
         "viewed": "Container logs viewed",
         "downloaded": "Container logs downloaded"

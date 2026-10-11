@@ -692,6 +692,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/images/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pull an image on every node of an environment
+         * @description Starts a pull of the image on every node of the environment and answers 202 with the job ID at once; the pull goes on if the browser closes. The reference is normalised first: nginx:1.27 becomes docker.io/library/nginx:1.27 and no tag means latest. An unparsable reference is 422 ref_invalid and starts nothing. At most 5 pulls of one user run at once (429 too_many_pulls). Each node pulls once, is never retried, and writes one image.pulled audit row. Needs images.pull (Operator) on the environment.
+         */
+        post: operations["startPull"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/networks": {
         parameters: {
             query?: never;
@@ -1428,6 +1448,26 @@ export interface paths {
          * @description The new owner must be able to run it now, which is checked again here: a user who could not answers 422 owner_not_eligible and nothing changes. A paused automation is active again under its new owner. Audited as owner.transferred. Answers the automation as it now is. An unknown automation answers 404 automation_not_found.
          */
         post: operations["transferOwned"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pulls/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One pull job and its progress on every node
+         * @description The pull as it stands now, for a browser that returns to a pull it started. A pull is kept for 10 minutes after it ends. Only the user who started it, or an instance admin, can read it; anyone else gets 404 pull_not_found.
+         */
+        get: operations["getPull"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3787,6 +3827,117 @@ export interface components {
             /** @description The lower-cased username. It can never be changed */
             username: string;
         };
+        PullCredentialBody: {
+            /** @description The credential's ID */
+            id: string;
+            /**
+             * @description Where the credential is stored
+             * @enum {string}
+             */
+            layer: "instance" | "environment";
+            /** @description The credential's name */
+            name: string;
+        };
+        PullItemBody: {
+            /** @description A stable word for how a failed pull failed, empty otherwise */
+            code: string;
+            /**
+             * Format: int64
+             * @description Layers seen so far
+             */
+            count: number;
+            /**
+             * Format: int64
+             * @description Bytes downloaded so far across the layers counted
+             */
+            current: number;
+            /** @description The digest the reference resolved to, once the pull is done */
+            digest: string;
+            /**
+             * Format: int64
+             * @description Layers finished
+             */
+            done: number;
+            /** @description The layers seen, in the order the engine named them */
+            layers: components["schemas"]["PullLayerBody"][] | null;
+            /** @description A sentence for the code. The SPA words the code itself */
+            message: string;
+            /** @description The node's name */
+            name: string;
+            /** @description The node's ID */
+            nodeId: string;
+            /**
+             * @description Where the pull on this node is
+             * @enum {string}
+             */
+            state: "waiting" | "running" | "done" | "failed" | "cancelled";
+            /**
+             * Format: int64
+             * @description Bytes to download across the layers counted, 0 until known
+             */
+            total: number;
+            /** @description What current and total count: bytes, or empty */
+            unit: string;
+            /** @description True when the node already had this image */
+            upToDate: boolean;
+        };
+        PullJobBody: {
+            /** @description When the job started, RFC 3339 UTC */
+            createdAt: string;
+            /** @description The credential the pull uses, or null for an anonymous pull */
+            credential: components["schemas"]["PullCredentialBody"] | null;
+            /** @description The environment the pull runs on */
+            envId: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            finishedAt: string;
+            /** @description The job ID */
+            id: string;
+            /** @description One entry per node, in the order the nodes were named */
+            items: components["schemas"]["PullItemBody"][] | null;
+            /** @description The normalised reference */
+            ref: string;
+            /**
+             * @description running until every node has ended, then done when every node is, partial when some are, failed when none is and one failed, and cancelled otherwise
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
+        };
+        PullLayerBody: {
+            /**
+             * Format: int64
+             * @description Bytes downloaded so far, 0 when the engine has not counted
+             */
+            current: number;
+            /** @description The layer's short ID */
+            id: string;
+            /** @description What the engine last said about the layer: Pulling fs layer, Downloading, Download complete, Extracting, Pull complete or Already exists */
+            status: string;
+            /**
+             * Format: int64
+             * @description Bytes to download, 0 when not known
+             */
+            total: number;
+        };
+        PullNodeBody: {
+            /** @description The node's name */
+            name: string;
+            /** @description The node's ID: the nodeId of its rows in the lists */
+            nodeId: string;
+        };
+        PullStartBody: {
+            /** @description The credential the pull uses, or null for an anonymous pull */
+            credential: components["schemas"]["PullCredentialBody"] | null;
+            /** @description The ID of the pull job. GET /api/pulls/{jobId} reads it and GET /api/pulls/{jobId}/stream follows it */
+            jobId: string;
+            /** @description The nodes the pull runs on, one item each */
+            nodes: components["schemas"]["PullNodeBody"][] | null;
+            /** @description The normalised reference being pulled: nginx:1.27 is docker.io/library/nginx:1.27 */
+            ref: string;
+        };
+        PullStartRequest: {
+            /** @description The image to pull, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image */
+            ref: string;
+        };
         PutBackupScheduleInputBody: {
             /** @description Turn scheduled backups on or off */
             enabled: boolean;
@@ -6079,6 +6230,43 @@ export interface operations {
             };
         };
     };
+    startPull: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PullStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listNetworks: {
         parameters: {
             query?: {
@@ -7568,6 +7756,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OwnedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getPull: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The pull job ID */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullJobBody"];
                 };
             };
             /** @description Error */

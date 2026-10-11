@@ -28,6 +28,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
+	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/shells"
 	"github.com/ianglennon/bayplan/internal/store"
@@ -117,6 +118,14 @@ type authFixture struct {
 	eventsMaxStreams int
 	// eventsMaxLifetime caps how long one stream may live; zero is the default.
 	eventsMaxLifetime time.Duration
+	// jobHub holds the pulls (plan 05-01); it is made when a test builds the routes.
+	// pullsHeartbeat, pullsMaxStreams and pullsMaxLifetime tune the pull stream, and
+	// pullsNodeTimeout the longest one node may pull; zero is the default.
+	jobHub           *jobs.Hub
+	pullsHeartbeat   time.Duration
+	pullsMaxStreams  int
+	pullsMaxLifetime time.Duration
+	pullsNodeTimeout time.Duration
 	// logsHeartbeat, logsMaxStreams and logsMaxLifetime tune the container log stream
 	// (plan 04-19); zero is the default. logsWrap, when set, wraps the aggregator the
 	// stream reads through, so a test can make the node refuse as a busy agent does.
@@ -278,6 +287,14 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterVolumes(r, api.VolumesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SizesTimeout: f.volumeSizesTimeout, Log: log})
+		if f.jobHub == nil {
+			f.jobHub = jobs.New(jobs.Options{})
+			t.Cleanup(f.jobHub.Close)
+		}
+		api.RegisterPulls(r, api.PullsDeps{
+			Aggregator: f.agg, Jobs: f.jobHub, Audit: f.aud, Checker: checker, Heartbeat: f.pullsHeartbeat,
+			MaxStreamsPerUser: f.pullsMaxStreams, MaxLifetime: f.pullsMaxLifetime, NodeTimeout: f.pullsNodeTimeout, Log: log,
+		})
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {
 			logsSrc = f.logsWrap(logsSrc)
@@ -344,6 +361,8 @@ type authReq struct {
 	method, path, body string
 	cookie, csrf       string // cookie is the raw session ID
 	ip                 string
+	// headers are added to the request as sent.
+	headers map[string]string
 }
 
 func (f *authFixture) do(t *testing.T, h http.Handler, r authReq) *httptest.ResponseRecorder {
@@ -368,6 +387,9 @@ func (f *authFixture) do(t *testing.T, h http.Handler, r authReq) *httptest.Resp
 	}
 	if r.csrf != "" {
 		req.Header.Set("X-CSRF-Token", r.csrf)
+	}
+	for k, v := range r.headers {
+		req.Header.Set(k, v)
 	}
 	if r.method != http.MethodGet {
 		if origin := f.inst.PublicOrigin(); origin != "" {

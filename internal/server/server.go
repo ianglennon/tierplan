@@ -31,6 +31,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
+	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/shells"
 	"github.com/ianglennon/bayplan/internal/store"
@@ -108,6 +109,8 @@ type Server struct {
 	// shells holds the browser shells that are open (plan 04-22). It is memory only,
 	// and the shutdown closes every one of them.
 	shells *shells.Registry
+	// jobs holds the image pulls in progress and the ones that finished a few minutes ago.
+	jobs *jobs.Hub
 	// tunnel holds the live agent connections; agents creates agent
 	// environments and enrols agents.
 	tunnel  *tunnel.Hub
@@ -152,6 +155,7 @@ type RouterDeps struct {
 	Containers    api.ContainersDeps
 	Networks      api.NetworksDeps
 	Volumes       api.VolumesDeps
+	Pulls         api.PullsDeps
 	Events        api.EventsDeps
 	Logs          api.LogsDeps
 	Shells        api.ShellsDeps
@@ -192,6 +196,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterContainers(r, d.Containers)
 	api.RegisterNetworks(r, d.Networks)
 	api.RegisterVolumes(r, d.Volumes)
+	api.RegisterPulls(r, d.Pulls)
 	api.RegisterEvents(r, d.Events)
 	api.RegisterLogs(r, d.Logs)
 	api.RegisterShells(r, d.Shells)
@@ -651,6 +656,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 
 	shellRegistry := shells.NewRegistry(nil)
+	// The job hub holds the pulls in progress. It is memory only; the audit log is the
+	// record, and Close ends every running job before the database closes (D-26).
+	jobHub := jobs.New(jobs.Options{})
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -715,6 +723,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, SelfContainerID: selfID, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, SelfContainerID: selfID, Log: log},
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
+		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
@@ -735,6 +744,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
+		jobHub.Close()
 		tunnelHub.Close()
 		aggregator.Close()
 		hub.Close()
@@ -763,6 +773,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		aggregator: aggregator,
 		broker:     broker,
 		shells:     shellRegistry,
+		jobs:       jobHub,
 		tunnel:     tunnelHub,
 		agents:     agentSvc,
 		updater:    updater,
@@ -790,6 +801,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if err := envSvc.StartAll(bg); err != nil {
 		stop()
 		srv.background.Wait()
+		jobHub.Close()
 		tunnelHub.Close()
 		aggregator.Close()
 		hub.Close()
@@ -883,6 +895,8 @@ func (s *Server) Close() error {
 	s.background.Wait()
 	// Before the database closes, so the end of each shell is still audited.
 	s.shells.CloseAll("server_shutdown")
+	// Pulls in flight are cancelled and waited for, so their audit rows are written.
+	s.jobs.Close()
 	s.broker.Close()
 	s.updater.Close()
 	s.tunnel.Close()

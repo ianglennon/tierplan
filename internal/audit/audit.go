@@ -145,6 +145,7 @@ const (
 	ActionNetworkDisconnected        = "network.disconnected"
 	ActionVolumeCreated              = "volume.created"
 	ActionVolumeRemoved              = "volume.removed"
+	ActionImagePulled                = "image.pulled"
 	ActionLogsViewed                 = "logs.viewed"
 	ActionLogsDownloaded             = "logs.downloaded"
 	ActionShellOpened                = "shell.opened"

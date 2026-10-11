@@ -159,6 +159,19 @@ type FakeConfig struct {
 	// container has: starting an exec of one prints the runtime's "no such file or
 	// directory" message and ends with exit code 127 (fake_exec.go).
 	MissingExecutables []string
+	// PullStatus makes POST /images/create answer that status and message before any stream,
+	// as the engine on the containerd image store does for a registry's refusal (images.go).
+	// A zero Code answers normally.
+	PullStatus FakePullStatus
+	// PullStreamError makes a pull stream its progress and then an errorDetail with this
+	// message, as a classic image store does; empty means the pull succeeds.
+	PullStreamError string
+}
+
+// FakePullStatus is an HTTP status and message a pull is answered with.
+type FakePullStatus struct {
+	Code    int
+	Message string
 }
 
 // FakeNode is one entry of /nodes. Leader marks the one manager whose
@@ -393,6 +406,10 @@ type Fake struct {
 	volGone map[string]bool
 	// dfCalls counts the GET /system/df requests the fake answered or refused.
 	dfCalls int
+	// pulled are the images pulled through the fake, listed after the configured ones, and
+	// pullAuth the X-Registry-Auth header of every pull, in order (fake_images.go).
+	pulled   []FakeImage
+	pullAuth []string
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
@@ -515,7 +532,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

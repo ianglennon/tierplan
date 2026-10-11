@@ -1,0 +1,184 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+package dockerx
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+)
+
+// Codes PullFailure answers. A code is a stable word the API maps to its own copy; the
+// engine's own text is never sent on.
+const (
+	PullCodeDenied              = "pull_denied"
+	PullCodeUnauthorized        = "pull_unauthorized"
+	PullCodeNotFound            = "image_not_found"
+	PullCodeInvalidReference    = "invalid_reference"
+	PullCodeRateLimited         = "rate_limited"
+	PullCodeRegistryUnreachable = "registry_unreachable"
+	PullCodeRegistryTLS         = "registry_tls"
+	PullCodeRegistryHTTP        = "registry_http"
+	PullCodeCancelled           = "cancelled"
+	PullCodeFailed              = "pull_failed"
+)
+
+// PullOptions are what a pull is sent with.
+type PullOptions struct {
+	// EncodedAuth is the base64url X-Registry-Auth value for the registry the image comes
+	// from; empty pulls anonymously. It is a credential: it is sent to the engine and
+	// goes nowhere else, and no error built here includes it.
+	EncodedAuth string
+	// Platform is os/arch[/variant]; empty takes the engine's own.
+	Platform string
+}
+
+// PullEvent is one line of the engine's progress for a pull.
+type PullEvent struct {
+	// Layer is the layer the line is about, empty for a line about the image as a whole.
+	Layer  string
+	Status string
+	// Current and Total count Bytes of the layer when Bytes is true. Other units (the
+	// seconds an extraction reports) are not carried: they are not a size.
+	Current, Total int64
+	Bytes          bool
+}
+
+// PullResult is how a pull ended.
+type PullResult struct {
+	// Digest is the digest the reference resolved to, empty when the engine did not say.
+	Digest string
+	// UpToDate is true when the engine already had that image.
+	UpToDate bool
+}
+
+// pullError carries the engine's answer to a pull. Its text names the reference and the
+// node as every error of this package does, and PullFailure classifies the answer alone,
+// so a reference that happens to contain a word like "denied" is not mistaken for one.
+type pullError struct {
+	ref, where string
+	err        error
+}
+
+func (e *pullError) Error() string { return fmt.Sprintf("pull %s on %s: %v", e.ref, e.where, e.err) }
+func (e *pullError) Unwrap() error { return e.err }
+
+// ImagePull pulls ref on this node and reports the engine's progress to on (which may be
+// nil) as it streams. It returns when the engine has finished, an error ends the stream,
+// or ctx ends. It never retries: a pull that failed is retried by the person who started
+// it. ref is a full reference as registry.ParseRef writes it.
+func (c *Client) ImagePull(ctx context.Context, ref string, o PullOptions, on func(PullEvent)) (PullResult, error) {
+	opts := client.ImagePullOptions{RegistryAuth: o.EncodedAuth}
+	if o.Platform != "" {
+		p, err := parsePlatform(o.Platform)
+		if err != nil {
+			return PullResult{}, &pullError{ref: ref, where: c.t.Describe(), err: cerrdefs.ErrInvalidArgument.WithMessage(err.Error())}
+		}
+		opts.Platforms = []ocispec.Platform{p}
+	}
+	resp, err := c.cur().ImagePull(ctx, ref, opts)
+	if err != nil {
+		return PullResult{}, &pullError{ref: ref, where: c.t.Describe(), err: err}
+	}
+	var res PullResult
+	for msg, err := range resp.JSONMessages(ctx) {
+		if err != nil {
+			return res, &pullError{ref: ref, where: c.t.Describe(), err: err}
+		}
+		if msg.Error != nil {
+			return res, &pullError{ref: ref, where: c.t.Describe(), err: errors.New(msg.Error.Message)}
+		}
+		if d, ok := strings.CutPrefix(msg.Status, "Digest: "); ok {
+			res.Digest = strings.TrimSpace(d)
+			continue
+		}
+		if strings.Contains(msg.Status, "Image is up to date") {
+			res.UpToDate = true
+			continue
+		}
+		if strings.HasPrefix(msg.Status, "Status: ") || on == nil {
+			continue
+		}
+		ev := PullEvent{Layer: msg.ID, Status: msg.Status}
+		if strings.HasPrefix(msg.Status, "Pulling from ") {
+			// The line about the image: its ID is the tag.
+			ev.Layer = ""
+		}
+		if p := msg.Progress; p != nil && !p.HideCounts && (p.Units == "" || p.Units == "bytes") && (p.Total > 0 || p.Current > 0) {
+			ev.Current, ev.Total, ev.Bytes = p.Current, p.Total, true
+		}
+		on(ev)
+	}
+	if err := ctx.Err(); err != nil {
+		return res, &pullError{ref: ref, where: c.t.Describe(), err: err}
+	}
+	return res, nil
+}
+
+// parsePlatform reads os/arch[/variant].
+func parsePlatform(s string) (ocispec.Platform, error) {
+	parts := strings.Split(s, "/")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
+		return ocispec.Platform{}, fmt.Errorf("platform %q is not os/arch[/variant]", s)
+	}
+	p := ocispec.Platform{OS: parts[0], Architecture: parts[1]}
+	if len(parts) == 3 {
+		p.Variant = parts[2]
+	}
+	return p, nil
+}
+
+// PullFailure classifies the error of ImagePull as one of the PullCode words: by the
+// status the engine answered first, then by what its message says. Anything else is
+// PullCodeFailed.
+func PullFailure(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.Canceled):
+		return PullCodeCancelled
+	case cerrdefs.IsUnauthorized(err):
+		return PullCodeUnauthorized
+	case cerrdefs.IsPermissionDenied(err):
+		return PullCodeDenied
+	case cerrdefs.IsNotFound(err):
+		return PullCodeNotFound
+	case cerrdefs.IsInvalidArgument(err):
+		return PullCodeInvalidReference
+	}
+	text := err.Error()
+	var pe *pullError
+	if errors.As(err, &pe) {
+		text = pe.err.Error()
+	}
+	text = strings.ToLower(text)
+	has := func(subs ...string) bool {
+		for _, s := range subs {
+			if strings.Contains(text, s) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("denied"):
+		return PullCodeDenied
+	case has("unauthorized", "authentication required"):
+		return PullCodeUnauthorized
+	case has("toomanyrequests", "too many requests"):
+		return PullCodeRateLimited
+	case has("no such host", "connection refused", "i/o timeout"):
+		return PullCodeRegistryUnreachable
+	case has("x509:", "certificate"):
+		return PullCodeRegistryTLS
+	case has("server gave http response to https client"):
+		return PullCodeRegistryHTTP
+	}
+	return PullCodeFailed
+}

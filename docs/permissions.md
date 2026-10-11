@@ -35,6 +35,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `environments.read` | environment | yes | yes | yes | yes | no | View an environment |
 | `environments.revoke` | environment | no | no | yes | yes | no | Revoke, block and unblock this environment's agents |
 | `environments.token` | global | no | no | no | yes | yes | Show or rotate an environment's join token |
+| `images.pull` | environment | no | yes | yes | yes | no | Pull images |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |
 | `networks.connect` | environment | no | yes | yes | yes | no | Connect and disconnect containers and networks |

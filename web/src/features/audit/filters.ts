@@ -99,6 +99,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "network.disconnected",
   "volume.created",
   "volume.removed",
+  "image.pulled",
   "logs.viewed",
   "logs.downloaded",
   "shell.opened",
@@ -122,6 +123,7 @@ const ENV_SCOPED_PREFIXES = [
   "container.",
   "network.",
   "volume.",
+  "image.",
   "logs.",
   "shell.",
 ];
