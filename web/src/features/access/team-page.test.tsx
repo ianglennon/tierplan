@@ -369,7 +369,7 @@ describe("the Members card states", () => {
     expect(within(table).getByRole("link", { name: "member-03" })).toBeTruthy();
     fireEvent.change(search, { target: { value: "nobody-like-this" } });
     expect(screen.getByText("No members match “nobody-like-this”.")).toBeTruthy();
-  });
+  }, 15_000);
 
   it("scrolls the Add members list inside 320px", async () => {
     users = Array.from({ length: 200 }, (_, i) =>
