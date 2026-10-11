@@ -437,6 +437,9 @@ func TestLogStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
 	if ninth.status0() != http.StatusTooManyRequests {
 		t.Fatalf("the 9th stream = %d, want 429", ninth.status0())
 	}
+	// The status is set before the problem body is written, so let the refused request
+	// finish before reading its body: a loaded run can look in between.
+	ninth.waitEnded(t, 5*time.Second, "the 429 was answered")
 	if body := ninth.bodyString(); !strings.Contains(body, `"type":"rate_limited"`) {
 		t.Errorf("429 body = %s", body)
 	}

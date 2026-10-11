@@ -490,6 +490,9 @@ func TestEventStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
 	if got := ninth.header.Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("429 Content-Type = %q", got)
 	}
+	// The status is set before the problem body is written, so let the refused request
+	// finish before reading its body: a loaded run can look in between.
+	ninth.waitEnded(t, 5*time.Second, "the 429 was answered")
 	if body := ninth.bodyString(); !strings.Contains(body, `"type":"rate_limited"`) {
 		t.Errorf("429 body = %s, want the rate_limited problem type", body)
 	}
