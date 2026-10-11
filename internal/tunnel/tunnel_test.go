@@ -929,6 +929,7 @@ func TestKeystrokesThatLookLikeARequestLineDoNotReleaseTheSlot(t *testing.T) {
 	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("exec start answer = %v, %v; want 101", resp, err)
 	}
+	_ = resp.Body.Close()
 	// The person pastes something that is shaped like a request.
 	if _, err := io.WriteString(shell, "GET / HTTP/1.1\r\n"); err != nil {
 		t.Fatalf("keystrokes: %v", err)
@@ -976,6 +977,7 @@ func TestKeystrokesThatLookLikeARequestLineDoNotCapTheShellsOutput(t *testing.T)
 	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("exec start answer = %v, %v; want 101", resp, err)
 	}
+	_ = resp.Body.Close()
 	if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\n"); err != nil {
 		t.Fatalf("keystrokes: %v", err)
 	}
