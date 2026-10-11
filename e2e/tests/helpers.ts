@@ -44,6 +44,43 @@ export function dind(cmd: string): string {
   return compose("exec", "-T", "dind", "sh", "-c", cmd).trim();
 }
 
+// The image the containers spec runs: a shell and a few tools, built inside the
+// dind with no registry (the dind has no route to one).
+export const SHELL_IMAGE = "e2e-busybox:local";
+
+// importShellImage builds SHELL_IMAGE from the dind's own busybox and the musl
+// loader it links against, as a root filesystem imported with `docker import`.
+// busybox is dynamically linked on Alpine, so the loader has to come with it.
+// Nothing is pushed or pulled; the image exists only in the test engine. It is
+// idempotent: a second call finds the image and does nothing.
+export function importShellImage(): void {
+  dind(
+    [
+      `docker image inspect ${SHELL_IMAGE} >/dev/null 2>&1 && exit 0`,
+      "root=$(mktemp -d)",
+      'mkdir -p "$root/bin" "$root/lib" "$root/tmp"',
+      'cp /bin/busybox "$root/bin/busybox"',
+      'cp /lib/ld-musl-*.so.1 "$root/lib/"',
+      'chmod 1777 "$root/tmp"',
+      'for c in sh echo sleep touch ls cat printf; do ln -s busybox "$root/bin/$c"; done',
+      `tar -C "$root" -c . | docker import - ${SHELL_IMAGE} >/dev/null`,
+      'rm -rf "$root"',
+    ].join("; "),
+  );
+}
+
+// runLogger starts a container that writes "line-N" to stdout and "err-N" to
+// stderr once a second, removing any container of that name a retried attempt
+// left behind. It is started on the engine behind Bayplan's back, the way a
+// person at a prompt on the host would.
+export function runLogger(name: string): void {
+  dind(`docker rm -f ${name} >/dev/null 2>&1 || true`);
+  dind(
+    `docker run -d --stop-timeout 2 --name ${name} ${SHELL_IMAGE} sh -c ` +
+      `'i=0; while true; do echo line-$i; echo err-$i >&2; i=$((i+1)); sleep 1; done'`,
+  );
+}
+
 // dockerExec runs a shell script inside one service of the stack with
 // `docker compose exec -T <service> sh -c <script>`, as a person at a prompt on
 // that machine would. For "agenthost" it is a shell on the remote Docker host:

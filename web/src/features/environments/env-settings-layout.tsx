@@ -59,11 +59,12 @@ interface EnvSettingsLayoutProps {
 
 // EnvSettingsLayout is the frame of Settings > Environments > {env} (D-38, D-25):
 // the breadcrumb "Settings / Environments / {name}", the title with its badges,
-// the tab bar "Settings" and "Access" (Link triggers, the active tab follows the
+// the tab bar "Settings", "Access" and "Shells" (Link triggers, the active tab follows the
 // URL) and the tab under it. It answers while the environment loads, fails to
 // load or is gone, so both tabs start from a known environment. The Access tab
-// shows only to someone who holds environments.access on this environment, an
-// env Admin or an instance admin; hiding it is not access control, the server
+// shows only to someone who holds environments.access on this environment, and the
+// Shells tab to someone who holds shells.manage, an env Admin or an instance admin for
+// both; hiding a tab is not access control, the server
 // answers 403 (or 404 for an environment the caller cannot see).
 export function EnvSettingsLayout({ envId }: EnvSettingsLayoutProps) {
   const t = useT();
@@ -74,6 +75,7 @@ export function EnvSettingsLayout({ envId }: EnvSettingsLayoutProps) {
 
   const canConfigure = hasPermission(me, "environments.configure", envId);
   const canAccess = hasPermission(me, "environments.access", envId);
+  const canShells = hasPermission(me, "shells.manage", envId);
   if (!canConfigure && !canAccess) return <NoPermission />;
 
   if (environments.isPending) {
@@ -146,7 +148,7 @@ export function EnvSettingsLayout({ envId }: EnvSettingsLayoutProps) {
             </Badge>
           ) : null}
         </div>
-        {canAccess ? (
+        {canAccess || canShells ? (
           <Tabs value="" className="mt-2 gap-4">
             <TabsList
               variant="line"
@@ -168,20 +170,38 @@ export function EnvSettingsLayout({ envId }: EnvSettingsLayoutProps) {
                   {t("envaccess.tabs.settings")}
                 </Link>
               </TabsTrigger>
-              <TabsTrigger
-                value="access"
-                asChild
-                className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
-              >
-                <Link
-                  to="/settings/environments/$envId/access"
-                  params={{ envId }}
-                  activeProps={{ "data-active": true }}
-                  inactiveProps={{ "data-active": undefined }}
+              {canAccess ? (
+                <TabsTrigger
+                  value="access"
+                  asChild
+                  className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
                 >
-                  {t("envaccess.tabs.access")}
-                </Link>
-              </TabsTrigger>
+                  <Link
+                    to="/settings/environments/$envId/access"
+                    params={{ envId }}
+                    activeProps={{ "data-active": true }}
+                    inactiveProps={{ "data-active": undefined }}
+                  >
+                    {t("envaccess.tabs.access")}
+                  </Link>
+                </TabsTrigger>
+              ) : null}
+              {canShells ? (
+                <TabsTrigger
+                  value="shells"
+                  asChild
+                  className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
+                >
+                  <Link
+                    to="/settings/environments/$envId/shells"
+                    params={{ envId }}
+                    activeProps={{ "data-active": true }}
+                    inactiveProps={{ "data-active": undefined }}
+                  >
+                    {t("activeshells.tab")}
+                  </Link>
+                </TabsTrigger>
+              ) : null}
             </TabsList>
           </Tabs>
         ) : null}

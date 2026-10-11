@@ -1,0 +1,51 @@
+{
+  "activeshells": {
+    "tab": "Shells",
+    "title": "Open shells on {{name}}",
+    "caption": "Terminals people currently have open. Ending one closes it straight away.",
+    "label": "Open shells on {{name}}",
+    "columns": {
+      "user": "User",
+      "container": "Container",
+      "node": "Node",
+      "started": "Started",
+      "idle": "Idle",
+      "actions": "Actions"
+    },
+    "actionsFor": "Actions for {{user}}'s shell",
+    "idle": {
+      "active": "Active",
+      "minutes_one": "{{count}} min",
+      "minutes_other": "{{count}} min"
+    },
+    "empty": {
+      "heading": "No open shells",
+      "body": "Shells that people open in containers on {{name}} show up here while they run."
+    },
+    "loadFailed": "Couldn't load shells.",
+    "loadFailedBody": "Try again.",
+    "retry": "Retry",
+    "end": {
+      "action": "End session…",
+      "title": "End {{user}}'s shell?",
+      "body": "The shell in {{container}} closes now and anything running in it stops.",
+      "cancel": "Cancel",
+      "confirm": "End session",
+      "pending": "Ending…",
+      "done": "Ended {{user}}'s shell.",
+      "gone": "Shell already closed.",
+      "failed": "Couldn't end the shell. Try again."
+    },
+    "yours": {
+      "trigger": "Your shells ({{count}})",
+      "heading": "Your open shells",
+      "label": "Your open shells",
+      "end": "End session",
+      "ending": "Ending…",
+      "endFor": "End session in {{container}}",
+      "ended": "Session ended.",
+      "gone": "Shell already closed.",
+      "failed": "Couldn't end the shell. Try again."
+    }
+  }
+}

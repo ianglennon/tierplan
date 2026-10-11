@@ -324,8 +324,8 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	_, ch, stop := hub.Subscribe(ctx, env)
-	defer stop()
+	backlog, ch, stop := hub.Subscribe(ctx, env)
+	defer func() { stop() }()
 
 	name := "bp-ev-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
@@ -343,28 +343,189 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	timeout := time.After(5 * time.Second)
+	// isStart checks the start event of the test's container, with the allowlist applied.
+	isStart := func(ev dockerx.EventRow) bool {
+		if ev.Type != "container" || ev.Action != "start" || ev.Name != name {
+			return false
+		}
+		for k := range ev.Attributes {
+			if k != "name" && k != "image" && k != "exitCode" && k != "signal" && k != "com.docker.compose.project" && k != "com.docker.stack.namespace" {
+				t.Errorf("attribute %q passed the allowlist", k)
+			}
+		}
+		if ev.Attributes["image"] != "alpine:3" || ev.ID == "" || ev.TimeNano == 0 {
+			t.Errorf("start event = %+v", ev)
+		}
+		return true
+	}
+
+	// The feed's first stream replays what the daemon still buffers (up to 256 events
+	// from the backfill window). On an engine other tests have used, that burst can put
+	// a fresh subscriber more than 64 events behind, and the hub then closes its channel
+	// so it reconnects, as a browser does with Last-Event-ID. The test does the same:
+	// subscribe again and look in the backlog as well as the live channel.
+	timeout := time.After(15 * time.Second)
 	for {
+		for _, ev := range backlog {
+			if isStart(ev) {
+				return
+			}
+		}
+		backlog = nil
 		select {
 		case ev, ok := <-ch:
 			if !ok {
-				t.Fatal("the subscriber channel closed")
-			}
-			t.Logf("event: %s %s %s %v", ev.Type, ev.Action, ev.Name, ev.Attributes)
-			if ev.Type != "container" || ev.Action != "start" || ev.Name != name {
+				stop()
+				backlog, ch, stop = hub.Subscribe(ctx, env)
 				continue
 			}
-			for k := range ev.Attributes {
-				if k != "name" && k != "image" && k != "exitCode" {
-					t.Errorf("attribute %q passed the allowlist", k)
-				}
+			if isStart(ev) {
+				return
 			}
-			if ev.Attributes["image"] != "alpine:3" || ev.ID == "" || ev.TimeNano == 0 {
-				t.Errorf("start event = %+v", ev)
+		case <-timeout:
+			t.Fatal("no container start event within 15 seconds")
+		}
+	}
+}
+
+// TestEventsSwarmTypesOnStandalone checks, against whichever engine major CI runs
+// (plan 04-26, D-48, RESEARCH A6), that the events stream filtered with the
+// widened types (service, node, secret and config as well) opens on a standalone
+// engine that has no swarm, is not ended by it, and still delivers a container
+// start with only the allowlisted attributes: the compose project label passes
+// (D-61) and a secret-looking label does not.
+func TestEventsSwarmTypesOnStandalone(t *testing.T) {
+	host := dockertest.DockerHost(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	raw := dockertest.RawClient(t, host)
+	if res, err := raw.Info(ctx, client.InfoOptions{}); err != nil {
+		t.Fatalf("info: %v", err)
+	} else if res.Info.Swarm.LocalNodeState != swarm.LocalNodeStateInactive {
+		t.Fatalf("the engine is in a swarm (%q); this test is about a standalone engine", res.Info.Swarm.LocalNodeState)
+	}
+
+	pull, err := raw.ImagePull(ctx, "alpine:3", client.ImagePullOptions{})
+	if err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+	if err := pull.Wait(ctx); err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+
+	cli, err := dockerx.New(dockertest.TCPTransportFor(host))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	sctx, scancel := context.WithCancel(ctx)
+	defer scancel()
+	rows, errc := cli.Events(sctx, time.Time{})
+
+	name := "bp-evt-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: name,
+		Config: &container.Config{Image: "alpine:3", Cmd: []string{"sleep", "60"}, Labels: map[string]string{
+			"bayplan.test.secret": "hunter2", "com.docker.compose.project": "bp-test",
+		}},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() {
+		c, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _ = raw.ContainerRemove(c, name, client.ContainerRemoveOptions{Force: true})
+	})
+	if _, err := raw.ContainerStart(ctx, name, client.ContainerStartOptions{}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	timeout := time.After(10 * time.Second)
+	for {
+		select {
+		case row, ok := <-rows:
+			if !ok {
+				t.Fatalf("the events stream ended instead of delivering the start: %v", <-errc)
+			}
+			t.Logf("event: %s %s %s %v", row.Type, row.Action, row.Name, row.Attributes)
+			if row.Type != "container" || row.Action != "start" || row.Name != name {
+				continue
+			}
+			if row.Attributes["com.docker.compose.project"] != "bp-test" {
+				t.Errorf("the compose project label did not pass: %v", row.Attributes)
+			}
+			if _, leaked := row.Attributes["bayplan.test.secret"]; leaked {
+				t.Errorf("a label outside the allowlist reached the row: %v", row.Attributes)
 			}
 			return
 		case <-timeout:
-			t.Fatal("no container start event within 5 seconds")
+			t.Fatal("no container start event within 10 seconds")
 		}
 	}
+}
+
+// TestContainerHealthInList checks, against the engine BAYPLAN_TEST_ENGINE names
+// (24 to 29), that a container whose HEALTHCHECK keeps failing reads unhealthy in
+// the list within its retries (plan 04-06, RESEARCH A2). Engines before API 1.52
+// send no health summary, so this is what proves the status-text fallback.
+func TestContainerHealthInList(t *testing.T) {
+	host := dockertest.DockerHost(t)
+	cli, err := dockerx.New(dockertest.TCPTransportFor(host))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	raw := dockertest.RawClient(t, host)
+
+	pull, err := raw.ImagePull(ctx, "alpine:3", client.ImagePullOptions{})
+	if err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+	if err := pull.Wait(ctx); err != nil {
+		t.Fatalf("pull alpine: %v", err)
+	}
+
+	name := "bp-health-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: name,
+		Config: &container.Config{
+			Image: "alpine:3", Cmd: []string{"sleep", "300"},
+			Healthcheck: &container.HealthConfig{Test: []string{"CMD-SHELL", "false"}, Interval: time.Second, Timeout: time.Second, Retries: 1},
+		},
+	}); err != nil {
+		t.Fatalf("create %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		c, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _ = raw.ContainerRemove(c, name, client.ContainerRemoveOptions{Force: true})
+	})
+	if _, err := raw.ContainerStart(ctx, name, client.ContainerStartOptions{}); err != nil {
+		t.Fatalf("start %s: %v", name, err)
+	}
+	if _, err := cli.Probe(ctx); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+
+	var last string
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := cli.Snapshot(ctx, false)
+		if err != nil {
+			t.Fatalf("Snapshot: %v", err)
+		}
+		for _, c := range snap.Containers {
+			if c.Name == name {
+				last = c.Health + " (" + c.Status + ")"
+				if c.Health == dockerx.HealthUnhealthy {
+					return
+				}
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("the failing container never read unhealthy in the list; last seen %q", last)
 }

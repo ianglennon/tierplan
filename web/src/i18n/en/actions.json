@@ -1,0 +1,258 @@
+{
+  "actions": {
+    "column": "Actions",
+    "menu": {
+      "label": "Actions for {{name}}",
+      "open": "Open",
+      "start": "Start",
+      "stop": "Stop",
+      "restart": "Restart",
+      "pause": "Pause",
+      "unpause": "Unpause",
+      "kill": "Kill…",
+      "remove": "Remove…"
+    },
+    "verb": {
+      "start": "start",
+      "stop": "stop",
+      "restart": "restart",
+      "pause": "pause",
+      "unpause": "unpause",
+      "kill": "kill",
+      "remove": "remove"
+    },
+    "toast": {
+      "started": "Started {{name}}.",
+      "stopped": "Stopped {{name}}.",
+      "failed": "Couldn't {{verb}} {{name}}. {{reason}}",
+      "restarted": "Restarted {{name}}.",
+      "paused": "Paused {{name}}.",
+      "unpaused": "Unpaused {{name}}.",
+      "bulk": {
+        "stop_one": "Stopped {{count}} container.",
+        "stop_other": "Stopped {{count}} containers.",
+        "start_one": "Started {{count}} container.",
+        "start_other": "Started {{count}} containers.",
+        "kill_one": "Killed {{count}} container.",
+        "kill_other": "Killed {{count}} containers.",
+        "remove_one": "Removed {{count}} container.",
+        "remove_other": "Removed {{count}} containers.",
+        "restart_one": "Restarted {{count}} container.",
+        "restart_other": "Restarted {{count}} containers.",
+        "pause_one": "Paused {{count}} container.",
+        "pause_other": "Paused {{count}} containers.",
+        "unpause_one": "Unpaused {{count}} container.",
+        "unpause_other": "Unpaused {{count}} containers."
+      },
+      "partial": "{{verb}} {{done}}, {{failed}} failed",
+      "skipped": "{{count}} skipped",
+      "failedMany": "Couldn't {{verb}} {{count}} containers. {{reason}}",
+      "killed": "Killed {{name}}.",
+      "removed": "Removed {{name}}.",
+      "details": "Details"
+    },
+    "stop": {
+      "title": "Stop {{name}}?",
+      "body": "It gets {{seconds}} seconds to shut down before Docker kills it, using the container's own stop settings.",
+      "bodyOwn": "Docker asks it to shut down first and kills it if it takes too long, using the container's own stop settings.",
+      "confirm": "Stop container",
+      "pending": "Stopping…",
+      "titleBulk_one": "Stop {{count}} container?",
+      "titleBulk_other": "Stop {{count}} containers?",
+      "bodyBulk": "Each one uses its own stop settings.",
+      "confirmBulk_one": "Stop {{count}} container",
+      "confirmBulk_other": "Stop {{count}} containers"
+    },
+    "refusal": {
+      "own_container": "{{name}} is one of Bayplan's own containers. Stopping it would cut Bayplan off from the host, so it can't be done from this list.",
+      "node_unreachable": "{{node}} isn't reachable right now. Try again when it's back.",
+      "not_found": "{{name}} no longer exists. The list has been refreshed.",
+      "agent_policy_denied": "This host's agent needs an update",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+      "confirmation": "Type the container's name to confirm this.",
+      "host_read_only": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
+      "container_running": "{{name}} is running. Tick Force to remove it."
+    },
+    "agentUpdate": {
+      "title": "This host's agent needs an update",
+      "lead": "It's too old to do this.",
+      "update": "Update it in Settings → Environments → {{environment}}, then try again.",
+      "ask": "Ask an administrator to update it.",
+      "link": "Open agent settings"
+    },
+    "readOnlyHost": "This host is read-only (set on the host)",
+    "bulk": {
+      "label": "Bulk actions",
+      "selected_one": "{{count}} selected",
+      "selected_other": "{{count}} selected",
+      "more": "More",
+      "clear": "Clear selection",
+      "selectAll": "Select all {{count}}",
+      "start": "Start",
+      "stop": "Stop…",
+      "restart": "Restart",
+      "pause": "Pause",
+      "unpause": "Unpause",
+      "kill": "Kill…",
+      "remove": "Remove…",
+      "none": "None of the selected containers can be {{verb}}.",
+      "can": {
+        "start": "started",
+        "stop": "stopped",
+        "restart": "restarted",
+        "pause": "paused",
+        "unpause": "unpaused",
+        "kill": "killed",
+        "remove": "removed"
+      }
+    },
+    "select": {
+      "all": "Select all containers",
+      "row": "Select {{name}}",
+      "group": "Select {{name}}",
+      "own": "Bayplan's own containers can't be part of a bulk action."
+    },
+    "pending": {
+      "start": "Starting…",
+      "stop": "Stopping…",
+      "restart": "Restarting…",
+      "kill": "Killing…",
+      "pause": "Pausing…",
+      "unpause": "Unpausing…",
+      "remove": "Removing…"
+    },
+    "announce": {
+      "start": "Starting {{names}}",
+      "stop": "Stopping {{names}}",
+      "restart": "Restarting {{names}}",
+      "kill": "Killing {{names}}",
+      "pause": "Pausing {{names}}",
+      "unpause": "Unpausing {{names}}",
+      "remove": "Removing {{names}}"
+    },
+    "past": {
+      "start": "Started",
+      "stop": "Stopped",
+      "restart": "Restarted",
+      "kill": "Killed",
+      "pause": "Paused",
+      "unpause": "Unpaused",
+      "remove": "Removed"
+    },
+    "targets": {
+      "container": "Container",
+      "node": "Node",
+      "note": "Note",
+      "task": "Task of service {{service}}",
+      "project": "Part of project {{project}}",
+      "skipped": "Not running, skipped"
+    },
+    "dialog": {
+      "cancel": "Cancel"
+    },
+    "kill": {
+      "title": "Kill {{name}}?",
+      "titleBulk_one": "Kill {{count}} container?",
+      "titleBulk_other": "Kill {{count}} containers?",
+      "body": "Sends SIGKILL now. The process gets no chance to shut down cleanly, and data it was writing can be lost.",
+      "confirm": "Kill container",
+      "confirmBulk_one": "Kill {{count}} container",
+      "confirmBulk_other": "Kill {{count}} containers",
+      "pending": "Killing…"
+    },
+    "remove": {
+      "title": "Remove {{name}}?",
+      "titleBulk_one": "Remove {{count}} container?",
+      "titleBulk_other": "Remove {{count}} containers?",
+      "body": "The container is deleted. Its image and its named volumes stay.",
+      "confirm": "Remove container",
+      "confirmBulk_one": "Remove {{count}} container",
+      "confirmBulk_other": "Remove {{count}} containers",
+      "pending": "Removing…",
+      "force": "Force (stop if running)",
+      "forceHelp": "Needed to remove a running container.",
+      "volumes": "Also remove anonymous volumes",
+      "volumesHelp": "Volumes Docker made for this container without a name. Named volumes are never removed.",
+      "forceRequired": "Tick Force to remove a running container."
+    },
+    "restart": {
+      "title": "Restart {{name}}?",
+      "body": "Docker stops it and starts it again.",
+      "confirm": "Restart container",
+      "pending": "Restarting…"
+    },
+    "pause": {
+      "title": "Pause {{name}}?",
+      "body": "Everything in it freezes until it is unpaused.",
+      "confirm": "Pause container",
+      "pending": "Pausing…"
+    },
+    "advanced": {
+      "trigger": "Advanced",
+      "timeout": "Timeout (seconds)",
+      "signal": "Signal",
+      "help": "Leave empty to use the container's own settings.",
+      "own": "The container's own",
+      "killSignal": "SIGKILL",
+      "timeoutInvalid": "Enter a whole number of seconds, 0 to 86400.",
+      "signalInvalid": "Use letters and digits, up to 16, such as SIGTERM."
+    },
+    "warn": {
+      "task": "This is a task of service {{service}}. Swarm will replace it. To stop it for good, scale the service.",
+      "tasks_one": "{{count}} of these is a task of a swarm service. Swarm will replace it.",
+      "tasks_other": "{{count}} of these are tasks of swarm services. Swarm will replace them.",
+      "project": "Part of project {{project}}. The next deploy will recreate it.",
+      "projects_one": "{{count}} of these belongs to a project. The next deploy will recreate it.",
+      "projects_other": "{{count}} of these belong to projects. The next deploy will recreate them."
+    },
+    "own": {
+      "server": "This is Bayplan's own container. {{gerund}} it cuts Bayplan off from this host, and you can't start it again from here.",
+      "agent": "This is the Bayplan agent on {{node}}. {{gerund}} it cuts Bayplan off from {{node}}.",
+      "gerund": {
+        "stop": "Stopping",
+        "kill": "Killing",
+        "restart": "Restarting",
+        "pause": "Pausing",
+        "remove": "Removing"
+      },
+      "confirm": {
+        "server": {
+          "stop": "Stop Bayplan",
+          "kill": "Kill Bayplan",
+          "restart": "Restart Bayplan",
+          "pause": "Pause Bayplan",
+          "remove": "Remove Bayplan"
+        },
+        "agent": {
+          "stop": "Stop agent",
+          "kill": "Kill agent",
+          "restart": "Restart agent",
+          "pause": "Pause agent",
+          "remove": "Remove agent"
+        }
+      }
+    },
+    "results": {
+      "title": "{{verb}} results",
+      "verb": {
+        "start": "Start",
+        "stop": "Stop",
+        "restart": "Restart",
+        "kill": "Kill",
+        "pause": "Pause",
+        "unpause": "Unpause",
+        "remove": "Remove"
+      },
+      "container": "Container",
+      "node": "Node",
+      "result": "Result",
+      "reason": "Reason",
+      "done": "Done",
+      "failed": "Failed",
+      "skipped": "Skipped",
+      "audit": "View in audit log",
+      "close": "Close results"
+    }
+  }
+}

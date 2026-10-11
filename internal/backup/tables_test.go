@@ -64,7 +64,7 @@ func TestTheTablesThatMustNeverTravelAreExcludedAndTheRestIncluded(t *testing.T)
 	}
 	for _, name := range []string{
 		"users", "teams", "team_members", "role_assignments", "assignment_extras", "environments", "env_cas",
-		"agents", "agent_blocks", "settings", "audit_log", "owned_resources", "user_recent_environments",
+		"agents", "agent_blocks", "settings", "audit_log", "owned_resources", "user_recent_environments", "user_shell_prefs",
 		"roles", "backup_schedule",
 	} {
 		if got, ok := backup.Tables[name]; !ok || got != backup.Included {

@@ -105,6 +105,23 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: #4338ca;
+  /* The 16 ANSI colours of logs and the terminal, chosen to keep 4.5:1 on the log surface and on the stderr tint (UI-SPEC "Color"). */
+  --ansi-0: #404040; /* black */
+  --ansi-1: #b91c1c; /* red */
+  --ansi-2: #166534; /* green */
+  --ansi-3: #854d0e; /* yellow */
+  --ansi-4: #1d4ed8; /* blue */
+  --ansi-5: #a21caf; /* magenta */
+  --ansi-6: #155e75; /* cyan */
+  --ansi-7: #525252; /* white */
+  --ansi-8: #666666; /* bright black */
+  --ansi-9: #991b1b; /* bright red */
+  --ansi-10: #14532d; /* bright green */
+  --ansi-11: #713f12; /* bright yellow */
+  --ansi-12: #1e40af; /* bright blue */
+  --ansi-13: #86198f; /* bright magenta */
+  --ansi-14: #164e63; /* bright cyan */
+  --ansi-15: #171717; /* bright white */
 }
 
 .dark {
@@ -148,6 +165,23 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: #a5b4fc;
+  /* The 16 ANSI colours of logs and the terminal, chosen to keep 4.5:1 on the log surface and on the stderr tint (UI-SPEC "Color"). */
+  --ansi-0: #8a8a8a; /* black */
+  --ansi-1: #f87171; /* red */
+  --ansi-2: #4ade80; /* green */
+  --ansi-3: #facc15; /* yellow */
+  --ansi-4: #60a5fa; /* blue */
+  --ansi-5: #e879f9; /* magenta */
+  --ansi-6: #22d3ee; /* cyan */
+  --ansi-7: #d4d4d4; /* white */
+  --ansi-8: #a3a3a3; /* bright black */
+  --ansi-9: #fca5a5; /* bright red */
+  --ansi-10: #86efac; /* bright green */
+  --ansi-11: #fde047; /* bright yellow */
+  --ansi-12: #93c5fd; /* bright blue */
+  --ansi-13: #f0abfc; /* bright magenta */
+  --ansi-14: #67e8f9; /* bright cyan */
+  --ansi-15: #ffffff; /* bright white */
 }
 
 @layer base {

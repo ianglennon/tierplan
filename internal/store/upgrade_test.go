@@ -74,6 +74,55 @@ func TestPhase2DatabaseUpgradesToHead(t *testing.T) {
 	assertEnvironmentDataUnchanged(t, s, fx)
 	assertAuditChainIntact(t, s, v, fx)
 	assertFormerAdminIsInstanceAdmin(t, s, fx)
+	assertShellPrefsTableWorks(t, s, fx.adminID)
+}
+
+// TestVersion12DatabaseUpgradesToHeadWithTheShellPreferenceTable stages a database as
+// the release before the remembered shell choice leaves it (schema version 12), upgrades
+// it, and checks that its users are untouched and that user_shell_prefs now exists
+// (plan 04-24, D-26).
+func TestVersion12DatabaseUpgradesToHeadWithTheShellPreferenceTable(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	s := open(t, dir)
+	res, err := store.Migrate(ctx, s, store.MigrateOptions{
+		AppVersion: "v12-fixture", DataDir: dir, SkipBackup: true, Migrations: migrationsUpTo(t, 12),
+	})
+	if err != nil || res.To != 12 {
+		t.Fatalf("migrate to version 12: %v (at %d)", err, res.To)
+	}
+	var one int
+	if err := s.Read.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'user_shell_prefs'`).Scan(&one); err != nil || one != 0 {
+		t.Fatalf("user_shell_prefs exists at version 12 (%d, %v)", one, err)
+	}
+	if _, err := s.Write.ExecContext(ctx, `INSERT INTO users (id, username, password_hash, created_at, updated_at, password_changed_at) VALUES ('u-1','ann','h',1,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	up, err := store.Migrate(ctx, s, store.MigrateOptions{DataDir: dir, AppVersion: "v12-fixture"})
+	if err != nil {
+		t.Fatalf("upgrade to head: %v", err)
+	}
+	if up.From != 12 || up.To < 13 {
+		t.Fatalf("upgrade went %d -> %d, want from 12 to at least 13", up.From, up.To)
+	}
+	assertShellPrefsTableWorks(t, s, "u-1")
+}
+
+// assertShellPrefsTableWorks writes and reads a remembered choice for the user, and checks
+// that the table refuses a shell it does not know and goes with its user.
+func assertShellPrefsTableWorks(t *testing.T, s *store.Store, userID string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := s.Write.ExecContext(ctx, `INSERT INTO user_shell_prefs (user_id, image, shell, command, run_as, working_dir, updated_at) VALUES (?, 'nginx:1.27', 'bash', '', 'root', '', 5)`, userID); err != nil {
+		t.Fatalf("insert a shell preference: %v", err)
+	}
+	var shell, runAs string
+	if err := s.Read.QueryRowContext(ctx, `SELECT shell, run_as FROM user_shell_prefs WHERE user_id = ? AND image = 'nginx:1.27'`, userID).Scan(&shell, &runAs); err != nil || shell != "bash" || runAs != "root" {
+		t.Errorf("preference = %q as %q (%v), want bash as root", shell, runAs, err)
+	}
+	if _, err := s.Write.ExecContext(ctx, `INSERT INTO user_shell_prefs (user_id, image, shell, updated_at) VALUES (?, 'other', 'zsh', 6)`, userID); err == nil {
+		t.Errorf("a shell outside auto, bash, sh, ash and custom was accepted")
+	}
 }
 
 // seedPhase2Database writes the Phase 2 rows with raw SQL against the version-11

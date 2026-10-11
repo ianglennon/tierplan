@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List audit entries
-         * @description Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. An instance admin reads every entry. An Admin of one or more environments (environments.audit) reads only the entries on those environments, or on every environment when they are Admin of all of them, never an instance-level event such as a sign-in or a settings change; the scope is applied before paging. Anyone else gets 403, audited as permission.denied with reason no_audit_scope.
+         * @description Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an inclusive time range, and optionally by one bulk operation (bulk, the bulkId of a container action). The export takes the same filters. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to, and 422 for a bulk that is not a UUID. An instance admin reads every entry. An Admin of one or more environments (environments.audit) reads only the entries on those environments, or on every environment when they are Admin of all of them, never an instance-level event such as a sign-in or a settings change; the scope is applied before paging. Anyone else gets 403, audited as permission.denied with reason no_audit_scope.
          */
         get: operations["listAudit"];
         put?: never;
@@ -372,6 +372,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/active-shells": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every open shell on an environment
+         * @description Every browser shell that is open on the environment, whoever opened it, oldest first: the person, the container, its node, when it was opened and how long it has sat unused. A shell that is waiting for its browser to attach is listed too. Needs shells.manage on the environment (env Admin or instance admin).
+         */
+        get: operations["listActiveShells"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/active-shells/{shellId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * End someone's shell
+         * @description Closes an open shell on the environment at once. Its browser is told it was ended by an administrator (reason ended_by_admin). 404 shell_not_found when it already closed, or belongs to another environment. A process the person left running in the container keeps running. Needs shells.manage on the environment (env Admin or instance admin). Audited as shell.ended by the administrator, naming the owner, and the shell's own shell.closed row carries the reason ended_by_admin.
+         */
+        delete: operations["endShell"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/adopt-cluster": {
         parameters: {
             query?: never;
@@ -481,11 +521,131 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables, labels or mounts. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for Bayplan's own containers) and readOnly (its host refuses changes). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/containers/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start, stop, restart, kill, pause or unpause containers
+         * @description Does one action to up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. The actions are start, stop, restart, kill, pause and unpause. A stop or restart uses the container's own stop timeout and signal and a kill sends SIGKILL; a request with exactly one target may set timeout or signal, and a request with more is refused 422 options_single_only. Starting a running container or stopping a stopped one is answered done, and a container removed meanwhile is not_found, so repeating an action is safe. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. At most 4 calls run at once on one node and 16 targets at once overall. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Bayplan's own server container and any agent container are protected: to stop, kill, restart or pause one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. A node whose agent runs read-only (BAYPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. Each target is audited as container.started, container.stopped, container.restarted, container.killed, container.paused or container.unpaused, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
+         */
+        post: operations["actOnContainers"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/containers/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove containers
+         * @description Removes up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order, as the actions route does. A running container is refused with container_running unless force is true, and nothing is sent for it. Named volumes are never removed. removeVolumes also removes the container's anonymous volumes, and needs the delete volumes permission on top of containers.remove: a caller without it is refused 403 before any call and the refusal is audited as permission.denied. Bayplan's own server container and any agent container are protected: to remove one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. Each target is audited as container.removed with its force and volumes choices. Needs containers.remove (Operator) on the environment.
+         */
+        post: operations["removeContainers"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/containers/{containerId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One container: its state and configuration
+         * @description Everything the container detail page shows, read live from the container's engine: state, health, image, command, ports, mounts, networks with their aliases, restart policy, labels, environment variables and log driver. The container lives on one node, named by nodeId (the nodeId of its row in the containers list); it may be left out on an environment of one node and is required on a swarm (422 node_required). The values of the environment variables and of the log driver's options can be credentials: they are withheld on the server, and sent only to a caller who holds secrets.reveal on the environment. env and logConfig.options then list the names with masked true and no value, and masked at the top says something was withheld. The command and the entrypoint can carry credentials too (a password on the command line): without secrets.reveal each is the single entry <hidden> and commandMasked is true. 404 container_not_found when the engine has no such container (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. Needs containers.read (Viewer) on the environment.
+         */
+        get: operations["getContainer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/containers/{containerId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One container's raw inspect document
+         * @description The engine's inspect document of the container as it is, for the Inspect tab. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). The environment variables' values, the log driver's option values and the command line (Config.Cmd, Config.Entrypoint, Path, Args and the command of Config.Healthcheck.Test) can be credentials: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. Needs containers.read (Viewer) on the environment.
+         */
+        get: operations["inspectContainer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/containers/{containerId}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A page of earlier log lines
+         * @description Up to tail lines of the container's log that were written before until, oldest first, for "Load earlier lines". It does not follow the log. until is an RFC 3339 time or Unix seconds and is exclusive; leave it out for the newest lines. since, when given, is the earliest time to look back to. startOfLogs is true when fewer than tail lines came back because the log has no more, and false when more may be earlier (including when the page was cut to a size limit, newest lines kept). To page without losing a line that shares its timestamp with the one before, ask for until one nanosecond after the oldest line held and drop the lines already held by timestamp and text. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). sid is the viewer's ID, the one its live stream uses: a viewer is audited once however many pages it reads. Lines are returned as the application wrote them and are never masked. Needs containers.read (Viewer) on the environment.
+         */
+        get: operations["getContainerLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/containers/{containerId}/shell": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open a shell in a container
+         * @description Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), 409 host_read_only on a read-only host, 409 own_container for Bayplan's own server or an agent's container (decided from a fresh inspect), 409 container_not_running, 502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).
+         */
+        post: operations["openShell"];
         delete?: never;
         options?: never;
         head?: never;
@@ -501,7 +661,7 @@ export interface paths {
         };
         /**
          * The recent Docker events of an environment
-         * @description The newest 50 container, image, network and volume events Bayplan has seen on this environment, newest first, for clients that cannot hold a stream open. Events are kept in memory only: the list is empty after a restart until Docker reports something, apart from what the daemon still remembers from the last hour. The live version of this list is a server-sent events stream with the same event data.
+         * @description The newest container, image, network, volume and (from a swarm manager) service, node, secret and config events Bayplan has seen on this environment, newest first, for clients that cannot hold a stream open and for the Events page. since keeps only events at or after that time, at most 24 hours back; limit is 1 to 1000 and defaults to 50. Events are kept in memory only: the list is empty after a restart until Docker reports something, apart from what the daemon still remembers (about its last 256 events, and none across its own restart). The live version of this list is a server-sent events stream with the same event data.
          */
         get: operations["listRecentEvents"];
         put?: never;
@@ -545,6 +705,94 @@ export interface paths {
          */
         get: operations["listNetworks"];
         put?: never;
+        /**
+         * Create a network
+         * @description Creates a bridge, overlay, macvlan or ipvlan network. An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. 409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.
+         */
+        post: operations["createNetwork"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/networks/{networkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One network: its configuration and what is attached to it
+         * @description Everything the network detail page shows: driver, scope, addressing, flags, owner, options, labels, and every attachment. Attachments are the containers, running or not, on every node that answered (a local network: its own node, named by nodeId), each with its node, addresses and aliases, and on a swarm every service whose spec mentions the network, even with no running task. Sorted by name, then node. Aliases come from an inspect of the attached containers, at most 50 of them (4 at once per node); the rest have aliases null and aliasesTruncated is true. A local-scope network on a swarm is named by nodeId (422 node_required when two nodes have one with that ID). 404 network_not_found when the network is not there; 409 node_unreachable when it is missing and a node did not answer; 503 node_unavailable when its node is not connected. Needs networks.read (Viewer) on the environment.
+         */
+        get: operations["getNetwork"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a network
+         * @description Deletes one network, once and never retried. 404 network_not_found when the network is not there (already gone). 409 network_builtin for bridge, host, none, ingress, docker_gwbridge and any network with the ingress flag. A local-scope network on a swarm is named by nodeId, the nodeId of its row (422 node_required when two nodes have one with that ID). Needs networks.manage (Admin) on the environment. Every attempt on a network that exists is audited as network.removed, with result failure and the code when it was refused.
+         */
+        delete: operations["deleteNetwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/networks/{networkId}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect a container to a network
+         * @description Connects one container to one network, once and never retried, with an optional alias and fixed addresses. The call goes to the node the container is on, named by nodeId. A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. Bayplan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent; such a connect is audited before the call (stage initiated) and after it (stage completed). 404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.
+         */
+        post: operations["connectContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/networks/{networkId}/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disconnect a container from a network
+         * @description Disconnects one container from one network, once, never retried and never forced. The call goes to the node the container is on, named by nodeId. A container that is not on the network is 409 not_connected; 404 network_not_found or container_not_found, Bayplan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent. Such a disconnect is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call, which is what cutting Bayplan off its own network does, is answered 204 and audited as stage connection_lost with result success. 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.disconnected, with result failure and the code when it was refused.
+         */
+        post: operations["disconnectContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/networks/{networkId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One network's raw inspect document
+         * @description The engine's inspect document of the network as it is, for the Inspect tab: verbose for a swarm-scoped network read on a manager, so the services are in it. The network is named as the detail route names it, with the same rules and problems (422 node_required, 404 network_not_found, 409 node_unreachable, 503 node_unavailable). Needs networks.read (Viewer) on the environment.
+         */
+        get: operations["inspectNetwork"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -567,6 +815,46 @@ export interface paths {
          */
         post: operations["reconnectEnvironment"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/shells": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the caller's own open shells
+         * @description The shells the caller has open on the environment, oldest first, and only those: other people's are never listed here, whatever the caller's role. With containerId, only the ones in that container. Needs containers.exec on the environment.
+         */
+        get: operations["listMyShells"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/shells/{shellId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * End one of the caller's own shells
+         * @description Closes one of the caller's own open shells at once; its browser is told it was ended by the user (reason ended_by_user) and its shell.closed row says the same. 404 shell_not_found when it already closed, belongs to another environment, or belongs to someone else: the answer is the same for all three. Needs containers.exec on the environment.
+         */
+        delete: operations["endMyShell"];
         options?: never;
         head?: never;
         patch?: never;
@@ -621,9 +909,93 @@ export interface paths {
         };
         /**
          * List the volumes of an environment
-         * @description By name. On a swarm every node's volumes, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description By name, then node. On a swarm every node's volumes, each with its node: the same name on two nodes is two volumes. Each row says what uses it (usedByContainers: containers on its node, stopped ones included; usedByServices: swarm services whose spec mounts that name), whether Docker made it without a name (anonymous), and its compose project and stack. Optionally only one node's (node), a search (q) and a usage filter (usage: used or unused). The node, the search and the usage filter run on the server before the 500-row cap, so at most 500 rows come back after them, with the total the number that matched. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listVolumes"];
+        put?: never;
+        /**
+         * Create a volume
+         * @description Creates a volume on one node, once and never retried. Volumes are node-local: nodeId names the node (the nodeId of a row of a list) and may be left out only on an environment of one node that is not a swarm (else 422 node_required). The driver is local unless one is named. 409 name_taken when the node already has a volume of that name (the engine would silently reuse it), 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs volumes.create (Admin) on the environment. Every attempt is audited as volume.created, with result failure and the code when it was refused. The audit row carries the driver option names and values with any password-like part replaced.
+         */
+        post: operations["createVolume"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/volumes/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete volumes
+         * @description Deletes up to 25 volumes, each named by its node ID and name, and answers one result per target in request order. This is irreversible: the data in the volume is gone. The caller types the confirmation: the volume's name for a single target, or delete {n} volumes for several, where n is at least the number of targets in the request (else 422 confirmation_required and nothing is sent). Volumes are node-local: a volume is deleted on the node named, and the same name on another node is left alone. A volume that any container on its node, running or stopped, or any swarm service mounts is never deleted: the result is failed with code volume_in_use and the detail names up to 5 users. The users are read again from the node and from a manager just before each removal, and force is never sent, so a container that mounts the volume between the check and the call makes the engine refuse and is answered volume_in_use too. A volume the node does not have is failed with code not_found. One that fails never stops the others. Needs volumes.delete (an Operator or above with the delete volumes permission) on the environment; a caller without it is refused 403 and the refusal is audited as permission.denied. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Every attempt on a volume that exists is audited as volume.removed, failures included.
+         */
+        post: operations["deleteVolumes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/volumes/sizes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Calculate the sizes of the volumes, per node
+         * @description Asks the engine of every node that answered (or only the one named by nodeId) for the disk usage of its volumes and answers one entry per node. This makes the engine walk every volume's files, which can take long on a host with large volumes, so the SPA asks only when the user presses Calculate sizes and never on a timer. At most 4 nodes calculate at once, each for at most 60 seconds; a node that fails or runs out of time answers ok false with an error, and the others are unaffected. A volume's size is -1 when the engine cannot say. 503 node_unavailable when nodeId is not a connected node of the environment. Needs volumes.read (Viewer) on the environment.
+         */
+        get: operations["volumeSizes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/volumes/{volumeName}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One volume: its details, options and what uses it
+         * @description Everything the volume detail page shows, read live from the volume's node: driver, mount point, scope, creation time, driver options and labels, and what mounts it: every container on that node, running or not, with where and how it is mounted, and on a swarm every service whose spec mounts a volume of that name, even with no running task. The volume lives on one node, named by nodeId (the nodeId of its row in the volumes list); it may be left out only on an environment of one node that is not a swarm (else 422 node_required). The option values can be credentials of a remote share: they are withheld on the server and sent only to a caller who holds secrets.reveal on the environment; the others get each option's name with masked true and no value. 404 volume_not_found when the node has no such volume (it may have been removed meanwhile); 503 node_unavailable when the node is not a connected node of the environment. The name sizes is the sizes route, not a volume of that name. Needs volumes.read (Viewer) on the environment.
+         */
+        get: operations["getVolume"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/volumes/{volumeName}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One volume's raw inspect document
+         * @description The engine's inspect document of the volume as it is, for the Inspect tab. The volume is named as the detail route names it, with the same rules and problems (422 node_required, 404 volume_not_found, 503 node_unavailable). The driver option values can be credentials of a remote share: for a caller without secrets.reveal on the environment each is replaced by the placeholder <hidden> on the server, and masked says something was. Needs volumes.read (Viewer) on the environment.
+         */
+        get: operations["inspectVolume"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1002,6 +1374,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/shell-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How the signed-in user last opened a shell in an image
+         * @description The shell, custom command, user and working directory of the caller's most recent successful shell in a container of the image, so the launcher can preselect them on any browser. 404 shell_preference_not_found when the caller has none for that image. At most 200 images are remembered per user; the oldest are dropped. Nothing typed in a shell is part of it.
+         */
+        get: operations["getShellPreference"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/owned/{kind}/{resourceId}/eligible-owners": {
         parameters: {
             query?: never;
@@ -1064,6 +1456,30 @@ export interface paths {
          * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url, insecure_agent_url). An agent URL that is plain http for a host that is not this machine answers 422 insecure_agent_url unless BAYPLAN_AGENT_ALLOW_INSECURE is on, because agents refuse such an address; a loopback or https agent URL, clearing it, and an http public URL are accepted. A different public URL while BAYPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while BAYPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
          */
         patch: operations["updateSettings"];
+        trace?: never;
+    };
+    "/api/settings/shells": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the browser-shell limits
+         * @description idleMinutes is how long a shell may sit without input or output (5 to 240, default 30) and maxPerUser how many open shells one person may hold across all environments (1 to 50, default 10).
+         */
+        get: operations["getShellSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the browser-shell limits
+         * @description Only the fields sent are changed. A value outside its range answers 422. A change takes effect at once: open shells use the new idle limit at their next check, and the next open uses the new cap. A request that changes nothing answers 200 and is not audited. Each change is audited as settings.updated with the old and new value of every changed field.
+         */
+        patch: operations["updateShellSettings"];
         trace?: never;
     };
     "/api/setup/complete": {
@@ -2016,9 +2432,173 @@ export interface components {
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
         };
+        ContainerActionRequest: {
+            /**
+             * @description What to do. A stop or restart uses the container's own stop timeout and signal, and a kill sends SIGKILL, unless this is a single-target request that sets timeout or signal
+             * @enum {string}
+             */
+            action: "start" | "stop" | "restart" | "kill" | "pause" | "unpause";
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
+             */
+            bulkId?: string;
+            /** @description The container's name, typed. Needed to stop, kill, restart or pause Bayplan's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only */
+            confirm?: string;
+            /** @description The signal a stop, restart or kill sends, for example SIGTERM. Only with exactly one target (else 422 options_single_only); ignored by the other actions */
+            signal?: string;
+            /** @description The containers to act on, at most 25. Each is acted on and answered separately; one that fails never stops the others */
+            targets: components["schemas"]["ContainerActionTarget"][] | null;
+            /**
+             * Format: int64
+             * @description Seconds a stop or restart waits before it kills the container. Only with exactly one target (else 422 options_single_only); ignored by the other actions
+             */
+            timeout?: number;
+        };
+        ContainerActionResponse: {
+            /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent */
+            bulkId?: string;
+            /** @description One entry per requested target, in request order */
+            results: components["schemas"]["ContainerActionResult"][] | null;
+        };
+        ContainerActionResult: {
+            /**
+             * @description Why a target failed. own_container (with result skipped): Bayplan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of Bayplan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent, so Bayplan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
+             * @enum {string}
+             */
+            code?: "own_container" | "node_unreachable" | "not_found" | "host_read_only" | "agent_policy_denied" | "container_running" | "connection_lost" | "action_failed";
+            /** @description The engine's message for action_failed, at most 300 characters; for the other codes a plain sentence */
+            detail?: string;
+            /** @description The container ID or name the request named */
+            id: string;
+            /** @description The container name when the engine could be asked; otherwise the ID or name the request named */
+            name: string;
+            /** @description The node ID the request named */
+            nodeId: string;
+            /**
+             * @description done: the engine accepted the action. failed: it was refused or could not be sent; code says why. skipped: not acted on because it is one of Bayplan's own containers in a bulk
+             * @enum {string}
+             */
+            result: "done" | "failed" | "skipped";
+        };
+        ContainerActionTarget: {
+            /** @description The container ID or name */
+            id: string;
+            /** @description The node the container is on: the nodeId of its row in the containers list. Never the display name */
+            nodeId: string;
+        };
+        ContainerDetailBody: {
+            /** @description The command (Cmd). Withheld, as the single entry <hidden>, unless the caller holds secrets.reveal on this environment: a command line often carries a password or token */
+            command: string[] | null;
+            /** @description True when command or entrypoint was withheld because the caller may not reveal secrets on this environment */
+            commandMasked: boolean;
+            /** Format: date-time */
+            created?: string;
+            /** @description The entrypoint. Withheld, as the single entry <hidden>, on the same terms as command */
+            entrypoint: string[] | null;
+            /** @description The environment variables by name. Their values are withheld unless the caller holds secrets.reveal on this environment */
+            env: components["schemas"]["EnvVar"][] | null;
+            /** @description The engine's last start error */
+            error?: string;
+            /**
+             * Format: int64
+             * @description The exit code of its last run
+             */
+            exitCode: number;
+            /**
+             * Format: date-time
+             * @description When it last stopped; absent while it runs or when it never ran
+             */
+            finishedAt?: string;
+            /** @enum {string} */
+            health: "none" | "starting" | "healthy" | "unhealthy";
+            /** @description The full container ID */
+            id: string;
+            /** @description The image as the container was created with it */
+            image: string;
+            /** @description The ID of the image it runs */
+            imageId: string;
+            /** @description True for the container Bayplan itself runs in */
+            isSelf: boolean;
+            /** @description Every label, as the engine reports them. Do not put secrets in labels */
+            labels: {
+                [key: string]: string;
+            };
+            logConfig: components["schemas"]["ContainerLogConfigBody"];
+            /** @description True when any value was withheld from env, logConfig.options, command or entrypoint */
+            masked: boolean;
+            mounts: components["schemas"]["ContainerMountBody"][] | null;
+            /** @description The container name without the leading slash */
+            name: string;
+            networks: components["schemas"]["ContainerNetworkBody"][] | null;
+            /** @description The display name of the node, when it is among the nodes that answered */
+            node?: string;
+            /** @description The ID of the node the container is on: what a write is routed by */
+            nodeId: string;
+            /** @description True when the kernel killed it for running out of memory */
+            oomKilled: boolean;
+            /** @description Published ports only */
+            ports: components["schemas"]["ContainerPortBody"][] | null;
+            /** @description The compose project (com.docker.compose.project); empty when the container has none */
+            project: string;
+            /** @description True when the host of this container's node is read-only, so no change to it will be accepted */
+            readOnly: boolean;
+            /**
+             * Format: int64
+             * @description How many times the engine has restarted it
+             */
+            restartCount: number;
+            /**
+             * Format: int64
+             * @description The on-failure maximum; 0 when none is set
+             */
+            restartMaxRetries: number;
+            /** @enum {string} */
+            restartPolicy: "no" | "always" | "on-failure" | "unless-stopped";
+            /**
+             * @description server for the container Bayplan itself runs in, agent for a Bayplan agent's container, empty otherwise
+             * @enum {string}
+             */
+            selfKind: "" | "server" | "agent";
+            /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
+            service: string;
+            /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
+            stack: string;
+            /**
+             * Format: date-time
+             * @description When it last started; absent when it never did
+             */
+            startedAt?: string;
+            /**
+             * @description The container state
+             * @enum {string}
+             */
+            state: "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead";
+            stopSignal?: string;
+            /**
+             * Format: int64
+             * @description Seconds the container's own setting waits before a kill; absent when it sets none
+             */
+            stopTimeout?: number;
+            user?: string;
+            workingDir?: string;
+        };
+        ContainerInspectBody: {
+            /** @description The engine's inspect document, with the environment variables' values, the log driver's option values and the command line replaced by <hidden> unless the caller holds secrets.reveal */
+            inspect: {
+                [key: string]: unknown;
+            };
+            /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked: boolean;
+        };
         ContainerItem: {
             /** Format: date-time */
             created?: string;
+            /**
+             * @description The container's health: none when it has no healthcheck
+             * @enum {string}
+             */
+            health: "none" | "starting" | "healthy" | "unhealthy";
             /** @description The full container ID */
             id: string;
             /** @description The image the container was created from */
@@ -2029,8 +2609,23 @@ export interface components {
             name: string;
             /** @description The node the container runs on */
             node: string;
+            /** @description The ID of that node: what a write is routed by, since two hosts can share a display name */
+            nodeId: string;
             /** @description Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published */
             ports: string[] | null;
+            /** @description The compose project (com.docker.compose.project); empty when the container has none */
+            project: string;
+            /** @description True when the host of this container's node is read-only, so no change to it will be accepted */
+            readOnly: boolean;
+            /**
+             * @description server for the container Bayplan itself runs in, agent for a Bayplan agent's container (marked by the label bayplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
+             * @enum {string}
+             */
+            selfKind: "" | "server" | "agent";
+            /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
+            service: string;
+            /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
+            stack: string;
             /**
              * @description The container state
              * @enum {string}
@@ -2046,13 +2641,83 @@ export interface components {
             nodes: string[] | null;
             /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
             notReporting: string[] | null;
+            /** @description How many containers each status chip counts, after the node filter and before the search and the status filter, so the numbers never shrink with what was typed */
+            statusCounts: components["schemas"]["StatusCountsBody"];
             /**
              * Format: int64
-             * @description How many there are, whatever the cap
+             * @description How many match the search, whatever the cap
              */
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+            /**
+             * Format: int64
+             * @description How many containers there are before the search and the status filter are applied (after the node filter), so a page can say 3 of 600
+             */
+            unfilteredTotal: number;
+        };
+        ContainerLogConfigBody: {
+            /** @description The driver's options by name. Their values can carry credentials, so they are withheld unless the caller holds secrets.reveal on this environment */
+            options: components["schemas"]["OptionVar"][] | null;
+            /** @description The log driver, for example json-file; empty when the engine did not say */
+            type: string;
+        };
+        ContainerLogsBody: {
+            /** @description The lines, oldest first. t is the engine's timestamp (UTC, nine digits), s is o for stdout and e for stderr, m is the text as written */
+            lines: components["schemas"]["LogLine"][] | null;
+            /** @description True when there are no earlier lines than these */
+            startOfLogs: boolean;
+        };
+        ContainerMountBody: {
+            /** @description The path inside the container */
+            destination: string;
+            /** @description The engine's mount options, for example z or ro */
+            mode?: string;
+            /** @description The volume name, for a volume */
+            name?: string;
+            /** @description True when the container may write to it */
+            rw: boolean;
+            /** @description The host path or, for a volume, where the engine keeps it */
+            source: string;
+            /** @description bind, volume, tmpfs, npipe or cluster */
+            type: string;
+        };
+        ContainerNetworkBody: {
+            /** @description The DNS names the container answers to on this network */
+            aliases: string[] | null;
+            ipv4?: string;
+            ipv6?: string;
+            mac?: string;
+            name: string;
+            networkId: string;
+        };
+        ContainerPortBody: {
+            /**
+             * Format: int64
+             * @description The port inside the container
+             */
+            containerPort: number;
+            /** @description The host address it is bound to; empty when the engine did not say */
+            hostIp?: string;
+            /** @description The port on the host */
+            hostPort: string;
+            /** @description tcp, udp or sctp */
+            protocol: string;
+        };
+        ContainerRemoveRequest: {
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one bulk request, as for the actions route
+             */
+            bulkId?: string;
+            /** @description The container's name, typed. Needed to remove Bayplan's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only */
+            confirm?: string;
+            /** @description Remove a running container too. Without it a running container is refused with container_running */
+            force: boolean;
+            /** @description Also remove the container's anonymous volumes; named volumes are never removed. Needs the delete volumes permission on top of containers.remove */
+            removeVolumes: boolean;
+            /** @description The containers to remove, at most 25. Each is answered separately; one that fails never stops the others */
+            targets: components["schemas"]["ContainerActionTarget"][] | null;
         };
         CreateTeamInputBody: {
             /** @description 1 to 64 characters; not case-sensitive for uniqueness */
@@ -2197,6 +2862,14 @@ export interface components {
              * @enum {string}
              */
             subjectType: "user" | "team";
+        };
+        EnvVar: {
+            /** @description True when the value was withheld because the caller may not reveal secrets on this environment */
+            masked: boolean;
+            /** @description The variable's name */
+            name: string;
+            /** @description The variable's value; absent while masked */
+            value?: string;
         };
         EnvWarningBody: {
             /** @description For cert_not_renewing and clock_skew: the agent */
@@ -2500,15 +3173,15 @@ export interface components {
         EventDTO: {
             /** @description What happened, for example start, die, pull, connect or create */
             action: string;
-            /** @description The ID of the container, image, network or volume */
+            /** @description The ID of the container, image, network, volume, service, node, secret or config */
             actorId: string;
-            /** @description Only name, image and exitCode, when the event had them */
+            /** @description Only these attributes, when the event had them: name, image, exitCode, signal, type, container, driver, reason, destination, read/write, com.docker.compose.project and com.docker.stack.namespace. Every other label, environment value and free-form attribute is left out */
             attributes: {
                 [key: string]: string;
             };
             /** @description A stable ID for the event; the SSE frame id, and what a repeated event is recognised by */
             id: string;
-            /** @description The container, image, network or volume name; empty when Docker gave none */
+            /** @description The object's name; empty when Docker gave none */
             name: string;
             /** @description The node the event happened on; for a row of Bayplan's own, the node it concerns, such as the manager that took over */
             node: string;
@@ -2518,13 +3191,13 @@ export interface components {
              */
             time: string;
             /**
-             * @description What kind of object it is about. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event
+             * @description What kind of object it is about. service, node, secret and config come from a swarm manager only. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event
              * @enum {string}
              */
-            type: "container" | "image" | "network" | "volume" | "bayplan";
+            type: "container" | "image" | "network" | "volume" | "service" | "node" | "secret" | "config" | "bayplan";
         };
         EventListBody: {
-            /** @description At most 50 events, newest first */
+            /** @description At most limit events (50 unless asked otherwise, never more than 1000), newest first */
             items: components["schemas"]["EventDTO"][] | null;
         };
         ExportBackupInputBody: {
@@ -2746,6 +3419,11 @@ export interface components {
             /** @description The Docker socket path Bayplan was configured with */
             socketPath: string;
         };
+        LogLine: {
+            m: string;
+            s: string;
+            t: string;
+        };
         LoginBody: {
             /** @description Sent as X-CSRF-Token on every mutating request */
             csrfToken: string;
@@ -2793,14 +3471,198 @@ export interface components {
             /** @description The signed-in user */
             user: components["schemas"]["UserBody"];
         };
-        NetworkItem: {
+        NetworkAttachmentBody: {
+            /** @description The DNS names the container answers to on this network, from an inspect of the container. Null for a service, for a container whose inspect failed, and for a container past the 50th (see aliasesTruncated) */
+            aliases: string[] | null;
+            /** @description The container ID; for a service, its ID when the cluster read has it, else empty */
+            id: string;
+            /** @description The container's IPv4 address on this network; empty when it has none */
+            ipv4: string;
+            /** @description The container's IPv6 address on this network; empty when it has none */
+            ipv6: string;
+            /**
+             * @description container, or service for a swarm service whose spec mentions the network
+             * @enum {string}
+             */
+            kind: "container" | "service";
+            /** @description The container's MAC address on this network; empty when it has none */
+            mac: string;
+            /** @description The container or service name */
+            name: string;
+            /** @description The display name of the node a container is on; empty for a service */
+            node: string;
+            /** @description The ID of the node a container is on: what a write is routed by; empty for a service */
+            nodeId: string;
+            /** @description The container state; empty for a service */
+            state: string;
+            /**
+             * Format: int64
+             * @description For a service, how many of its tasks have an endpoint on the network, as the manager reports it; 0 for a container and when not known
+             */
+            tasks: number;
+        };
+        NetworkConnectRequest: {
+            /** @description Another name other containers on the network can use to reach this one */
+            alias?: string;
+            /** @description The container's name, typed. Needed to connect Bayplan's own server or an agent container (else 422 confirmation_required, and nothing is sent) */
+            confirm?: string;
+            /** @description The container ID */
+            containerId: string;
+            /** @description An IPv4 address to give the container on the network, inside one of its subnets */
+            ipv4?: string;
+            /** @description An IPv6 address to give the container on the network, inside one of its subnets */
+            ipv6?: string;
+            /** @description The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node */
+            nodeId?: string;
+        };
+        NetworkCreateBody: {
+            /** @description The ID of the network the engine made */
+            id: string;
+            /** @description The network name */
+            name: string;
+        };
+        NetworkCreateRequest: {
+            /** @description Let standalone containers join it. Only for an overlay network on a swarm */
+            attachable?: boolean;
+            /**
+             * @description The network driver. Ingress, config-only and config-from networks cannot be created
+             * @enum {string}
+             */
+            driver: "bridge" | "overlay" | "macvlan" | "ipvlan";
+            /** @description The gateway address, inside the subnet */
+            gateway?: string;
+            /** @description No access to outside networks */
+            internal?: boolean;
+            /** @description The range containers are given addresses from, in CIDR form, inside the subnet */
+            ipRange?: string;
+            /** @description Enable IPv6 */
+            ipv6?: boolean;
+            /** @description Labels, at most 64 */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description The network name */
+            name: string;
+            /** @description The node to create a local-scope network on: the nodeId of a row of a list. Left out on an environment of one node */
+            nodeId?: string;
+            /** @description Driver options, at most 64 */
+            options?: {
+                [key: string]: string;
+            };
+            /** @description The subnet in CIDR form, for example 10.20.0.0/24. Left out, the engine picks one */
+            subnet?: string;
+        };
+        NetworkDetailBody: {
+            /** @description True when more than 50 containers are attached, so only the first 50 (in the order above) were inspected for their aliases and the rest have aliases null */
+            aliasesTruncated: boolean;
+            /** @description Standalone containers can join it */
+            attachable: boolean;
+            /**
+             * Format: int64
+             * @description How many attachments are containers
+             */
+            attachedContainers: number;
+            /**
+             * Format: int64
+             * @description How many attachments are services
+             */
+            attachedServices: number;
+            /** @description Every container on every reporting node that is attached to the network (a local network: its own node's) and, on a swarm, every service whose spec mentions it. Sorted by name, then node */
+            attachments: components["schemas"]["NetworkAttachmentBody"][] | null;
+            /** @description True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted */
+            builtIn: boolean;
             /** Format: date-time */
             created?: string;
             driver: string;
             id: string;
+            /** @description No access to outside networks */
+            internal: boolean;
+            /** @description The address pools, in the engine's order; empty when the network has none */
+            ipam: components["schemas"]["NetworkIPAMBody"][] | null;
+            /** @description IPv6 is enabled */
+            ipv6: boolean;
+            /** @description Every label of the network */
+            labels: {
+                [key: string]: string;
+            };
             name: string;
             /** @description The node the network is local to, or Cluster for a swarm-wide network */
             node: string;
+            /** @description The ID of the node the network was read from; for a swarm-wide network, the manager in use */
+            nodeId: string;
+            /** @description Nodes that should have answered and did not, so the attachments may be incomplete */
+            notReporting: string[] | null;
+            /** @description The driver options the network was created with */
+            options: {
+                [key: string]: string;
+            };
+            /** @description The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; empty when the network has neither */
+            owner: string;
+            /**
+             * @description stack, project, or empty when the network has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "project" | "";
+            /** @description local, or swarm for a cluster-wide network */
+            scope: string;
+        };
+        NetworkDisconnectRequest: {
+            /** @description The container's name, typed. Needed to disconnect Bayplan's own server or an agent container (else 422 confirmation_required, and nothing is sent) */
+            confirm?: string;
+            /** @description The container ID */
+            containerId: string;
+            /** @description The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node */
+            nodeId?: string;
+        };
+        NetworkIPAMBody: {
+            /** @description The gateway address; empty when the network sets none */
+            gateway: string;
+            /** @description The range containers are given addresses from, in CIDR notation; empty when the network sets none */
+            ipRange: string;
+            /** @description The subnet in CIDR notation */
+            subnet: string;
+        };
+        NetworkInspectBody: {
+            /** @description The engine's inspect document of the network as it is; verbose, with the services, for a swarm-scoped network read on a manager */
+            inspect: {
+                [key: string]: unknown;
+            };
+        };
+        NetworkItem: {
+            /** @description Standalone containers can join it */
+            attachable: boolean;
+            /**
+             * Format: int64
+             * @description Containers, running or not, on any reporting node that are attached to the network. A local network counts the containers of its own node
+             */
+            attachedContainers: number;
+            /**
+             * Format: int64
+             * @description Swarm services whose spec mentions the network, even with no running task, as of the last cluster read. Always 0 off a swarm and for a local network
+             */
+            attachedServices: number;
+            /** @description True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted */
+            builtIn: boolean;
+            /** Format: date-time */
+            created?: string;
+            driver: string;
+            id: string;
+            /** @description No access to outside networks */
+            internal: boolean;
+            /** @description IPv6 is enabled */
+            ipv6: boolean;
+            name: string;
+            /** @description The node the network is local to, or Cluster for a swarm-wide network */
+            node: string;
+            /** @description The ID of the node the network was read from; for a swarm-wide network, the manager in use */
+            nodeId: string;
+            /** @description The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; empty when the network has neither */
+            owner: string;
+            /**
+             * @description stack, project, or empty when the network has no owner
+             * @enum {string}
+             */
+            ownerKind: "stack" | "project" | "";
             /** @description local, or swarm for a cluster-wide network */
             scope: string;
             /** @description The IPAM subnets in CIDR notation; empty when the network has none */
@@ -2838,6 +3700,14 @@ export interface components {
             node: string;
             /** Format: int64 */
             volumes: number;
+        };
+        OptionVar: {
+            /** @description True when the value was withheld because the caller may not reveal secrets on this environment */
+            masked: boolean;
+            /** @description The option's name */
+            name: string;
+            /** @description The option's value; absent while masked */
+            value?: string;
         };
         OwnedBody: {
             /** @description The environment it acts on */
@@ -3161,6 +4031,97 @@ export interface components {
             /** @description The lower-cased username */
             username: string;
         };
+        ShellItemBody: {
+            /** @description The container's name */
+            container: string;
+            /** @description The container's full ID */
+            containerId: string;
+            /** @description The session's ID, the one to end it by */
+            id: string;
+            /**
+             * Format: int64
+             * @description Seconds since anything was typed into or printed by the shell
+             */
+            idleSeconds: number;
+            /** @description The name of the node the container is on */
+            node: string;
+            /**
+             * Format: date-time
+             * @description When the session was opened
+             */
+            startedAt: string;
+            /** @description The name of the person it belongs to */
+            user: string;
+        };
+        ShellListBody: {
+            /** @description Oldest first; empty when there are none */
+            items: components["schemas"]["ShellItemBody"][] | null;
+        };
+        ShellOpenBody: {
+            /**
+             * Format: int64
+             * @description The terminal's width in characters
+             * @default 80
+             */
+            cols: number;
+            /** @description With shell custom, the command to run, split into words the way a shell reads quotes and backslashes. It is never given to a shell, so nothing in it is expanded */
+            command?: string;
+            /** @description The node the container is on: the nodeId of its row in the containers list. May be left out only on an environment of one node that is not a swarm (422 node_required) */
+            nodeId?: string;
+            /**
+             * Format: int64
+             * @description The terminal's height in lines
+             * @default 24
+             */
+            rows: number;
+            /**
+             * @description auto runs bash when the image has it and sh otherwise, in one exec. custom runs command
+             * @default auto
+             * @enum {string}
+             */
+            shell: "auto" | "bash" | "sh" | "ash" | "custom";
+            /** @description The user to run as, for example root, 0 or www-data. Empty means the container's own */
+            user?: string;
+            /** @description The working directory. Empty means the container's own */
+            workingDir?: string;
+        };
+        ShellPreferenceBody: {
+            /** @description With shell custom, the command that was entered; otherwise empty */
+            command: string;
+            /**
+             * @description The shell that was chosen
+             * @enum {string}
+             */
+            shell: "auto" | "bash" | "sh" | "ash" | "custom";
+            /** @description The user it ran as; empty means the container's own */
+            user: string;
+            /** @description Its working directory; empty means the container's own */
+            workingDir: string;
+        };
+        ShellSessionBody: {
+            /** @description The command that was started */
+            command: string[] | null;
+            /** @description The session's ID, single use and bound to the caller's sign-in */
+            sessionId: string;
+            /** @description The user it runs as; empty means the container's own */
+            user: string;
+            /** @description Its working directory; empty means the container's own */
+            workingDir: string;
+            /** @description The WebSocket to attach to within 30 seconds, as a path under the public URL's base path. Binary frames are the terminal's bytes; text frames are JSON control: resize from the browser, exit and closed from the server */
+            wsPath: string;
+        };
+        ShellSettingsBody: {
+            /**
+             * Format: int64
+             * @description How many minutes a shell may sit without input or output before it is closed. A warning is shown a minute before
+             */
+            idleMinutes: number;
+            /**
+             * Format: int64
+             * @description The most open shells one person may hold across all environments
+             */
+            maxPerUser: number;
+        };
         SourceBody: {
             /**
              * @description Where the grant comes from: the instance-admin flag, an assignment to every environment, a team the user belongs to, or an assignment to the user on this environment
@@ -3171,6 +4132,33 @@ export interface components {
             teamId?: string;
             /** @description The team's name; set when kind is team */
             teamName?: string;
+        };
+        StatusCountsBody: {
+            /**
+             * Format: int64
+             * @description Containers in state exited
+             */
+            exited: number;
+            /**
+             * Format: int64
+             * @description Containers in state paused
+             */
+            paused: number;
+            /**
+             * Format: int64
+             * @description Containers in state restarting
+             */
+            restarting: number;
+            /**
+             * Format: int64
+             * @description Containers in state running
+             */
+            running: number;
+            /**
+             * Format: int64
+             * @description Containers whose health is unhealthy, whatever their state
+             */
+            unhealthy: number;
         };
         SummaryCountsBody: {
             /**
@@ -3392,6 +4380,18 @@ export interface components {
             /** @description New public URL, an absolute http or https URL. Refused with 409 public_url_locked while BAYPLAN_PUBLIC_URL is set */
             publicUrl?: string;
         };
+        UpdateShellSettingsInputBody: {
+            /**
+             * Format: int64
+             * @description New idle limit in minutes, 5 to 240
+             */
+            idleMinutes?: number;
+            /**
+             * Format: int64
+             * @description New per-person cap on open shells, 1 to 50
+             */
+            maxPerUser?: number;
+        };
         UpdateStateBody: {
             /** @description Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, insecure_session, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed */
             reason?: string;
@@ -3536,13 +4536,139 @@ export interface components {
             /** @description Release version, or dev for an untagged build */
             version: string;
         };
+        VolumeCreateBody: {
+            /** @description The volume name */
+            name: string;
+            /** @description The ID of the node the volume was made on */
+            nodeId: string;
+        };
+        VolumeCreateRequest: {
+            /** @description The volume driver. Left out it is local */
+            driver?: string;
+            /** @description Driver options, at most 64. For the local driver: type, o and device. They can hold a share password, so they are never audited as they are */
+            driverOptions?: {
+                [key: string]: string;
+            };
+            /** @description Labels, at most 64 */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description The volume name */
+            name: string;
+            /** @description The node to create the volume on: the nodeId of a row of a list. Volumes are node-local. Left out only on an environment of one node that is not a swarm */
+            nodeId?: string;
+        };
+        VolumeDeleteRequest: {
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
+             */
+            bulkId?: string;
+            /** @description The confirmation, typed: the volume's name for a single target, else the phrase delete {n} volumes where n is at least the number of targets (a bulk of more than 25 is sent in chunks, each carrying the phrase for the whole selection). Anything else is 422 confirmation_required and nothing is sent */
+            confirm: string;
+            /** @description The volumes to delete, at most 25. Each is answered separately; one that fails never stops the others */
+            targets: components["schemas"]["VolumeDeleteTarget"][] | null;
+        };
+        VolumeDeleteResponse: {
+            /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent */
+            bulkId?: string;
+            /** @description One entry per requested target, in request order */
+            results: components["schemas"]["VolumeDeleteResult"][] | null;
+        };
+        VolumeDeleteResult: {
+            /**
+             * @description Why a target failed. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @enum {string}
+             */
+            code?: "volume_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
+            /** @description A plain sentence, or for action_failed the engine's message, at most 300 characters */
+            detail?: string;
+            /** @description The volume name the request named */
+            name: string;
+            /** @description The node ID the request named */
+            nodeId: string;
+            /**
+             * @description done: the engine removed the volume. failed: it was refused or could not be sent; code says why
+             * @enum {string}
+             */
+            result: "done" | "failed";
+        };
+        VolumeDeleteTarget: {
+            /** @description The volume name */
+            name: string;
+            /** @description The node the volume is on: the nodeId of its row in the volumes list. Never the display name */
+            nodeId: string;
+        };
+        VolumeDetailBody: {
+            /** @description True for a volume Docker made for a container without a name */
+            anonymous: boolean;
+            /** Format: date-time */
+            created?: string;
+            driver: string;
+            /** @description Every label of the volume */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description Where the engine keeps the volume's data on the node */
+            mountpoint: string;
+            /** @description The volume name */
+            name: string;
+            /** @description The display name of the node that holds the volume */
+            node: string;
+            /** @description The ID of that node */
+            nodeId: string;
+            /** @description Nodes that should have answered and did not, so usedBy may be incomplete */
+            notReporting: string[] | null;
+            /** @description The driver options the volume was created with, by name. The values can be credentials: a caller without secrets.reveal on the environment gets each with masked true and no value */
+            options: components["schemas"]["OptionVar"][] | null;
+            /** @description local, or global for a volume a cluster driver shares */
+            scope: string;
+            /** @description Every container on the volume's node, running or not, and every swarm service whose spec mounts a volume of this name. Containers first, by name, then services, by name */
+            usedBy: components["schemas"]["VolumeUsedByBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many entries of usedBy are containers
+             */
+            usedByContainers: number;
+            /**
+             * Format: int64
+             * @description How many entries of usedBy are services
+             */
+            usedByServices: number;
+        };
+        VolumeInspectBody: {
+            /** @description The engine's inspect document, with the values of Options replaced by <hidden> unless the caller holds secrets.reveal */
+            inspect: {
+                [key: string]: unknown;
+            };
+            /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked: boolean;
+        };
         VolumeItem: {
+            /** @description True for a volume Docker made for a container without a name: it has the com.docker.volume.anonymous label, or on an engine without it a name of 64 hexadecimal characters */
+            anonymous: boolean;
             /** Format: date-time */
             created?: string;
             driver: string;
             name: string;
             /** @description The node that holds the volume */
             node: string;
+            /** @description The ID of that node: what a write is routed by, since two hosts can share a display name */
+            nodeId: string;
+            /** @description The compose project (com.docker.compose.project); empty when the volume has none */
+            project: string;
+            /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the volume has none */
+            stack: string;
+            /**
+             * Format: int64
+             * @description Containers on this node, running or not, that mount the volume
+             */
+            usedByContainers: number;
+            /**
+             * Format: int64
+             * @description Swarm services whose spec mounts a volume of this name, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts for the volume on every node. Always 0 off a swarm
+             */
+            usedByServices: number;
         };
         VolumeListBody: {
             /** @description At most 500 rows */
@@ -3558,6 +4684,57 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        VolumeSizeEntry: {
+            /** @description The volume name */
+            name: string;
+            /**
+             * Format: int64
+             * @description How many containers reference the volume, or -1 when the engine does not count them
+             */
+            refCount: number;
+            /**
+             * Format: int64
+             * @description Bytes the volume takes, or -1 when the engine cannot say, as for a volume of a driver other than local
+             */
+            size: number;
+        };
+        VolumeSizesBody: {
+            /** @description One entry per node asked, sorted by display name then ID. One node failing never fails the others */
+            nodes: components["schemas"]["VolumeSizesNodeBody"][] | null;
+        };
+        VolumeSizesNodeBody: {
+            /** @description Why the node could not calculate, in a plain sentence */
+            error?: string;
+            /** @description The node's display name */
+            node: string;
+            /** @description The node ID, as in the volumes list */
+            nodeId: string;
+            /** @description False when the node could not calculate its sizes; error says why and sizes is empty */
+            ok: boolean;
+            /** @description The node's volumes with their sizes, sorted by name */
+            sizes: components["schemas"]["VolumeSizeEntry"][] | null;
+        };
+        VolumeUsedByBody: {
+            /** @description The container ID or the service ID */
+            id: string;
+            /**
+             * @description container: on the volume's node, running or not. service: a swarm service whose spec mounts a volume of this name, even with no running task
+             * @enum {string}
+             */
+            kind: "container" | "service";
+            /** @description Where the volume appears inside the container; empty when not known */
+            mountedAt: string;
+            /** @description The container or service name */
+            name: string;
+            /** @description The display name of the node a container is on; empty for a service, which can run on any node */
+            node: string;
+            /** @description The ID of that node; empty for a service */
+            nodeId: string;
+            /** @description True when it is mounted read-only */
+            readOnly: boolean;
+            /** @description A container's state (running, exited ...). For a service: running when any task runs, stopped when it is scaled to zero, starting otherwise; empty when the cluster read does not have it */
+            state: string;
         };
         WarningBody: {
             /**
@@ -3614,6 +4791,8 @@ export interface operations {
                 from?: string;
                 /** @description Only entries at or before this time (RFC 3339) */
                 to?: string;
+                /** @description Only entries of one bulk operation: those whose bulk detail is this ID (the bulkId a container action answers with). 422 when it is not a UUID */
+                bulk?: string;
                 /** @description The nextCursor of the previous page; leave out for the newest entries */
                 cursor?: number;
                 /** @description Entries per page; 50 by default, at most 100 (larger values are clamped) */
@@ -3687,6 +4866,8 @@ export interface operations {
                 from?: string;
                 /** @description Only entries at or before this time (RFC 3339) */
                 to?: string;
+                /** @description Only entries of one bulk operation: those whose bulk detail is this ID (the bulkId a container action answers with). 422 when it is not a UUID */
+                bulk?: string;
                 /** @description csv or json */
                 format?: "csv" | "json";
             };
@@ -4282,6 +5463,71 @@ export interface operations {
             };
         };
     };
+    listActiveShells: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    endShell: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The session's ID */
+                shellId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     adoptEnvironmentCluster: {
         parameters: {
             query?: never;
@@ -4453,6 +5699,10 @@ export interface operations {
             query?: {
                 /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
                 node?: string;
+                /** @description Search: a case-insensitive substring of the name, image, compose project, stack, service or any label key or value. Applied before the 500-row cap */
+                q?: string;
+                /** @description Only containers with one of these statuses, comma separated: running, exited, paused, restarting or unhealthy (a health, not a state). Applied before the 500-row cap; any other value is refused 422 invalid_status */
+                status?: string;
             };
             header?: never;
             path: {
@@ -4502,9 +5752,249 @@ export interface operations {
             };
         };
     };
-    listRecentEvents: {
+    actOnContainers: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContainerActionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerActionResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeContainers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContainerRemoveRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerActionResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getContainer: {
+        parameters: {
+            query?: {
+                /** @description The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required) */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectContainer: {
+        parameters: {
+            query?: {
+                /** @description The node the container is on: the nodeId of its row in the containers list. May be left out on an environment of one node; on a swarm it is required (422 node_required) */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getContainerLogs: {
+        parameters: {
+            query: {
+                /** @description The node the container is on; see the container detail route */
+                nodeId?: string;
+                /** @description The viewer's ID: 16 to 64 letters, digits, dashes or underscores */
+                sid: string;
+                /** @description Only lines written before this time: an RFC 3339 time or Unix seconds. Left out, the newest lines */
+                until?: string;
+                /** @description Do not look further back than this time: an RFC 3339 time or Unix seconds */
+                since?: string;
+                /** @description How many lines at most; 500 by default */
+                tail?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerLogsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    openShell: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The container ID or name */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShellOpenBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellSessionBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listRecentEvents: {
+        parameters: {
+            query?: {
+                /** @description Only events at or after this time (RFC 3339). Anything earlier than 24 hours ago is read as 24 hours ago */
+                since?: string;
+                /** @description At most this many events; 50 by default */
+                limit?: number;
+            };
             header?: never;
             path: {
                 /** @description The environment ID */
@@ -4594,6 +6084,8 @@ export interface operations {
             query?: {
                 /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
                 node?: string;
+                /** @description Search: a case-insensitive substring of the name, driver, a subnet or the owner (stack or compose project). Applied before the 500-row cap */
+                q?: string;
             };
             header?: never;
             path: {
@@ -4643,6 +6135,226 @@ export interface operations {
             };
         };
     };
+    createNetwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getNetwork: {
+        parameters: {
+            query?: {
+                /** @description The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the id of a row of the networks list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteNetwork: {
+        parameters: {
+            query?: {
+                /** @description The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the id of a row of the networks list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    connectContainer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the id of a row of the networks list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkConnectRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disconnectContainer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the id of a row of the networks list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkDisconnectRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectNetwork: {
+        parameters: {
+            query?: {
+                /** @description The node a local-scope network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the id of a row of the networks list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     reconnectEnvironment: {
         parameters: {
             query?: never;
@@ -4664,6 +6376,74 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listMyShells: {
+        parameters: {
+            query?: {
+                /** @description Only the shells in this container: its ID or name. Left out, every shell the caller has open on the environment */
+                containerId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    endMyShell: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The session's ID */
+                shellId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {
@@ -4765,6 +6545,10 @@ export interface operations {
             query?: {
                 /** @description Only the rows of this node, matched exactly against the node names the list reports. A name that is not one of them gives an empty list */
                 node?: string;
+                /** @description Search: a case-insensitive substring of the name, driver, a label (its name or its value) or the stack or compose project. Applied before the 500-row cap */
+                q?: string;
+                /** @description used: only volumes a container or a swarm service mounts. unused: only volumes nothing mounts. Applied before the 500-row cap */
+                usage?: "all" | "used" | "unused";
             };
             header?: never;
             path: {
@@ -4810,6 +6594,192 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    createVolume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VolumeCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteVolumes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VolumeDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeDeleteResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    volumeSizes: {
+        parameters: {
+            query?: {
+                /** @description Only this node: the nodeId of a row of the volumes list. Left out, every reporting node */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeSizesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getVolume: {
+        parameters: {
+            query?: {
+                /** @description The node the volume is on: the nodeId of its row in the volumes list. Volumes are node-local, so it is required on a swarm and may be left out only on an environment of one node */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The volume name */
+                volumeName: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectVolume: {
+        parameters: {
+            query?: {
+                /** @description The node the volume is on: the nodeId of its row in the volumes list. Volumes are node-local, so it is required on a swarm and may be left out only on an environment of one node */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The volume name */
+                volumeName: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
                 };
             };
         };
@@ -5504,6 +7474,39 @@ export interface operations {
             };
         };
     };
+    getShellPreference: {
+        parameters: {
+            query: {
+                /** @description The image reference of the container, for example nginx:1.27, as the container detail names it */
+                image: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellPreferenceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listEligibleOwners: {
         parameters: {
             query?: never;
@@ -5629,6 +7632,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getShellSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateShellSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateShellSettingsInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellSettingsBody"];
                 };
             };
             /** @description Error */

@@ -32,6 +32,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/shells"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/vault"
@@ -104,6 +105,9 @@ type Server struct {
 	// broker turns agent connections and health changes into the global
 	// environments stream (plan 02-12).
 	broker *envs.Broker
+	// shells holds the browser shells that are open (plan 04-22). It is memory only,
+	// and the shutdown closes every one of them.
+	shells *shells.Registry
 	// tunnel holds the live agent connections; agents creates agent
 	// environments and enrols agents.
 	tunnel  *tunnel.Hub
@@ -145,7 +149,12 @@ type RouterDeps struct {
 	Agents        api.AgentsDeps
 	UnknownAgents api.UnknownAgentsDeps
 	Dashboard     api.DashboardDeps
+	Containers    api.ContainersDeps
+	Networks      api.NetworksDeps
+	Volumes       api.VolumesDeps
 	Events        api.EventsDeps
+	Logs          api.LogsDeps
+	Shells        api.ShellsDeps
 	EnvStream     api.EnvStreamDeps
 	Recent        api.RecentDeps
 	Audit         api.AuditDeps
@@ -180,7 +189,12 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterUnknownAgents(r, d.UnknownAgents)
 	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Agents: d.Agents, Log: d.Environments.Log})
 	api.RegisterDashboard(r, d.Dashboard)
+	api.RegisterContainers(r, d.Containers)
+	api.RegisterNetworks(r, d.Networks)
+	api.RegisterVolumes(r, d.Volumes)
 	api.RegisterEvents(r, d.Events)
+	api.RegisterLogs(r, d.Logs)
+	api.RegisterShells(r, d.Shells)
 	api.RegisterEnvStream(r, d.EnvStream)
 	api.RegisterRecent(r, d.Recent)
 	api.RegisterAudit(r, d.Audit)
@@ -636,6 +650,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		InstanceName: inst.Name, PublicURL: inst.PublicURL,
 	}
 
+	shellRegistry := shells.NewRegistry(nil)
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -697,8 +712,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
-		Dashboard:     api.DashboardDeps{Aggregator: aggregator, SelfContainerID: selfID, Log: log},
+		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, SelfContainerID: selfID, Log: log},
+		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, SelfContainerID: selfID, Log: log},
+		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
+		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
+		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
+		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, SelfContainerID: selfID, Store: st, Log: log},
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
@@ -742,6 +762,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		clusters:   clusters,
 		aggregator: aggregator,
 		broker:     broker,
+		shells:     shellRegistry,
 		tunnel:     tunnelHub,
 		agents:     agentSvc,
 		updater:    updater,
@@ -805,6 +826,10 @@ func (s *Server) Sessions() *auth.Sessions { return s.session }
 // Environments is the environment registry.
 func (s *Server) Environments() *envs.Service { return s.envs }
 
+// Aggregator is the read and write path to one node's engine. Tests drive
+// node-targeted calls through it.
+func (s *Server) Aggregator() *envs.Aggregator { return s.aggregator }
+
 // Snapshots is the per-environment resource snapshot cache; the events feed
 // invalidates it when Docker reports a change.
 func (s *Server) Snapshots() *envs.Snapshots { return s.snapshots }
@@ -856,6 +881,8 @@ func (s *Server) Agents() *agents.Service { return s.agents }
 func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
+	// Before the database closes, so the end of each shell is still audited.
+	s.shells.CloseAll("server_shutdown")
 	s.broker.Close()
 	s.updater.Close()
 	s.tunnel.Close()
@@ -932,6 +959,10 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	srv.RegisterOnShutdown(s.hub.Close)
 	// The health stream is open as long as a tab is, so it ends the same way.
 	srv.RegisterOnShutdown(s.broker.Close)
+	// http.Server.Shutdown ignores hijacked connections, and every browser shell is
+	// one. Closing the registry tells each attached browser why and ends its process
+	// attach, so a shell does not outlive the shutdown.
+	srv.RegisterOnShutdown(func() { s.shells.CloseAll("server_shutdown") })
 	// http.Server.Shutdown ignores hijacked connections, and every agent
 	// tunnel is one. Closing the hub sends each a close frame so the agents
 	// reconnect with backoff instead of waiting on a dead session (Pitfall 5).
@@ -968,7 +999,12 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 func (s *Server) shutdown(srv *http.Server, restarting bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	err := srv.Shutdown(ctx)
+	// Shutdown runs the shell hook on a goroutine it does not wait for. CloseAll
+	// waits for every shell's end to be audited, so nothing is lost when the
+	// database closes after serve returns.
+	s.shells.CloseAll("server_shutdown")
+	if err != nil {
 		if restarting {
 			s.log.Warn("some connections were still open at the restart and were closed", "error", err)
 			_ = srv.Close()

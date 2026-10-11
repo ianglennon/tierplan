@@ -116,25 +116,57 @@ const IMAGES = {
   truncated: false,
 };
 
-const VOLUMES = { items: [{ name: "pgdata", driver: "local" }], total: 1, truncated: false };
+// What every volume row carries besides its columns' own values (plan 04-17).
+const NO_VOLUME_USE = {
+  usedByContainers: 0,
+  usedByServices: 0,
+  anonymous: false,
+  project: "",
+  stack: "",
+};
+
+const VOLUMES = {
+  items: [{ ...NO_VOLUME_USE, name: "pgdata", driver: "local", node: "", nodeId: "" }],
+  total: 1,
+  truncated: false,
+};
+
+// What every network row carries besides its columns' own values (plan 04-13).
+const NO_USE = {
+  builtIn: false,
+  attachedContainers: 0,
+  attachedServices: 0,
+  owner: "",
+  ownerKind: "",
+  internal: false,
+  attachable: false,
+  ipv6: false,
+};
 
 const NETWORKS = {
   items: [
     {
+      ...NO_USE,
       id: "n1",
       name: "bridge",
       driver: "bridge",
       scope: "local",
       subnets: ["172.17.0.0/16"],
       created: ago(10 * 86_400_000),
+      builtIn: true,
+      attachedContainers: 2,
+      owner: "shop",
+      ownerKind: "stack",
     },
     {
+      ...NO_USE,
       id: "n2",
       name: "host",
       driver: "host",
       scope: "local",
       subnets: [],
       created: ago(10 * 86_400_000),
+      builtIn: true,
     },
   ],
   total: 2,
@@ -234,21 +266,21 @@ afterEach(() => {
 });
 
 describe("containers list", () => {
-  it("shows Name, State, Image, Created, Status and Ports in the server's order", async () => {
-    renderAt("/env/e1/containers");
+  it("shows Name, State, Image, Ports and Created, then the actions column, sorted by name", async () => {
+    renderAt("/env/e1/containers?group=none");
     await screen.findByRole("heading", { name: "Containers" });
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
-    expect(headers).toEqual(["Name", "State", "Image", "Created", "Status", "Ports"]);
+    // The last column is the row menu; its header is for assistive technology only.
+    expect(headers).toEqual(["", "Name", "State", "Image", "Ports", "Created", "Actions"]);
     const rows = (await screen.findAllByRole("row")).slice(1);
     expect(rows).toHaveLength(3);
-    const first = cellsOf(rows[0] as HTMLElement);
+    const first = cellsOf(rows[0] as HTMLElement).slice(1);
     expect(first[0]).toContain("bayplan");
     expect(first[1]).toBe("Running");
     expect(first[2]).toBe("ghcr.io/ianglennon/bayplan:latest");
-    expect(first[3]).toBe("3 h ago");
-    expect(first[4]).toBe("Up 3 hours");
-    expect(first[5]).toBe("0.0.0.0:7480->7480/tcp");
-    const names = rows.map((r) => cellsOf(r as HTMLElement)[0]);
+    expect(first[3]).toBe("0.0.0.0:7480->7480/tcp");
+    expect(first[4]).toBe("3 h ago");
+    const names = rows.map((r) => cellsOf(r as HTMLElement)[1]);
     expect(names[0]).toContain("bayplan");
     expect(names[1]).toContain("db");
     expect(names[2]).toContain("old-job");
@@ -256,33 +288,44 @@ describe("containers list", () => {
   });
 
   it("badges Bayplan's own container row and no other (D-27)", async () => {
-    renderAt("/env/e1/containers");
+    renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[0] as HTMLElement)[0]).toContain("Bayplan (this instance)");
-    expect(cellsOf(rows[1] as HTMLElement)[0]).not.toContain("Bayplan (this instance)");
+    expect(cellsOf(rows[0] as HTMLElement).slice(1)[0]).toContain("Bayplan (this instance)");
+    expect(cellsOf(rows[1] as HTMLElement).slice(1)[0]).not.toContain("Bayplan (this instance)");
   });
 
   it("pairs every state dot with its text and renders a dash for a missing created time and no ports", async () => {
-    renderAt("/env/e1/containers");
+    renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[1] as HTMLElement)[1]).toBe("Restarting");
-    const last = cellsOf(rows[2] as HTMLElement);
+    expect(cellsOf(rows[1] as HTMLElement).slice(1)[1]).toBe("Restarting");
+    const last = cellsOf(rows[2] as HTMLElement).slice(1);
     expect(last[1]).toBe("Exited");
+    expect(last[4]).toBe("—");
     expect(last[3]).toBe("—");
-    expect(last[5]).toBe("—");
-    expect(cellsOf(rows[1] as HTMLElement)[5]).toBe("5432/tcp, 5433/tcp");
+    expect(cellsOf(rows[1] as HTMLElement).slice(1)[3]).toBe("5432/tcp, 5433/tcp");
   });
 
-  it("has no checkboxes, row actions, menus or links in the table (D-56)", async () => {
-    renderAt("/env/e1/containers");
+  it("has a checkbox for each row and one for all, a link for each name, and its only other buttons are the closed row action menus (D-56, plan 04-08, 04-10)", async () => {
+    renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const table = screen.getByRole("table");
-    expect(within(table).queryByRole("checkbox")).toBeNull();
-    expect(within(table).queryByRole("button")).toBeNull();
-    expect(within(table).queryByRole("link")).toBeNull();
+    expect(within(table).getAllByRole("checkbox")).toHaveLength(4);
+    // The only links are the names, which open the container (plan 04-10).
+    const links = within(table).getAllByRole("link");
+    expect(links).toHaveLength(3); // one per row; the fourth checkbox is Select all
+    for (const l of links) expect(l.getAttribute("href")).toMatch(/^\/env\/e1\/containers\/\w+/);
     expect(within(table).queryByRole("menu")).toBeNull();
+    // The sortable headers are buttons too (plan 04-07); the rows hold only menus.
+    const buttons = within(table)
+      .getAllByRole("button")
+      .filter((b) => b.closest("td"));
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) {
+      if (b.getAttribute("role") === "checkbox") continue;
+      expect(b.getAttribute("aria-label")).toMatch(/^Actions for /);
+    }
   });
 
   it("sets the tab title to the resource and the instance name", async () => {
@@ -330,6 +373,36 @@ describe("containers list", () => {
     await screen.findByText("old-job");
   });
 
+  it("puts the search in the URL 250 ms after typing, replacing the history entry, and asks the server for it", async () => {
+    const router = renderAt("/env/e1/containers?group=none");
+    await screen.findByText("old-job");
+    const length = window.history.length;
+    answers["/api/env/e1/containers"] = (url) =>
+      Response.json({
+        items: CONTAINERS.items.filter((c) => c.name.includes(url.searchParams.get("q") ?? "")),
+        total: 1,
+        truncated: false,
+      });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search containers" }), {
+      target: { value: "old" },
+    });
+    expect(router.state.location.search).toEqual({ group: "none" });
+    await waitFor(() => expect(router.state.location.search).toEqual({ group: "none", q: "old" }), {
+      timeout: 2000,
+    });
+    await waitFor(() => expect(sentUrls).toContain("/api/env/e1/containers?q=old"));
+    expect(window.history.length).toBe(length);
+    await waitFor(() => expect(screen.queryByText("bayplan")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ group: "none" }));
+  });
+
+  it("drops an invalid ?group= and groups by stack or project", async () => {
+    renderAt("/env/e1/containers?group=foo");
+    await screen.findByText("old-job");
+    expect(screen.getByRole("button", { name: "Collapse Ungrouped" })).toBeTruthy();
+  });
+
   it("says how many it left out when the server capped the list", async () => {
     answers["/api/env/e1/containers"] = () =>
       Response.json({ ...CONTAINERS, total: 612, truncated: true });
@@ -363,26 +436,46 @@ describe("images list", () => {
 });
 
 describe("volumes list", () => {
-  it("shows Name, Driver and Created, with a dash when the engine gave no time", async () => {
-    renderAt("/env/e1/volumes");
+  it("shows Name, Driver, Used by, Size and Created, with a dash when the engine gave no time", async () => {
+    renderAt("/env/e1/volumes?group=none");
     await screen.findByText("pgdata");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[0] as HTMLElement)).toEqual(["pgdata", "local", "—"]);
+    // The last cell is Delete…, disabled with its reason for a reader.
+    const cells = cellsOf(rows[0] as HTMLElement);
+    expect(cells.slice(0, 6)).toEqual(["", "pgdata", "local", "Not in use", "—", "—"]);
+    expect(cells[6]).toContain("Delete…");
   });
 });
 
 describe("networks list", () => {
-  it("shows Name, Driver, Scope, Subnet and Created, with a dash for no subnet", async () => {
+  it("shows Name to Created, with a dash for no subnet or owner and None when nothing is attached", async () => {
     renderAt("/env/e1/networks");
     await screen.findByText("172.17.0.0/16");
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
-    expect(headers).toEqual(["Name", "Driver", "Scope", "Subnet", "Created"]);
+    expect(headers).toEqual([
+      "Name",
+      "Driver",
+      "Scope",
+      "Subnet",
+      "Attached",
+      "Owner",
+      "Created",
+      "Actions",
+    ]);
     const rows = screen.getAllByRole("row").slice(1);
     const bridge = cellsOf(rows[0] as HTMLElement);
-    expect(bridge.slice(0, 4)).toEqual(["bridge", "bridge", "local", "172.17.0.0/16"]);
+    expect(bridge.slice(0, 6)).toEqual([
+      "bridge",
+      "bridge",
+      "Local",
+      "172.17.0.0/16",
+      "2 containers",
+      "shop",
+    ]);
     // Ten days old: an absolute date, not "10 d ago" (D-66).
-    expect(bridge[4]).toMatch(/2026/);
-    expect(cellsOf(rows[1] as HTMLElement)[3]).toBe("—");
+    expect(bridge[6]).toMatch(/2026/);
+    const host = cellsOf(rows[1] as HTMLElement);
+    expect(host.slice(3, 6)).toEqual(["—", "None", "—"]);
   });
 });
 
@@ -512,13 +605,14 @@ describe("swarm lists", () => {
   }
 
   it("shows Node after Name, the caption across the nodes and the banner for a node that did not report", async () => {
-    renderAt("/env/e1/containers");
+    renderAt("/env/e1/containers?group=none");
     await screen.findByText("web.1");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(headers).toEqual(["Name", "Node", "State", "Image", "Created", "Status", "Ports"]);
+    expect(headers).toEqual(["", "Name", "Node", "State", "Image", "Ports", "Created", "Actions"]);
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[0] as HTMLElement).slice(0, 2)).toEqual(["web.1", "n1"]);
-    expect(cellsOf(rows[2] as HTMLElement).slice(0, 2)).toEqual(["db", "n3"]);
+    // The page sorts by name, whatever order the server sent.
+    expect(cellsOf(rows[0] as HTMLElement).slice(1, 3)).toEqual(["db", "n3"]);
+    expect(cellsOf(rows[2] as HTMLElement).slice(1, 3)).toEqual(["web.2", "n2"]);
     expect(screen.getByText("3 containers across 3 nodes")).toBeTruthy();
     expect(
       screen.getByText("1 node isn't reporting: n4. The totals below leave it out."),
@@ -531,12 +625,12 @@ describe("swarm lists", () => {
   });
 
   it("gives the Node column one width, so the table does not reflow as nodes report", async () => {
-    renderAt("/env/e1/containers");
+    renderAt("/env/e1/containers?group=none");
     await screen.findByText("web.1");
     const header = screen.getByRole("columnheader", { name: "Node" });
     expect(header.className).toContain("w-56");
     expect(header.className).toContain("min-w-56");
-    const cell = within(screen.getAllByRole("row")[1] as HTMLElement).getAllByRole("cell")[1];
+    const cell = within(screen.getAllByRole("row")[1] as HTMLElement).getAllByRole("cell")[2];
     expect(cell?.className).toContain("w-56");
   });
 
@@ -617,6 +711,7 @@ describe("swarm lists", () => {
       Response.json({
         items: [
           {
+            ...NO_USE,
             id: "n1",
             name: "ingress",
             node: "Cluster",
@@ -626,6 +721,7 @@ describe("swarm lists", () => {
             created: ago(86_400_000 * 10),
           },
           {
+            ...NO_USE,
             id: "n2",
             name: "bridge",
             node: "n1",
@@ -643,7 +739,17 @@ describe("swarm lists", () => {
     renderAt("/env/e1/networks");
     await screen.findByText("ingress");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(headers).toEqual(["Name", "Node", "Driver", "Scope", "Subnet", "Created"]);
+    expect(headers).toEqual([
+      "Name",
+      "Node",
+      "Driver",
+      "Scope",
+      "Subnet",
+      "Attached",
+      "Owner",
+      "Created",
+      "Actions",
+    ]);
     const rows = screen.getAllByRole("row").slice(1);
     expect(cellsOf(rows[0] as HTMLElement).slice(0, 2)).toEqual(["ingress", "Cluster"]);
     expect(cellsOf(rows[1] as HTMLElement).slice(0, 2)).toEqual(["bridge", "n1"]);
@@ -677,7 +783,7 @@ describe("swarm lists", () => {
       });
     answers["/api/env/e1/volumes"] = () =>
       Response.json({
-        items: [{ name: "pgdata", node: "n2", driver: "local" }],
+        items: [{ ...NO_VOLUME_USE, name: "pgdata", node: "n2", nodeId: "n2-id", driver: "local" }],
         total: 1,
         truncated: false,
         nodes: ["n2"],
@@ -696,10 +802,14 @@ describe("swarm lists", () => {
     renderAt("/env/e1/volumes");
     await screen.findByText("pgdata");
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "",
       "Name",
       "Node",
       "Driver",
+      "Used by",
+      "Size",
       "Created",
+      "Actions",
     ]);
   });
 
@@ -744,8 +854,8 @@ describe("swarm lists", () => {
     answers["/api/env/e1/volumes"] = () =>
       Response.json({
         items: [
-          { name: "pgdata", node: "n1", driver: "local" },
-          { name: "pgdata", node: "n2", driver: "local" },
+          { ...NO_VOLUME_USE, name: "pgdata", node: "n1", nodeId: "n1-id", driver: "local" },
+          { ...NO_VOLUME_USE, name: "pgdata", node: "n2", nodeId: "n2-id", driver: "local" },
         ],
         total: 2,
         truncated: false,
@@ -754,10 +864,10 @@ describe("swarm lists", () => {
       });
     const spy = sameKeyWarnings();
     try {
-      renderAt("/env/e1/volumes");
+      renderAt("/env/e1/volumes?group=none");
       await screen.findAllByText("pgdata");
       const rows = screen.getAllByRole("row").slice(1);
-      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[2])).toEqual(["n1", "n2"]);
       expect(sameKeyWarningsOf(spy)).toEqual([]);
     } finally {
       spy.mockRestore();
@@ -768,6 +878,7 @@ describe("swarm lists", () => {
     answers["/api/env/e1/networks"] = () =>
       Response.json({
         items: ["n1", "n2"].map((node) => ({
+          ...NO_USE,
           id: "b1",
           name: "bridge",
           node,
@@ -796,10 +907,10 @@ describe("swarm lists", () => {
       let rows = screen.getAllByRole("row").slice(1);
       expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
       cleanup();
-      renderAt("/env/e1/containers");
+      renderAt("/env/e1/containers?group=none");
       await screen.findAllByText("web");
       rows = screen.getAllByRole("row").slice(1);
-      expect(rows.map((r) => cellsOf(r as HTMLElement)[1])).toEqual(["n1", "n2"]);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[2])).toEqual(["n1", "n2"]);
       expect(sameKeyWarningsOf(spy)).toEqual([]);
     } finally {
       spy.mockRestore();
@@ -814,7 +925,7 @@ describe("swarm lists", () => {
       await screen.findByText("nginx:1.27, nginx:latest");
       expect(screen.getAllByRole("row").slice(1)).toHaveLength(2);
       cleanup();
-      renderAt("/env/e1/volumes");
+      renderAt("/env/e1/volumes?group=none");
       await screen.findByText("pgdata");
       expect(screen.getAllByRole("row").slice(1)).toHaveLength(1);
       expect(sameKeyWarningsOf(spy)).toEqual([]);

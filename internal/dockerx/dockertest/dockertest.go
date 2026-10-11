@@ -32,6 +32,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/system"
@@ -105,6 +106,15 @@ type FakeConfig struct {
 	Images     []FakeImage
 	Volumes    []FakeVolume
 	Networks   []FakeNetwork
+	// DiskUsageFail makes GET /system/df answer 500, as an engine does when a volume's files
+	// cannot be walked.
+	DiskUsageFail bool
+	// DiskUsageDelay is how long GET /system/df takes to answer, so a test can make the
+	// per-node time limit trip. It ends early when the caller gives up.
+	DiskUsageDelay time.Duration
+	// BusyVolumes are volumes the daemon refuses to remove as in use although no container
+	// in its list mounts them, as when a container starts between a check and the call.
+	BusyVolumes []string
 	// Nodes and Services are how many swarm nodes and services /nodes and
 	// /services list. A fake that is not a swarm manager answers both with the
 	// 503 a real worker gives, so a client that asks anyway fails loudly.
@@ -112,9 +122,17 @@ type FakeConfig struct {
 	// ListDelay is how long /containers/json takes to answer, so a test can
 	// make concurrent callers overlap.
 	ListDelay time.Duration
-	// PolicyDeny makes the four list endpoints answer 403 with the message an
-	// agent gives for a request its policy refuses: agent_policy_denied: followed
-	// by the method and path.
+	// WriteDelay is how long each container write (start, stop, restart, kill, pause,
+	// unpause, remove) takes to answer, so a test can make concurrent writes overlap
+	// and read the high-water mark with MaxConcurrentWrites.
+	WriteDelay time.Duration
+	// DropWrites makes every container write close its connection without answering,
+	// as the engine does when the container it is stopping is the one that serves the
+	// caller (Bayplan's own server or an agent). The write is still recorded.
+	DropWrites bool
+	// PolicyDeny makes the four list endpoints and every write answer 403 with the
+	// message an agent gives for a request its policy refuses: agent_policy_denied:
+	// followed by the method and path.
 	PolicyDeny bool
 	// Events is the history the daemon has buffered when it starts, oldest
 	// first, as /events replays it to a client that passes since.
@@ -137,6 +155,10 @@ type FakeConfig struct {
 	// reports: a name such as "always", or "on-failure:3" with its maximum retry
 	// count. An ID that is not here is a container with no policy.
 	RestartPolicies map[string]string
+	// MissingExecutables are commands (the first word of an exec's Cmd) that no
+	// container has: starting an exec of one prints the runtime's "no such file or
+	// directory" message and ends with exit code 127 (fake_exec.go).
+	MissingExecutables []string
 }
 
 // FakeNode is one entry of /nodes. Leader marks the one manager whose
@@ -168,6 +190,19 @@ type FakeService struct {
 	// Labels are the service's own labels (the --label of docker service create,
 	// the deploy.labels of a stack file).
 	Labels map[string]string
+	// Networks are the targets of the service spec's network attachments, an ID or a
+	// name as the spec wrote it, and Mounts the mounts of its container spec.
+	Networks []string
+	Mounts   []FakeServiceMount
+}
+
+// FakeServiceMount is one mount of a service's container spec. Type is "volume",
+// "bind" or "tmpfs".
+type FakeServiceMount struct {
+	Type, Source string
+	// Target is where the mount appears in the container; ReadOnly mounts it read-only.
+	Target   string
+	ReadOnly bool
 }
 
 // FakeAgentTask is one task of a service in ServiceRows, an agent's when that
@@ -218,7 +253,29 @@ type FakeContainer struct {
 	Created int64
 	Ports   []FakePort
 	Labels  map[string]string
-	Mounts  []string
+	// Mounts are listed as volume mounts when the entry is a plain name and as
+	// bind mounts when it starts with a slash.
+	Mounts []string
+	// Networks are the container's attachments by network name.
+	Networks map[string]FakeEndpoint
+	// Inspect holds what only an inspect reports (fake_inspect.go).
+	Inspect FakeInspect
+	// Health is the engine's health summary (starting, healthy, unhealthy). Empty
+	// sends none, as an engine before API 1.52 does.
+	Health string
+	// StopTimeout and StopSignal are the container's own, as inspect reports them.
+	StopTimeout *int
+	StopSignal  string
+}
+
+// FakeEndpoint is one network attachment of a FakeContainer.
+type FakeEndpoint struct {
+	NetworkID string
+	IPv4      string
+	IPv6      string
+	MAC       string
+	// Aliases are the extra DNS names the container answers to on the network.
+	Aliases []string
 }
 
 // FakePort is one published or exposed container port. IP is empty for a port
@@ -245,6 +302,11 @@ type FakeVolume struct {
 	Driver    string
 	CreatedAt string
 	Labels    map[string]string
+	// Options are the driver options the volume was created with.
+	Options map[string]string
+	// Size is the bytes /system/df reports for the volume. A volume of a driver other than
+	// local reports -1, "not available", whatever is set here.
+	Size int64
 }
 
 // FakeNetwork is one entry of /networks.
@@ -255,6 +317,18 @@ type FakeNetwork struct {
 	Scope   string
 	Subnets []string
 	Created time.Time
+	// Labels, Internal, Attachable and Ingress are what /networks reports for the
+	// network.
+	Labels     map[string]string
+	Internal   bool
+	Attachable bool
+	Ingress    bool
+	// IPv6 is EnableIPv6, Options the driver options, and Gateways the gateway of
+	// each subnet of Subnets by position (a shorter list leaves the rest without
+	// one). They are what an inspect of the network reports.
+	IPv6     bool
+	Options  map[string]string
+	Gateways []string
 }
 
 func (c FakeConfig) withDefaults() FakeConfig {
@@ -287,6 +361,38 @@ type Fake struct {
 	cfg      FakeConfig
 	requests []string
 	srv      *httptest.Server // nil while the daemon is stopped
+	// states is the state a write left each container in, by container ID, and
+	// writes is every write served, in order (fake_writes.go).
+	states map[string]fakeState
+	writes []string
+	// inflight is how many container writes are being served now, and maxInflight
+	// the most there have been at once (fake_writes.go).
+	inflight, maxInflight int
+	// execs is the exec state (fake_exec.go).
+	execs fakeExecs
+	// logs is the container log state (fake_logs.go).
+	logs fakeLogs
+	// nets are the networks created through the fake, and netCreates the bodies of
+	// those requests (fake_networks.go).
+	nets       []FakeNetwork
+	netCreates []network.CreateRequest
+	// netGone are the IDs of networks removed through the fake; withoutNetworks
+	// leaves them out of every list.
+	netGone map[string]bool
+	// netConnects and netDisconnects are the bodies of the connects and disconnects the
+	// fake accepted, and epChanges the attachments they left, by container ID and
+	// network name: a nil endpoint is a disconnect (fake_networks.go).
+	netConnects    []network.ConnectRequest
+	netDisconnects []network.DisconnectRequest
+	epChanges      map[[2]string]*FakeEndpoint
+	// vols are the volumes created through the fake, and volCreates the bodies of those
+	// requests (fake_volumes.go).
+	vols       []FakeVolume
+	volCreates []volume.CreateRequest
+	// volGone are the names of the volumes removed through the fake.
+	volGone map[string]bool
+	// dfCalls counts the GET /system/df requests the fake answered or refused.
+	dfCalls int
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
@@ -315,7 +421,7 @@ func NewFake(t testing.TB, cfg FakeConfig) *Fake {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults(), evSubs: map[*eventSub]struct{}{}}
+	f := &Fake{path: filepath.Join(dir, "d.sock"), cfg: cfg.withDefaults(), evSubs: map[*eventSub]struct{}{}, states: map[string]fakeState{}}
 	f.evHistory = append(f.evHistory, cfg.Events...)
 	if err := f.listen(); err != nil {
 		t.Fatalf("listen on the fake daemon socket: %v", err)
@@ -409,7 +515,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -457,6 +563,14 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p = m[3]
+	}
+
+	// A write is answered by the first handler that claims it (fake_writes.go and
+	// the files later plans add), before any read route is tried.
+	for _, h := range fakeHandlers {
+		if h(f, w, r, p, cfg) {
+			return
+		}
 	}
 
 	if cfg.PolicyDeny {
@@ -521,10 +635,6 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	case "/nodes", "/services", "/tasks", "/swarm":
 		f.serveCluster(w, r, p, cfg)
 	default:
-		if id, ok := inspectID(p); ok {
-			f.serveInspect(w, id, cfg)
-			return
-		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "page not found"})
 	}
 }
@@ -559,41 +669,31 @@ func (f *Fake) serveCluster(w http.ResponseWriter, r *http.Request, p string, cf
 	}
 }
 
-// inspectContainer matches /containers/{id}/json.
-var inspectContainer = regexp.MustCompile(`^/containers/([^/]+)/json$`)
-
-func inspectID(p string) (string, bool) {
-	m := inspectContainer.FindStringSubmatch(p)
-	if m == nil || m[1] == "json" {
-		return "", false
+// resolveContainer finds a container the way a real daemon does: by its full ID,
+// by its name (with or without the leading slash), or by an ID prefix that only one
+// container has.
+func (c FakeConfig) resolveContainer(ref string) (FakeContainer, bool) {
+	for _, fc := range c.Containers {
+		if fc.ID == ref {
+			return fc, true
+		}
 	}
-	return m[1], true
-}
-
-// serveInspect answers GET /containers/{id}/json with the restart policy and, to
-// prove it is never read, an environment variable that holds a secret.
-func (f *Fake) serveInspect(w http.ResponseWriter, id string, cfg FakeConfig) {
-	known := false
-	for _, c := range cfg.Containers {
-		known = known || c.ID == id
+	for _, fc := range c.Containers {
+		for _, n := range fc.Names {
+			if strings.TrimPrefix(n, "/") == strings.TrimPrefix(ref, "/") {
+				return fc, true
+			}
+		}
 	}
-	policy, hasPolicy := cfg.RestartPolicies[id]
-	if !known && !hasPolicy {
-		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + id})
-		return
+	var hit FakeContainer
+	n := 0
+	for _, fc := range c.Containers {
+		if ref != "" && strings.HasPrefix(fc.ID, ref) {
+			hit = fc
+			n++
+		}
 	}
-	name, retries, _ := strings.Cut(policy, ":")
-	max, _ := strconv.Atoi(retries)
-	writeJSON(w, http.StatusOK, container.InspectResponse{
-		ID:   id,
-		Name: "/" + id,
-		Config: &container.Config{
-			Env: []string{"DB_PASSWORD=hunter2"},
-		},
-		HostConfig: &container.HostConfig{
-			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(name), MaximumRetryCount: max},
-		},
-	})
+	return hit, n == 1
 }
 
 // swarmInfo is Info.Swarm: the state, the node ID and the cluster ID when one is set.
@@ -631,7 +731,34 @@ func (c FakeConfig) containerList(all bool) []container.Summary {
 			s.Ports = append(s.Ports, ps)
 		}
 		for _, m := range fc.Mounts {
-			s.Mounts = append(s.Mounts, container.MountPoint{Source: m, Destination: "/mnt"})
+			mp := container.MountPoint{Type: "volume", Name: m, Source: "/var/lib/docker/volumes/" + m + "/_data", Destination: "/mnt", RW: true}
+			if strings.HasPrefix(m, "/") {
+				mp = container.MountPoint{Type: "bind", Source: m, Destination: "/mnt", RW: true}
+			}
+			if to := fc.Inspect.MountTargets[m]; to != "" {
+				mp.Destination = to
+			}
+			mp.RW = !strings.Contains(fc.Inspect.MountModes[m], "ro")
+			s.Mounts = append(s.Mounts, mp)
+		}
+		if len(fc.Networks) > 0 {
+			s.NetworkSettings = &container.NetworkSettingsSummary{Networks: map[string]*network.EndpointSettings{}}
+			for name, ep := range fc.Networks {
+				es := &network.EndpointSettings{NetworkID: ep.NetworkID}
+				if ep.IPv4 != "" {
+					es.IPAddress = netip.MustParseAddr(ep.IPv4)
+				}
+				if ep.IPv6 != "" {
+					es.GlobalIPv6Address = netip.MustParseAddr(ep.IPv6)
+				}
+				if ep.MAC != "" {
+					_ = es.MacAddress.UnmarshalText([]byte(ep.MAC))
+				}
+				s.NetworkSettings.Networks[name] = es
+			}
+		}
+		if fc.Health != "" {
+			s.Health = &container.HealthSummary{Status: container.HealthStatus(fc.Health)}
 		}
 		out = append(out, s)
 	}
@@ -650,7 +777,7 @@ func (c FakeConfig) volumeList() volume.ListResponse {
 	out := volume.ListResponse{Volumes: make([]volume.Volume, 0, len(c.Volumes))}
 	for _, fv := range c.Volumes {
 		out.Volumes = append(out.Volumes, volume.Volume{
-			Name: fv.Name, Driver: fv.Driver, CreatedAt: fv.CreatedAt, Labels: fv.Labels,
+			Name: fv.Name, Driver: fv.Driver, CreatedAt: fv.CreatedAt, Labels: fv.Labels, Options: fv.Options,
 			Mountpoint: "/var/lib/docker/volumes/" + fv.Name + "/_data", Scope: "local",
 		})
 	}
@@ -660,7 +787,11 @@ func (c FakeConfig) volumeList() volume.ListResponse {
 func (c FakeConfig) networkList() []network.Summary {
 	out := make([]network.Summary, 0, len(c.Networks))
 	for _, fn := range c.Networks {
-		n := network.Summary{Network: network.Network{ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created}}
+		n := network.Summary{Network: network.Network{
+			ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created,
+			Labels: fn.Labels, Internal: fn.Internal, Attachable: fn.Attachable, Ingress: fn.Ingress,
+			EnableIPv6: fn.IPv6,
+		}}
 		for _, sub := range fn.Subnets {
 			n.IPAM.Config = append(n.IPAM.Config, network.IPAMConfig{Subnet: netip.MustParsePrefix(sub)})
 		}
@@ -986,6 +1117,15 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		s := swarm.Service{ID: fs.ID}
 		s.Spec.Name = fs.Name
 		s.Spec.Labels = fs.Labels
+		for _, target := range fs.Networks {
+			s.Spec.TaskTemplate.Networks = append(s.Spec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{Target: target})
+		}
+		if len(fs.Mounts) > 0 {
+			s.Spec.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{}
+			for _, m := range fs.Mounts {
+				s.Spec.TaskTemplate.ContainerSpec.Mounts = append(s.Spec.TaskTemplate.ContainerSpec.Mounts, mount.Mount{Type: mount.Type(m.Type), Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
+			}
+		}
 		s.UpdatedAt = fs.UpdatedAt
 		switch fs.Mode {
 		case "global":

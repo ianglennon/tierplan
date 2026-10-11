@@ -73,6 +73,7 @@ type listBody[T any] struct {
 }
 
 type containerItem struct {
+	NodeID  string   `json:"nodeId"`
 	ID      string   `json:"id"`
 	Name    string   `json:"name"`
 	State   string   `json:"state"`
@@ -92,9 +93,16 @@ type imageItem struct {
 }
 
 type volumeItem struct {
-	Name    string `json:"name"`
-	Driver  string `json:"driver"`
-	Created string `json:"created"`
+	Name             string `json:"name"`
+	Driver           string `json:"driver"`
+	Created          string `json:"created"`
+	Node             string `json:"node"`
+	NodeID           string `json:"nodeId"`
+	UsedByContainers int    `json:"usedByContainers"`
+	UsedByServices   int    `json:"usedByServices"`
+	Anonymous        bool   `json:"anonymous"`
+	Project          string `json:"project"`
+	Stack            string `json:"stack"`
 }
 
 type networkItem struct {
@@ -308,7 +316,8 @@ func TestListsCarryTheDocumentedColumns(t *testing.T) {
 	}
 
 	vs := decode[listBody[volumeItem]](t, f.get(t, e, "volumes")).Items
-	if len(vs) != 1 || vs[0] != (volumeItem{Name: "data", Driver: "local", Created: "2026-03-04T05:06:07Z"}) {
+	if len(vs) != 1 || vs[0].Name != "data" || vs[0].Driver != "local" || vs[0].Created != "2026-03-04T05:06:07Z" ||
+		vs[0].UsedByContainers != 0 || vs[0].UsedByServices != 0 || vs[0].Anonymous || vs[0].Project != "" || vs[0].Stack != "" {
 		t.Errorf("volumes = %+v", vs)
 	}
 
@@ -321,10 +330,21 @@ func TestListsCarryTheDocumentedColumns(t *testing.T) {
 	}
 }
 
+// containerKeys are the only keys a container row may have (T-04-29). Every other
+// label, every mount and every variable stays on the server.
+var containerKeys = []string{
+	"node", "nodeId", "id", "name", "state", "status", "image", "created", "ports", "isSelf",
+	"project", "stack", "service", "health", "selfKind", "readOnly",
+}
+
 func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {
 	cfg := richEngine()
-	cfg.Containers[1].Labels = map[string]string{"app.note": "label-9f3"}
+	cfg.Containers[1].Labels = map[string]string{
+		"app.note": "label-9f3", "com.docker.compose.project": "shop",
+		"com.docker.stack.namespace": "blog", "com.docker.swarm.service.name": "blog_web",
+	}
 	cfg.Containers[1].Mounts = []string{"/srv/mount-9f3"}
+	cfg.Containers[1].Networks = map[string]dockertest.FakeEndpoint{"net-9f3": {NetworkID: "n9f3", IPv4: "10.9.3.2"}}
 	cfg.Images[0].Labels = map[string]string{"app.build": "image-9f3"}
 	cfg.Volumes[0].Labels = map[string]string{"app.owner": "volume-9f3"}
 	f, e := dashEnv(t, cfg)
@@ -333,12 +353,33 @@ func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {
 		if rec.code != http.StatusOK {
 			t.Fatalf("%s: %d %s", what, rec.code, rec.body)
 		}
-		if strings.Contains(string(rec.body), "9f3") {
-			t.Errorf("%s leaked a label, mount or variable (T-01-77): %s", what, rec.body)
+		for _, leaked := range []string{"9f3", "app.note", "app.build", "app.owner"} {
+			if strings.Contains(string(rec.body), leaked) {
+				t.Errorf("%s leaked %q, a label, mount, network or variable (T-01-77): %s", what, leaked, rec.body)
+			}
 		}
 		for _, banned := range []string{`"labels"`, `"mounts"`, `"env"`, `"Labels"`, `"Mounts"`, `"Env"`} {
 			if strings.Contains(string(rec.body), banned) {
 				t.Errorf("%s has a %s field: %s", what, banned, rec.body)
+			}
+		}
+	}
+	// A container row has exactly the documented keys.
+	var body struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(f.get(t, e, "containers").body, &body); err != nil || len(body.Items) == 0 {
+		t.Fatalf("decode containers: %v", err)
+	}
+	for _, item := range body.Items {
+		for key := range item {
+			if !slices.Contains(containerKeys, key) {
+				t.Errorf("a container row has the undocumented key %q", key)
+			}
+		}
+		for _, want := range containerKeys {
+			if _, ok := item[want]; !ok && want != "created" {
+				t.Errorf("a container row lacks the key %q", want)
 			}
 		}
 	}
@@ -483,6 +524,11 @@ func TestAViewerReadsTheSummaryAndEveryListAndAUserWithoutAGrantGetsNotFound(t *
 func TestListRoutesAreReadOnly(t *testing.T) {
 	f, e := dashEnv(t, richEngine())
 	for _, what := range dataPaths {
+		if what == "networks" || what == "volumes" {
+			// The networks and volumes paths are also where one is created (plans 04-12
+			// and 04-16); those routes are tested on their own, with their permission.
+			continue
+		}
 		rec := f.req(t, http.MethodPost, "/api/env/"+e.ID+"/"+what, `{}`)
 		if rec.code != http.StatusMethodNotAllowed {
 			t.Errorf("POST %s = %d, want 405", what, rec.code)
@@ -800,14 +846,26 @@ type swarmFix struct {
 func newSwarmFix(t *testing.T) *swarmFix {
 	t.Helper()
 	f := newAgentFix(t)
+	// The cluster reader of a real server: the networks routes read the services a
+	// network is mentioned by from it. The router is built again to hear of it.
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.tclk.Now, Publisher: f.brk, Events: f.hub})
+	f.svc.WithClusters(f.clusters)
+	f.h = f.build(t)
 	env := f.srv.NewEnvironment(t, "Swarm")
 	mgr := func(i int) (dockertest.FakeConfig, *wire.Facts) {
 		name := fmt.Sprintf("mgr-%d", i)
 		return dockertest.FakeConfig{
 			Hostname: name, SwarmState: "active", SwarmControl: true, Nodes: 3, Services: 2,
 			Containers: []dockertest.FakeContainer{{ID: fmt.Sprintf("m%d", i), Names: []string{"/web"}, State: "running"}},
-			Images:     []dockertest.FakeImage{{ID: "sha256:" + strings.Repeat("a", 64), RepoTags: []string{"nginx:1"}, Size: 5}},
-			Volumes:    []dockertest.FakeVolume{{Name: "data", Driver: "local"}},
+			// Two services mention the overlay; one of them is scaled to zero.
+			ServiceRows: []dockertest.FakeService{
+				{ID: "svc-web", Name: "web", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"ovl"}},
+				// Scaled to zero, so no task keeps the volume, yet its spec mounts it.
+				{ID: "svc-idle", Name: "idle", Mode: "replicated", Running: 0, Desired: 0, Networks: []string{"ovl"},
+					Mounts: []dockertest.FakeServiceMount{{Type: "volume", Source: "data", Target: "/srv/data", ReadOnly: true}, {Type: "bind", Source: "/srv/x"}}},
+			},
+			Images:  []dockertest.FakeImage{{ID: "sha256:" + strings.Repeat("a", 64), RepoTags: []string{"nginx:1"}, Size: 5}},
+			Volumes: []dockertest.FakeVolume{{Name: "data", Driver: "local"}},
 			Networks: []dockertest.FakeNetwork{
 				{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"},
 				{ID: fmt.Sprintf("br%d", i), Name: "bridge", Driver: "bridge", Scope: "local"},

@@ -625,3 +625,50 @@ func TestActorsMarkADeletedUserAndTheExportsCarryActorDeleted(t *testing.T) {
 		}
 	}
 }
+
+func TestQueryFiltersByBulkAndKeepsTheOtherFiltersAndTheScope(t *testing.T) {
+	f := newFixture(t)
+	f.clk.Set(t0)
+	rec := func(actor, target, env, bulk string) {
+		e := ent("container.stopped")
+		e.Actor = audit.Actor{Type: audit.ActorUser, ID: "id-" + actor, Name: actor}
+		e.TargetID, e.EnvID = target, env
+		e.Details = map[string]string{}
+		if bulk != "" {
+			e.Details["bulk"] = bulk
+		}
+		if err := f.w.Record(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec("alice", "a1", "env-a", "bulk-1")
+	rec("bob", "a2", "env-a", "bulk-2")
+	rec("alice", "b1", "env-b", "bulk-1")
+	rec("alice", "a3", "env-a", "")
+	targets := func(flt audit.Filter) string {
+		rows, _, err := audit.Query(context.Background(), f.s, flt, 0, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.TargetID)
+		}
+		return strings.Join(out, ",")
+	}
+	if got := targets(audit.Filter{Bulk: "bulk-1"}); got != "b1,a1" {
+		t.Errorf("bulk-1 = %q, want b1,a1", got)
+	}
+	if got := targets(audit.Filter{Bulk: "nope"}); got != "" {
+		t.Errorf("an unknown bulk = %q, want none", got)
+	}
+	if got := targets(audit.Filter{}); got != "a3,b1,a2,a1" {
+		t.Errorf("no bulk = %q, want every row", got)
+	}
+	if got := targets(audit.Filter{Bulk: "bulk-1", Actor: "bob"}); got != "" {
+		t.Errorf("bulk-1 by bob = %q, want none", got)
+	}
+	if got := targets(audit.Filter{Bulk: "bulk-1", Scoped: true, Envs: []string{"env-a"}}); got != "a1" {
+		t.Errorf("bulk-1 scoped to env-a = %q, want a1 only", got)
+	}
+}

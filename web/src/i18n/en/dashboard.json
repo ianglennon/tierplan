@@ -33,6 +33,10 @@
         "image": "Image",
         "network": "Network",
         "volume": "Volume",
+        "service": "Service",
+        "node": "Node",
+        "secret": "Secret",
+        "config": "Config",
         "bayplan": "Bayplan"
       },
       "live": "Live",
@@ -133,6 +137,8 @@
           "driver": "Driver",
           "scope": "Scope",
           "subnet": "Subnet",
+          "attached": "Attached",
+          "owner": "Owner",
           "created": "Created"
         }
       },

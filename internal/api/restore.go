@@ -447,12 +447,22 @@ func (a *restoreAPI) serveUpload(w http.ResponseWriter, req *http.Request, gate 
 }
 
 // writeProblemError writes the problem a huma error carries, for the plain
-// handlers that cannot return one.
+// handlers that cannot return one. A problem with fields of its own, such as the
+// environment problems, keeps them.
 func writeProblemError(w http.ResponseWriter, err error) {
 	var em *huma.ErrorModel
 	if errors.As(err, &em) {
 		writeJSONProblem(w, em.Status, em.Type, em.Detail)
 		return
+	}
+	var se huma.StatusError
+	if errors.As(err, &se) {
+		if body, mErr := json.Marshal(se); mErr == nil {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(se.GetStatus())
+			_, _ = w.Write(body)
+			return
+		}
 	}
 	writeJSONProblem(w, http.StatusInternalServerError, "", "internal error")
 }

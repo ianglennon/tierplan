@@ -1027,3 +1027,43 @@ func TestAFloodOfDeniedMessagesCostsAtMostTheBurstOfAuditRowsThenOneSummary(t *t
 		t.Errorf("the next row says suppressed=%q, want 80", got[20].Details["suppressed"])
 	}
 }
+
+// The kind of a stream is decided from the request line the server wrote (plan 04-03,
+// T-04-14), with or without the API version prefix, and a piece that is not the start
+// of a request is not classified at all.
+func TestStartsStreamRequestClassifiesByTheRequestLine(t *testing.T) {
+	line := func(s string) []byte { return []byte(s + " HTTP/1.1\r\nHost: docker\r\n\r\n") }
+	for _, tc := range []struct {
+		name string
+		in   []byte
+		kind string
+		ok   bool
+	}{
+		{"events, versioned", line("GET /v1.47/events?since=1"), "events", true},
+		{"events, plain", line("GET /events"), "events", true},
+		{"logs, versioned and followed", line("GET /v1.47/containers/abc/logs?follow=1&stdout=1"), "logs", true},
+		{"logs, plain", line("GET /containers/abc/logs"), "logs", true},
+		{"exec start, versioned", line("POST /v1.47/exec/abc/start"), "exec", true},
+		{"exec start, plain", line("POST /exec/abc/start"), "exec", true},
+		{"list", line("GET /containers/json"), "other", true},
+		{"versioned list", line("GET /v1.47/containers/json?all=1"), "other", true},
+		{"exec create is an ordinary call", line("POST /v1.47/containers/abc/exec"), "other", true},
+		{"exec inspect is an ordinary call", line("GET /v1.47/exec/abc/json"), "other", true},
+		{"logs by POST is not a log follow", line("POST /v1.47/containers/abc/logs"), "other", true},
+		{"exec start by GET is not an exec", line("GET /v1.47/exec/abc/start"), "other", true},
+		{"a path that only ends like logs", line("GET /v1.47/containers/logs"), "other", true},
+		{"a nested path that ends in logs", line("GET /v1.47/containers/abc/def/logs"), "other", true},
+		{"a query that names logs", line("GET /containers/json?x=/containers/abc/logs"), "other", true},
+		{"a partial first write", []byte("GET /v1.47/containers/abc/log"), "other", false},
+		{"the next piece of a body", []byte("{\"AttachStdin\":true}"), "other", false},
+		{"the stream kind byte", []byte{wire.StreamKindDockerHTTP}, "other", false},
+		{"empty", nil, "other", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kind, ok := tunnel.ClassifyStreamRequest(tc.in)
+			if kind != tc.kind || ok != tc.ok {
+				t.Fatalf("classified %q as %q, %v; want %q, %v", tc.in, kind, ok, tc.kind, tc.ok)
+			}
+		})
+	}
+}

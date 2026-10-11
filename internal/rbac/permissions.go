@@ -40,6 +40,11 @@ const (
 	PermImagesRead            Perm = "images.read"
 	PermVolumesRead           Perm = "volumes.read"
 	PermNetworksRead          Perm = "networks.read"
+	PermContainersControl     Perm = "containers.control"
+	PermContainersRemove      Perm = "containers.remove"
+	PermNetworksManage        Perm = "networks.manage"
+	PermNetworksConnect       Perm = "networks.connect"
+	PermVolumesCreate         Perm = "volumes.create"
 	PermAuditRead             Perm = "audit.read"
 	PermSettingsRead          Perm = "settings.read"
 	PermSettingsWrite         Perm = "settings.write"
@@ -50,6 +55,7 @@ const (
 	PermSecretsReveal         Perm = "secrets.reveal"
 	PermVolumesDelete         Perm = "volumes.delete"
 	PermJanitorPolicy         Perm = "janitor.policy"
+	PermShellsManage          Perm = "shells.manage"
 )
 
 // Registry is a list of permissions. The Checker consults one, so a test can
@@ -76,6 +82,11 @@ var defaultRegistry = Registry{
 	{Name: PermImagesRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View images"},
 	{Name: PermVolumesRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View volumes"},
 	{Name: PermNetworksRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View networks"},
+	{Name: PermContainersControl, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Start, stop, restart, kill, pause and unpause containers"},
+	{Name: PermContainersRemove, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Remove containers"},
+	{Name: PermNetworksManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create and delete networks"},
+	{Name: PermNetworksConnect, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Connect and disconnect containers and networks"},
+	{Name: PermVolumesCreate, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create volumes"},
 	{Name: PermAuditRead, Scope: ScopeGlobal, Description: "Read the audit log"},
 	{Name: PermSettingsRead, Scope: ScopeGlobal, Description: "View settings"},
 	{Name: PermSettingsWrite, Scope: ScopeGlobal, Description: "Change settings"},
@@ -86,6 +97,7 @@ var defaultRegistry = Registry{
 	{Name: PermSecretsReveal, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Reveal secret values"},
 	{Name: PermVolumesDelete, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Delete volumes"},
 	{Name: PermJanitorPolicy, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Change cleanup policy"},
+	{Name: PermShellsManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "See and end other people's shells"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.

@@ -29,6 +29,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/shells"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
@@ -53,6 +54,25 @@ var authHash = sync.OnceValue(func() string {
 	return h
 })
 
+// syncBuffer is the server's log as a test reads it: handlers write it from their own
+// goroutines while the test looks, so it takes a lock.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
 type authFixture struct {
 	h       http.Handler
 	st      *store.Store
@@ -61,7 +81,7 @@ type authFixture struct {
 	sess    *auth.Sessions
 	inst    *instance.Instance
 	clk     *fakeClock
-	logs    *bytes.Buffer
+	logs    *syncBuffer
 	limiter *auth.IPLimiter
 	// dataInfo and acctVault feed the account routes (plan 14). A test sets them
 	// before calling build; the defaults are a persisted directory and the
@@ -97,6 +117,23 @@ type authFixture struct {
 	eventsMaxStreams int
 	// eventsMaxLifetime caps how long one stream may live; zero is the default.
 	eventsMaxLifetime time.Duration
+	// logsHeartbeat, logsMaxStreams and logsMaxLifetime tune the container log stream
+	// (plan 04-19); zero is the default. logsWrap, when set, wraps the aggregator the
+	// stream reads through, so a test can make the node refuse as a busy agent does.
+	logsHeartbeat   time.Duration
+	logsMaxStreams  int
+	logsMaxLifetime time.Duration
+	logsWrap        func(api.LogsSource) api.LogsSource
+	// logsMaxPageBytes shortens how much one page of earlier lines may hold (plan 04-20).
+	logsMaxPageBytes int
+	// volumeSizesTimeout shortens the per-node time limit of the volume sizes route.
+	volumeSizesTimeout time.Duration
+	// shellsReg is the registry behind the shell routes (plan 04-22); build makes it on
+	// first use and keeps it across builds. shellsPending and shellsControls shorten the
+	// time a session waits for its browser and tune the byte bridge.
+	shellsReg      *shells.Registry
+	shellsPending  time.Duration
+	shellsControls shells.Controls
 	// brk, when set with envSvc, is the health broker behind GET
 	// /api/environments/stream (plan 02-12); envStreamHeartbeat, envStreamMaxStreams
 	// and envStreamMaxLifetime tune that stream for a test.
@@ -119,6 +156,8 @@ type authFixture struct {
 	// a real session.
 	agentSvc   *agents.Service
 	liveAgents api.AgentSessions
+	// clusters is the cluster reader of a swarm fixture; nil elsewhere.
+	clusters *envs.Clusters
 	// agentCluster says which agent leads a swarm, for the role in the node list.
 	agentCluster api.AgentCluster
 	// updater and serverVersion are what the agent update routes use, when set.
@@ -148,7 +187,7 @@ type authFixture struct {
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	t.Helper()
-	f := &authFixture{st: storetest.New(t), clk: &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, logs: &bytes.Buffer{}, unknown: agents.NewUnknownAgents()}
+	f := &authFixture{st: storetest.New(t), clk: &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, logs: &syncBuffer{}, unknown: agents.NewUnknownAgents()}
 	log := slog.New(slog.NewJSONHandler(f.logs, nil))
 	v, err := vault.LoadOrCreate(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)), t.TempDir(), slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -235,7 +274,25 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 	}
 	if f.envSvc != nil && f.agg != nil {
-		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		api.RegisterVolumes(r, api.VolumesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SizesTimeout: f.volumeSizesTimeout, Log: log})
+		var logsSrc api.LogsSource = f.agg
+		if f.logsWrap != nil {
+			logsSrc = f.logsWrap(logsSrc)
+		}
+		api.RegisterLogs(r, api.LogsDeps{
+			Aggregator: logsSrc, Audit: f.aud, Checker: checker, Heartbeat: f.logsHeartbeat, MaxStreamsPerUser: f.logsMaxStreams,
+			MaxLifetime: f.logsMaxLifetime, MaxPageBytes: f.logsMaxPageBytes, Now: f.clk.now, Log: log,
+		})
+		if f.shellsReg == nil {
+			f.shellsReg = shells.NewRegistry(nil)
+		}
+		api.RegisterShells(r, api.ShellsDeps{
+			Aggregator: f.agg, Registry: f.shellsReg, Audit: f.aud, Checker: checker, Instance: f.inst, SelfContainerID: f.envSvc.SelfContainerID(),
+			PendingTTL: f.shellsPending, Controls: f.shellsControls, Store: f.st, Now: f.clk.now, Log: log,
+		})
 	}
 	if f.envSvc != nil && f.agg != nil && f.hub != nil {
 		api.RegisterEvents(r, api.EventsDeps{Aggregator: f.agg, Heartbeat: f.eventsHeartbeat, MaxStreamsPerUser: f.eventsMaxStreams, MaxLifetime: f.eventsMaxLifetime, Log: log})

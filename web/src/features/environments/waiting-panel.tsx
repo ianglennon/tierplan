@@ -82,6 +82,14 @@ export function WaitingPanel({ envId, envName, agentUrl }: WaitingPanelProps) {
     }
   });
 
+  // The list is the fallback for an env.status the panel never saw: one sent
+  // while the stream was reconnecting, or before the panel subscribed. The list
+  // is resynced after a reconnect, so once it says online, so does the panel.
+  const listedOnline = item?.status.state === "online";
+  useEffect(() => {
+    if (listedOnline) setPhase("online");
+  }, [listedOnline]);
+
   useEffect(() => {
     const id = setTimeout(() => setSlow(true), SLOW_MS);
     return () => clearTimeout(id);

@@ -44,6 +44,9 @@ SELECT * FROM audit_log WHERE seq = ?;
 -- environment when any_env is set; an entry with no environment, an instance-level
 -- event, never matches. The scope is part of the WHERE clause, so it applies
 -- before the cursor and the limit and a page is never short of entries.
+-- bulk is the bulk-operation ID of the container actions (D-14), compared to the
+-- bulk detail of an entry on a fixed JSON path; empty means every entry. Like the
+-- other filters it is ANDed with the scope clause, before the cursor and limit.
 -- actor_deleted is a display-time join to the user tombstone (D-22c): the signed
 -- row is never rewritten when a user is deleted.
 SELECT a.*, CAST(COALESCE(u.deleted_at IS NOT NULL, 0) AS INTEGER) AS actor_deleted
@@ -53,6 +56,8 @@ WHERE (CAST(sqlc.arg(actor) AS TEXT) = '' OR a.actor_name = sqlc.arg(actor))
   AND (json_array_length(sqlc.arg(actions)) = 0 OR a.action IN (SELECT value FROM json_each(sqlc.arg(actions))))
   AND (CAST(sqlc.arg(from_ts) AS INTEGER) = 0 OR a.ts >= sqlc.arg(from_ts))
   AND (CAST(sqlc.arg(to_ts) AS INTEGER) = 0 OR a.ts <= sqlc.arg(to_ts))
+  AND (CAST(sqlc.arg(bulk) AS TEXT) = ''
+       OR json_extract(a.details, '$.bulk') = sqlc.arg(bulk))
   AND (CAST(sqlc.arg(cursor) AS INTEGER) = 0 OR a.seq < sqlc.arg(cursor))
   AND (CAST(sqlc.arg(scoped) AS INTEGER) = 0
        OR (CAST(sqlc.arg(any_env) AS INTEGER) = 1 AND a.env_id IS NOT NULL)

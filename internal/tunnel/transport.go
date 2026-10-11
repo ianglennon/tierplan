@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -78,11 +79,30 @@ type streamConn struct {
 
 	// read counts the bytes received for the exchange in progress, and is reset
 	// when the next request is written, so a keep-alive connection is capped per
-	// answer and not for its lifetime. uncapped is set for the events feed.
+	// answer and not for its lifetime. uncapped is set for the events feed, a log
+	// follow and an exec, which are meant to outlast any cap.
 	read     atomic.Int64
 	uncapped atomic.Bool
 	tooLarge atomic.Bool
 	released sync.Once
+
+	// hijacked is set, once and for good, when the answer to an exec start is the
+	// upgrade (101): from then on the connection carries a person's keystrokes, not
+	// HTTP, and Write no longer looks for a request line, so a keystroke frame that
+	// reads like one cannot release the slot or put the cap back (T-04-13).
+	// awaiting is set when an exec start is written and cleared when the start of the
+	// answer is known; sniff holds the first bytes of that answer (under mu).
+	hijacked atomic.Bool
+	awaiting atomic.Bool
+	sniff    []byte
+
+	// mu guards holding: whether this connection holds one of the session's
+	// interactive slots, which it takes when a log follow or an exec starts and
+	// gives back when a request of another kind follows on the connection or the
+	// connection closes, exactly once either way.
+	mu      sync.Mutex
+	holding bool
+	closed  bool
 }
 
 func (c *streamConn) Read(p []byte) (int, error) {
@@ -90,6 +110,9 @@ func (c *streamConn) Read(p []byte) (int, error) {
 		return 0, c.errTooLarge()
 	}
 	n, err := c.Conn.Read(p)
+	if n > 0 && c.awaiting.Load() {
+		c.sniffUpgrade(p[:n])
+	}
 	if n > 0 && !c.uncapped.Load() && c.s.maxResponse > 0 && c.read.Add(int64(n)) > c.s.maxResponse {
 		// Close the stream so the agent stops sending. The session carries on.
 		c.tooLarge.Store(true)
@@ -100,19 +123,88 @@ func (c *streamConn) Read(p []byte) (int, error) {
 }
 
 func (c *streamConn) Write(p []byte) (int, error) {
-	// Each request starts a new exchange; the events feed is the one answer that
-	// is meant to be endless.
-	if events, ok := startsEventsRequest(p); ok {
-		c.read.Store(0)
-		c.uncapped.Store(events)
+	// Each request starts a new exchange. The events feed, a log follow and an exec
+	// are the answers that are meant to be endless; the last two also take a slot of
+	// the session's interactive budget, and a full budget fails the write with
+	// ErrBusy before anything of the request is sent.
+	//
+	// Once an exec start has been answered with the upgrade the connection is a shell
+	// and carries raw bytes, so nothing written to it is classified again: a keystroke
+	// frame that looks like a request line must not release the slot or cap the
+	// stream. A start that was not upgraded leaves the connection speaking HTTP.
+	if !c.hijacked.Load() {
+		if kind, ok := startsStreamRequest(p); ok {
+			if err := c.enter(kind); err != nil {
+				return 0, err
+			}
+			c.read.Store(0)
+			c.uncapped.Store(kind.uncapped())
+			if kind == streamExec {
+				c.mu.Lock()
+				c.sniff = c.sniff[:0]
+				c.mu.Unlock()
+				c.awaiting.Store(true)
+			}
+		}
 	}
 	n, err := c.Conn.Write(p)
 	return n, c.s.mark(err)
 }
 
-// Close closes the stream and frees its slot in the session's budget.
+// upgradeLine is how the answer to an upgraded exec start begins.
+const upgradeLine = "HTTP/1.1 101"
+
+// sniffUpgrade looks at the start of the answer to an exec start, which arrives in
+// pieces of any size, and marks the connection hijacked when it is the upgrade. It
+// stops looking at the first byte that cannot be the upgrade.
+func (c *streamConn) sniffUpgrade(b []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.awaiting.Load() {
+		return
+	}
+	c.sniff = append(c.sniff, b[:min(len(b), len(upgradeLine)-len(c.sniff))]...)
+	switch {
+	case !strings.HasPrefix(upgradeLine, string(c.sniff)):
+		c.awaiting.Store(false)
+		c.sniff = nil
+	case len(c.sniff) == len(upgradeLine):
+		c.hijacked.Store(true)
+		c.awaiting.Store(false)
+		c.sniff = nil
+	}
+}
+
+// enter moves the connection's interactive slot to what the next request needs.
+func (c *streamConn) enter(kind streamKind) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case kind.interactive() && !c.holding:
+		if c.closed {
+			return net.ErrClosed
+		}
+		if !c.s.acquireInteractive() {
+			return fmt.Errorf("agent %s: %w (%d log follows and shells are open)", c.s.AgentID, ErrBusy, MaxInteractiveStreams)
+		}
+		c.holding = true
+	case !kind.interactive() && c.holding:
+		c.holding = false
+		c.s.releaseInteractive()
+	}
+	return nil
+}
+
+// Close closes the stream and frees its slots in the session's budgets.
 func (c *streamConn) Close() error {
 	err := c.Conn.Close()
+	c.mu.Lock()
+	c.closed = true
+	if c.holding {
+		c.holding = false
+		c.s.releaseInteractive()
+	}
+	c.mu.Unlock()
 	c.released.Do(c.s.releaseStream)
 	return err
 }

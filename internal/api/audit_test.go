@@ -572,3 +572,150 @@ func TestAuditEntriesOfADeletedUserReadAsDeletedAndTheSignedRowsAreUntouched(t *
 		t.Errorf("verify after a delete = %+v, %v", res, err)
 	}
 }
+
+const (
+	bulkOne = "018f0000-0000-7000-8000-000000000001"
+	bulkTwo = "018f0000-0000-7000-8000-000000000002"
+)
+
+// logBulk appends one container entry on an environment whose details carry a
+// bulk ID ("" for none), like the rows of 04-05.
+func (f *auditFix) logBulk(t *testing.T, at time.Time, actor, target, envID, bulk string) {
+	t.Helper()
+	w := audit.NewWriter(f.st, f.v, slog.New(slog.DiscardHandler), func() time.Time { return at })
+	details := map[string]string{"k": "v"}
+	if bulk != "" {
+		details["bulk"] = bulk
+	}
+	err := w.Record(context.Background(), audit.Entry{
+		Actor:  audit.Actor{Type: audit.ActorUser, ID: "id-" + actor, Name: actor},
+		Action: "container.stopped", TargetType: "container", TargetID: target, EnvID: envID,
+		Result: audit.ResultSuccess, IP: "198.51.100.7", UserAgent: "ua", Details: details,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newBulkFix holds three rows of bulk one (two on env-a, one on env-b), two of
+// bulk two and one with no bulk, all on env-a unless said.
+func newBulkFix(t *testing.T) *scopeFix {
+	t.Helper()
+	f := newScopeFix(t)
+	at := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	f.logBulk(t, at, "alice", "one-a1", scopeEnvA, bulkOne)
+	f.logBulk(t, at, "alice", "two-a1", scopeEnvA, bulkTwo)
+	f.logBulk(t, at, "alice", "one-a2", scopeEnvA, bulkOne)
+	f.logBulk(t, at, "alice", "none-a", scopeEnvA, "")
+	f.logBulk(t, at, "erin", "one-b", scopeEnvB, bulkOne)
+	f.logBulk(t, at, "alice", "two-a2", scopeEnvA, bulkTwo)
+	return f
+}
+
+func targetsOf(r auditListResp) []string {
+	var out []string
+	for _, it := range r.Items {
+		out = append(out, it.Target)
+	}
+	return out
+}
+
+func TestAuditBulkListReturnsOnlyThatOperationsRowsNewestFirst(t *testing.T) {
+	f := newBulkFix(t)
+	got := f.get(t, "/api/audit?bulk="+bulkOne, f.cookie).list(t)
+	if fmt.Sprint(targetsOf(got)) != "[one-b one-a2 one-a1]" {
+		t.Errorf("bulk one = %v, want its three rows newest first", targetsOf(got))
+	}
+	for _, it := range got.Items {
+		if it.Details["bulk"] != bulkOne {
+			t.Errorf("row %s carries bulk %q", it.Target, it.Details["bulk"])
+		}
+	}
+	two := f.get(t, "/api/audit?bulk="+bulkTwo, f.cookie).list(t)
+	if fmt.Sprint(targetsOf(two)) != "[two-a2 two-a1]" {
+		t.Errorf("bulk two = %v", targetsOf(two))
+	}
+	unknown := f.get(t, "/api/audit?bulk=018f0000-0000-7000-8000-0000000000ff", f.cookie).list(t)
+	if len(unknown.Items) != 0 {
+		t.Errorf("an unknown bulk returned %v", targetsOf(unknown))
+	}
+	all := f.get(t, "/api/audit", f.cookie).list(t)
+	if len(all.Items) < 6 {
+		t.Errorf("no bulk filter returned %d rows, want the bulk and non-bulk rows alike", len(all.Items))
+	}
+}
+
+func TestAuditBulkExportCSVAndJSONHoldOnlyThatOperationsRows(t *testing.T) {
+	f := newBulkFix(t)
+	rec := f.get(t, "/api/audit/export?format=csv&bulk="+bulkOne, f.cookie)
+	if rec.code != http.StatusOK {
+		t.Fatalf("csv export: status %d: %s", rec.code, rec.body)
+	}
+	rows, err := csv.NewReader(strings.NewReader(rec.body)).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var targets []string
+	for _, r := range rows[1:] {
+		targets = append(targets, r[6])
+	}
+	if fmt.Sprint(targets) != "[one-b one-a2 one-a1]" {
+		t.Errorf("csv export of bulk one = %v, want its three rows newest first", targets)
+	}
+
+	rec = f.get(t, "/api/audit/export?format=json&bulk="+bulkTwo, f.cookie)
+	var got []struct {
+		Target  string            `json:"target"`
+		Details map[string]string `json:"details"`
+	}
+	if err := json.Unmarshal([]byte(rec.body), &got); err != nil {
+		t.Fatalf("json export: %v (%s)", err, rec.body)
+	}
+	if len(got) != 2 || got[0].Target != "two-a2" || got[1].Target != "two-a1" {
+		t.Errorf("json export of bulk two = %+v, want its two rows", got)
+	}
+	for _, g := range got {
+		if g.Details["bulk"] != bulkTwo {
+			t.Errorf("json export holds a row of bulk %q", g.Details["bulk"])
+		}
+	}
+}
+
+func TestAuditBulkIsAndedWithTheEnvAdminScope(t *testing.T) {
+	f := newBulkFix(t)
+	const bulkOnB = "018f0000-0000-7000-8000-0000000000b3"
+	at := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	f.logBulk(t, at, "erin", "only-b1", scopeEnvB, bulkOnB)
+	f.logBulk(t, at, "erin", "only-b2", scopeEnvB, bulkOnB)
+
+	// carol administers A: a bulk whose rows are all on B reads as empty.
+	if got := f.as(t, "carol", "/api/audit?bulk="+bulkOnB).list(t); len(got.Items) != 0 {
+		t.Errorf("an env Admin of A read %v of a bulk on B", targetsOf(got))
+	}
+	// A bulk spread over A and B shows her only the rows on A.
+	if got := f.as(t, "carol", "/api/audit?bulk="+bulkOne).list(t); fmt.Sprint(targetsOf(got)) != "[one-a2 one-a1]" {
+		t.Errorf("an env Admin of A read %v of bulk one, want its two rows on A", targetsOf(got))
+	}
+	// The exports are scoped the same way.
+	for _, format := range []string{"csv", "json"} {
+		rec := f.as(t, "carol", "/api/audit/export?format="+format+"&bulk="+bulkOnB)
+		if rec.code != http.StatusOK || strings.Contains(rec.body, "only-b") {
+			t.Errorf("%s export: status %d, body leaks a row of B: %q", format, rec.code, rec.body)
+		}
+	}
+	// An instance admin reads them all.
+	if got := f.get(t, "/api/audit?bulk="+bulkOnB, f.cookie).list(t); fmt.Sprint(targetsOf(got)) != "[only-b2 only-b1]" {
+		t.Errorf("an instance admin read %v of the bulk on B", targetsOf(got))
+	}
+}
+
+func TestAuditBulkThatIsNotAUUIDIsRefused422OnTheListAndTheExport(t *testing.T) {
+	f := newBulkFix(t)
+	for _, bad := range []string{"not-a-uuid", "018f0000", "x' OR '1'='1", "018f0000-0000-7000-8000-00000000000g"} {
+		for _, path := range []string{"/api/audit?bulk=", "/api/audit/export?format=csv&bulk=", "/api/audit/export?format=json&bulk="} {
+			if rec := f.get(t, path+url.QueryEscape(bad), f.cookie); rec.code != http.StatusUnprocessableEntity {
+				t.Errorf("%s%s: status = %d, want 422", path, bad, rec.code)
+			}
+		}
+	}
+}

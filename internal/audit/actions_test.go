@@ -85,6 +85,86 @@ func TestEveryPhase3ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	}
 }
 
+// phase4DetailKeys maps every Phase 4 action to the detail keys the plans that
+// record it must use, for the same reason as phase3DetailKeys. The union of keys
+// is shared by the container actions: container, node and code always; bulk, stage,
+// own, timeout and signal when the request carried them.
+var phase4DetailKeys = map[string][]string{
+	audit.ActionContainerStarted: {"container", "node", "code", "bulk", "stage", "own", "timeout", "signal"},
+	audit.ActionContainerStopped: {"container", "node", "code", "bulk", "stage", "own", "timeout", "signal"},
+	// restart and kill take the same timeout and signal as a stop; remove takes
+	// force and volumes (plan 04-05).
+	audit.ActionContainerRestarted: {"container", "node", "code", "bulk", "stage", "own", "timeout", "signal"},
+	audit.ActionContainerKilled:    {"container", "node", "code", "bulk", "stage", "own", "signal"},
+	audit.ActionContainerPaused:    {"container", "node", "code", "bulk", "stage", "own"},
+	audit.ActionContainerUnpaused:  {"container", "node", "code", "bulk", "stage", "own"},
+	audit.ActionContainerRemoved:   {"container", "node", "code", "bulk", "stage", "own", "force", "volumes"},
+	// A network create records what was asked and where it landed; the remove of plan
+	// 04-13 records the name, node and scope, and the code of a refusal.
+	audit.ActionNetworkCreated: {"name", "node", "driver", "scope", "subnet", "gateway", "internal", "attachable", "code"},
+	audit.ActionNetworkRemoved: {"name", "node", "driver", "scope", "code"},
+	// Connecting a container records the network, the container, its node and, when asked
+	// for, the alias and addresses; disconnecting the first three.
+	audit.ActionNetworkConnected:    {"network", "container", "node", "alias", "ipv4", "ipv6", "code"},
+	audit.ActionNetworkDisconnected: {"network", "container", "node", "code"},
+	// A volume create records the name, node, driver and the driver options with any
+	// password-like part masked (redact.AuditOptions); the remove of plan 04-17 records
+	// the name, node, whether it was part of a bulk delete, and the code.
+	audit.ActionVolumeCreated: {"name", "node", "driver", "options", "code"},
+	audit.ActionVolumeRemoved: {"name", "node", "driver", "bulk", "code"},
+	// Opening a log stream records the container, its node, the viewer's random ID (sid)
+	// and what was asked for; never any line of the log (plan 04-19, D-23, D-24).
+	audit.ActionLogsViewed: {"container", "node", "sid", "since", "tail"},
+	// A browser shell records that a session began and how it ended, never what was
+	// typed or shown (plan 04-22, D-28): the container, its node, the session's ID
+	// (sid), the command as chosen, the user and working directory (empty for the
+	// container's own), then at the end the time it lasted, the exit code or that the
+	// process was still running, and why it ended. owner names whose session an admin
+	// ended (plan 04-25).
+	audit.ActionShellOpened: {"container", "node", "sid", "command", "user", "workdir"},
+	audit.ActionShellClosed: {"container", "node", "sid", "duration_ms", "exit_code", "still_running", "reason", "owner"},
+	// An administrator ending someone else's shell is its own row, with the admin as the
+	// actor and the session's owner named (plan 04-25, D-37).
+	audit.ActionShellEnded: {"container", "node", "sid", "owner"},
+}
+
+func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase4DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase4DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"container.started": audit.ActionContainerStarted, "container.stopped": audit.ActionContainerStopped,
+		"container.restarted": audit.ActionContainerRestarted, "container.killed": audit.ActionContainerKilled,
+		"container.paused": audit.ActionContainerPaused, "container.unpaused": audit.ActionContainerUnpaused,
+		"container.removed": audit.ActionContainerRemoved,
+		"network.created":   audit.ActionNetworkCreated, "network.removed": audit.ActionNetworkRemoved,
+		"network.connected": audit.ActionNetworkConnected, "network.disconnected": audit.ActionNetworkDisconnected,
+		"volume.created": audit.ActionVolumeCreated, "volume.removed": audit.ActionVolumeRemoved,
+		"logs.viewed": audit.ActionLogsViewed, "logs.downloaded": audit.ActionLogsDownloaded,
+		"shell.opened": audit.ActionShellOpened, "shell.closed": audit.ActionShellClosed, "shell.ended": audit.ActionShellEnded,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 func TestPhase3ActionKeysHaveTheirDocumentedValues(t *testing.T) {
 	for key, constant := range map[string]string{
 		"user.created": audit.ActionUserCreated, "user.invite_regenerated": audit.ActionUserInviteRegenerated,

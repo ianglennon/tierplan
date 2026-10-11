@@ -3,6 +3,7 @@
 A remote Docker host or swarm is managed through a small agent that you install on it. This page is for the person who runs those hosts: how to install the agent, what each flag does, how to rotate the join token, how to run it behind a proxy with its own certificate, what every connection problem means, and how to remove it again.
 
 - [What the agent is](#what-the-agent-is)
+- [What the agent forwards](#what-the-agent-forwards)
 - [Before you install](#before-you-install)
 - [Install on a swarm](#install-on-a-swarm)
 - [Install on a standalone host](#install-on-a-standalone-host)
@@ -23,10 +24,51 @@ The agent is one container, `ghcr.io/ianglennon/bayplan-agent`, that runs next t
 
 - On a swarm the agent is a global service, one task per node, so Bayplan can reach node-local data on every node and cluster data through any manager.
 - On a standalone host it is a single container.
-- The agent allows only a short list of read-only Docker calls (the lists the dashboard shows, events, the swarm lists, and the inspect of one container) and refuses everything else, whatever Bayplan asks. Docker write endpoints are not part of the agent in this release. The only changes it makes are to itself, when Bayplan asks it to update or uninstall (see [Updates](#updates)).
+- The agent forwards only a short, fixed list of Docker calls and refuses everything else, whatever Bayplan asks (see [What the agent forwards](#what-the-agent-forwards)). Apart from those calls, the only changes it makes are to itself, when Bayplan asks it to update or uninstall (see [Updates](#updates)).
 - An agent is identified by its own key. The join token only lets a host enrol the first time; after that the agent proves possession of its key and the token is no longer needed (see [Rotate or disable the join token](#rotate-or-disable-the-join-token)).
 
 Bayplan's own host does not need an agent: it uses the Docker socket directly.
+
+## What the agent forwards
+
+The agent is the security boundary between Bayplan and the host's Docker socket. The socket is root-equivalent, so the agent does not trust Bayplan with it: every request is checked against one fixed table of method, path, query keys and body shape, and a request that is not in the table is answered with `agent_policy_denied` and never reaches Docker. The agent decides this itself, from the bytes it receives. A compromised Bayplan cannot widen the list.
+
+**Reads** (any query):
+
+- `_ping`, `version`, `info`, `events`.
+- The lists the dashboard shows: containers, images, volumes and networks.
+- The swarm lists: nodes, services and tasks.
+- The inspect of one container, one network and one volume, and the state of one exec.
+- A container's logs (`stdout`, `stderr`, `since`, `until`, `timestamps`, `follow`, `tail`, `details` only).
+- Disk usage for volumes (`system/df` with `type=volume`).
+
+**Changes** (a read-only host refuses every one of these):
+
+| What | Calls |
+|------|-------|
+| Container lifecycle | start, stop, restart, kill, pause and unpause (only the `t` timeout and `signal` keys), and remove (only `force` and `v`) |
+| A shell in a container | create an exec, start it, resize its terminal. Start is the only call that may be upgraded to a raw two-way stream |
+| Networks | create, connect a container, disconnect a container, delete |
+| Volumes | create, delete |
+
+For every call that carries a body (exec create and start, network create, connect and disconnect, volume create) the agent reads the JSON into Docker's own request type, refuses any field it does not know, builds a fresh request from the fields it allows, and forwards that fresh request. Whatever else the sender put in the body does not arrive.
+
+**Refused, whatever Bayplan asks:**
+
+- A **privileged** exec, an exec with **environment variables** or **detach keys**, an exec without a terminal, and a detached exec start.
+- Any HTTP **upgrade** other than starting an exec. `attach` and the file `archive` of a container are refused.
+- A network that is an **ingress**, **config-only** or **config-from** network, a network driver other than bridge, overlay, macvlan or ipvlan, and IPAM options.
+- A **forced** network disconnect.
+- A **cluster volume** (a volume with a cluster spec).
+- The legacy **`link`** key on a container remove, and **`force`** on a volume delete.
+- Creating or changing a container, image or service; the stats, export and file contents of a container; the swarm join tokens (`GET /swarm`).
+- A body larger than 64 KiB, and a query larger than 4 KiB.
+
+**A volume can point at a host directory.** A `local` volume created with the options `type=none`, `o=bind` and a `device` is a bind of that host path. Docker allows it and so does the agent, because the agent cannot know who is asking: Bayplan lets only an environment **Admin** create volumes, and the options are written to the audit log. The agent forwards no container create, so Bayplan cannot mount such a volume into a new container. An Admin can still make a path on the host visible to a container someone else starts.
+
+**The read-only flag comes first.** On a host with `BAYPLAN_AGENT_READ_ONLY=true` the agent refuses every request that is not a `GET` or `HEAD` before it looks at the table, so no table entry can reach a change, and no shell can be opened, because creating an exec is a `POST`. See [Settings on the host](#settings-on-the-host-read-only-and-self-update).
+
+**An older agent refuses the newer calls.** The table ships with the agent. An agent from before this list grew refuses container actions, logs, shells, networks and volumes with `agent_policy_denied` until it updates; Bayplan then says the agent needs an update, and updates it itself unless the host set `BAYPLAN_AGENT_SELF_UPDATE=false` (see [Updates](#updates)).
 
 ## Before you install
 
@@ -161,7 +203,7 @@ These two are set by whoever owns the host, in the agent's environment (`-e` on 
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
-| `BAYPLAN_AGENT_READ_ONLY` | `false` | The agent refuses every Docker request that is not a `GET` or `HEAD`, whatever the allowlist says. The node list shows **Read-only (set on host)**. Today the allowlist is read-only anyway; the flag keeps a host read-only when a later release adds changes. |
+| `BAYPLAN_AGENT_READ_ONLY` | `false` | The agent refuses every Docker request that is not a `GET` or `HEAD`, whatever the allowlist says. The node list shows **Read-only (set on host)**. On a read-only host Bayplan can still list and read, but it cannot start, stop or remove anything, create networks or volumes, or open a shell. |
 | `BAYPLAN_AGENT_SELF_UPDATE` | `true` | Whether the agent may update or uninstall itself when Bayplan asks. With `false` the node list gives you the update command to run by hand and removing the environment leaves the agent in place (see [Updates](#updates) and [Uninstall and manual cleanup](#uninstall-and-manual-cleanup)). |
 
 Smaller settings, rarely needed: `BAYPLAN_AGENT_SOCKET` (default `/var/run/docker.sock`), `BAYPLAN_AGENT_STATE_DIR` (default `/var/lib/bayplan-agent`), `BAYPLAN_AGENT_DOCKER_GID` (the group of the socket, when it cannot be detected), `BAYPLAN_AGENT_BACKOFF_MIN` and `BAYPLAN_AGENT_BACKOFF_MAX` (reconnect delay, 1 s to 60 s by default), and `BAYPLAN_AGENT_ALLOW_INSECURE` (development only, see [Development only](#development-only-plain-ws)).

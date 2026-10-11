@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { z } from "zod";
+import { z } from "@/lib/zod-config";
 
 // The profile rules the Create user dialog and the Profile card share, so a
 // display name or email is judged the same way wherever it is typed. They are

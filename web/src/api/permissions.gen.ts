@@ -17,8 +17,10 @@ export const GLOBAL_PERMISSIONS = [
 
 // Permissions checked against one environment.
 export const ENVIRONMENT_PERMISSIONS = [
+  "containers.control",
   "containers.exec",
   "containers.read",
+  "containers.remove",
   "environments.access",
   "environments.audit",
   "environments.configure",
@@ -26,8 +28,12 @@ export const ENVIRONMENT_PERMISSIONS = [
   "environments.revoke",
   "images.read",
   "janitor.policy",
+  "networks.connect",
+  "networks.manage",
   "networks.read",
   "secrets.reveal",
+  "shells.manage",
+  "volumes.create",
   "volumes.delete",
   "volumes.read",
 ] as const;
@@ -64,8 +70,10 @@ export interface PermissionRequirement {
 export const PERMISSION_REQUIREMENTS: Record<PermissionName, PermissionRequirement> = {
   "audit.read": { kind: "instance" },
   "backup.manage": { kind: "instance" },
+  "containers.control": { kind: "role", role: "operator" },
   "containers.exec": { kind: "extra", role: "operator" },
   "containers.read": { kind: "role", role: "viewer" },
+  "containers.remove": { kind: "role", role: "operator" },
   "environments.access": { kind: "role", role: "admin" },
   "environments.audit": { kind: "role", role: "admin" },
   "environments.configure": { kind: "role", role: "admin" },
@@ -77,12 +85,16 @@ export const PERMISSION_REQUIREMENTS: Record<PermissionName, PermissionRequireme
   "environments.token": { kind: "instance" },
   "images.read": { kind: "role", role: "viewer" },
   "janitor.policy": { kind: "extra", role: "operator" },
+  "networks.connect": { kind: "role", role: "operator" },
+  "networks.manage": { kind: "role", role: "admin" },
   "networks.read": { kind: "role", role: "viewer" },
   "secrets.reveal": { kind: "extra", role: "operator" },
   "settings.read": { kind: "instance" },
   "settings.write": { kind: "instance" },
+  "shells.manage": { kind: "role", role: "admin" },
   "teams.manage": { kind: "instance" },
   "users.manage": { kind: "instance" },
+  "volumes.create": { kind: "role", role: "admin" },
   "volumes.delete": { kind: "extra", role: "operator" },
   "volumes.read": { kind: "role", role: "viewer" },
 };

@@ -419,8 +419,39 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 }
 
 // allowedMethods is the exported method set of *dockerx.Client. Later plans add
-// their read-only methods here, deliberately and one at a time (D-52).
-var allowedMethods = []string{"Close", "Cluster", "Events", "Probe", "RestartPolicies", "Snapshot"}
+// their methods here, deliberately and one at a time (D-52). ContainerAction (Phase
+// 4) is the first typed write: it takes a closed set of verbs, never a path, and the
+// forbidden-name pattern below still refuses any raw or passthrough shape.
+// StartExec (Phase 4, OBS-03) is the typed interactive shell: it takes a container
+// ID and an argv and sets only the TTY, size, user, working directory and command.
+// ContainerRemove (Phase 4) removes one container by ID with two booleans, force and
+// anonymous volumes; it never sets links and takes no path.
+// ContainerDetail (Phase 4, RES-01) is a read: one inspect by ID, typed.
+// NetworkCreate (Phase 4, RES-06) takes a typed spec of a name, one of four drivers and
+// its addressing; it cannot express an ingress, config-only or config-from network.
+// ServiceRefs (Phase 4, RES-06) is a read: the networks and volumes each swarm service spec mentions.
+// NetworkDetail (Phase 4, RES-06) is a read: one network inspect by ID, typed, with the raw document.
+// NetworkRemove (Phase 4, RES-06) removes one network by ID, once; it takes no path and
+// no options, and the API refuses a built-in or an in-use network before it is called.
+// NetworkConnect (Phase 4, RES-06) takes a network ID, a container ID and an EndpointSpec of an
+// alias and two addresses; it cannot express links, driver options or a MAC address.
+// NetworkDisconnect (Phase 4, RES-06) takes a network ID and a container ID and is never forced.
+// VolumeCreate (Phase 4, RES-07) takes a typed spec of a name, a driver, driver options and labels;
+// it cannot express a cluster volume. VolumeExists (Phase 4, RES-07) is a read: one inspect by name.
+// VolumeDriver (Phase 4, RES-07) is a read: the same inspect, answering the driver.
+// VolumeUsers (Phase 4, RES-07) is a read: the names of the containers that mount one volume.
+// VolumeDetail (Phase 4, RES-07) is a read: one inspect by name, with the raw document.
+// VolumeSizes (Phase 4, RES-07) is a read: the engine's disk usage of its volumes, which takes no
+// options, so the caller can ask for nothing else.
+// VolumeRemove (Phase 4, RES-07) removes one volume by name, once; it takes no options, so force
+// is never sent, and the API refuses a volume that is in use before it is called.
+// ContainerLogs (Phase 4, OBS-01) is a read: one inspect, then the engine's log of the container
+// with stdout, stderr and timestamps always on; it takes only the time range, the tail and follow.
+var allowedMethods = []string{"Close", "Cluster", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "Events", "NetworkConnect", "NetworkCreate", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "Probe", "RestartPolicies", "ServiceRefs", "Snapshot", "StartExec", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers"}
+
+// typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
+// pattern below refuses, each reviewed one by one.
+var typedMethodsWithForbiddenWords = []string{"StartExec", "ContainerRemove", "NetworkCreate", "NetworkRemove", "VolumeCreate", "VolumeRemove"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 
@@ -437,6 +468,9 @@ func TestTheClientExportsOnlyTheAllowedReadOnlyMethods(t *testing.T) {
 		t.Errorf("exported methods of *dockerx.Client = %v, want exactly %v", got, want)
 	}
 	for _, name := range got {
+		if slices.Contains(typedMethodsWithForbiddenWords, name) {
+			continue
+		}
 		if forbiddenName.MatchString(name) {
 			t.Errorf("method %s matches a forbidden state-changing or passthrough name (D-52)", name)
 		}
@@ -680,16 +714,76 @@ func TestSnapshotOnAWorkerNeverAsksForNodesOrServices(t *testing.T) {
 }
 
 func TestSnapshotRowsCannotCarryEnvironmentVariablesLabelsOrMounts(t *testing.T) {
-	// T-01-77. The row types are the only thing that crosses to the API, so a
-	// field that could hold these must not exist.
+	// T-01-77. A field that could hold these must not exist on a row type.
+	// The one deliberate exception (plan 04-06): a ContainerRow keeps its labels, mounts
+	// and network attachments for the search and the usage rules of networks and
+	// volumes. It never has a variable or a command. The API's container list sends
+	// an allowlist and never these fields; TestListsNeverCarryLabelsMountsOrVariables
+	// proves it (T-04-29). A NetworkRow keeps its labels (plan 04-13) for the same
+	// reason: the owner column and the search read the stack and project labels, and the
+	// list sends only the owner. A VolumeRow keeps its labels (plan 04-17) for the stack and
+	// project columns and the search; the list sends only those two and a flag, and
+	// the option values of a volume (which can hold a share password) are never on a row.
 	banned := regexp.MustCompile(`(?i)^(labels?|env|environment|mounts?|binds?|command|cmd|entrypoint|options|attachments|containers)$`)
+	internal := map[string]bool{"ContainerRow.Labels": true, "ContainerRow.Mounts": true, "NetworkRow.Labels": true, "VolumeRow.Labels": true}
 	for _, v := range []any{dockerx.ContainerRow{}, dockerx.ImageRow{}, dockerx.VolumeRow{}, dockerx.NetworkRow{}} {
 		typ := reflect.TypeOf(v)
 		for i := range typ.NumField() {
-			if f := typ.Field(i); banned.MatchString(f.Name) {
+			if f := typ.Field(i); banned.MatchString(f.Name) && !internal[typ.Name()+"."+f.Name] {
 				t.Errorf("%s has field %s, which can hold secrets", typ.Name(), f.Name)
 			}
 		}
+	}
+}
+
+func TestSnapshotContainerRowsKeepLabelsMountsAndNetworksForTheServer(t *testing.T) {
+	cfg := dockertest.FakeConfig{Containers: []dockertest.FakeContainer{{
+		ID: "c1", Names: []string{"/web"}, State: "running",
+		Labels: map[string]string{"com.docker.compose.project": "shop"},
+		Mounts: []string{"data", "/srv/x"},
+		Networks: map[string]dockertest.FakeEndpoint{
+			"zeta":  {NetworkID: "nz", IPv4: "10.0.1.5"},
+			"alpha": {NetworkID: "na", IPv4: "10.0.0.5", IPv6: "fd00::5", MAC: "02:42:0a:00:00:05"},
+		},
+	}}}
+	snap, _ := snapshot(t, cfg, false)
+	row := snap.Containers[0]
+	if row.Labels["com.docker.compose.project"] != "shop" {
+		t.Errorf("labels = %v", row.Labels)
+	}
+	if len(row.Mounts) != 2 || row.Mounts[0].Type != "volume" || row.Mounts[0].Name != "data" || row.Mounts[1].Type != "bind" || row.Mounts[1].Source != "/srv/x" {
+		t.Errorf("mounts = %+v", row.Mounts)
+	}
+	if len(row.Networks) != 2 || row.Networks[0].Name != "alpha" || row.Networks[0].NetworkID != "na" || row.Networks[0].IPv4 != "10.0.0.5" ||
+		row.Networks[0].IPv6 != "fd00::5" || row.Networks[0].MAC != "02:42:0a:00:00:05" || row.Networks[1].Name != "zeta" {
+		t.Errorf("networks = %+v, want alpha then zeta", row.Networks)
+	}
+}
+
+func TestSnapshotContainerHealthComesFromTheSummaryOrTheStatusText(t *testing.T) {
+	for _, tc := range []struct {
+		name, health, status, want string
+	}{
+		{"summary unhealthy", "unhealthy", "Up 2 minutes", "unhealthy"},
+		{"summary healthy", "healthy", "Up 2 minutes", "healthy"},
+		{"summary starting", "starting", "Up 2 seconds", "starting"},
+		{"summary wins over the text", "healthy", "Up 2 minutes (unhealthy)", "healthy"},
+		{"text unhealthy", "", "Up 2 minutes (unhealthy)", "unhealthy"},
+		{"text starting", "", "Up 5 seconds (health: starting)", "starting"},
+		{"text healthy", "", "Up 1 hour (healthy)", "healthy"},
+		{"no healthcheck", "", "Up 1 hour", "none"},
+		{"summary none", "none", "Up 1 hour", "none"},
+		{"exited", "", "Exited (1) 2 hours ago", "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := dockertest.FakeConfig{Containers: []dockertest.FakeContainer{
+				{ID: "c1", Names: []string{"/web"}, State: "running", Status: tc.status, Health: tc.health},
+			}}
+			snap, _ := snapshot(t, cfg, false)
+			if got := snap.Containers[0].Health; got != tc.want {
+				t.Errorf("health = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -732,12 +826,11 @@ func recvRow(t *testing.T, rows <-chan dockerx.EventRow) dockerx.EventRow {
 	return dockerx.EventRow{}
 }
 
-func TestEventsKeepsContainerImageNetworkAndVolumeEventsAndDropsTheNoise(t *testing.T) {
+func TestEventsKeepsContainerImageNetworkAndVolumeEventsAndDropsExecNoise(t *testing.T) {
 	base := time.Now().Add(-time.Minute).UnixNano()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
 		{Type: "container", Action: "create", ActorID: "c1", TimeNano: base + 1, Attributes: map[string]string{"name": "web", "image": "nginx:1.27"}},
 		{Type: "container", Action: "exec_start: sh -c 'echo $SECRET'", ActorID: "c1", TimeNano: base + 2, Attributes: map[string]string{"name": "web"}},
-		{Type: "container", Action: "health_status: healthy", ActorID: "c1", TimeNano: base + 3, Attributes: map[string]string{"name": "web"}},
 		{Type: "image", Action: "pull", ActorID: "nginx:1.27", TimeNano: base + 4, Attributes: map[string]string{"name": "nginx"}},
 		{Type: "network", Action: "connect", ActorID: "n1", TimeNano: base + 5, Attributes: map[string]string{"name": "app", "container": "c1"}},
 		{Type: "volume", Action: "create", ActorID: "data", TimeNano: base + 6, Attributes: map[string]string{"driver": "local"}},
@@ -769,7 +862,7 @@ func TestEventsKeepsContainerImageNetworkAndVolumeEventsAndDropsTheNoise(t *test
 	}
 	select {
 	case r := <-rows:
-		t.Errorf("a fifth row arrived: %+v (exec and health events must be dropped)", r)
+		t.Errorf("a fifth row arrived: %+v (exec events must be dropped)", r)
 	case <-time.After(150 * time.Millisecond):
 	}
 }
@@ -798,7 +891,7 @@ func TestEventsDropsAttachDetachResizeAndTopToo(t *testing.T) {
 	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
 	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
-	for _, a := range []string{"attach", "detach", "resize", "top", "exec_die", "exec_create: sh", "health_status: unhealthy"} {
+	for _, a := range []string{"attach", "detach", "resize", "top", "exec_die", "exec_create: sh"} {
 		fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: a, ActorID: "c1"})
 	}
 	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c1"})
@@ -807,7 +900,7 @@ func TestEventsDropsAttachDetachResizeAndTopToo(t *testing.T) {
 	}
 }
 
-func TestEventsCopiesOnlyNameImageAndExitCode(t *testing.T) {
+func TestEventsCopyOnlyTheAllowlistedAttributes(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -815,17 +908,79 @@ func TestEventsCopiesOnlyNameImageAndExitCode(t *testing.T) {
 	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
 
 	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c1", Attributes: map[string]string{
-		"name": "web", "image": "nginx:1.27", "exitCode": "137",
-		"com.docker.compose.project": "shop", "API_TOKEN": "hunter2", "execID": "abc", "signal": "9",
+		"name": "web", "image": "nginx:1.27", "exitCode": "137", "signal": "9",
+		"com.docker.compose.project": "shop", "com.docker.stack.namespace": "prod",
+		"secret.token": "hunter2", "API_TOKEN": "hunter2", "execID": "abc", "com.example.owner": "ian",
+		"com.docker.compose.service": "web", "PASSWORD=hunter2": "", "traefik.http.routers.x.rule": "Host(`x`)",
 	}})
 	r := recvRow(t, rows)
-	want := map[string]string{"name": "web", "image": "nginx:1.27", "exitCode": "137"}
+	want := map[string]string{
+		"name": "web", "image": "nginx:1.27", "exitCode": "137", "signal": "9",
+		"com.docker.compose.project": "shop", "com.docker.stack.namespace": "prod",
+	}
 	if !reflect.DeepEqual(r.Attributes, want) {
-		t.Errorf("Attributes = %v, want only %v (T-01-88)", r.Attributes, want)
+		t.Errorf("Attributes = %v, want only %v (D-61, T-01-88)", r.Attributes, want)
 	}
 }
 
-func TestEventsAskForTheFourTypesAndPassSinceAsSecondsOrSecondsAndNanoseconds(t *testing.T) {
+func TestEventsDeliverSwarmServiceNodeSecretAndConfigEvents(t *testing.T) {
+	// D-48: a swarm manager's events are in the feed. The fake applies the type
+	// filter the client sent, so a type missing from the filter would never arrive.
+	base := time.Now().Add(-time.Minute).UnixNano()
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
+		{Type: "service", Action: "update", ActorID: "svc1", Scope: "swarm", TimeNano: base + 1, Attributes: map[string]string{"name": "web", "com.docker.stack.namespace": "prod", "updatestate.new": "updating"}},
+		{Type: "node", Action: "update", ActorID: "n1", Scope: "swarm", TimeNano: base + 2, Attributes: map[string]string{"name": "worker-1"}},
+		{Type: "secret", Action: "create", ActorID: "s1", Scope: "swarm", TimeNano: base + 3, Attributes: map[string]string{"name": "db-password"}},
+		{Type: "config", Action: "remove", ActorID: "cfg1", Scope: "swarm", TimeNano: base + 4, Attributes: map[string]string{"name": "nginx.conf"}},
+		{Type: "plugin", Action: "install", ActorID: "p1", TimeNano: base + 5},
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rows, _ := newClient(t, fake).Events(ctx, time.Now().Add(-time.Hour))
+	for i, want := range []struct{ typ, name string }{{"service", "web"}, {"node", "worker-1"}, {"secret", "db-password"}, {"config", "nginx.conf"}} {
+		r := recvRow(t, rows)
+		if r.Type != want.typ || r.Name != want.name || r.Scope != "swarm" {
+			t.Errorf("row %d = %+v, want a swarm %s named %s", i, r, want.typ, want.name)
+		}
+		if _, leaked := r.Attributes["updatestate.new"]; leaked {
+			t.Errorf("row %d leaks an attribute outside the allowlist: %v", i, r.Attributes)
+		}
+	}
+	select {
+	case r := <-rows:
+		t.Errorf("a plugin event arrived: %+v", r)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestEventsTurnAHealthStatusChangeIntoAnInvalidateOnlyRowWithoutAttributes(t *testing.T) {
+	// RES-14: a list must show Unhealthy at once, but a feed for people has no use
+	// for every check, and the attributes of the event can name the check command.
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rows, _ := newClient(t, fake).Events(ctx, time.Time{})
+	waitFor(t, "the stream to open", func() bool { return fake.OpenEventStreams() == 1 })
+
+	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "health_status: unhealthy", ActorID: "c1", Attributes: map[string]string{
+		"name": "web", "image": "nginx:1.27", "healthcheck": "curl -u admin:hunter2 localhost", "API_TOKEN": "hunter2",
+	}})
+	r := recvRow(t, rows)
+	if !r.InvalidateOnly || r.Type != "container" || r.ActorID != "c1" || r.ID == "" {
+		t.Fatalf("row = %+v, want an invalidate-only container row for c1", r)
+	}
+	if len(r.Attributes) != 0 || r.Attributes == nil || r.Name != "" {
+		t.Errorf("Attributes = %#v, Name = %q, want an empty, non-nil map and no name", r.Attributes, r.Name)
+	}
+
+	// A kept event next to it is a normal row.
+	fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "die", ActorID: "c1"})
+	if r := recvRow(t, rows); r.InvalidateOnly || r.Action != "die" {
+		t.Errorf("next row = %+v, want a normal die row", r)
+	}
+}
+
+func TestEventsAskForTheEightTypesAndPassSinceAsSecondsOrSecondsAndNanoseconds(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	cli := newClient(t, fake)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -847,8 +1002,8 @@ func TestEventsAskForTheFourTypesAndPassSinceAsSecondsOrSecondsAndNanoseconds(t 
 	if err := json.Unmarshal([]byte(qs[0].Get("filters")), &f); err != nil {
 		t.Fatalf("filters %q: %v", qs[0].Get("filters"), err)
 	}
-	if !reflect.DeepEqual(f, map[string]map[string]bool{"type": {"container": true, "image": true, "network": true, "volume": true}}) {
-		t.Errorf("filters = %v, want the four types", f)
+	if !reflect.DeepEqual(f, map[string]map[string]bool{"type": {"container": true, "image": true, "network": true, "volume": true, "service": true, "node": true, "secret": true, "config": true}}) {
+		t.Errorf("filters = %v, want the four resource types and the four swarm ones", f)
 	}
 }
 

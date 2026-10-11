@@ -31,8 +31,13 @@ const (
 	// re-checks missed, the browser's reconnect then goes through the full
 	// policy (WR-02).
 	defaultMaxStreamLifetime = time.Hour
-	// recentEventsLimit is how many events the polling fallback returns.
+	// recentEventsLimit is how many events the list returns when it is not told.
 	recentEventsLimit = 50
+	// recentEventsMax is the most events one list call returns: the hub's ring.
+	recentEventsMax = 1000
+	// recentEventsWindow is how far back since may reach. It matches the hub's
+	// backfill; an earlier time is clamped to it (D-48).
+	recentEventsWindow = 24 * time.Hour
 )
 
 // EventsSource is what the events routes read: the events of an environment,
@@ -41,8 +46,9 @@ type EventsSource interface {
 	// Events returns the buffered events, oldest first, and the channel of the
 	// ones that follow; see envs.Aggregator.Events.
 	Events(ctx context.Context, envID string) (backlog []envs.NodeEvent, ch <-chan envs.NodeEvent, cancel func())
-	// Recent returns up to n buffered events, newest first.
-	Recent(ctx context.Context, envID string, n int) []envs.NodeEvent
+	// RecentSince returns up to n buffered events at or after since (the zero
+	// time for no bound), newest first.
+	RecentSince(ctx context.Context, envID string, since time.Time, n int) []envs.NodeEvent
 }
 
 // EventsDeps are the dependencies of the events routes.
@@ -58,26 +64,43 @@ type EventsDeps struct {
 	MaxLifetime time.Duration
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// Now is the clock the since bound is clamped against. Nil means time.Now.
+	Now func() time.Time
 }
 
 // EventDTO is one Docker event as the feed shows it. It is the data of every
 // stream frame and the item of the recent-events list. It carries no labels or
-// environment: only name, image and exit code survive from Docker's attributes
-// (T-01-88).
+// environment beyond the small allowlist in dockerx (D-61, T-01-88).
 type EventDTO struct {
 	Node       string            `json:"node" doc:"The node the event happened on; for a row of Bayplan's own, the node it concerns, such as the manager that took over"`
 	ID         string            `json:"id" doc:"A stable ID for the event; the SSE frame id, and what a repeated event is recognised by"`
 	Time       string            `json:"time" format:"date-time" doc:"When it happened, in UTC, with sub-second precision"`
-	Type       string            `json:"type" enum:"container,image,network,volume,bayplan" doc:"What kind of object it is about. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event"`
+	Type       string            `json:"type" enum:"container,image,network,volume,service,node,secret,config,bayplan" doc:"What kind of object it is about. service, node, secret and config come from a swarm manager only. bayplan is a row of Bayplan's own, such as a manager failover, not a Docker event"`
 	Action     string            `json:"action" doc:"What happened, for example start, die, pull, connect or create"`
-	ActorID    string            `json:"actorId" doc:"The ID of the container, image, network or volume"`
-	Name       string            `json:"name" doc:"The container, image, network or volume name; empty when Docker gave none"`
-	Attributes map[string]string `json:"attributes" doc:"Only name, image and exitCode, when the event had them"`
+	ActorID    string            `json:"actorId" doc:"The ID of the container, image, network, volume, service, node, secret or config"`
+	Name       string            `json:"name" doc:"The object's name; empty when Docker gave none"`
+	Attributes map[string]string `json:"attributes" doc:"Only these attributes, when the event had them: name, image, exitCode, signal, type, container, driver, reason, destination, read/write, com.docker.compose.project and com.docker.stack.namespace. Every other label, environment value and free-form attribute is left out"`
+}
+
+// InvalidateDTO is the data of an `event: invalidate` frame: a change that makes
+// the browser's lists stale but is not shown in the feed, such as a container's
+// health turning unhealthy. It carries no attributes.
+type InvalidateDTO struct {
+	Type    string `json:"type"`
+	ActorID string `json:"actorId"`
+	Node    string `json:"node"`
+}
+
+// ListRecentEventsInput is the path and query of GET /api/env/{envId}/events.
+type ListRecentEventsInput struct {
+	EnvironmentPathInput
+	Since string `query:"since" format:"date-time" doc:"Only events at or after this time (RFC 3339). Anything earlier than 24 hours ago is read as 24 hours ago"`
+	Limit int    `query:"limit" minimum:"1" maximum:"1000" default:"50" doc:"At most this many events; 50 by default"`
 }
 
 // EventListBody is the recent events of an environment.
 type EventListBody struct {
-	Items []EventDTO `json:"items" doc:"At most 50 events, newest first"`
+	Items []EventDTO `json:"items" doc:"At most limit events (50 unless asked otherwise, never more than 1000), newest first"`
 }
 
 // EventListOutput wraps EventListBody for huma.
@@ -150,13 +173,36 @@ func RegisterEvents(r *httpx.Router, d EventsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "listRecentEvents", Method: http.MethodGet, Path: "/api/env/{envId}/events",
 		Summary: "The recent Docker events of an environment",
-		Description: "The newest 50 container, image, network and volume events Bayplan has seen on this environment, " +
-			"newest first, for clients that cannot hold a stream open. Events are kept in memory only: the list is " +
-			"empty after a restart until Docker reports something, apart from what the daemon still remembers from " +
-			"the last hour. The live version of this list is a server-sent events stream with the same event data.",
+		Description: "The newest container, image, network, volume and (from a swarm manager) service, node, secret and " +
+			"config events Bayplan has seen on this environment, newest first, for clients that cannot hold a stream " +
+			"open and for the Events page. since keeps only events at or after that time, at most 24 hours back; " +
+			"limit is 1 to 1000 and defaults to 50. Events are kept in memory only: the list is empty after a " +
+			"restart until Docker reports something, apart from what the daemon still remembers (about its last 256 " +
+			"events, and none across its own restart). The live version of this list is a server-sent events stream " +
+			"with the same event data.",
 		Tags: []string{"environments"},
-	}, need, func(ctx context.Context, in *EnvironmentPathInput) (*EventListOutput, error) {
-		rows := d.Aggregator.Recent(ctx, in.EnvID, recentEventsLimit)
+	}, need, func(ctx context.Context, in *ListRecentEventsInput) (*EventListOutput, error) {
+		now := time.Now()
+		if d.Now != nil {
+			now = d.Now()
+		}
+		var since time.Time
+		if in.Since != "" {
+			t, err := time.Parse(time.RFC3339Nano, in.Since)
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity("since is not an RFC 3339 time")
+			}
+			since = t
+		}
+		if floor := now.Add(-recentEventsWindow); !since.IsZero() && since.Before(floor) {
+			since = floor
+		}
+		limit := in.Limit
+		if limit <= 0 {
+			limit = recentEventsLimit
+		}
+		limit = min(limit, recentEventsMax)
+		rows := d.Aggregator.RecentSince(ctx, in.EnvID, since, limit)
 		items := make([]EventDTO, 0, len(rows))
 		for _, row := range rows {
 			items = append(items, eventDTO(row))
@@ -229,6 +275,19 @@ func serveEventStream(w http.ResponseWriter, req *http.Request, d EventsDeps, li
 	}
 
 	send := func(row envs.NodeEvent) bool {
+		if row.InvalidateOnly {
+			// Tells the browser a list changed. It has no id, so Last-Event-ID resume
+			// is unaffected, and nothing about the event but its type, actor and node.
+			data, err := json.Marshal(InvalidateDTO{Type: row.Type, ActorID: row.ActorID, Node: row.Node})
+			if err != nil {
+				d.Log.Error("encode an invalidate frame", "error", err)
+				return false
+			}
+			if _, err := fmt.Fprintf(w, "event: invalidate\ndata: %s\n\n", data); err != nil {
+				return false
+			}
+			return rc.Flush() == nil
+		}
 		data, err := json.Marshal(eventDTO(row))
 		if err != nil {
 			d.Log.Error("encode an event", "error", err)

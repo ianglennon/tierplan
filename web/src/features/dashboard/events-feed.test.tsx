@@ -10,6 +10,7 @@ import { EnvEventsProvider, type EventDTO } from "@/features/dashboard/events";
 import { EventsFeed } from "@/features/dashboard/events-feed";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import "@/i18n";
+import { TestRouter } from "@/test-router";
 
 function ev(id: string, over: Partial<EventDTO> = {}): EventDTO {
   return {
@@ -27,14 +28,16 @@ function ev(id: string, over: Partial<EventDTO> = {}): EventDTO {
 
 let recent: () => Promise<Response>;
 
-function show(showNode = false) {
+function show(showNode = false, envId?: string) {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <TooltipProvider>
-        <EnvEventsProvider envId="e1">
-          <EventsFeed showNode={showNode} />
-        </EnvEventsProvider>
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <EnvEventsProvider envId="e1">
+            <EventsFeed envId={envId} showNode={showNode} />
+          </EnvEventsProvider>
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>,
   );
 }
@@ -91,6 +94,62 @@ describe("EventsFeed", () => {
     expect(within(row).getByText("nginx:1.27")).toBeTruthy();
     expect(within(row).getByText("exit code 137")).toBeTruthy();
     expect(within(row).getByText("1 min ago")).toBeTruthy();
+  });
+
+  it("labels the swarm types Service, Node, Secret and Config and shows each under All with its name", async () => {
+    recent = async () =>
+      Response.json({
+        items: [
+          ev("1", { type: "service", action: "update", name: "web", time: "2026-10-02T10:00:04Z" }),
+          ev("2", {
+            type: "node",
+            action: "update",
+            name: "worker-1",
+            time: "2026-10-02T10:00:03Z",
+          }),
+          ev("3", {
+            type: "secret",
+            action: "create",
+            name: "db-password",
+            time: "2026-10-02T10:00:02Z",
+          }),
+          ev("4", {
+            type: "config",
+            action: "remove",
+            name: "nginx.conf",
+            time: "2026-10-02T10:00:01Z",
+          }),
+        ],
+      });
+    show();
+    const items = await screen.findAllByRole("listitem");
+    expect(items).toHaveLength(4);
+    expect(within(items[0] as HTMLElement).getByText("Service update")).toBeTruthy();
+    expect(within(items[1] as HTMLElement).getByText("Node update")).toBeTruthy();
+    expect(within(items[2] as HTMLElement).getByText("Secret create")).toBeTruthy();
+    expect(within(items[3] as HTMLElement).getByText("Config remove")).toBeTruthy();
+    expect(within(items[2] as HTMLElement).getByText("db-password")).toBeTruthy();
+  });
+
+  it("keeps showing 50 events at most when swarm events arrive", async () => {
+    show();
+    await screen.findByText("No events in the last hour");
+    act(() => {
+      stream().open();
+      for (let i = 0; i < 60; i++) {
+        stream().send(
+          ev(`s${i}`, {
+            type: "service",
+            action: "update",
+            name: `svc-${i}`,
+            time: new Date(Date.now() + i * 1000).toISOString(),
+          }),
+        );
+      }
+    });
+    expect(rows()).toHaveLength(50);
+    expect(screen.getByText("svc-59")).toBeTruthy();
+    expect(screen.queryByText("svc-9")).toBeNull();
   });
 
   it("shows a row of Bayplan's own with a Bayplan label and its message, under All only", async () => {
@@ -332,5 +391,28 @@ describe("EventsFeed on a swarm", () => {
     show(true);
     await screen.findByText(evil);
     expect(document.querySelector("img[src='x']")).toBeNull();
+  });
+
+  it("has a View all events link to the same environment's Events page, and changes nothing else", async () => {
+    recent = async () => Response.json({ items: [ev("1", { name: "web-1" })] });
+    show(false, "e1");
+    const link = await screen.findByRole("link", { name: "View all events" });
+    expect(link.getAttribute("href")).toBe("/env/e1/events");
+    expect(screen.getByText("Recent events")).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "Filter events by type" })).toBeTruthy();
+    expect(await screen.findByText("web-1")).toBeTruthy();
+    expect(rows()).toHaveLength(1);
+  });
+
+  it("shows the link while the feed is loading or empty, and not without an environment", async () => {
+    recent = async () => Response.json({ items: [] });
+    show(false, "e1");
+    expect(screen.getByRole("link", { name: "View all events" })).toBeTruthy();
+    await screen.findByText("No events in the last hour");
+    expect(screen.getByRole("link", { name: "View all events" })).toBeTruthy();
+    cleanup();
+    show();
+    await screen.findByText("No events in the last hour");
+    expect(screen.queryByRole("link", { name: "View all events" })).toBeNull();
   });
 });

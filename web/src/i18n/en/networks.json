@@ -1,0 +1,286 @@
+{
+  "networks": {
+    "list": {
+      "search": {
+        "label": "Search networks",
+        "placeholder": "Search by name, driver, subnet or stack",
+        "clear": "Clear search"
+      },
+      "empty": {
+        "search": {
+          "title": "No networks match “{{q}}”.",
+          "action": "Clear search"
+        }
+      },
+      "scope": {
+        "swarm": "Swarm",
+        "local": "Local"
+      },
+      "none": "None",
+      "attached": {
+        "containers_one": "{{count, number}} container",
+        "containers_other": "{{count, number}} containers",
+        "services_one": "{{count, number}} service",
+        "services_other": "{{count, number}} services",
+        "both": "{{containers}}, {{services}}"
+      },
+      "inUseBy": "In use by {{what}}. Open it to see what uses it.",
+      "inUseAnd": "{{first}} and {{second}}"
+    },
+    "create": {
+      "button": "Create network",
+      "title": "Create network",
+      "body": "A network lets containers reach each other by name.",
+      "cancel": "Cancel",
+      "submit": "Create network",
+      "pending": "Creating…",
+      "success": "Created network {{name}}.",
+      "name": {
+        "label": "Name"
+      },
+      "driver": {
+        "label": "Driver"
+      },
+      "attachable": {
+        "label": "Attachable",
+        "helper": "Lets standalone containers join an overlay network. Only for overlay networks on a swarm."
+      },
+      "internal": {
+        "label": "Internal",
+        "helper": "No access to outside networks."
+      },
+      "labels": {
+        "label": "Labels",
+        "add": "Add label",
+        "key": "Label name",
+        "value": "Label value",
+        "remove": "Remove label {{name}}",
+        "removeEmpty": "Remove label"
+      },
+      "node": {
+        "label": "Create on node",
+        "placeholder": "Choose a node"
+      },
+      "advanced": {
+        "trigger": "Advanced"
+      },
+      "subnet": {
+        "label": "Subnet",
+        "placeholder": "10.20.0.0/24",
+        "helper": "In CIDR form. Bayplan warns if it overlaps another network but doesn't pick one for you."
+      },
+      "gateway": {
+        "label": "Gateway"
+      },
+      "ipRange": {
+        "label": "IP range"
+      },
+      "ipv6": {
+        "label": "Enable IPv6"
+      },
+      "options": {
+        "label": "Driver options",
+        "add": "Add option",
+        "key": "Option name",
+        "value": "Option value",
+        "remove": "Remove option {{name}}",
+        "removeEmpty": "Remove option"
+      },
+      "overlap": {
+        "one": "This overlaps {{name}} ({{cidr}}). Containers on both networks may not reach each other. You can still create it.",
+        "two": "This overlaps {{count}} networks: {{first}} and {{second}}. Containers on both networks may not reach each other. You can still create it.",
+        "many": "This overlaps {{count}} networks: {{first}}, {{second}} and {{more}} more. Containers on both networks may not reach each other. You can still create it."
+      }
+    },
+    "delete": {
+      "action": "Delete…",
+      "title": "Delete {{name}}?",
+      "body": "Containers can no longer use it. This can't be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete network",
+      "pending": "Deleting…",
+      "done": "Deleted network {{name}}.",
+      "gone": "{{name}} is already gone.",
+      "builtin": "{{name}} is built in and can't be deleted.",
+      "inUse": "{{name}} is still in use. Disconnect or remove what uses it, then try again.",
+      "label": "Delete network {{name}}"
+    },
+    "connect": {
+      "action": "Connect container",
+      "actionContainer": "Connect to network",
+      "title": "Connect a container to {{network}}",
+      "titleContainer": "Connect {{container}} to a network",
+      "body": "The container is on the network straight away.",
+      "notAttachable": "{{name}} isn't attachable, so standalone containers can't join it. Only swarm services can.",
+      "own": "This is one of Bayplan's own containers. Putting it on another network changes what can reach it, so its name has to be typed first.",
+      "container": {
+        "label": "Container",
+        "placeholder": "Find a container…",
+        "empty": "Every container is already on this network.",
+        "noMatch": "No container matches.",
+        "loading": "Loading containers"
+      },
+      "network": {
+        "label": "Network",
+        "placeholder": "Find a network…",
+        "empty": "This container is on every network it can join.",
+        "noMatch": "No network matches.",
+        "loading": "Loading networks"
+      },
+      "alias": {
+        "label": "Alias (optional)",
+        "helper": "Another name other containers can use."
+      },
+      "ipv4": {
+        "label": "IPv4 address (optional)"
+      },
+      "ipv6": {
+        "label": "IPv6 address (optional)"
+      },
+      "cancel": "Cancel",
+      "submit": "Connect container",
+      "pending": "Connecting…",
+      "success": "Connected {{container}} to {{network}}.",
+      "errors": {
+        "ipv4": "Enter an address like 10.20.0.5.",
+        "ipv6": "Enter an address like fd00:20::5.",
+        "addressInvalid": "The network didn't accept that address. Enter one inside the network's subnet, like 10.20.0.5.",
+        "nodeMismatch": "{{network}} is local to one node, and {{container}} is on another. A container can only join a local network of its own node.",
+        "notAttachable": "{{network}} isn't attachable, so standalone containers can't join it. Only swarm services can.",
+        "alreadyConnected": "{{container}} is already on {{network}}.",
+        "unavailableOnNode": "That node doesn't know {{network}} yet, so {{container}} can't join it from there. Try again once a service that uses the network is running on that node.",
+        "networkGone": "{{network}} no longer exists. It may have been removed.",
+        "containerGone": "{{container}} no longer exists. It may have been removed."
+      }
+    },
+    "disconnect": {
+      "action": "Disconnect…",
+      "label": "Disconnect {{container}} from {{network}}",
+      "actions": "Actions",
+      "title": "Disconnect {{container}} from {{network}}?",
+      "body": "It loses access to everything on that network straight away.",
+      "cancel": "Cancel",
+      "confirm": "Disconnect container",
+      "pending": "Disconnecting…",
+      "done": "Disconnected {{container}} from {{network}}.",
+      "notConnected": "{{container}} isn't on {{network}} any more.",
+      "gone": "{{container}} or {{network}} is already gone.",
+      "own": "This is one of Bayplan's own containers. Taking it off a network can cut Bayplan off from this host, and Bayplan can't put it back once that happens.",
+      "ownAsked": "This is one of Bayplan's own containers, so its name has to be typed first."
+    },
+    "usedBy": {
+      "container": "{{name}} on {{node}}",
+      "service": "Service {{name}}"
+    },
+    "errors": {
+      "nameRequired": "Enter a name.",
+      "nameInvalid": "Use letters, numbers, dot, dash or underscore.",
+      "nameTaken": "A network named {{name}} already exists.",
+      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+      "permission": "You no longer have permission to do that. Your access may have changed.",
+      "nodeUnreachable": "That node isn't reachable right now. Try again when it's back.",
+      "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
+      "nodeRequired": "Choose a node.",
+      "subnetInvalid": "Enter a subnet like 10.20.0.0/24.",
+      "gatewayOutside": "The gateway must be inside the subnet.",
+      "rangeOutside": "The IP range must be inside the subnet.",
+      "attachableOverlayOnly": "Only an overlay network on a swarm can be attachable.",
+      "overlayNeedsSwarm": "An overlay network needs a swarm. This environment isn't one."
+    },
+    "detail": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "networks": "Networks"
+      },
+      "tabs": {
+        "label": "Network sections",
+        "overview": "Overview",
+        "attachments": "Attachments",
+        "inspect": "Inspect"
+      },
+      "owner": {
+        "stack": "Stack {{name}}",
+        "project": "Project {{name}}"
+      },
+      "error": {
+        "loadFailed": "Couldn't load {{name}}. Docker may be unreachable. Try again.",
+        "retry": "Retry"
+      },
+      "gone": {
+        "heading": "This network is gone",
+        "body": "It was removed, or a deploy replaced it. Go back to the list to find it.",
+        "back": "Back to networks"
+      },
+      "open": "Open",
+      "openLabel": "Open network {{name}}",
+      "missing": "—",
+      "attachments": {
+        "title": "Attachments",
+        "columns": {
+          "name": "Name",
+          "type": "Type",
+          "node": "Node",
+          "ipv4": "IPv4",
+          "ipv6": "IPv6",
+          "mac": "MAC",
+          "aliases": "Aliases"
+        },
+        "type": {
+          "container": "Container",
+          "service": "Service"
+        },
+        "service": "Service {{name}}",
+        "empty": "Nothing is attached to this network.",
+        "truncated": "Aliases are shown for the first {{count, number}} containers only.",
+        "loading": "Loading the attachments",
+        "tasks_one": "{{count, number}} task",
+        "tasks_other": "{{count, number}} tasks"
+      },
+      "overview": {
+        "loading": "Loading the network",
+        "details": {
+          "title": "Details",
+          "id": "ID",
+          "idLabel": "the network ID",
+          "driver": "Driver",
+          "scope": "Scope",
+          "ipv6": "IPv6",
+          "internal": "Internal",
+          "attachable": "Attachable",
+          "created": "Created",
+          "owner": "Owner",
+          "yes": "Yes",
+          "no": "No"
+        },
+        "pools": {
+          "title": "Subnets and gateways",
+          "subnet": "Subnet",
+          "gateway": "Gateway",
+          "ipRange": "IP range",
+          "empty": "No address pools."
+        },
+        "options": {
+          "title": "Options",
+          "label": "Driver options",
+          "empty": "No options."
+        },
+        "labels": {
+          "title": "Labels",
+          "label": "Labels",
+          "empty": "No labels."
+        }
+      },
+      "inspect": {
+        "loading": "Loading the inspect output",
+        "loadFailed": "Couldn't load the inspect output of {{name}}.",
+        "retry": "Retry"
+      },
+      "inUse": {
+        "title": "{{name}} is in use",
+        "body": "Disconnect or remove these first. Swarm services that mention this network count, even with no running tasks.",
+        "reason": "In use by {{what}}."
+      },
+      "builtin": "{{name}} is built in and can't be deleted."
+    }
+  }
+}

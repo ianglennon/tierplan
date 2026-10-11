@@ -4,6 +4,7 @@
 package tunnel_test
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -11,8 +12,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -678,5 +681,308 @@ func TestSessionsAreListedByAgentID(t *testing.T) {
 	got := f.hub.Sessions()
 	if len(got) != 2 || got[0].AgentID != "a" || got[1].AgentID != "b" {
 		t.Fatalf("Sessions = %v", got)
+	}
+}
+
+// Long streams through the tunnel: a followed log or a shell is not cut at the response
+// cap, and the two together may not take every stream of a session (plan 04-03, OBS-01,
+// OBS-03, T-04-13, T-04-14).
+
+// serveSized answers every Docker request on the agent's side with a body of n bytes for
+// the paths in big, and "ok" for the rest. The body is generated, never held in memory.
+func serveSized(t *testing.T, mux *yamux.Session, n int64, big func(path string) bool) {
+	t.Helper()
+	go func() {
+		for {
+			st, err := mux.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = st.Close() }()
+				br := bufio.NewReader(st)
+				if k, err := br.ReadByte(); err != nil || k != wire.StreamKindDockerHTTP {
+					return
+				}
+				for {
+					req, err := http.ReadRequest(br)
+					if err != nil {
+						return
+					}
+					_ = req.Body.Close()
+					if !big(req.URL.Path) {
+						if _, err := io.WriteString(st, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); err != nil {
+							return
+						}
+						continue
+					}
+					if _, err := io.WriteString(st, "HTTP/1.1 200 OK\r\nContent-Length: "+strconv.FormatInt(n, 10)+"\r\n\r\n"); err != nil {
+						return
+					}
+					if _, err := io.CopyN(st, zeroReader{}, n); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
+
+func TestUncappedLogsPassWhileOtherAnswersKeepTheCap(t *testing.T) {
+	const size = 65 << 20 // more than MaxResponseBytes
+	srv := timed(t, nil)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	srv.Events.WaitLen(t, 1)
+	s := srv.Hub.Session(c.Identity.AgentID)
+	serveSized(t, c.Mux, size, func(p string) bool {
+		return strings.HasSuffix(p, "/logs") || strings.HasSuffix(p, "/containers/json") || strings.Contains(p, "/exec/")
+	})
+	hc := httpOver(s)
+
+	resp, err := hc.Get("http://docker/v1.47/containers/abc/logs?follow=1&stdout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if err != nil || n != size {
+		t.Fatalf("a followed log of %d bytes read %d bytes, err %v; want it whole", size, n, err)
+	}
+
+	resp, err = hc.Post("http://docker/v1.47/exec/abc/start", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if err != nil || n != size {
+		t.Fatalf("an exec stream of %d bytes read %d bytes, err %v; want it whole", size, n, err)
+	}
+
+	resp, err = hc.Get("http://docker/v1.47/containers/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if !errors.Is(err, tunnel.ErrTooLarge) {
+		t.Fatalf("a list of %d bytes = %v, want ErrTooLarge", size, err)
+	}
+	if isDone(s) {
+		t.Fatal("the session ended")
+	}
+}
+
+// startRequest writes the first line of a Docker request on conn, as the HTTP client
+// does, which is what tells the transport what kind of stream this is.
+func startRequest(conn net.Conn, method, target string) error {
+	_, err := io.WriteString(conn, method+" "+target+" HTTP/1.1\r\nHost: docker\r\n\r\n")
+	return err
+}
+
+func TestInteractiveStreamsAreBudgetedAndOrdinaryReadsStillOpen(t *testing.T) {
+	if tunnel.MaxInteractiveStreams != 32 {
+		t.Fatalf("MaxInteractiveStreams = %d, want 32 of the %d", tunnel.MaxInteractiveStreams, tunnel.MaxSessionStreams)
+	}
+	srv := timed(t, nil)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	srv.Events.WaitLen(t, 1)
+	s := srv.Hub.Session(c.Identity.AgentID)
+	holdOpenStreams(t, c)
+	dial := func() net.Conn {
+		t.Helper()
+		conn, err := s.Transport().DialContext(context.Background(), "tcp", "x")
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		return conn
+	}
+
+	var open []net.Conn
+	defer func() {
+		for _, c := range open {
+			_ = c.Close()
+		}
+	}()
+	for i := range tunnel.MaxInteractiveStreams {
+		conn := dial()
+		open = append(open, conn)
+		target, method := "/v1.47/containers/abc/logs?follow=1", http.MethodGet
+		if i%2 == 1 {
+			target, method = "/v1.47/exec/abc/start", http.MethodPost
+		}
+		if err := startRequest(conn, method, target); err != nil {
+			t.Fatalf("interactive stream %d: %v", i+1, err)
+		}
+	}
+
+	over := dial()
+	err := startRequest(over, http.MethodGet, "/v1.47/containers/abc/logs?follow=1")
+	_ = over.Close()
+	if !errors.Is(err, tunnel.ErrBusy) {
+		t.Fatalf("the 33rd interactive stream = %v, want ErrBusy", err)
+	}
+	if errors.Is(err, tunnel.ErrAgentGone) {
+		t.Error("ErrBusy must not look like ErrAgentGone")
+	}
+
+	// An ordinary read, and the events feed, still get a stream.
+	list := dial()
+	open = append(open, list)
+	if err := startRequest(list, http.MethodGet, "/v1.47/containers/json"); err != nil {
+		t.Fatalf("an ordinary read with the interactive budget used up = %v, want a stream", err)
+	}
+	ev := dial()
+	open = append(open, ev)
+	if err := startRequest(ev, http.MethodGet, "/v1.47/events"); err != nil {
+		t.Fatalf("the events feed with the interactive budget used up = %v, want a stream", err)
+	}
+
+	// Closing one gives its slot to the next, and closing twice gives back only one.
+	_ = open[0].Close()
+	_ = open[0].Close()
+	again := dial()
+	open = append(open, again)
+	if err := startRequest(again, http.MethodGet, "/v1.47/containers/abc/logs"); err != nil {
+		t.Fatalf("an interactive stream after one was closed = %v, want its slot", err)
+	}
+	extra := dial()
+	err = startRequest(extra, http.MethodGet, "/v1.47/containers/abc/logs")
+	_ = extra.Close()
+	if !errors.Is(err, tunnel.ErrBusy) {
+		t.Fatalf("a second stream for the one slot = %v, want ErrBusy: a double close must not give two slots back", err)
+	}
+	if isDone(s) {
+		t.Fatal("the session ended")
+	}
+}
+
+// serveShells answers every Docker request on the agent's side: an exec start gets the
+// upgrade and then afterUpgrade(st, br) runs on the raw stream; everything else is read
+// and never answered.
+func serveShells(t *testing.T, mux *yamux.Session, afterUpgrade func(st net.Conn, br *bufio.Reader)) {
+	t.Helper()
+	go func() {
+		for {
+			st, err := mux.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = st.Close() }()
+				br := bufio.NewReader(st)
+				if k, err := br.ReadByte(); err != nil || k != wire.StreamKindDockerHTTP {
+					return
+				}
+				req, err := http.ReadRequest(br)
+				if err != nil {
+					return
+				}
+				_ = req.Body.Close()
+				if !strings.HasSuffix(req.URL.Path, "/start") {
+					_, _ = io.Copy(io.Discard, br)
+					return
+				}
+				if _, err := io.WriteString(st, "HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"); err != nil {
+					return
+				}
+				afterUpgrade(st, br)
+			}()
+		}
+	}()
+}
+
+// A shell's keystrokes are raw bytes, whatever they look like. Once an exec start has
+// been answered with the upgrade, a frame that reads like a request line must neither
+// give back the interactive slot nor put the response cap back on the stream (WR-01).
+func TestKeystrokesThatLookLikeARequestLineDoNotReleaseTheSlot(t *testing.T) {
+	srv := timed(t, nil)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	srv.Events.WaitLen(t, 1)
+	s := srv.Hub.Session(c.Identity.AgentID)
+	serveShells(t, c.Mux, func(_ net.Conn, br *bufio.Reader) { _, _ = io.Copy(io.Discard, br) })
+	dial := func() net.Conn {
+		t.Helper()
+		conn, err := s.Transport().DialContext(context.Background(), "tcp", "x")
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		return conn
+	}
+
+	var open []net.Conn
+	defer func() {
+		for _, c := range open {
+			_ = c.Close()
+		}
+	}()
+	shell := dial()
+	open = append(open, shell)
+	if err := startRequest(shell, http.MethodPost, "/v1.47/exec/abc/start"); err != nil {
+		t.Fatalf("exec start: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(shell), nil)
+	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("exec start answer = %v, %v; want 101", resp, err)
+	}
+	_ = resp.Body.Close()
+	// The person pastes something that is shaped like a request.
+	if _, err := io.WriteString(shell, "GET / HTTP/1.1\r\n"); err != nil {
+		t.Fatalf("keystrokes: %v", err)
+	}
+	for i := 1; i < tunnel.MaxInteractiveStreams; i++ {
+		conn := dial()
+		open = append(open, conn)
+		if err := startRequest(conn, http.MethodGet, "/v1.47/containers/abc/logs?follow=1"); err != nil {
+			t.Fatalf("interactive stream %d: %v", i+1, err)
+		}
+	}
+	over := dial()
+	err = startRequest(over, http.MethodGet, "/v1.47/containers/abc/logs?follow=1")
+	_ = over.Close()
+	if !errors.Is(err, tunnel.ErrBusy) {
+		t.Fatalf("the 33rd interactive stream = %v, want ErrBusy: the shell must still hold its slot", err)
+	}
+}
+
+func TestKeystrokesThatLookLikeARequestLineDoNotCapTheShellsOutput(t *testing.T) {
+	const size = 65 << 20 // more than MaxResponseBytes
+	srv := timed(t, nil)
+	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
+	srv.Events.WaitLen(t, 1)
+	s := srv.Hub.Session(c.Identity.AgentID)
+	serveShells(t, c.Mux, func(st net.Conn, br *bufio.Reader) {
+		// Output starts once the pasted keystrokes have arrived.
+		line := make([]byte, len("GET / HTTP/1.1\r\n"))
+		if _, err := io.ReadFull(br, line); err != nil {
+			return
+		}
+		_, _ = io.CopyN(st, zeroReader{}, size)
+	})
+
+	conn, err := s.Transport().DialContext(context.Background(), "tcp", "x")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := startRequest(conn, http.MethodPost, "/v1.47/exec/abc/start"); err != nil {
+		t.Fatalf("exec start: %v", err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("exec start answer = %v, %v; want 101", resp, err)
+	}
+	_ = resp.Body.Close()
+	if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\n"); err != nil {
+		t.Fatalf("keystrokes: %v", err)
+	}
+	n, err := io.CopyN(io.Discard, br, size)
+	if err != nil || n != size {
+		t.Fatalf("a shell printed %d bytes after a request-shaped keystroke frame, read %d, err %v; want it whole", size, n, err)
 	}
 }

@@ -133,6 +133,9 @@ beforeEach(() => {
       if (path === "/api/settings") {
         return method === "PATCH" ? patchAnswer(call.body ?? {}) : Response.json(settings);
       }
+      // The Container shells card under the form (plan 04-23) reads its own limits.
+      if (path === "/api/settings/shells")
+        return Response.json({ idleMinutes: 30, maxPerUser: 10 });
       if (path === "/api/version") {
         return Response.json({
           commit: SHA,
@@ -177,7 +180,10 @@ const main = () => within(document.getElementById("main") as HTMLElement);
 const nameField = () => screen.getByLabelText("Instance name") as HTMLInputElement;
 const urlField = () => screen.getByLabelText("Public URL") as HTMLInputElement;
 const agentField = () => screen.getByLabelText("Agent URL") as HTMLInputElement;
-const saveButton = () => screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement;
+// The instance form's own button: the Container shells card below it has one too.
+const instanceForm = () => nameField().closest("form") as HTMLFormElement;
+const saveButton = () =>
+  within(instanceForm()).getByRole("button", { name: "Save settings" }) as HTMLButtonElement;
 
 async function openGeneral() {
   renderAt("/settings/general");
@@ -396,7 +402,7 @@ describe("General tab", () => {
     await openGeneral();
     expect(nameField().readOnly).toBe(true);
     expect(urlField().readOnly).toBe(true);
-    expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
+    expect(within(instanceForm()).queryByRole("button", { name: "Save settings" })).toBeNull();
     fireEvent.submit(nameField().closest("form") as HTMLFormElement);
     expect(patches()).toHaveLength(0);
   });
@@ -723,7 +729,7 @@ describe("General tab: agent URL", () => {
     me = READER;
     await openGeneral();
     expect(agentField().readOnly).toBe(true);
-    expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
+    expect(within(instanceForm()).queryByRole("button", { name: "Save settings" })).toBeNull();
   });
 });
 

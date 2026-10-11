@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 )
@@ -71,11 +72,37 @@ type ServiceRow struct {
 // AgentTaskRow is the state of the agent service's current task on one node.
 type AgentTaskRow struct{ NodeID, State, Error string }
 
+// ServiceRef is what one swarm service's spec mentions, whatever its tasks are doing:
+// the networks it attaches to, by network ID, and the volumes it mounts, by name. A
+// service scaled to zero still mentions them, which is why the rules for deleting a
+// network or a volume read specs and not tasks (D-41, RESEARCH Pitfall 7).
+type ServiceRef struct {
+	ID, Name string
+	// Networks are network IDs. A spec that names a swarm network by name is resolved
+	// to its ID; a target that is neither is kept as the spec wrote it. Never nil.
+	Networks []string
+	// Volumes are the sources of the service's volume mounts. Bind, tmpfs and other
+	// mounts are not volumes. Never nil.
+	Volumes []string
+	// VolumeMounts are those volume mounts with where and how each is mounted. Never nil.
+	VolumeMounts []ServiceVolumeMount
+}
+
+// ServiceVolumeMount is one volume mount of a service's container spec.
+type ServiceVolumeMount struct {
+	// Source is the volume's name, Target where it appears in the container.
+	Source, Target string
+	ReadOnly       bool
+}
+
 // ClusterRead is what one manager says about the cluster.
 type ClusterRead struct {
 	Nodes      []NodeRow
 	Services   []ServiceRow
 	AgentTasks []AgentTaskRow
+	// ServiceRefs are the networks and volumes each service's spec mentions, sorted
+	// by service name then ID.
+	ServiceRefs []ServiceRef
 }
 
 // Cluster reads the nodes, the services with their task counts and the tasks of
@@ -134,6 +161,9 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 	slices.SortFunc(out.Services, func(a, b ServiceRow) int {
 		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
 	})
+	if out.ServiceRefs, err = c.serviceRefsOf(ctx, cli, ss.Items); err != nil {
+		return ClusterRead{}, err
+	}
 
 	if len(agentServices) == 0 {
 		return out, nil // no agent service, so no agent tasks to ask for
@@ -208,4 +238,69 @@ func (c *Client) RestartPolicies(ctx context.Context, ids []string) (map[string]
 		out[id] = p
 	}
 	return out, nil
+}
+
+// ServiceRefs reads, from a swarm manager, the networks and volumes each service's spec
+// mentions. It is read-only, and it is what a delete re-reads live just before it acts,
+// so a service created a moment ago counts.
+func (c *Client) ServiceRefs(ctx context.Context) ([]ServiceRef, error) {
+	cli := c.cur()
+	ss, err := cli.ServiceList(ctx, client.ServiceListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list swarm services on %s: %w", c.t.Describe(), err)
+	}
+	return c.serviceRefsOf(ctx, cli, ss.Items)
+}
+
+// serviceRefsOf turns listed services into their references. The networks are listed
+// once, and only when some service names one, to turn the names a spec may use into IDs.
+func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services []swarm.Service) ([]ServiceRef, error) {
+	targets := false
+	for _, s := range services {
+		if len(s.Spec.TaskTemplate.Networks) > 0 {
+			targets = true
+			break
+		}
+	}
+	idOf := map[string]string{}
+	if targets {
+		ns, err := cli.NetworkList(ctx, client.NetworkListOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("list networks on %s: %w", c.t.Describe(), err)
+		}
+		for _, n := range ns.Items {
+			if n.Scope == ScopeSwarm {
+				idOf[n.Name] = n.ID
+			}
+		}
+	}
+	refs := make([]ServiceRef, 0, len(services))
+	for _, s := range services {
+		ref := ServiceRef{ID: s.ID, Name: s.Spec.Name, Networks: []string{}, Volumes: []string{}, VolumeMounts: []ServiceVolumeMount{}}
+		for _, a := range s.Spec.TaskTemplate.Networks {
+			target := a.Target
+			if id, ok := idOf[target]; ok {
+				target = id
+			}
+			if target != "" && !slices.Contains(ref.Networks, target) {
+				ref.Networks = append(ref.Networks, target)
+			}
+		}
+		if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {
+			for _, m := range cs.Mounts {
+				if m.Type != mount.TypeVolume || m.Source == "" {
+					continue
+				}
+				if !slices.Contains(ref.Volumes, m.Source) {
+					ref.Volumes = append(ref.Volumes, m.Source)
+				}
+				ref.VolumeMounts = append(ref.VolumeMounts, ServiceVolumeMount{Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
+			}
+		}
+		refs = append(refs, ref)
+	}
+	slices.SortFunc(refs, func(a, b ServiceRef) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
+	})
+	return refs, nil
 }

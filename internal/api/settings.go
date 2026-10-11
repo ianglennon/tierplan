@@ -8,8 +8,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -113,6 +115,7 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
+	RegisterShellSettings(r, d)
 	internal := func(what string, err error) error {
 		d.Log.Error("settings request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
@@ -322,5 +325,107 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			d.Log.Info("told the connected agents the new server address", "agents", n)
 		}
 		return &SettingsOutput{CacheControl: "no-store", Body: withAgents(ctx, after)}, nil
+	})
+}
+
+// ShellSettingsBody is the instance's browser-shell limits (D-29, D-31).
+type ShellSettingsBody struct {
+	IdleMinutes int `json:"idleMinutes" minimum:"5" maximum:"240" doc:"How many minutes a shell may sit without input or output before it is closed. A warning is shown a minute before"`
+	MaxPerUser  int `json:"maxPerUser" minimum:"1" maximum:"50" doc:"The most open shells one person may hold across all environments"`
+}
+
+// ShellSettingsOutput wraps ShellSettingsBody for huma.
+type ShellSettingsOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ShellSettingsBody
+}
+
+// UpdateShellSettingsInput changes the limits it names and leaves the other alone.
+type UpdateShellSettingsInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		IdleMinutes *int `json:"idleMinutes,omitempty" minimum:"5" maximum:"240" doc:"New idle limit in minutes, 5 to 240"`
+		MaxPerUser  *int `json:"maxPerUser,omitempty" minimum:"1" maximum:"50" doc:"New per-person cap on open shells, 1 to 50"`
+	}
+}
+
+// RegisterShellSettings registers GET and PATCH /api/settings/shells: how long an
+// idle browser shell lives and how many one person may hold (D-29, D-31). Both are
+// read from the instance on every use, so a change reaches open shells at their next
+// idle check.
+func RegisterShellSettings(r *httpx.Router, d SettingsDeps) {
+	if d.Log == nil {
+		d.Log = slog.Default()
+	}
+	current := func() ShellSettingsBody {
+		return ShellSettingsBody{IdleMinutes: int(d.Instance.ShellIdle() / time.Minute), MaxPerUser: d.Instance.ShellCap()}
+	}
+	var mu sync.Mutex
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getShellSettings",
+		Method:      http.MethodGet,
+		Path:        "/api/settings/shells",
+		Summary:     "Get the browser-shell limits",
+		Description: "idleMinutes is how long a shell may sit without input or output (5 to 240, default 30) and maxPerUser how many open shells one person may hold across all environments (1 to 50, default 10).",
+		Tags:        []string{"settings"},
+	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(_ context.Context, _ *struct{}) (*ShellSettingsOutput, error) {
+		return &ShellSettingsOutput{CacheControl: "no-store", Body: current()}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "updateShellSettings",
+		Method:      http.MethodPatch,
+		Path:        "/api/settings/shells",
+		Summary:     "Change the browser-shell limits",
+		Description: "Only the fields sent are changed. A value outside its range answers 422. A change takes effect at once: open shells use the new idle limit at their next check, and the next open uses the new cap. " +
+			"A request that changes nothing answers 200 and is not audited. Each change is audited as settings.updated with the old and new value of every changed field.",
+		Tags: []string{"settings"},
+	}, rbac.Requirement{Perm: rbac.PermSettingsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateShellSettingsInput) (*ShellSettingsOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+
+		before := current()
+		idle, maxN := before.IdleMinutes, before.MaxPerUser
+		details := map[string]string{}
+		if in.Body.IdleMinutes != nil && *in.Body.IdleMinutes != idle {
+			details["shell_idle_minutes_from"], details["shell_idle_minutes_to"] = strconv.Itoa(idle), strconv.Itoa(*in.Body.IdleMinutes)
+			idle = *in.Body.IdleMinutes
+		}
+		if in.Body.MaxPerUser != nil && *in.Body.MaxPerUser != maxN {
+			details["shell_max_per_user_from"], details["shell_max_per_user_to"] = strconv.Itoa(maxN), strconv.Itoa(*in.Body.MaxPerUser)
+			maxN = *in.Body.MaxPerUser
+		}
+		if len(details) == 0 {
+			return &ShellSettingsOutput{CacheControl: "no-store", Body: before}, nil
+		}
+		fail := func(what string, err error) error {
+			d.Log.Error("shell settings request failed", "step", what, "error", err)
+			return huma.Error500InternalServerError("internal error")
+		}
+		tx, err := d.Store.Write.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fail("begin", err)
+		}
+		defer func() { _ = tx.Rollback() }() // a no-op once committed
+		if err := d.Instance.SetShellLimitsTx(ctx, tx, d.Store.Q, idle, maxN); err != nil {
+			return nil, fail("store shell limits", err)
+		}
+		if err := d.Audit.RecordTx(ctx, tx, audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionSettingsUpdated, TargetType: targetSettings, TargetID: targetSettings,
+			Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent, Details: details,
+		}); err != nil {
+			return nil, fail("audit shell settings change", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fail("commit", err)
+		}
+		d.Instance.ApplyShellLimits(idle, maxN)
+		return &ShellSettingsOutput{CacheControl: "no-store", Body: current()}, nil
 	})
 }

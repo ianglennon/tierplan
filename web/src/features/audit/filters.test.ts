@@ -311,3 +311,27 @@ describe("formatDay and parseDay", () => {
     expect(parseDay("not a day")).toBeUndefined();
   });
 });
+
+describe("the bulk filter", () => {
+  const BULK = "018f0000-0000-7000-8000-000000000001";
+
+  it("reads a bulk ID from the URL and sends it to the list and the export", () => {
+    const parsed = auditSearchSchema.parse(fromUrl(`bulk=${BULK}`));
+    expect(parsed.bulk).toBe(BULK);
+    expect(listParams(parsed, NOW).get("bulk")).toBe(BULK);
+    expect(new URL(exportUrl("csv", parsed, NOW), "http://x").searchParams.get("bulk")).toBe(BULK);
+    expect(auditSearchSchema.parse(parsed)).toEqual(parsed);
+  });
+
+  it("sends no bulk parameter when there is none", () => {
+    expect(listParams(auditSearchSchema.parse({}), NOW).has("bulk")).toBe(false);
+  });
+
+  it("drops a value that is not a UUID instead of sending it", () => {
+    for (const bad of ["nope", "123", "018f0000-0000-7000-8000-00000000000g", "x' OR '1'='1", ""]) {
+      const parsed = auditSearchSchema.parse({ bulk: bad });
+      expect(parsed.bulk).toBeUndefined();
+      expect(listParams(parsed, NOW).has("bulk")).toBe(false);
+    }
+  });
+});

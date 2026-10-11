@@ -913,3 +913,35 @@ func TestAggregateOfTheLocalSocketIsOneNodeNamedAfterTheEngine(t *testing.T) {
 		t.Fatalf("aggregate = %+v, %v; want the one container on this-host", agg, err)
 	}
 }
+
+func TestAggregateNodeRefCarriesTheHostsReadOnlyFlag(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Locked")
+	r.connect(t, env, dockertest.FakeConfig{Hostname: "ro-1"}, &wire.Facts{
+		EngineID: "ENG:ro", Hostname: "ro-1", EngineReachable: true, Policy: wire.PolicyFacts{ReadOnly: true},
+	})
+	r.whenOnline(t, env.ID)
+	agg, _, err := r.agg.Snapshot(context.Background(), env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agg.Nodes) != 1 || !agg.Nodes[0].ReadOnly {
+		t.Errorf("nodes = %+v, want the one node read-only", agg.Nodes)
+	}
+}
+
+func TestAggregateNodeRefOfTheLocalSocketIsNeverReadOnly(t *testing.T) {
+	local := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "this-host"})
+	r := newTunRig(t, local)
+	r.pastGrace()
+	e, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.whenOnline(t, e.ID)
+	agg, _, err := r.agg.Snapshot(context.Background(), e.ID)
+	if err != nil || len(agg.Nodes) != 1 || agg.Nodes[0].ReadOnly {
+		t.Fatalf("nodes = %+v, %v; want the local socket writable", agg.Nodes, err)
+	}
+}

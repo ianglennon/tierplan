@@ -13,6 +13,7 @@
 package tunnel
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -201,6 +202,9 @@ type Session struct {
 	// is the cap on one Docker answer that is not the events feed.
 	streams     chan struct{}
 	maxResponse int64
+	// interactive holds one token per log follow or shell in flight, which is
+	// also in streams; it keeps them to MaxInteractiveStreams of its 64.
+	interactive chan struct{}
 
 	// denyLimit spends one token per audited policy denial, and suppressed counts
 	// the denials since the last audited one that were not written (D-29).
@@ -327,6 +331,11 @@ type Hub struct {
 	offlineAfter time.Duration
 	watchEvery   time.Duration
 	lastSeen     LastSeenRecorder
+
+	// muxKeepAlive and muxWriteTimeout replace muxConfig's keepalive interval and
+	// write timeout when set. Only tests set them.
+	muxKeepAlive    time.Duration
+	muxWriteTimeout time.Duration
 
 	// allowInsecure lets plain ws:// in. connect is the per-address budget of
 	// connection attempts, handshakes the semaphore of handshakes in flight and
@@ -535,6 +544,7 @@ func (h *Hub) Views(envID string) []AgentLive {
 			v.Connected, v.LastSeen = true, s.lastSignOfLife()
 			v.EngineReachable = st.LastHeartbeat.IsZero() || st.EngineReachable
 			v.ClockOffset, v.ClockWarning = st.ClockOffset, st.ClockWarning
+			v.ReadOnly = s.Facts.Policy.ReadOnly
 		}
 		out = append(out, v)
 	}
@@ -695,10 +705,10 @@ func (h *Hub) report(s *Session) {
 // 10 s with a 10 s write timeout detect a silent black hole in at most about
 // 20 s, inside the D-41 window of 30 s. StreamCloseTimeout is cut from the
 // default five minutes, which keeps half-closed streams alive far too long.
-func muxConfig() *yamux.Config {
+func (h *Hub) muxConfig() *yamux.Config {
 	c := yamux.DefaultConfig()
-	c.KeepAliveInterval = 10 * time.Second
-	c.ConnectionWriteTimeout = 10 * time.Second
+	c.KeepAliveInterval = cmp.Or(h.muxKeepAlive, 10*time.Second)
+	c.ConnectionWriteTimeout = cmp.Or(h.muxWriteTimeout, 10*time.Second)
 	c.StreamCloseTimeout = 30 * time.Second
 	c.StreamOpenTimeout = 10 * time.Second
 	c.AcceptBacklog = 64

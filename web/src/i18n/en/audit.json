@@ -24,6 +24,8 @@
       "actionCount_other": "{{count}} actions",
       "range": "Time range",
       "clear": "Clear filters",
+      "bulkChip": "Bulk operation {{id}}",
+      "bulkRemove": "Remove bulk filter",
       "customSummary": "{{from}} to {{to}}",
       "customOpenEnded": "Pick days",
       "customDialog": "Choose the first and last day. Both days are included.",
@@ -161,6 +163,34 @@
       },
       "key": {
         "rotated": "Rotated master key"
+      },
+      "container": {
+        "started": "Container started",
+        "stopped": "Container stopped",
+        "restarted": "Container restarted",
+        "killed": "Container killed",
+        "paused": "Container paused",
+        "unpaused": "Container unpaused",
+        "removed": "Container removed"
+      },
+      "network": {
+        "created": "Network created",
+        "removed": "Network removed",
+        "connected": "Container connected to network",
+        "disconnected": "Container disconnected from network"
+      },
+      "volume": {
+        "created": "Volume created",
+        "removed": "Volume removed"
+      },
+      "logs": {
+        "viewed": "Container logs viewed",
+        "downloaded": "Container logs downloaded"
+      },
+      "shell": {
+        "opened": "Container shell opened",
+        "closed": "Container shell closed",
+        "ended": "Container shell ended by an administrator"
       }
     },
     "coalesced": {

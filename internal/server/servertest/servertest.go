@@ -356,6 +356,14 @@ func (s *Server) login() {
 	s.csrf = me.CSRFToken
 }
 
+// Client is the HTTP client that trusts the server's certificate, for a test that
+// has to open something Do cannot, such as a WebSocket or an event stream. It has a
+// timeout of its own: copy it and clear Timeout for a connection meant to stay open.
+func (s *Server) Client() *http.Client { return s.http }
+
+// Cookie is the session cookie of the signed-in admin, for the same tests.
+func (s *Server) Cookie() *http.Cookie { return s.cookie }
+
 // Do calls the API as the admin. A non-nil body is sent as JSON.
 func (s *Server) Do(method, path string, body any) (int, []byte) {
 	s.t.Helper()

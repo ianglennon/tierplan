@@ -22,8 +22,10 @@ This page is generated from the permission registry in `internal/rbac/permission
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `audit.read` | global | no | no | no | yes | no | Read the audit log |
 | `backup.manage` | global | no | no | no | yes | yes | Back up and restore Bayplan |
+| `containers.control` | environment | no | yes | yes | yes | no | Start, stop, restart, kill, pause and unpause containers |
 | `containers.exec` | environment | no | extra | yes | yes | yes | Open a shell in a container |
 | `containers.read` | environment | yes | yes | yes | yes | no | View containers |
+| `containers.remove` | environment | no | yes | yes | yes | no | Remove containers |
 | `environments.access` | environment | no | no | yes | yes | no | See and change who has access to an environment |
 | `environments.audit` | environment | no | no | yes | yes | no | Read the audit log for an environment |
 | `environments.configure` | environment | no | no | yes | yes | no | Rename an environment, manage its agents and auto-update, adopt a changed cluster |
@@ -35,11 +37,15 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `environments.token` | global | no | no | no | yes | yes | Show or rotate an environment's join token |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |
+| `networks.connect` | environment | no | yes | yes | yes | no | Connect and disconnect containers and networks |
+| `networks.manage` | environment | no | no | yes | yes | no | Create and delete networks |
 | `networks.read` | environment | yes | yes | yes | yes | no | View networks |
 | `secrets.reveal` | environment | no | extra | yes | yes | yes | Reveal secret values |
 | `settings.read` | global | no | no | no | yes | no | View settings |
 | `settings.write` | global | no | no | no | yes | no | Change settings |
+| `shells.manage` | environment | no | no | yes | yes | no | See and end other people's shells |
 | `teams.manage` | global | no | no | no | yes | no | Create teams and change their members |
 | `users.manage` | global | no | no | no | yes | no | Create, change, disable and delete users |
+| `volumes.create` | environment | no | no | yes | yes | no | Create volumes |
 | `volumes.delete` | environment | no | extra | yes | yes | yes | Delete volumes |
 | `volumes.read` | environment | yes | yes | yes | yes | no | View volumes |

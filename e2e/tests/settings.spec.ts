@@ -17,7 +17,12 @@ test("General saves the instance name and keeps it across a reload", async ({ pa
   await expect(page.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
 
   const name = page.getByRole("textbox", { name: "Instance name" });
-  const save = page.getByRole("button", { name: "Save settings" });
+  // The Shells card has a Save settings button of its own, so this one is found
+  // through the group that holds the instance name.
+  const save = page
+    .getByRole("group")
+    .filter({ has: name })
+    .getByRole("button", { name: "Save settings" });
   // Nothing changed yet, so there is nothing to save.
   await expect(save).toBeDisabled();
   // BAYPLAN_PUBLIC_URL is set in this topology (the proxy's address with its

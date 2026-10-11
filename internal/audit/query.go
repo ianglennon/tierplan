@@ -28,7 +28,8 @@ const (
 
 // Filter narrows the audit log. The zero value matches every entry. Actor is an
 // exact match on the stored actor name, Actions matches any of the listed
-// action keys, and From and To are inclusive bounds on the entry time.
+// action keys, and From and To are inclusive bounds on the entry time. Bulk
+// keeps only the entries whose bulk detail is that bulk-operation ID (D-14).
 //
 // Scoped narrows the log to the entries of certain environments, for a reader
 // who is not an instance admin (D-09): an entry matches when its environment is
@@ -41,6 +42,7 @@ type Filter struct {
 	Actions []string
 	From    time.Time
 	To      time.Time
+	Bulk    string
 
 	Scoped bool
 	Envs   []string
@@ -112,7 +114,7 @@ func (f Filter) params(cursor int64, limit int) (sqlc.ListAuditPageParams, error
 		return sqlc.ListAuditPageParams{}, err
 	}
 	p := sqlc.ListAuditPageParams{
-		Actor: f.Actor, Actions: string(enc), Cursor: cursor, Lim: int64(limit),
+		Actor: f.Actor, Actions: string(enc), Bulk: f.Bulk, Cursor: cursor, Lim: int64(limit),
 		Scoped: scoped, AnyEnv: anyEnv, Envs: envs,
 	}
 	if !f.From.IsZero() {

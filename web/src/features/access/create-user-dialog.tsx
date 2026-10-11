@@ -5,7 +5,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { z } from "zod";
 import type { OneTimeLink } from "@/api/users";
 import { createUser, usersQuery } from "@/api/users";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -25,6 +24,7 @@ import { OneTimeLinkContent } from "@/features/access/one-time-link-dialog";
 import { displayNameRule, emailRule, PROFILE_KEY } from "@/features/access/profile-schema";
 import { lowerAscii, MAX_USERNAME_LENGTH } from "@/features/setup/schemas";
 import { useT } from "@/i18n/use-t";
+import { z } from "@/lib/zod-config";
 
 const KEY = {
   taken: "users.create.errors.usernameTaken",

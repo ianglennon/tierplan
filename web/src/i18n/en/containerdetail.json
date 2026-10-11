@@ -1,0 +1,124 @@
+{
+  "containerdetail": {
+    "breadcrumb": {
+      "label": "Breadcrumb",
+      "containers": "Containers"
+    },
+    "tabs": {
+      "label": "Container sections",
+      "overview": "Overview",
+      "logs": "Logs",
+      "shell": "Shell",
+      "inspect": "Inspect"
+    },
+    "inspect": {
+      "label": "Inspect output for {{name}}",
+      "masked": "Environment variable values are hidden. Needs the reveal secrets permission to show them.",
+      "copy": "Copy JSON",
+      "copied": "Copied",
+      "download": "Download JSON",
+      "loading": "Loading the inspect output",
+      "loadFailed": "Couldn't load the inspect output of {{name}}.",
+      "retry": "Retry"
+    },
+    "loading": "Loading the container",
+    "state": {
+      "title": "State",
+      "status": "Status",
+      "health": "Health",
+      "started": "Started",
+      "finished": "Finished",
+      "exitCode": "Exit code",
+      "restarts": "Restarts",
+      "oomKilled": "Out of memory killed",
+      "yes": "Yes",
+      "no": "No"
+    },
+    "health": {
+      "none": "No health check",
+      "starting": "Starting",
+      "healthy": "Healthy",
+      "unhealthy": "Unhealthy"
+    },
+    "env": {
+      "title": "Environment variables",
+      "label": "Environment variables",
+      "empty": "No environment variables.",
+      "masked": "Values are hidden. Needs the reveal secrets permission to show them."
+    },
+    "missing": "—",
+    "imageCommand": {
+      "title": "Image and command",
+      "image": "Image",
+      "command": "Command",
+      "entrypoint": "Entrypoint",
+      "workingDir": "Working directory",
+      "user": "User",
+      "masked": "The command line is hidden, as it can hold a password. Needs the reveal secrets permission to show it."
+    },
+    "ports": {
+      "title": "Ports",
+      "containerPort": "Container port",
+      "host": "Host",
+      "protocol": "Protocol",
+      "empty": "No published ports."
+    },
+    "mounts": {
+      "title": "Mounts",
+      "type": "Type",
+      "source": "Source",
+      "destination": "Destination",
+      "mode": "Mode",
+      "readWrite": "Read-write",
+      "readOnly": "Read-only",
+      "empty": "No mounts."
+    },
+    "networks": {
+      "title": "Networks",
+      "network": "Network",
+      "ipv4": "IPv4",
+      "ipv6": "IPv6",
+      "mac": "MAC",
+      "aliases": "Aliases",
+      "empty": "Not connected to any network."
+    },
+    "restart": {
+      "title": "Restart policy",
+      "policy": {
+        "no": "Never restart",
+        "always": "Always restart",
+        "on-failure": "Restart on failure",
+        "unless-stopped": "Restart unless stopped"
+      },
+      "maxRetries_one": "Maximum {{count}} retry",
+      "maxRetries_other": "Maximum {{count}} retries"
+    },
+    "labels": {
+      "title": "Labels",
+      "label": "Labels",
+      "empty": "No labels."
+    },
+    "header": {
+      "stack": "Stack {{name}}",
+      "project": "Project {{name}}",
+      "task": "Task of service {{service}}"
+    },
+    "banner": {
+      "task": "This is a task of service {{service}}. Swarm replaces it if it stops."
+    },
+    "gone": {
+      "heading": "This container is gone",
+      "body": "It was removed, or recreated under a new ID, so there is nothing left to show here.",
+      "back": "Back to containers"
+    },
+    "error": {
+      "loadFailed": "Couldn't load {{name}}.",
+      "retry": "Retry"
+    },
+    "actions": {
+      "more": "More actions",
+      "moreText": "More",
+      "start": "Start container"
+    }
+  }
+}

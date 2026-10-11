@@ -56,6 +56,11 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 		"images.read":            e(rbac.RoleViewer),
 		"volumes.read":           e(rbac.RoleViewer),
 		"networks.read":          e(rbac.RoleViewer),
+		"containers.control":     e(rbac.RoleOperator),
+		"containers.remove":      e(rbac.RoleOperator),
+		"networks.manage":        e(rbac.RoleAdmin),
+		"networks.connect":       e(rbac.RoleOperator),
+		"volumes.create":         e(rbac.RoleAdmin),
 		"audit.read":             g(false),
 		"settings.read":          g(false),
 		"settings.write":         g(false),
@@ -66,6 +71,7 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 		"secrets.reveal":         x,
 		"volumes.delete":         x,
 		"janitor.policy":         x,
+		"shells.manage":          e(rbac.RoleAdmin),
 	}
 	for name, w := range want {
 		p, ok := m[name]

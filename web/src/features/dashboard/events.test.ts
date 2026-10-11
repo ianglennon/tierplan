@@ -10,6 +10,7 @@ import {
   type FeedState,
   invalidationKeys,
   mergeEvents,
+  type RecentQuery,
 } from "@/features/dashboard/events";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { resetBasePathForTests } from "@/lib/base-path";
@@ -44,13 +45,17 @@ function announceBase(base: string | null): void {
 
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
-function connect(fetchRecent: () => Promise<EventDTO[]>) {
+function connect(
+  fetchRecent: (query: RecentQuery) => Promise<EventDTO[]>,
+  extra: { cap?: number; since?: string } = {},
+) {
   FakeEventSource.instances = [];
   const snapshots: EventsSnapshot[] = [];
   const invalidated: Array<readonly unknown[]> = [];
   const connection = createEventsConnection({
     envId: "e1",
     fetchRecent,
+    ...extra,
     createSource: (url) => new FakeEventSource(url),
     invalidate: (key) => invalidated.push(key),
     onChange: (s) => snapshots.push(s),
@@ -132,16 +137,35 @@ describe("mergeEvents", () => {
 });
 
 describe("invalidationKeys", () => {
-  it("maps each event type to the summary and its own list", () => {
-    const summary = ["env", "e1", "summary"];
-    expect(invalidationKeys("container", "e1")).toEqual([summary, ["env", "e1", "containers"]]);
-    expect(invalidationKeys("image", "e1")).toEqual([summary, ["env", "e1", "images"]]);
-    expect(invalidationKeys("network", "e1")).toEqual([summary, ["env", "e1", "networks"]]);
-    expect(invalidationKeys("volume", "e1")).toEqual([summary, ["env", "e1", "volumes"]]);
+  const summary = ["env", "e1", "summary"];
+  const list = (resource: string) => ["env", "e1", resource];
+
+  it("maps a container event to the summary, containers, volumes and networks", () => {
+    expect(invalidationKeys("container", "e1")).toEqual([
+      summary,
+      list("containers"),
+      list("volumes"),
+      list("networks"),
+    ]);
   });
 
-  it("makes only the summary stale for a row of Bayplan's own, which has no list", () => {
-    expect(invalidationKeys("bayplan", "e1")).toEqual([["env", "e1", "summary"]]);
+  it("maps a network event to the summary, networks and containers", () => {
+    expect(invalidationKeys("network", "e1")).toEqual([
+      summary,
+      list("networks"),
+      list("containers"),
+    ]);
+  });
+
+  it("maps a volume event to the summary and volumes, and an image event to the summary and images", () => {
+    expect(invalidationKeys("volume", "e1")).toEqual([summary, list("volumes")]);
+    expect(invalidationKeys("image", "e1")).toEqual([summary, list("images")]);
+  });
+
+  it("makes only the summary stale for swarm objects and for a row of Bayplan's own", () => {
+    for (const type of ["service", "node", "secret", "config", "bayplan"] as const) {
+      expect(invalidationKeys(type, "e1")).toEqual([summary]);
+    }
   });
 });
 
@@ -276,6 +300,8 @@ describe("createEventsConnection", () => {
     expect(c.invalidated).toEqual([
       ["env", "e1", "summary"],
       ["env", "e1", "containers"],
+      ["env", "e1", "volumes"],
+      ["env", "e1", "networks"],
     ]);
 
     // A burst inside the second collapses into one trailing refetch.
@@ -292,6 +318,140 @@ describe("createEventsConnection", () => {
     // Nothing more once the window is quiet.
     await vi.advanceTimersByTimeAsync(5_000);
     expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(2);
+  });
+
+  it("refreshes the containers and the summary on an invalidate frame without touching the feed", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+    const before = c.last();
+
+    source.sendFrame("invalidate", { type: "container", actorId: "c1", node: "node-1" });
+    expect(c.invalidated).toEqual([
+      ["env", "e1", "summary"],
+      ["env", "e1", "containers"],
+      ["env", "e1", "volumes"],
+      ["env", "e1", "networks"],
+    ]);
+    expect(c.last().events).toEqual(before.events);
+    expect(c.last().events).toHaveLength(0);
+  });
+
+  it("throttles invalidate frames like docker events: a burst collapses into one trailing refetch", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+
+    for (let i = 0; i < 5; i++) {
+      source.sendFrame("invalidate", { type: "container", actorId: `c${i}`, node: "node-1" });
+    }
+    expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(c.invalidated.filter((k) => k[2] === "containers")).toHaveLength(2);
+  });
+
+  it("ignores an invalidate frame it cannot read", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+    source.sendFrame("invalidate", null);
+    source.sendFrame("invalidate", { actorId: "c1" });
+    expect(c.invalidated).toEqual([]);
+  });
+
+  it("refetches everything of the environment once when the stream comes back after a drop", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+    expect(c.invalidated).toEqual([]);
+
+    source.fail();
+    expect(c.states()).toContain("reconnecting");
+    expect(c.invalidated).toEqual([]);
+    source.open();
+    expect(c.invalidated).toEqual([["env", "e1"]]);
+    expect(c.last().state).toBe("live");
+
+    // An open that was not a recovery does not refetch again.
+    source.open();
+    expect(c.invalidated).toEqual([["env", "e1"]]);
+  });
+
+  it("does not refetch on the first connect", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    (c.source() as FakeEventSource).open();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(c.invalidated).toEqual([]);
+  });
+
+  it("refetches once per recovery, and a flapping connection is held to one refetch a second", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+
+    for (let i = 0; i < 2; i++) {
+      source.fail();
+      source.open();
+    }
+    // The first recovery ran at once; the second waits for the end of the window.
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(2);
+    // Long enough that the earlier errors no longer count towards giving up.
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(2);
+
+    // A later, separate drop refetches again.
+    source.fail();
+    source.open();
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(3);
+  });
+
+  it("does not refetch when the stream gave up for polling", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+    source.fail(true);
+    expect(c.last().state).toBe("polling");
+    // The browser's source is closed; a late open event changes nothing.
+    source.open();
+    expect(c.last().state).toBe("polling");
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(0);
+  });
+
+  it("invalidates once for an event delivered twice, as a resume after a reconnect replays it", async () => {
+    const c = connect(() => Promise.resolve([]));
+    c.connection.start();
+    await flush();
+    const source = c.source() as FakeEventSource;
+    source.open();
+    const same = ev("r1", "2026-10-02T10:00:01Z", { type: "network" });
+    source.send(same);
+    source.fail();
+    source.open();
+    source.send(same);
+    await vi.advanceTimersByTimeAsync(5_000);
+    // One set of keys for the network event, plus the one reconnect refetch.
+    expect(c.invalidated.filter((k) => k[2] === "networks")).toHaveLength(1);
+    expect(c.invalidated.filter((k) => k[2] === "summary")).toHaveLength(1);
+    expect(c.invalidated.filter((k) => k.length === 2)).toHaveLength(1);
+    expect(c.last().events.map((e) => e.id)).toEqual(["r1"]);
   });
 
   it("does not invalidate for an event it already has", async () => {
@@ -371,5 +531,39 @@ describe("createEventsConnection", () => {
     resolve([ev("a", "2026-10-02T10:00:01Z")]);
     await flush();
     expect(c.snapshots.length).toBe(n);
+  });
+
+  it("asks for the feed's own 50 events and no start time unless told otherwise", async () => {
+    const fetchRecent = vi.fn((_: RecentQuery) => Promise.resolve([] as EventDTO[]));
+    const c = connect(fetchRecent);
+    c.connection.start();
+    await flush();
+    expect(fetchRecent).toHaveBeenCalledWith({ since: undefined, limit: 50 });
+  });
+
+  it("keeps the cap it is given and asks for that many events from the time it is given", async () => {
+    const since = "2026-10-02T09:00:00.000Z";
+    const history = Array.from({ length: 1200 }, (_, i) =>
+      ev(`h${i}`, new Date(Date.parse("2026-10-02T10:00:00Z") + i * 1000).toISOString()),
+    );
+    const fetchRecent = vi.fn((_: RecentQuery) =>
+      Promise.resolve([...history].reverse().slice(0, 1000)),
+    );
+    const c = connect(fetchRecent, { cap: 1000, since });
+    c.connection.start();
+    await flush();
+    expect(fetchRecent).toHaveBeenCalledWith({ since, limit: 1000 });
+    expect(c.last().events).toHaveLength(1000);
+    expect(c.last().events[0]?.id).toBe("h1199");
+
+    (c.source() as FakeEventSource).open();
+    (c.source() as FakeEventSource).send(ev("live", "2026-10-02T11:00:00Z"));
+    expect(c.last().events).toHaveLength(1000);
+    expect(c.last().events[0]?.id).toBe("live");
+    // The same window is read again when the stream gives way to polling.
+    (c.source() as FakeEventSource).fail(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchRecent).toHaveBeenLastCalledWith({ since, limit: 1000 });
+    expect(c.last().events).toHaveLength(1000);
   });
 });

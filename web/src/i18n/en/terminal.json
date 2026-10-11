@@ -1,0 +1,114 @@
+{
+  "terminal": {
+    "name": "Terminal in {{name}}",
+    "launcher": {
+      "heading": "Open a shell in {{name}}",
+      "body": "You get a terminal inside the container. Nothing you type or see is recorded. Bayplan records that the session happened.",
+      "bodyNode": "You get a terminal inside the container, on {{node}}. Nothing you type or see is recorded. Bayplan records that the session happened.",
+      "open": "Open shell",
+      "opening": "Opening shell…",
+      "shell": {
+        "label": "Shell",
+        "auto": "Automatic (bash, then sh)",
+        "bash": "bash",
+        "sh": "sh",
+        "ash": "ash",
+        "custom": "Custom command…"
+      },
+      "command": {
+        "label": "Command",
+        "helper": "The command to run, for example /bin/zsh."
+      },
+      "options": "Options",
+      "user": {
+        "label": "User",
+        "placeholder": "Container default",
+        "helper": "For example root, 0 or www-data."
+      },
+      "dir": {
+        "label": "Working directory",
+        "placeholder": "Container default"
+      }
+    },
+    "notRunning": {
+      "heading": "Start the container to open a shell",
+      "body": "A shell needs a running container.",
+      "start": "Start container",
+      "starting": "Starting…"
+    },
+    "status": {
+      "connecting": "Connecting…",
+      "connected": "Connected"
+    },
+    "ended": {
+      "message": "Session ended (exit code {{code}}).",
+      "again": "Start a new session"
+    },
+    "idle": {
+      "warning": "This session closes in 1 minute because nothing has happened in it. Press any key to keep it open."
+    },
+    "closed": {
+      "idle_one": "Session closed after {{count}} minute without activity.",
+      "idle_other": "Session closed after {{count}} minutes without activity.",
+      "access_lost": "Your access changed. This session was closed.",
+      "ended_by_admin": "An administrator ended this session.",
+      "ended_by_user": "You ended this session from your list of open shells."
+    },
+    "disconnected": {
+      "heading": "Disconnected",
+      "body": "The connection dropped, so the shell was closed.",
+      "reconnect": "Reconnect shell"
+    },
+    "error": {
+      "failed": "Couldn't open a shell. Try again.",
+      "hostReadOnly": "This host is read-only (set on the host). Logs still work.",
+      "notRunning": "Start the container to open a shell.",
+      "busy": "This host's agent is serving as many logs and shells as it can. Close one and try again.",
+      "noShell": "Bayplan couldn't find bash or sh in this container."
+    },
+    "refusal": {
+      "readOnly": {
+        "heading": "Shells are off on this host",
+        "body": "This host is read-only (set on the host). Logs still work."
+      },
+      "ownContainer": "Bayplan doesn't open shells in its own containers.",
+      "noShell": {
+        "heading": "No shell in this image",
+        "body": "Bayplan couldn't find bash or sh in this container. If the image has one somewhere else, enter its path."
+      },
+      "limit_one": "You already have {{count}} shell open, which is the most allowed. Close one to open another.",
+      "limit_other": "You already have {{count}} shells open, which is the most allowed. Close one to open another."
+    },
+    "toolbar": {
+      "label": "Terminal controls",
+      "fontSize": "Font size",
+      "search": "Search",
+      "openWindow": "Open in new window",
+      "end": "End session",
+      "summary": "{{shell}} as {{user}} in {{directory}}",
+      "auto": "bash or sh",
+      "defaultUser": "default user",
+      "defaultDirectory": "default directory"
+    },
+    "keyboard": {
+      "trigger": "Keyboard",
+      "copy": "Copy",
+      "paste": "Paste",
+      "search": "Search",
+      "leave": "Leave the terminal",
+      "copyOnSelect": "Copy on select is off.",
+      "screenReader": "Screen reader support"
+    },
+    "search": {
+      "label": "Search the terminal",
+      "placeholder": "Search",
+      "previous": "Previous match",
+      "next": "Next match",
+      "close": "Close search",
+      "noMatch": "No matches"
+    },
+    "popout": {
+      "title": "{{name}} shell"
+    }
+  }
+}

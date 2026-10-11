@@ -69,12 +69,13 @@ type AuditFilterInput struct {
 	Action []string `query:"action,explode" maxItems:"50" doc:"Only entries of these action types; repeat the parameter to give several"`
 	From   string   `query:"from" format:"date-time" doc:"Only entries at or after this time (RFC 3339)"`
 	To     string   `query:"to" format:"date-time" doc:"Only entries at or before this time (RFC 3339)"`
+	Bulk   string   `query:"bulk" format:"uuid" doc:"Only entries of one bulk operation: those whose bulk detail is this ID (the bulkId a container action answers with). 422 when it is not a UUID"`
 }
 
 // filter turns the query parameters into an audit.Filter. A time that does not
 // parse is a 422 (huma already rejects most before this runs).
 func (in *AuditFilterInput) filter() (audit.Filter, error) {
-	f := audit.Filter{Actor: in.User, Actions: in.Action}
+	f := audit.Filter{Actor: in.User, Actions: in.Action, Bulk: in.Bulk}
 	for _, p := range []struct {
 		raw  string
 		dest *time.Time
@@ -253,8 +254,8 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 		Path:        "/api/audit",
 		Summary:     "List audit entries",
 		Description: "Newest first, 50 per page by default and 100 at most, filtered by actor, one or more action types and an " +
-			"inclusive time range. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated " +
-			"or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to. " +
+			"inclusive time range, and optionally by one bulk operation (bulk, the bulkId of a container action). The export takes the same filters. Pages are cut by insertion sequence, so entries that share a timestamp are never repeated " +
+			"or skipped; pass nextCursor back as cursor for the next page. 422 invalid_time_range for a malformed from or to, and 422 for a bulk that is not a UUID. " +
 			"An instance admin reads every entry. An Admin of one or more environments (environments.audit) reads only the " +
 			"entries on those environments, or on every environment when they are Admin of all of them, never an instance-level " +
 			"event such as a sign-in or a settings change; the scope is applied before paging. Anyone else gets 403, audited as " +

@@ -66,7 +66,16 @@ Bayplan's live feeds are Server-Sent Events streams, and the agent tunnel and th
 
 - **pass the upgrade.** A WebSocket request carries `Upgrade: websocket` and `Connection: Upgrade`. nginx drops both unless told to pass them; Caddy and Traefik pass them by themselves.
 - **not buffer the streams.** A buffering proxy holds events back until a buffer fills, so the page looks frozen. Bayplan sends `X-Accel-Buffering: no`, which nginx honours, and the nginx file below also sets `proxy_buffering off`. Do not compress `text/event-stream`.
-- **allow idle connections.** Bayplan sends something every 10 to 15 seconds on every connection: agent heartbeats every 10 seconds, and a comment line on each event stream every 15 seconds. That fits inside the 60 second idle timeout that nginx starts with. A longer timeout keeps connections up through a pause, so the files below set one hour for nginx. Traefik's entry point closes idle connections after 180 seconds by default, and Caddy sets no limit. Never set an idle or read timeout under 15 seconds.
+- **allow idle connections.** Bayplan sends something every 10 to 20 seconds on every connection: agent heartbeats every 10 seconds, a comment line on each event stream and each log stream every 15 seconds, and a ping on each browser shell every 20 seconds. That fits inside the 60 second idle timeout that nginx starts with. A longer timeout keeps connections up through a pause, so the files below set one hour for nginx. Traefik's entry point closes idle connections after 180 seconds by default, and Caddy sets no limit. Never set an idle or read timeout under 15 seconds.
+
+Phase 4 adds two kinds of long-lived connection to this list. Both pass through the same proxy settings and need nothing extra:
+
+- **The browser shell** is a WebSocket at `/api/env/<environment>/shell-sessions/<session>/ws` (under your base path, if you use one). It is opened from the page after a normal `POST`, and Bayplan accepts the upgrade only from your public URL's origin (or the request's own host), so the proxy must pass the `Origin` and `Host` headers unchanged. A shell can sit open for hours, so a proxy idle or read timeout must not be shorter than the 20 second ping. Bayplan closes a shell that nobody uses after 30 minutes by default.
+- **Log streams** are Server-Sent Events at `/api/env/<environment>/containers/<container>/logs/stream`, and a log download (`.../logs/download`) is one long response that is written as it is read. Neither may be buffered or compressed, or the log appears in bursts, or only when the download ends.
+
+Several log windows open at once can reach a browser limit. On plain HTTP/1.1 a browser opens at most six connections to one origin, and each live log, each event stream and each shell takes one of them, so a seventh does not start until another closes. HTTP/2 shares many streams over one connection and removes the limit, so serve Bayplan over HTTPS from a proxy that speaks HTTP/2 if you keep many logs open. Caddy and Traefik do this over HTTPS by default, and nginx does when HTTP/2 is switched on for the listener. The files below do not set this up for you.
+
+The proxy smoke test (`make proxy-smoke`) checks that each of the three setups below passes the shell's upgrade request and a log stream request through to Bayplan. See [Checking a setup](#checking-a-setup).
 
 ## Caddy
 
@@ -248,6 +257,9 @@ Other symptoms:
 - `/api/version` answers;
 - a WebSocket upgrade of `/agent/connect` with the subprotocol `bayplan.agent.v1` gets `101 Switching Protocols`;
 - the signed-in event stream sends its first frame at once, and without a session it answers `401` at once;
+- the shell's upgrade request (`shell_ws_reaches_bayplan`) and a log stream request (`log_stream_prompt`) reach Bayplan, which answers them itself;
 - Bayplan shows no proxy warning.
+
+The last two checks ask for an environment that does not exist, so they need no container. They show that the proxy forwards the shell's upgrade request, with the session and the origin, to Bayplan, which answers with its own `environment_not_found` problem and not a `400`, `426` or `502` from the proxy, and that the log stream request is answered within 3 seconds and not held back. They do not open a real shell or stream real log lines; the end-to-end suite does that in Chromium behind Caddy at `/bayplan`. Behind nginx and Traefik these two request-level checks are all there is.
 
 It then breaks nginx three ways, and checks that Bayplan notices each: without the `Upgrade` lines (the agent endpoint answers `426` and the bell shows the WebSocket warning), without the `Host` line (the public URL warning), and without `BAYPLAN_TRUSTED_PROXIES` (the untrusted address warning). It needs Docker, `curl` and `jq`, and removes everything it creates.

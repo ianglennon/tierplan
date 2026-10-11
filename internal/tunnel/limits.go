@@ -34,8 +34,13 @@ const (
 	// MaxSessionStreams is how many server-opened streams one session carries at
 	// once. A request beyond it fails with ErrBusy and is never queued.
 	MaxSessionStreams = 64
-	// MaxResponseBytes caps one Docker response that is not the events feed, so a
-	// hostile agent cannot exhaust server memory with a huge JSON list.
+	// MaxInteractiveStreams is how many of those may be log follows or shells at
+	// once. The rest stay for reads, actions and the events feed, so a crowd of log
+	// viewers cannot starve the dashboard or other users' actions (T-04-13).
+	MaxInteractiveStreams = 32
+	// MaxResponseBytes caps one Docker response that is not a stream (the events
+	// feed, a log follow, an exec), so a hostile agent cannot exhaust server memory
+	// with a huge JSON list.
 	MaxResponseBytes = 64 << 20
 
 	// maxHandshakes is how many unauthenticated handshakes may be in flight.
@@ -70,7 +75,8 @@ const (
 )
 
 var (
-	// ErrBusy means the session already has MaxSessionStreams requests in flight.
+	// ErrBusy means the session already has MaxSessionStreams requests in flight,
+	// or MaxInteractiveStreams log follows and shells for a request that is one.
 	// It is not ErrAgentGone: the agent is fine, there is only too much asked of
 	// it, so the caller must not mark it offline.
 	ErrBusy = errors.New("tunnel: the agent has too many requests in flight")
@@ -356,23 +362,99 @@ func (s *Session) releaseStream() {
 	}
 }
 
-// requestLine matches the first line of an HTTP request, the start of one
-// exchange on a stream.
-var requestLine = regexp.MustCompile(`^[A-Z]+ (\S+) HTTP/1\.[01]\r\n`)
+// acquireInteractive takes one of the session's interactive slots, the budget of log
+// follows and shells, or reports false when all MaxInteractiveStreams are in use. A
+// stream holds a slot of this budget as well as one of the session's streams, so the
+// other MaxSessionStreams-MaxInteractiveStreams are always left for reads, actions and
+// the events feed (T-04-13).
+func (s *Session) acquireInteractive() bool {
+	if s.interactive == nil {
+		return true
+	}
+	select {
+	case s.interactive <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
 
-// startsEventsRequest reports whether p begins an HTTP request for the events
-// feed, which is a stream that is meant to run for hours and is not capped. It
-// reports ok false when p is not the start of a request at all, for example the
-// next piece of a body.
-func startsEventsRequest(p []byte) (events, ok bool) {
+// releaseInteractive gives an interactive slot back.
+func (s *Session) releaseInteractive() {
+	if s.interactive == nil {
+		return
+	}
+	select {
+	case <-s.interactive:
+	default:
+	}
+}
+
+// streamKind is what a request on a stream is for, which decides whether its answer
+// is capped and whether it counts against the interactive budget.
+type streamKind int
+
+const (
+	// streamOther is every ordinary request: a capped answer, no interactive slot.
+	streamOther streamKind = iota
+	// streamEvents is the events feed: endless, uncapped, not interactive.
+	streamEvents
+	// streamLogs is a container's logs, which a client may follow for hours.
+	streamLogs
+	// streamExec is the start of an exec, whose stream carries a shell.
+	streamExec
+)
+
+// uncapped reports whether the answer to a request of this kind may be longer than
+// the response cap: only streams that are meant to run for as long as the caller
+// reads them.
+func (k streamKind) uncapped() bool { return k != streamOther }
+
+// interactive reports whether a request of this kind takes an interactive slot.
+func (k streamKind) interactive() bool { return k == streamLogs || k == streamExec }
+
+var (
+	// requestLine matches the first line of an HTTP request, the start of one
+	// exchange on a stream: the method and the target.
+	requestLine = regexp.MustCompile(`^([A-Z]+) (\S+) HTTP/1\.[01]\r\n`)
+	// versionedPath splits an optional /vX.Y prefix off a Docker path.
+	versionedPath = regexp.MustCompile(`^/v[0-9]+(?:\.[0-9]+)?(/.*)$`)
+	// logsPath and execStartPath are the two stream routes besides the events feed.
+	logsPath      = regexp.MustCompile(`^/containers/[^/]+/logs$`)
+	execStartPath = regexp.MustCompile(`^/exec/[^/]+/start$`)
+)
+
+// startsStreamRequest classifies p when it begins an HTTP request: the events feed
+// (any method, a path ending in /events), a container's logs (GET
+// /containers/{id}/logs) or an exec start (POST /exec/{id}/start), each with or
+// without a /vX.Y prefix, and every other request as streamOther. It reports ok false
+// when p is not the start of a request at all, for example the next piece of a body,
+// or a first write too short to hold the whole request line, so the caller keeps what
+// it knew. The decision is made from the request line the server itself wrote, never
+// from anything the agent sends (T-04-14). The caller stops asking once an exec start
+// has been written, because the bytes after that are a person's keystrokes.
+func startsStreamRequest(p []byte) (kind streamKind, ok bool) {
 	head := p
 	if len(head) > 1024 {
 		head = head[:1024]
 	}
 	m := requestLine.FindSubmatch(head)
 	if m == nil {
-		return false, false
+		return streamOther, false
 	}
-	target, _, _ := strings.Cut(string(m[1]), "?")
-	return strings.HasSuffix(target, "/events"), true
+	method := string(m[1])
+	target, _, _ := strings.Cut(string(m[2]), "?")
+	path := target
+	if v := versionedPath.FindStringSubmatch(target); v != nil {
+		path = v[1]
+	}
+	switch {
+	case strings.HasSuffix(target, "/events"):
+		return streamEvents, true
+	case method == http.MethodGet && logsPath.MatchString(path):
+		return streamLogs, true
+	case method == http.MethodPost && execStartPath.MatchString(path):
+		return streamExec, true
+	}
+	return streamOther, true
 }

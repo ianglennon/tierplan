@@ -6,8 +6,6 @@ import { useRouter } from "@tanstack/react-router";
 import { Eye, EyeOff } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { z } from "zod";
-
 import {
   acceptInvite,
   clearInviteToken,
@@ -31,6 +29,7 @@ import { PASSWORD_KEYS, passwordSchema } from "@/features/setup/schemas";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { withBase } from "@/lib/base-path";
+import { z } from "@/lib/zod-config";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";

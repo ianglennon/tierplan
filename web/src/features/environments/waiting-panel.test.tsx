@@ -186,6 +186,27 @@ describe("WaitingPanel", () => {
     expect(screen.getByText("Detected a swarm with 3 nodes. Opening it now…")).toBeTruthy();
   });
 
+  it("goes online from the list when the env.status event never reached it", async () => {
+    mount({ envName: "edge" });
+    await connected();
+    // A reconnect resyncs the list; the env.status sent while it was down is gone.
+    await act(async () => {
+      client.setQueryData(KEY, {
+        items: [
+          item({
+            envType: "standalone",
+            status: { state: "online" },
+            nodes: { ready: 1, total: 1 },
+          }),
+        ],
+      });
+      await vi.advanceTimersByTimeAsync(5);
+    });
+    expect(screen.getByText("edge is online")).toBeTruthy();
+    await advance(2100);
+    expect(navigate).toHaveBeenCalledWith({ to: "/env/$envId", params: { envId: "e9" } });
+  });
+
   it("does not navigate when it is closed before the 2 seconds are up", async () => {
     const { unmount } = mount({ envName: "edge" });
     await frame("env.status", {

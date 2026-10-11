@@ -1,7 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { Box, HardDrive, Layers, type LucideIcon, Network } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import {
+  Box,
+  Boxes,
+  FileText,
+  HardDrive,
+  KeyRound,
+  Layers,
+  type LucideIcon,
+  Network,
+  Server,
+} from "lucide-react";
 import { useState } from "react";
 
 import { LiveChip } from "@/components/live-chip";
@@ -28,6 +39,10 @@ const ICONS: Record<DockerEventType, LucideIcon> = {
   image: Layers,
   network: Network,
   volume: HardDrive,
+  service: Boxes,
+  node: Server,
+  secret: KeyRound,
+  config: FileText,
 };
 
 // How many characters of an ID stand in for a name Docker did not give.
@@ -100,9 +115,10 @@ function EventRow({ event, showNode }: { event: EventDTO; showNode?: boolean }) 
 
 // EventsFeed is the dashboard's "Recent events" card (D-55, D-57): the last
 // hour best effort, then new events at the top as they happen, 50 at most.
-// Filtering is client-side over what the provider holds. On a swarm each row
+// Filtering is client-side over what the provider holds; "View all events" opens
+// the Events page of the same environment. On a swarm each row
 // names its node (D-43).
-export function EventsFeed({ showNode }: { showNode?: boolean }) {
+export function EventsFeed({ envId, showNode }: { envId?: string; showNode?: boolean }) {
   const t = useT();
   const { events, state, ready, retry } = useEnvEvents();
   const [filter, setFilter] = useState<Filter>("all");
@@ -160,6 +176,14 @@ export function EventsFeed({ showNode }: { showNode?: boolean }) {
         <CardTitle className="text-base font-semibold">{t("dashboard.events.title")}</CardTitle>
         <CardAction className="flex flex-wrap items-center justify-end gap-2">
           {chip ? <LiveChip state={chip} /> : null}
+          {envId ? (
+            // The full history of the same environment, with its filters (D-48).
+            <Button asChild variant="link" size="sm" className="max-md:h-11">
+              <Link to="/env/$envId/events" params={{ envId }}>
+                {t("events.viewAll")}
+              </Link>
+            </Button>
+          ) : null}
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">

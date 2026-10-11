@@ -7,7 +7,9 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -20,7 +22,10 @@ import (
 const untagged = "<none>"
 
 // ContainerRow is one container as the list view shows it. It carries no
-// variables, no metadata and no mounts: those can hold secrets (T-01-77).
+// variables. Labels, Mounts and Networks stay inside the server: they feed the
+// search, the grouping and the "attached" and "used by" rules of networks and
+// volumes. They can hold secrets, so the API exposes an allowlist and never
+// these fields (T-01-77, T-04-29).
 type ContainerRow struct {
 	ID      string
 	Name    string
@@ -30,6 +35,34 @@ type ContainerRow struct {
 	Created time.Time
 	// Ports reads like "0.0.0.0:8080->80/tcp", or "80/tcp" when not published.
 	Ports []string
+	// Labels is every label of the container. Never sent to a browser by a list.
+	Labels map[string]string
+	// Mounts are the container's mounts, in the engine's order.
+	Mounts []MountRow
+	// Networks are the networks the container is attached to, by name.
+	Networks []ContainerNet
+	// Health is none, starting, healthy or unhealthy.
+	Health string
+}
+
+// MountRow is one mount of a container.
+type MountRow struct {
+	Type        string
+	Name        string
+	Source      string
+	Destination string
+	// Mode is the engine's comma separated mount options (for example "z" or "ro"); empty when it sends none.
+	Mode string
+	RW   bool
+}
+
+// ContainerNet is one network attachment of a container.
+type ContainerNet struct {
+	NetworkID string
+	Name      string
+	IPv4      string
+	IPv6      string
+	MAC       string
 }
 
 // ImageRow is one image. RepoTags is ["<none>"] for an untagged image.
@@ -45,6 +78,29 @@ type VolumeRow struct {
 	Name    string
 	Driver  string
 	Created time.Time
+	// Labels is every label of the volume. It feeds the stack and project columns and
+	// the search and is never sent to a browser whole.
+	Labels map[string]string
+	// Anonymous is true for a volume Docker made for a container without a name: it
+	// carries the com.docker.volume.anonymous label, or on an engine that does not set
+	// it, its name is 64 hexadecimal characters.
+	Anonymous bool
+}
+
+// LabelVolumeAnonymous is the label newer engines put on a volume they made for a
+// container without a name.
+const LabelVolumeAnonymous = "com.docker.volume.anonymous"
+
+// anonymousName matches the name Docker gives an anonymous volume: the 64 hexadecimal
+// characters of a random ID.
+var anonymousName = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// IsAnonymousVolume says whether a volume is one Docker made without a name.
+func IsAnonymousVolume(name string, labels map[string]string) bool {
+	if _, ok := labels[LabelVolumeAnonymous]; ok {
+		return true
+	}
+	return anonymousName.MatchString(name)
 }
 
 // NetworkRow is one network. Subnets is empty, not nil, for a network with none.
@@ -55,6 +111,12 @@ type NetworkRow struct {
 	Scope   string
 	Subnets []string
 	Created time.Time
+	// Labels is every label of the network. It feeds the owner column and the
+	// search and is never sent to a browser whole.
+	Labels map[string]string
+	// Internal, Attachable and IPv6 are the network's flags; Ingress marks the
+	// swarm's routing mesh network, whatever it is named.
+	Internal, Attachable, IPv6, Ingress bool
 }
 
 // Counts are the dashboard tiles. Every one is derived from the lists of the
@@ -116,7 +178,10 @@ func (c *Client) Snapshot(ctx context.Context, swarmManager bool) (Snapshot, err
 	}
 	snap.Volumes = make([]VolumeRow, 0, len(vs.Items))
 	for _, v := range vs.Items {
-		snap.Volumes = append(snap.Volumes, VolumeRow{Name: v.Name, Driver: v.Driver, Created: parseTime(v.CreatedAt)})
+		snap.Volumes = append(snap.Volumes, VolumeRow{
+			Name: v.Name, Driver: v.Driver, Created: parseTime(v.CreatedAt),
+			Labels: maps.Clone(v.Labels), Anonymous: IsAnonymousVolume(v.Name, v.Labels),
+		})
 	}
 	slices.SortFunc(snap.Volumes, func(a, b VolumeRow) int { return cmp.Compare(a.Name, b.Name) })
 
@@ -126,7 +191,10 @@ func (c *Client) Snapshot(ctx context.Context, swarmManager bool) (Snapshot, err
 	}
 	snap.Networks = make([]NetworkRow, 0, len(ns.Items))
 	for _, n := range ns.Items {
-		row := NetworkRow{ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: []string{}, Created: n.Created.UTC()}
+		row := NetworkRow{
+			ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: []string{}, Created: n.Created.UTC(),
+			Labels: maps.Clone(n.Labels), Internal: n.Internal, Attachable: n.Attachable, IPv6: n.EnableIPv6, Ingress: n.Ingress,
+		}
 		for _, cfg := range n.IPAM.Config {
 			if cfg.Subnet.IsValid() {
 				row.Subnets = append(row.Subnets, cfg.Subnet.String())
@@ -184,19 +252,88 @@ func containerRows(items []container.Summary) []ContainerRow {
 	rows := make([]ContainerRow, 0, len(items))
 	for _, it := range items {
 		rows = append(rows, ContainerRow{
-			ID:      it.ID,
-			Name:    containerName(it.ID, it.Names),
-			State:   string(it.State),
-			Status:  it.Status,
-			Image:   it.Image,
-			Created: time.Unix(it.Created, 0).UTC(),
-			Ports:   portStrings(it.Ports),
+			ID:       it.ID,
+			Name:     containerName(it.ID, it.Names),
+			State:    string(it.State),
+			Status:   it.Status,
+			Image:    it.Image,
+			Created:  time.Unix(it.Created, 0).UTC(),
+			Ports:    portStrings(it.Ports),
+			Labels:   maps.Clone(it.Labels),
+			Mounts:   mountRows(it.Mounts),
+			Networks: netRows(it.NetworkSettings),
+			Health:   healthOf(it),
 		})
 	}
 	slices.SortFunc(rows, func(a, b ContainerRow) int {
 		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
 	})
 	return rows
+}
+
+// mountRows maps the engine's mount points.
+func mountRows(in []container.MountPoint) []MountRow {
+	out := make([]MountRow, 0, len(in))
+	for _, m := range in {
+		out = append(out, MountRow{Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, Mode: m.Mode, RW: m.RW})
+	}
+	return out
+}
+
+// netRows maps the attachments of a container, sorted by network name.
+func netRows(ns *container.NetworkSettingsSummary) []ContainerNet {
+	if ns == nil {
+		return []ContainerNet{}
+	}
+	out := make([]ContainerNet, 0, len(ns.Networks))
+	for name, ep := range ns.Networks {
+		if ep == nil {
+			continue
+		}
+		n := ContainerNet{NetworkID: ep.NetworkID, Name: name, MAC: ep.MacAddress.String()}
+		if ep.IPAddress.IsValid() {
+			n.IPv4 = ep.IPAddress.String()
+		}
+		if ep.GlobalIPv6Address.IsValid() {
+			n.IPv6 = ep.GlobalIPv6Address.String()
+		}
+		out = append(out, n)
+	}
+	slices.SortFunc(out, func(a, b ContainerNet) int { return cmp.Compare(a.Name, b.Name) })
+	return out
+}
+
+// Container health values.
+const (
+	HealthNone      = "none"
+	HealthStarting  = "starting"
+	HealthHealthy   = "healthy"
+	HealthUnhealthy = "unhealthy"
+)
+
+// healthOf is the container's health. The engine's own summary wins when it
+// sends one (API 1.52 and later list it); otherwise the status text carries it as
+// "(unhealthy)" or "(health: starting)", which every supported engine writes.
+func healthOf(it container.Summary) string {
+	if it.Health != nil {
+		switch it.Health.Status {
+		case container.Unhealthy:
+			return HealthUnhealthy
+		case container.Starting:
+			return HealthStarting
+		case container.Healthy:
+			return HealthHealthy
+		}
+	}
+	switch {
+	case strings.HasSuffix(it.Status, "(unhealthy)"):
+		return HealthUnhealthy
+	case strings.HasSuffix(it.Status, "(health: starting)"):
+		return HealthStarting
+	case strings.HasSuffix(it.Status, "(healthy)"):
+		return HealthHealthy
+	}
+	return HealthNone
 }
 
 // containerName is the name the container was given, without the leading

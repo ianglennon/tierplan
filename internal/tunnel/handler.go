@@ -82,7 +82,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conn := websocket.NetConn(sctx, c, websocket.MessageBinary)
-	ym, err := yamux.Client(conn, muxConfig())
+	ym, err := yamux.Client(conn, h.muxConfig())
 	if err != nil {
 		h.log.Error("start the agent multiplexer", "agent_id", acc.AgentID, "error", err)
 		return
@@ -91,6 +91,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		AgentID: acc.AgentID, EnvID: acc.EnvID, AgentVersion: acc.AgentVersion, Facts: acc.Facts,
 		IP: acc.IP, ConnectedAt: h.now(), order: order, ym: ym, ws: c, done: make(chan struct{}),
 		streams: make(chan struct{}, MaxSessionStreams), maxResponse: h.maxResponse,
+		interactive: make(chan struct{}, MaxInteractiveStreams),
 		denyLimit:   rate.NewLimiter(rate.Every(denyRefill), denyBurst),
 		status:      SessionStatus{ClockOffset: acc.ClockOffset, ClockWarning: abs(acc.ClockOffset) > ClockWarnOffset},
 		welcomeURLs: acc.URLs,

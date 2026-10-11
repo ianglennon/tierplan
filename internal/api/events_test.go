@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -370,6 +371,50 @@ func TestEventStreamSendsTheHeadersTheBacklogAndThenLiveFrames(t *testing.T) {
 	}
 }
 
+func TestEventStreamSendsAHealthChangeAsAnIdlessInvalidateFrameAndTheListNeverHoldsIt(t *testing.T) {
+	// RES-14: the browser must learn that a list is stale, but the feed people read
+	// has no row for it, and nothing about the health check leaves the server.
+	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
+	f.waitStream(t)
+	c := f.openStream(t, f.cookie, "")
+
+	f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "health_status: unhealthy", ActorID: "sick",
+		Attributes: map[string]string{"name": "web", "image": "img", "check": "curl -u admin:hunter2 localhost"}})
+	publish(f, "after")
+
+	fr, ok := c.next(5 * time.Second)
+	if !ok {
+		t.Fatal("no frame arrived")
+	}
+	if fr.event != "invalidate" || fr.id != "" {
+		t.Fatalf("frame = %+v, want event invalidate with no id (Last-Event-ID resume must be unaffected)", fr)
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(fr.data), &got); err != nil {
+		t.Fatalf("data %q: %v", fr.data, err)
+	}
+	if len(got) != 3 || got["type"] != "container" || got["actorId"] != "sick" || got["node"] == "" {
+		t.Errorf("invalidate data = %v, want exactly type, actorId and node", got)
+	}
+	if strings.Contains(fr.data, "hunter2") || strings.Contains(fr.data, "curl") {
+		t.Errorf("the invalidate frame leaks the check: %s", fr.data)
+	}
+	if next, e := c.mustNext(t); next.event != "docker" || e.ActorID != "after" {
+		t.Errorf("next frame = %+v / %+v, want the docker frame for \"after\"", next, e)
+	}
+
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + f.env.ID + "/events", cookie: f.cookie})
+	var body recentBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range body.Items {
+		if it.ActorID == "sick" {
+			t.Errorf("the recent list holds the health row %+v", it)
+		}
+	}
+}
+
 func TestEventStreamResumesAfterLastEventID(t *testing.T) {
 	now := time.Now()
 	f := newEventsFix(t, dockertest.FakeConfig{Events: []dockertest.FakeEvent{
@@ -445,6 +490,9 @@ func TestEventStreamAllowsEightPerUserAndRefusesTheNinthWith429(t *testing.T) {
 	if got := ninth.header.Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("429 Content-Type = %q", got)
 	}
+	// The status is set before the problem body is written, so let the refused request
+	// finish before reading its body: a loaded run can look in between.
+	ninth.waitEnded(t, 5*time.Second, "the 429 was answered")
 	if body := ninth.bodyString(); !strings.Contains(body, `"type":"rate_limited"`) {
 		t.Errorf("429 body = %s, want the rate_limited problem type", body)
 	}
@@ -566,6 +614,58 @@ func TestEventRecentReturnsTheNewest50NewestFirstWithTheStreamFields(t *testing.
 	}
 	if _, ok := first.Attributes["secret"]; ok {
 		t.Errorf("attributes %v leak a label", first.Attributes)
+	}
+}
+
+func TestEventRecentTakesSinceAndLimitAndRefusesBadValues(t *testing.T) {
+	f := newEventsFix(t, dockertest.FakeConfig{}, time.Hour, 0)
+	f.waitStream(t)
+	now := time.Now()
+	for _, e := range []struct {
+		id  string
+		ago time.Duration
+	}{{"ancient", 30 * time.Hour}, {"old", 2 * time.Hour}, {"recent", time.Minute}} {
+		f.fake.PublishEvent(dockertest.FakeEvent{Type: "container", Action: "start", ActorID: e.id, TimeNano: now.Add(-e.ago).UnixNano()})
+	}
+	f.waitBuffered(t, 3)
+
+	get := func(query string) (int, []string) {
+		t.Helper()
+		rec := f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + f.env.ID + "/events" + query, cookie: f.cookie})
+		if rec.Code != http.StatusOK {
+			return rec.Code, nil
+		}
+		var body recentBody
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]string, 0, len(body.Items))
+		for _, it := range body.Items {
+			ids = append(ids, it.ActorID)
+		}
+		return rec.Code, ids
+	}
+	at := func(d time.Duration) string { return "?since=" + now.Add(-d).UTC().Format(time.RFC3339Nano) }
+
+	if code, ids := get(""); code != 200 || !slices.Equal(ids, []string{"recent", "old", "ancient"}) {
+		t.Errorf("no parameters = %d %v, want all three newest first", code, ids)
+	}
+	if code, ids := get(at(10 * time.Minute)); code != 200 || !slices.Equal(ids, []string{"recent"}) {
+		t.Errorf("since 10 minutes ago = %d %v, want recent only", code, ids)
+	}
+	if code, ids := get(at(48 * time.Hour)); code != 200 || !slices.Equal(ids, []string{"recent", "old"}) {
+		t.Errorf("since 48 hours ago = %d %v, want it clamped to 24 hours: recent and old", code, ids)
+	}
+	if code, ids := get("?limit=1"); code != 200 || !slices.Equal(ids, []string{"recent"}) {
+		t.Errorf("limit 1 = %d %v, want the newest only", code, ids)
+	}
+	if code, ids := get("?limit=1000"); code != 200 || len(ids) != 3 {
+		t.Errorf("limit 1000 = %d %v, want 200 and three rows", code, ids)
+	}
+	for _, q := range []string{"?limit=0", "?limit=1001", "?limit=-1", "?limit=abc", "?since=yesterday"} {
+		if code, _ := get(q); code != http.StatusUnprocessableEntity {
+			t.Errorf("%s answered %d, want 422", q, code)
+		}
 	}
 }
 

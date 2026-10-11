@@ -976,6 +976,18 @@ func (f *agentFix) whenState(t *testing.T, id, state string) agentEnvBody {
 	return e
 }
 
+// whenProbed waits until the monitor has probed the engine of every node key and
+// found it online. An environment is online as soon as its agent's session is,
+// while a call to one node goes through the monitor's client, which is ErrOffline
+// until the first probe of that engine has finished; on a loaded machine that can
+// come after the environment reads online.
+func (f *agentFix) whenProbed(t *testing.T, keys ...string) {
+	t.Helper()
+	for _, k := range keys {
+		waitFor(t, "the monitor to probe "+k, func() bool { return f.mon.Status(k).State == envs.StateOnline })
+	}
+}
+
 func utc(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 func TestAgentEnvironmentIsPendingThenOnlineThenOfflineWithReasonTimeoutAndSince(t *testing.T) {

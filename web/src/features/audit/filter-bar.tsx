@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { CalendarDays, ChevronDown, Download, Users } from "lucide-react";
+import { CalendarDays, ChevronDown, Download, Users, X } from "lucide-react";
 import { useId, useState } from "react";
 import type { DateRange } from "react-day-picker";
 
@@ -56,6 +56,7 @@ interface FilterBarProps {
 export function hasFilters(search: AuditSearch): boolean {
   return (
     Boolean(search.user) ||
+    Boolean(search.bulk) ||
     (search.action?.length ?? 0) > 0 ||
     (search.range ?? DEFAULT_RANGE) !== DEFAULT_RANGE
   );
@@ -395,8 +396,38 @@ function ExportMenu({ search }: { search: AuditSearch }) {
   );
 }
 
-// FilterBar is the audit log's controls (D-43): user, action, time range,
-// Clear filters and Export. Every change is written to the URL by the caller.
+// BulkChip says the view is narrowed to one bulk operation (D-14), by the first
+// 8 characters of its ID, and takes the filter off again. The whole ID is in the
+// address and in the title.
+function BulkChip({ bulk, onRemove }: { bulk: string; onRemove: () => void }) {
+  const t = useT();
+  return (
+    <div className="flex flex-col gap-1">
+      <span aria-hidden="true" className="invisible text-xs">
+        {t("audit.filters.range")}
+      </span>
+      <span
+        title={bulk}
+        className="inline-flex h-9 items-center gap-1 rounded-md border bg-muted ps-3 pe-1 text-sm max-md:h-11"
+      >
+        <span className="font-mono text-xs">
+          {t("audit.filters.bulkChip", { id: bulk.slice(0, 8) })}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t("audit.filters.bulkRemove")}
+          onClick={onRemove}
+        >
+          <X aria-hidden="true" />
+        </Button>
+      </span>
+    </div>
+  );
+}
+
+// FilterBar is the audit log's controls (D-43): user, action, time range, the
+// bulk chip when set, Clear filters and Export. Every change is written to the URL by the caller.
 export function FilterBar({ search, onChange, onClear }: FilterBarProps) {
   const t = useT();
   return (
@@ -407,6 +438,9 @@ export function FilterBar({ search, onChange, onClear }: FilterBarProps) {
       <UserFilter value={search.user} onChange={(user) => onChange({ user })} />
       <ActionFilter value={search.action ?? []} onChange={(action) => onChange({ action })} />
       <RangeFilter search={search} onChange={onChange} />
+      {search.bulk ? (
+        <BulkChip bulk={search.bulk} onRemove={() => onChange({ bulk: undefined })} />
+      ) : null}
       <Button
         variant="ghost"
         disabled={!hasFilters(search)}

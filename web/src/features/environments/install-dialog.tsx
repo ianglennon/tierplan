@@ -6,8 +6,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { z } from "zod";
-
 import {
   createAgentEnvironment,
   environmentsQuery,
@@ -34,6 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { WaitingPanel } from "@/features/environments/waiting-panel";
 import { useT } from "@/i18n/use-t";
+import { z } from "@/lib/zod-config";
 
 // The longest name the server accepts, counted in characters.
 const NAME_MAX = 64;

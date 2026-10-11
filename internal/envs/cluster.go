@@ -90,6 +90,10 @@ type ClusterOptions struct {
 type ClusterState struct {
 	// Read is the last successful read of the cluster, zero before the first.
 	Read dockerx.ClusterRead
+	// ServiceRefs are the networks and volumes each service's spec mentioned in Read.
+	// They are what the networks list counts services from; a delete reads them live
+	// instead of trusting these.
+	ServiceRefs []dockerx.ServiceRef
 	// FetchedAt is when Read was taken; AttemptedAt is when a read was last tried,
 	// whatever came of it.
 	FetchedAt, AttemptedAt time.Time
@@ -551,6 +555,7 @@ func (c *Clusters) apply(in RollupInput, e *clusterEntry, read dockerx.ClusterRe
 	case err == nil:
 		changed = e.state.NoQuorum
 		e.state.Read, e.state.FetchedAt = read, now
+		e.state.ServiceRefs = read.ServiceRefs
 		e.state.NoQuorum, e.state.NoQuorumSince = false, time.Time{}
 		e.state.LeaderNodeID, e.state.LeaderAgentID = "", ""
 		for _, n := range read.Nodes {

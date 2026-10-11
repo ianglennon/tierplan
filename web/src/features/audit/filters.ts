@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { z } from "zod";
-
 import { apiUrl } from "@/lib/base-path";
+import { z } from "@/lib/zod-config";
 
 // The audit log's filters live in the URL (D-43), so a filtered view is
 // linkable and survives a refresh. This file is the one place that knows how
@@ -87,6 +86,24 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "backup.schedule_updated",
   "backup.upload_discarded",
   "key.rotated",
+  "container.started",
+  "container.stopped",
+  "container.restarted",
+  "container.killed",
+  "container.paused",
+  "container.unpaused",
+  "container.removed",
+  "network.created",
+  "network.removed",
+  "network.connected",
+  "network.disconnected",
+  "volume.created",
+  "volume.removed",
+  "logs.viewed",
+  "logs.downloaded",
+  "shell.opened",
+  "shell.closed",
+  "shell.ended",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -96,7 +113,18 @@ export const KNOWN_ACTIONS: readonly string[] = [
 // server never returns them to an env Admin and offering them would only build
 // a filter that matches nothing. An action in the address that is not here still
 // shows in the filter, so a linked view can be cleared.
-const ENV_SCOPED_PREFIXES = ["access.", "environment.", "agent.", "automation.", "owner."];
+const ENV_SCOPED_PREFIXES = [
+  "access.",
+  "environment.",
+  "agent.",
+  "automation.",
+  "owner.",
+  "container.",
+  "network.",
+  "volume.",
+  "logs.",
+  "shell.",
+];
 export const ENV_SCOPED_ACTIONS: readonly string[] = KNOWN_ACTIONS.filter(
   (key) => key === "permission.denied" || ENV_SCOPED_PREFIXES.some((p) => key.startsWith(p)),
 );
@@ -110,6 +138,14 @@ const text = z
   .union([z.string(), z.number(), z.boolean()])
   .optional()
   .transform((v) => (v === undefined || v === "" ? undefined : String(v)));
+
+// A bulk operation's ID is a UUID; anything else is dropped rather than sent, so
+// the server never has to refuse a hand-edited address.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const bulk = z
+  .string()
+  .optional()
+  .transform((v) => (v !== undefined && UUID.test(v) ? v : undefined));
 
 // One action arrives as a string and several as an array.
 const actions = z
@@ -127,6 +163,7 @@ const day = z.string().regex(DAY).optional().catch(undefined);
 export const auditSearchSchema = z.object({
   user: text,
   action: actions,
+  bulk,
   range: z.enum(RANGES).default(DEFAULT_RANGE).catch(DEFAULT_RANGE),
   from: day,
   to: day,
@@ -137,6 +174,8 @@ export const auditSearchSchema = z.object({
 export interface AuditSearch {
   user?: string | undefined;
   action?: string[] | undefined;
+  // One bulk operation's ID (D-14): only the entries it left.
+  bulk?: string | undefined;
   range?: Range | undefined;
   from?: string | undefined;
   to?: string | undefined;
@@ -209,12 +248,13 @@ export function actionLabel(key: string, t: Translate): string {
 }
 
 // listParams are the API's filter parameters for a search: the user, one
-// repeated action parameter per action, and from and to. A cursor and a page
+// repeated action parameter per action, the bulk ID, and from and to. A cursor and a page
 // size are the list's business, not a filter, so they are not here.
 export function listParams(search: AuditSearch, now: Date): URLSearchParams {
   const params = new URLSearchParams();
   if (search.user) params.set("user", search.user);
   for (const action of search.action ?? []) params.append("action", action);
+  if (search.bulk) params.set("bulk", search.bulk);
   const { from, to } = rangeFor(search, now);
   if (from) params.set("from", from);
   if (to) params.set("to", to);

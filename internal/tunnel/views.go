@@ -32,6 +32,11 @@ type AgentLive struct {
 	// the last handshake, and ClockWarning says it is beyond ClockWarnOffset.
 	ClockOffset  time.Duration
 	ClockWarning bool
+	// ReadOnly is true while the connected agent reported that its host owner set
+	// BAYPLAN_AGENT_READ_ONLY. It is a fact of the live session, so it is false for
+	// an agent that is not connected: nothing is known then, and nothing can be
+	// written anyway.
+	ReadOnly bool
 }
 
 // agentMemory is what the hub keeps of one agent between and during sessions. It

@@ -11,6 +11,9 @@ import { ORIGIN as baseURL } from "./tests/env";
 // one before it. A failure early on skips the rest, which is what a broken
 // setup deserves.
 const chromium = { ...devices["Desktop Chrome"], baseURL };
+// The containers project follows the dashboard because it starts from the one
+// environment and the engine the dashboard spec left, and it clears what that spec
+// made under names it also uses.
 // The agent project adds a second environment and revokes it, so the specs before
 // it assume the one environment they started with. The access project follows it
 // because it needs that second, revoked environment as the one a new user must not
@@ -19,6 +22,7 @@ const chromium = { ...devices["Desktop Chrome"], baseURL };
 const order = [
   "setup-and-login",
   "dashboard",
+  "containers",
   "audit",
   "version",
   "settings",

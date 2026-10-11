@@ -4,21 +4,28 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
+import actions from "./en/actions.json";
+import activeshells from "./en/activeshells.json";
 import aggregate from "./en/aggregate.json";
 import audit from "./en/audit.json";
 import auth from "./en/auth.json";
 import backup from "./en/backup.json";
 import bell from "./en/bell.json";
 import common from "./en/common.json";
+import containerdetail from "./en/containerdetail.json";
+import containers from "./en/containers.json";
 import dashboard from "./en/dashboard.json";
 import env from "./en/env.json";
 import envaccess from "./en/envaccess.json";
 import envsettings from "./en/envsettings.json";
+import events from "./en/events.json";
 import fullpage from "./en/fullpage.json";
 import grants from "./en/grants.json";
 import install from "./en/install.json";
 import invite from "./en/invite.json";
+import logs from "./en/logs.json";
 import needs from "./en/needs.json";
+import networks from "./en/networks.json";
 import noaccess from "./en/noaccess.json";
 import overview from "./en/overview.json";
 import owned from "./en/owned.json";
@@ -31,32 +38,43 @@ import setup from "./en/setup.json";
 import shell from "./en/shell.json";
 import switcher from "./en/switcher.json";
 import teams from "./en/teams.json";
+import terminal from "./en/terminal.json";
 import userpage from "./en/userpage.json";
 import users from "./en/users.json";
+import volumes from "./en/volumes.json";
 
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule) and registers it
-// here, so parallel work never edits the same JSON. Keys are shaped
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events) and registers it
+// here, so parallel work never edits the same JSON. The "containers" namespace
+// holds the containers list copy, and the "terminal" namespace the browser shell's
+// (never "shell", which is the app chrome's). Keys are shaped
 // area.screen.element. Plural keys use the i18next _one and _other suffixes.
 export const resources = {
   en: {
+    actions,
+    activeshells,
     aggregate,
     audit,
     auth,
     backup,
     bell,
     common,
+    containerdetail,
+    containers,
     dashboard,
     env,
     envaccess,
     envsettings,
+    events,
     fullpage,
     grants,
     install,
     invite,
+    logs,
     needs,
+    networks,
     noaccess,
     overview,
     owned,
@@ -69,8 +87,10 @@ export const resources = {
     shell,
     switcher,
     teams,
+    terminal,
     userpage,
     users,
+    volumes,
   },
 } as const;
 

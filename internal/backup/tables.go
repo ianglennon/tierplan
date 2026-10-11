@@ -45,6 +45,7 @@ var Tables = map[string]Class{
 	"teams":                    Included,
 	"team_members":             Included,
 	"user_recent_environments": Included,
+	"user_shell_prefs":         Included, // how each user likes to open a shell in an image; no secrets
 	"owned_resources":          Included,
 
 	// Environments and their agents.

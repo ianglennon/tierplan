@@ -4,22 +4,26 @@
 // Package proxy is the agent's policy: an allowlisting reverse proxy in front of
 // the Docker socket, served once per multiplexed stream. The server is not
 // trusted with the host (D-27, PITFALLS 1): whatever it asks for, the agent
-// forwards only a read-only set of Engine API calls and refuses the rest with a
-// typed answer.
+// forwards only the Engine API calls in its route table (routes.go), with the
+// query keys and request bodies each one is documented to take, and refuses the
+// rest with a typed answer. A host set read-only forwards reads and nothing else.
 //
 // Go's own HTTP parser decides what a request is. The agent never filters bytes
 // by hand, so a request smuggled past a hand-written parser cannot exist.
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"path"
-	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,26 +47,6 @@ const (
 	idleTimeout = 120 * time.Second
 )
 
-// allowed is the whole read-only surface of Phase 2: ping, version, info, the
-// four resource lists the dashboard reads, events, the swarm lists, and the
-// inspect of one container (inspectPath). The
-// optional /vX.Y prefix is the API version the server's client negotiated.
-//
-// GET /swarm is deliberately absent: its answer carries the swarm join tokens,
-// which are credentials to add nodes (RESEARCH Pitfall 2). The cluster ID is
-// read from /info on a manager instead.
-var allowed = regexp.MustCompile(
-	`^/(v[0-9]+\.[0-9]+/)?(_ping|version|info|containers/json|images/json|volumes|networks|events|nodes|services|tasks)$`)
-
-// inspectPath is the one container-scoped read that is allowed: the inspect of a
-// single container, which Bayplan reads only for its restart policy (the failing
-// standalone container rule, D-34). The ID or name is anchored and bounded: it
-// starts with a letter or digit, so ".." and a leading dash are not IDs, and it
-// is at most 128 characters. The logs, stats, archive and export of a container
-// are other paths and stay refused.
-var inspectPath = regexp.MustCompile(
-	`^/(v[0-9]+\.[0-9]+/)?containers/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}/json$`)
-
 // Policy is what the host owner set on this agent (D-28).
 type Policy struct {
 	// ReadOnly refuses every request that is not GET or HEAD, whatever the
@@ -72,28 +56,60 @@ type Policy struct {
 
 // Allowed decides whether a request may be forwarded to the engine, and says why
 // not when it may not. It is the whole decision, kept free of http types so that a
-// table of tricky paths and a fuzz target can drive it directly.
+// table of tricky paths and a fuzz target can drive it directly. When it allows the
+// request it also returns the kind of body the route takes, so the caller knows
+// which validator the body must go through before it is forwarded.
 //
 // The reason is wire.DeniedReadOnly when the host set the read-only flag and the
 // method would change something, checked first so that no future growth of the
-// allowlist can reach a write on a read-only host (D-28); every other refusal is
-// wire.DeniedAllowlist. The request is allowed only when it is a GET or HEAD whose
-// raw path is already clean (no //, no .., no encoded slash) and is exactly one of
-// the allowlisted shapes, with no control character anywhere, a query within
-// maxQuery, no body and no upgrade.
-func Allowed(method, rawPath, rawQuery string, hasBody, hasUpgrade bool, p Policy) (ok bool, reason string) {
-	read := method == http.MethodGet || method == http.MethodHead
-	switch {
-	case p.ReadOnly && !read:
-		return false, wire.DeniedReadOnly
-	case !read,
-		len(rawQuery) > maxQuery,
-		hasControl(rawPath), hasControl(rawQuery),
-		rawPath != path.Clean(rawPath), !allowed.MatchString(rawPath) && !inspectPath.MatchString(rawPath),
-		hasBody, hasUpgrade:
-		return false, wire.DeniedAllowlist
+// route table can reach a write on a read-only host (D-35); every other refusal is
+// wire.DeniedAllowlist. The request is allowed only when its raw path is already
+// clean (no //, no .., no encoded slash), has no control character anywhere, and
+// is exactly one route of the table, with a query within maxQuery that carries only
+// that route's keys and values, a body only where the route takes one, and an
+// upgrade only where the route allows one.
+func Allowed(method, rawPath, rawQuery string, hasBody, hasUpgrade bool, p Policy) (ok bool, reason string, body BodyKind) {
+	if p.ReadOnly && method != http.MethodGet && method != http.MethodHead {
+		return false, wire.DeniedReadOnly, BodyNone
 	}
-	return true, ""
+	if len(rawQuery) > maxQuery || hasControl(rawPath) || hasControl(rawQuery) || rawPath != path.Clean(rawPath) {
+		return false, wire.DeniedAllowlist, BodyNone
+	}
+	rt, found := Match(method, rawPath)
+	if !found || !queryAllowed(rt, rawQuery) {
+		return false, wire.DeniedAllowlist, BodyNone
+	}
+	// A route that takes a body must get one, and one that does not must not.
+	if hasBody != (rt.body != BodyNone) || (hasUpgrade && !rt.upgrade) {
+		return false, wire.DeniedAllowlist, BodyNone
+	}
+	return true, "", rt.body
+}
+
+// queryAllowed reports whether every key of the query is one the route takes and
+// every value of it matches the key's pattern. It parses the query the way the
+// engine does, so a key or value spelled with escapes is judged as the engine will
+// read it.
+func queryAllowed(rt route, rawQuery string) bool {
+	if rt.anyQuery {
+		return true
+	}
+	q, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return false
+	}
+	for key, values := range q {
+		pattern, ok := rt.query[key]
+		if !ok {
+			return false
+		}
+		for _, v := range values {
+			if !pattern.MatchString(v) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Handler returns the policy handler for the Docker socket at socketPath. Every
@@ -136,12 +152,32 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 		rawPath, query, _ := strings.Cut(r.RequestURI, "?")
 		hasBody := r.ContentLength != 0 || len(r.TransferEncoding) > 0
 		hasUpgrade := r.Header.Get("Upgrade") != "" || connectionUpgrade(r.Header)
-		if ok, reason := Allowed(r.Method, rawPath, query, hasBody, hasUpgrade, policy); !ok {
+		deny := func(reason string) {
 			if onDenied != nil {
 				onDenied(r.Method, shownPath(r), reason)
 			}
 			writeJSON(w, http.StatusForbidden, DeniedPrefix+": "+r.Method+" "+shownPath(r), true)
+		}
+		ok, reason, kind := Allowed(r.Method, rawPath, query, hasBody, hasUpgrade, policy)
+		if !ok {
+			deny(reason)
 			return
+		}
+		if kind != BodyNone {
+			// What is forwarded is the rebuilt body, never the bytes the server sent.
+			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, maxBody))
+			if err != nil {
+				deny(wire.DeniedAllowlist)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(rebuilt))
+			r.ContentLength = int64(len(rebuilt))
+			r.TransferEncoding = nil
+			r.Header.Set("Content-Length", strconv.Itoa(len(rebuilt)))
+			// The engine reads a form body as query keys when the type says form, so
+			// the type is always the one the rebuilt body has.
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Del("Content-Encoding")
 		}
 		rp.ServeHTTP(w, r)
 	})

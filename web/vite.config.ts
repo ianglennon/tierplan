@@ -57,8 +57,10 @@ export default defineConfig({
     // Dev loop: the SPA runs on Vite, the API on the Go server (make dev).
     // changeOrigin stays false so the browser's Origin header
     // (http://localhost:5173) reaches the Go Origin check unchanged (Pitfall 20).
+    // ws forwards the browser shell's WebSocket upgrade; without it the shell's
+    // pending session is never claimed and expires after 30 seconds.
     proxy: {
-      "/api": { target: "http://127.0.0.1:7480", changeOrigin: false },
+      "/api": { target: "http://127.0.0.1:7480", changeOrigin: false, ws: true },
     },
   },
 });

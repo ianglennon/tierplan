@@ -314,3 +314,220 @@ describe("ResourceTable on a swarm", () => {
     expect(screen.getByText(long).className).toContain("truncate");
   });
 });
+
+// Groups, the toolbar slot, the empty and cap overrides and the sort headers
+// (plan 04-07).
+describe("ResourceTable groups and slots", () => {
+  const rowsA: Row[] = [
+    { id: "a1", name: "alpha-1" },
+    { id: "a2", name: "alpha-2" },
+  ];
+  const rowsB: Row[] = [{ id: "b1", name: "beta-1" }];
+
+  function grouped(
+    over: Partial<{
+      collapsed: string[];
+      toggle: (key: string) => void;
+      toolbar: React.ReactNode;
+      empty: React.ReactNode;
+      capNote: string;
+      caption: string;
+      sort: { key: string; dir: "asc" | "desc"; onSort: (k: string) => void };
+      columns: Column<Row>[];
+      items: { key: string; rows: Row[]; header?: { name: string } }[];
+      total: number;
+      truncated: boolean;
+    }> = {},
+  ) {
+    const items = over.items ?? [
+      { key: "a", rows: rowsA, header: { name: "Group A" } },
+      { key: "b", rows: rowsB, header: { name: "Group B" } },
+    ];
+    render(
+      <TooltipProvider>
+        <ResourceTable
+          resource="containers"
+          columns={over.columns ?? COLUMNS}
+          query={query({
+            data: {
+              items: items.flatMap((g) => g.rows),
+              total: over.total ?? 3,
+              truncated: over.truncated ?? false,
+            },
+          })}
+          envName="Lab host"
+          getRowKey={(r) => r.id}
+          groups={{
+            items,
+            collapse: {
+              collapsed: new Set(over.collapsed ?? []),
+              toggle: over.toggle ?? (() => undefined),
+              collapseAll: () => undefined,
+              expandAll: () => undefined,
+            },
+          }}
+          toolbar={over.toolbar}
+          empty={over.empty}
+          capNote={over.capNote}
+          caption={over.caption}
+          sort={over.sort}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  it("draws a header band before each group's rows, spanning every column", () => {
+    grouped();
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "Group A",
+      "alpha-1a1",
+      "alpha-2a2",
+      "Group B",
+      "beta-1b1",
+    ]);
+    const band = rows[0]?.querySelector("td");
+    expect(band?.getAttribute("colspan")).toBe("2");
+    expect(rows[0]?.className).toContain("bg-muted");
+    expect(rows[0]?.className).toContain("h-9");
+  });
+
+  it("gives the chevron aria-expanded and aria-controls of the group's rows, and reports the toggle", () => {
+    const toggle = vi.fn();
+    grouped({ toggle });
+    const button = screen.getByRole("button", { name: "Collapse Group A" });
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    const rows = document.getElementById(button.getAttribute("aria-controls") as string);
+    expect(rows?.textContent).toBe("alpha-1a1alpha-2a2");
+    fireEvent.click(button);
+    expect(toggle).toHaveBeenCalledWith("a");
+  });
+
+  it("hides the rows of a collapsed group and keeps its header", () => {
+    grouped({ collapsed: ["a"] });
+    expect(screen.queryByText("alpha-1")).toBeNull();
+    expect(screen.getByText("beta-1")).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Expand Group A" });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(document.getElementById(button.getAttribute("aria-controls") as string)).not.toBeNull();
+  });
+
+  it("renders a group without a header as plain rows", () => {
+    grouped({ items: [{ key: "all", rows: rowsA }] });
+    expect(screen.getAllByRole("row").slice(1)).toHaveLength(2);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("shows the empty state when the groups hold no rows", () => {
+    grouped({ items: [] });
+    expect(screen.getByText("No containers")).toBeTruthy();
+    cleanup();
+    grouped({ items: [], empty: <p>custom empty</p> });
+    expect(screen.getByText("custom empty")).toBeTruthy();
+    expect(screen.queryByText("No containers")).toBeNull();
+  });
+
+  it("puts the toolbar between the header and the table, and swaps the caption and the cap sentence", () => {
+    grouped({
+      toolbar: <p>the toolbar</p>,
+      caption: "3 of 9 containers",
+      capNote: "Narrow it down.",
+      truncated: true,
+      total: 900,
+    });
+    expect(screen.getByText("3 of 9 containers")).toBeTruthy();
+    expect(screen.getByText("Narrow it down.")).toBeTruthy();
+    expect(
+      screen.getByText("the toolbar").compareDocumentPosition(screen.getByRole("table")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("marks the sorted column with aria-sort and reports a press on a sortable header", () => {
+    const onSort = vi.fn();
+    grouped({
+      columns: [
+        { id: "name", header: "Name", cell: (r) => r.name, sortKey: "name" },
+        { id: "id", header: "ID", cell: (r) => r.id },
+      ],
+      sort: { key: "name", dir: "desc", onSort },
+    });
+    const name = screen.getByRole("columnheader", { name: "Name" });
+    expect(name.getAttribute("aria-sort")).toBe("descending");
+    expect(screen.getByRole("columnheader", { name: "ID" }).getAttribute("aria-sort")).toBeNull();
+    fireEvent.click(within(name).getByRole("button"));
+    expect(onSort).toHaveBeenCalledWith("name");
+  });
+});
+
+// Row states (plan 04-07, D-05): a changed row is muted for a moment, a new row
+// slides in, a gone row fades out or stays dimmed.
+describe("ResourceTable row states", () => {
+  function states(map: Record<string, Record<string, boolean>>) {
+    const rows: Row[] = [
+      { id: "a", name: "alpha" },
+      { id: "b", name: "beta" },
+      { id: "c", name: "gamma" },
+      { id: "d", name: "delta" },
+    ];
+    render(
+      <TooltipProvider>
+        <ResourceTable
+          resource="containers"
+          columns={COLUMNS}
+          query={query({ data: { items: rows, total: 4, truncated: false } })}
+          envName="Lab"
+          getRowKey={(r) => r.id}
+          groups={{
+            items: [{ key: "all", rows }],
+            collapse: {
+              collapsed: new Set(),
+              toggle: () => undefined,
+              collapseAll: () => undefined,
+              expandAll: () => undefined,
+            },
+          }}
+          rowStates={new Map(Object.entries(map))}
+        />
+      </TooltipProvider>,
+    );
+    return (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+  }
+
+  it("marks changed, added and removed rows with data attributes", () => {
+    const row = states({
+      a: { changed: true },
+      b: { added: true },
+      c: { removed: true },
+      d: { removed: true, leaving: true },
+    });
+    expect(row("alpha").hasAttribute("data-changed")).toBe(true);
+    expect(row("alpha").hasAttribute("data-added")).toBe(false);
+    expect(row("beta").hasAttribute("data-added")).toBe(true);
+    expect(row("gamma").hasAttribute("data-removed")).toBe(true);
+    expect(row("delta").hasAttribute("data-removed")).toBe(true);
+    expect(row("delta").hasAttribute("data-leaving")).toBe(true);
+  });
+
+  it("mutes a changed row, and moves rows only when motion is allowed", () => {
+    const row = states({ a: { changed: true }, b: { added: true }, d: { leaving: true } });
+    expect(row("alpha").className).toContain("bg-muted");
+    expect(row("beta").className).toContain("motion-safe:animate-in");
+    expect(row("delta").className).toContain("motion-safe:animate-out");
+    // No row carries a transition or an animation that reduced motion would not turn off.
+    for (const name of ["alpha", "beta", "gamma", "delta"]) {
+      const bare = row(name)
+        .className.split(/\s+/)
+        .filter(
+          (c) => /^(transition|animate|duration|slide|fade)/.test(c) && c !== "transition-none",
+        );
+      expect(bare).toEqual([]);
+    }
+  });
+
+  it("dims a removed row", () => {
+    const row = states({ c: { removed: true } });
+    expect(row("gamma").className).toContain("opacity-60");
+    expect(row("alpha").className).not.toContain("opacity-60");
+  });
+});

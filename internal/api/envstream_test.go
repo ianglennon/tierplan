@@ -260,7 +260,13 @@ func TestEnvStreamAllowsFourPerUserAndRefusesTheFifthWith429(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a refused stream stayed open")
 	}
-	if fifth.status0() != http.StatusTooManyRequests || !strings.Contains(fifth.bodyString(), `"type":"rate_limited"`) {
+	if fifth.status0() != http.StatusTooManyRequests {
+		t.Fatalf("the 5th stream = %d, want 429", fifth.status0())
+	}
+	// The status is set before the problem body is written, so let the refused request
+	// finish before reading its body: a loaded run can look in between.
+	fifth.waitEnded(t, 5*time.Second, "the 429 was answered")
+	if !strings.Contains(fifth.bodyString(), `"type":"rate_limited"`) {
 		t.Fatalf("the 5th stream = %d %s, want 429 rate_limited", fifth.status0(), fifth.bodyString())
 	}
 	conns[0].close()

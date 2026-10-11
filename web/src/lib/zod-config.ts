@@ -10,5 +10,13 @@ import { z } from "zod";
 // policy is never tested against eval. The forms here are tiny; the interpreted
 // parser costs nothing noticeable.
 //
-// main.tsx imports this before anything that builds a schema.
+// The setting has to be in place before the first schema is built, and the
+// bundler decides which chunk runs first: a schema built at module level in a
+// chunk that loads before the entry's own code would try eval before the entry
+// could turn it off (the setup/login pages did, once the search schemas of the
+// log and events pages shared a chunk with zod). So no file imports "zod"
+// itself: every one imports `z` from here, and this module sets the option the
+// moment zod has loaded, ahead of every module that builds a schema.
 z.config({ jitless: true });
+
+export { z };

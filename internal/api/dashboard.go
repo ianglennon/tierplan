@@ -53,6 +53,9 @@ type AggregateSource interface {
 // DashboardDeps are the dependencies of the summary and list routes.
 type DashboardDeps struct {
 	Aggregator AggregateSource
+	// Clusters is the cluster reader of swarm environments: the networks list counts
+	// the services that mention a network from its last read. Nil counts none.
+	Clusters *envs.Clusters
 	// SelfContainerID is Bayplan's own container ID, for the isSelf flag. Empty
 	// when Bayplan does not run in a container, or cannot tell.
 	SelfContainerID string
@@ -137,18 +140,26 @@ type EnvironmentSummaryOutput struct {
 	Body         EnvironmentSummaryBody
 }
 
-// ContainerItem is one row of the containers list. It carries no variables,
-// labels or mounts (T-01-77).
+// ContainerItem is one row of the containers list. It carries no variables, mounts
+// or labels except the three that group a container: project, stack and service
+// (T-01-77, T-04-29).
 type ContainerItem struct {
-	Node    string   `json:"node" doc:"The node the container runs on"`
-	ID      string   `json:"id" doc:"The full container ID"`
-	Name    string   `json:"name" doc:"The container name without the leading slash"`
-	State   string   `json:"state" enum:"created,running,paused,restarting,removing,exited,dead" doc:"The container state"`
-	Status  string   `json:"status" doc:"The engine's status text, for example Up 3 hours"`
-	Image   string   `json:"image" doc:"The image the container was created from"`
-	Created string   `json:"created,omitempty" format:"date-time"`
-	Ports   []string `json:"ports" doc:"Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published"`
-	IsSelf  bool     `json:"isSelf" doc:"True for the container Bayplan itself runs in (D-27)"`
+	Node     string   `json:"node" doc:"The node the container runs on"`
+	NodeID   string   `json:"nodeId" doc:"The ID of that node: what a write is routed by, since two hosts can share a display name"`
+	ID       string   `json:"id" doc:"The full container ID"`
+	Name     string   `json:"name" doc:"The container name without the leading slash"`
+	State    string   `json:"state" enum:"created,running,paused,restarting,removing,exited,dead" doc:"The container state"`
+	Status   string   `json:"status" doc:"The engine's status text, for example Up 3 hours"`
+	Image    string   `json:"image" doc:"The image the container was created from"`
+	Created  string   `json:"created,omitempty" format:"date-time"`
+	Ports    []string `json:"ports" doc:"Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published"`
+	IsSelf   bool     `json:"isSelf" doc:"True for the container Bayplan itself runs in (D-27)"`
+	Health   string   `json:"health" enum:"none,starting,healthy,unhealthy" doc:"The container's health: none when it has no healthcheck"`
+	SelfKind string   `json:"selfKind" enum:",server,agent" doc:"server for the container Bayplan itself runs in, agent for a Bayplan agent's container (marked by the label bayplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
+	ReadOnly bool     `json:"readOnly" doc:"True when the host of this container's node is read-only, so no change to it will be accepted"`
+	Project  string   `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
+	Stack    string   `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
+	Service  string   `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
 }
 
 // ImageItem is one row of the images list.
@@ -164,29 +175,52 @@ type ImageItem struct {
 // VolumeItem is one row of the volumes list.
 type VolumeItem struct {
 	Node    string `json:"node" doc:"The node that holds the volume"`
+	NodeID  string `json:"nodeId" doc:"The ID of that node: what a write is routed by, since two hosts can share a display name"`
 	Name    string `json:"name"`
 	Driver  string `json:"driver"`
 	Created string `json:"created,omitempty" format:"date-time"`
+	// UsedByContainers and UsedByServices are what the volume cannot be deleted while
+	// any of them exist.
+	UsedByContainers int    `json:"usedByContainers" doc:"Containers on this node, running or not, that mount the volume"`
+	UsedByServices   int    `json:"usedByServices" doc:"Swarm services whose spec mounts a volume of this name, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts for the volume on every node. Always 0 off a swarm"`
+	Anonymous        bool   `json:"anonymous" doc:"True for a volume Docker made for a container without a name: it has the com.docker.volume.anonymous label, or on an engine without it a name of 64 hexadecimal characters"`
+	Project          string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the volume has none"`
+	Stack            string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the volume has none"`
 }
 
 // NetworkItem is one row of the networks list.
 type NetworkItem struct {
 	Node    string   `json:"node" doc:"The node the network is local to, or Cluster for a swarm-wide network"`
+	NodeID  string   `json:"nodeId" doc:"The ID of the node the network was read from; for a swarm-wide network, the manager in use"`
 	ID      string   `json:"id"`
 	Name    string   `json:"name"`
 	Driver  string   `json:"driver"`
 	Scope   string   `json:"scope" doc:"local, or swarm for a cluster-wide network"`
 	Subnets []string `json:"subnets" doc:"The IPAM subnets in CIDR notation; empty when the network has none"`
 	Created string   `json:"created,omitempty" format:"date-time"`
+	BuiltIn bool     `json:"builtIn" doc:"True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted"`
+	// AttachedContainers and AttachedServices are what the network cannot be deleted
+	// while any of them exist.
+	AttachedContainers int    `json:"attachedContainers" doc:"Containers, running or not, on any reporting node that are attached to the network. A local network counts the containers of its own node"`
+	AttachedServices   int    `json:"attachedServices" doc:"Swarm services whose spec mentions the network, even with no running task, as of the last cluster read. Always 0 off a swarm and for a local network"`
+	Owner              string `json:"owner" doc:"The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; empty when the network has neither"`
+	OwnerKind          string `json:"ownerKind" enum:"stack,project," doc:"stack, project, or empty when the network has no owner"`
+	Internal           bool   `json:"internal" doc:"No access to outside networks"`
+	Attachable         bool   `json:"attachable" doc:"Standalone containers can join it"`
+	IPv6               bool   `json:"ipv6" doc:"IPv6 is enabled"`
 }
 
 // ContainerListBody and its siblings are a capped list with the full total.
 type ContainerListBody struct {
 	Items        []ContainerItem `json:"items" doc:"At most 500 rows"`
-	Total        int             `json:"total" doc:"How many there are, whatever the cap"`
+	Total        int             `json:"total" doc:"How many match the search, whatever the cap"`
 	Truncated    bool            `json:"truncated" doc:"True when total is more than the rows returned"`
 	Nodes        []string        `json:"nodes" doc:"The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown"`
 	NotReporting []string        `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
+	// UnfilteredTotal is the count after the node filter and before the search.
+	UnfilteredTotal int `json:"unfilteredTotal" doc:"How many containers there are before the search and the status filter are applied (after the node filter), so a page can say 3 of 600"`
+	// StatusCounts is counted before the search and the status filter.
+	StatusCounts StatusCountsBody `json:"statusCounts" doc:"How many containers each status chip counts, after the node filter and before the search and the status filter, so the numbers never shrink with what was typed"`
 }
 
 // ImageListBody is a capped list of images.
@@ -238,6 +272,27 @@ type VolumeListOutput struct {
 type NetworkListOutput struct {
 	CacheControl string `header:"Cache-Control"`
 	Body         NetworkListBody
+}
+
+// ContainerListInput is the containers list: the node filter and the search.
+type ContainerListInput struct {
+	NodeFilterInput
+	Q      string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, image, compose project, stack, service or any label key or value. Applied before the 500-row cap"`
+	Status string `query:"status" maxLength:"64" doc:"Only containers with one of these statuses, comma separated: running, exited, paused, restarting or unhealthy (a health, not a state). Applied before the 500-row cap; any other value is refused 422 invalid_status"`
+}
+
+// NetworkListInput is the networks list: the node filter and the search.
+type NetworkListInput struct {
+	NodeFilterInput
+	Q string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, driver, a subnet or the owner (stack or compose project). Applied before the 500-row cap"`
+}
+
+// VolumeListInput is the path of the volumes list with its node filter, its search and its
+// usage filter.
+type VolumeListInput struct {
+	NodeFilterInput
+	Q     string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, driver, a label (its name or its value) or the stack or compose project. Applied before the 500-row cap"`
+	Usage string `query:"usage" enum:"all,used,unused" default:"all" doc:"used: only volumes a container or a swarm service mounts. unused: only volumes nothing mounts. Applied before the 500-row cap"`
 }
 
 // NodeFilterInput is the path of a list and its optional node filter (T-02-74).
@@ -412,22 +467,34 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 	httpx.Register(r, op("listContainers", "/api/env/{envId}/containers",
 		"List the containers of an environment",
 		"Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. "+
-			"Read-only rows: no variables, labels or mounts. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
+			"Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for Bayplan's own containers) and readOnly (its host refuses changes)."),
 		need(rbac.PermContainersRead),
-		func(ctx context.Context, in *NodeFilterInput) (*ContainerListOutput, error) {
+		func(ctx context.Context, in *ContainerListInput) (*ContainerListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			rows := filterNode(agg.Containers, in.Node, func(c envs.ContainerRow) string { return c.Node })
+			statuses, err := parseStatuses(in.Status)
+			if err != nil {
+				return nil, err
+			}
+			readOnly := map[string]bool{}
+			for _, n := range agg.Nodes {
+				readOnly[n.ID] = n.ReadOnly
+			}
+			onNode := filterNode(agg.Containers, in.Node, func(c envs.ContainerRow) string { return c.Node })
+			rows := filterContainers(onNode, in.Q, statuses)
 			items, total, truncated := capRows(rows, func(c envs.ContainerRow) ContainerItem {
 				return ContainerItem{
-					Node: c.Node, ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
+					Node: c.Node, NodeID: c.NodeID, ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
 					Created: rfc3339(c.Created), Ports: c.Ports, IsSelf: isSelf(c.ID),
+					Health: c.Health, SelfKind: selfKindOf(isSelf(c.ID), c.Labels), ReadOnly: readOnly[c.NodeID],
+					Project: c.Labels[labelProject], Stack: c.Labels[labelStack], Service: c.Labels[labelService],
 				}
 			})
 			return &ContainerListOutput{CacheControl: "no-store", Body: ContainerListBody{
 				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
+				UnfilteredTotal: len(onNode), StatusCounts: statusCounts(onNode),
 			}}, nil
 		})
 
@@ -451,16 +518,25 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 
 	httpx.Register(r, op("listVolumes", "/api/env/{envId}/volumes",
 		"List the volumes of an environment",
-		"By name. On a swarm every node's volumes, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
+		"By name, then node. On a swarm every node's volumes, each with its node: the same name on two nodes is two volumes. "+
+			"Each row says what uses it (usedByContainers: containers on its node, stopped ones included; usedByServices: swarm services whose spec mounts that name), whether Docker made it without a name (anonymous), and its compose project and stack. "+
+			"Optionally only one node's (node), a search (q) and a usage filter (usage: used or unused). The node, the search and the usage filter run on the server before the 500-row cap, so at most 500 rows come back after them, with the total the number that matched."),
 		need(rbac.PermVolumesRead),
-		func(ctx context.Context, in *NodeFilterInput) (*VolumeListOutput, error) {
+		func(ctx context.Context, in *VolumeListInput) (*VolumeListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			rows := filterNode(agg.Volumes, in.Node, func(v envs.VolumeRow) string { return v.Node })
+			onNode := filterNode(agg.Volumes, in.Node, func(v envs.VolumeRow) string { return v.Node })
+			use := volumeUsageOf(ctx, d.Clusters, in.EnvID, agg)
+			rows := filterVolumes(onNode, in.Q, in.Usage, use)
 			items, total, truncated := capRows(rows, func(v envs.VolumeRow) VolumeItem {
-				return VolumeItem{Node: v.Node, Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created)}
+				containers, services := use.of(v)
+				return VolumeItem{
+					Node: v.Node, NodeID: v.NodeID, Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created),
+					UsedByContainers: containers, UsedByServices: services, Anonymous: v.Anonymous,
+					Project: v.Labels[labelProject], Stack: v.Labels[labelStack],
+				}
 			})
 			return &VolumeListOutput{CacheControl: "no-store", Body: VolumeListBody{
 				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
@@ -471,14 +547,22 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		"List the networks of an environment",
 		"By name. On a swarm a swarm-wide network is listed once, from the manager in use, with node Cluster; local networks are listed per node. Optionally only one node's (node). At most 500 rows, after the filter, with the total."),
 		need(rbac.PermNetworksRead),
-		func(ctx context.Context, in *NodeFilterInput) (*NetworkListOutput, error) {
+		func(ctx context.Context, in *NetworkListInput) (*NetworkListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
 			if err != nil {
 				return nil, err
 			}
-			rows := filterNode(agg.Networks, in.Node, func(n envs.NetworkRow) string { return n.Node })
+			onNode := filterNode(agg.Networks, in.Node, func(n envs.NetworkRow) string { return n.Node })
+			rows := filterNetworks(onNode, in.Q)
+			use := networkUsageOf(ctx, d.Clusters, in.EnvID, agg)
 			items, total, truncated := capRows(rows, func(n envs.NetworkRow) NetworkItem {
-				return NetworkItem{Node: n.Node, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created)}
+				owner, kind := networkOwner(n.Labels)
+				containers, services := use.of(n)
+				return NetworkItem{
+					Node: n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created),
+					BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress), AttachedContainers: containers, AttachedServices: services,
+					Owner: owner, OwnerKind: kind, Internal: n.Internal, Attachable: n.Attachable, IPv6: n.IPv6,
+				}
 			})
 			return &NetworkListOutput{CacheControl: "no-store", Body: NetworkListBody{
 				Items: items, Total: total, Truncated: truncated,

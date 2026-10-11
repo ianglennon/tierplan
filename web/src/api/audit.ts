@@ -38,6 +38,7 @@ export function auditListQuery(search: AuditSearch) {
       "list",
       search.user ?? null,
       search.action ?? null,
+      search.bulk ?? null,
       search.range ?? DEFAULT_RANGE,
       search.from ?? null,
       search.to ?? null,
@@ -50,6 +51,7 @@ export function auditListQuery(search: AuditSearch) {
           query: {
             user: search.user,
             action: search.action,
+            bulk: search.bulk,
             from,
             to,
             cursor: pageParam,

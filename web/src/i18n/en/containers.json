@@ -1,0 +1,67 @@
+{
+  "containers": {
+    "list": {
+      "search": {
+        "label": "Search containers",
+        "placeholder": "Search by name, image, label or project",
+        "clear": "Clear search"
+      },
+      "group": {
+        "ungrouped": "Ungrouped",
+        "collapse": "Collapse {{name}}",
+        "expand": "Expand {{name}}",
+        "running_one": "{{running}} of {{count}} running",
+        "running_other": "{{running}} of {{count}} running",
+        "kind": {
+          "stack": "Stack",
+          "project": "Project"
+        }
+      },
+      "groupBy": {
+        "label": "Group by",
+        "stack": "Stack or project",
+        "node": "Node",
+        "none": "None"
+      },
+      "collapseAll": "Collapse all groups",
+      "expandAll": "Expand all groups",
+      "clearFilters": "Clear filters",
+      "status": {
+        "label": "Filter by status",
+        "running": "Running",
+        "exited": "Exited",
+        "paused": "Paused",
+        "restarting": "Restarting",
+        "unhealthy": "Unhealthy",
+        "chip": "{{label}} {{count, number}}"
+      },
+      "caption": {
+        "filtered_one": "{{n, number}} of {{count, number}} container",
+        "filtered_other": "{{n, number}} of {{count, number}} containers"
+      },
+      "cap": "Showing the first 500 of {{total, number}}. Narrow the search to see the rest.",
+      "empty": {
+        "filters": {
+          "title": "No containers match these filters.",
+          "action": "Clear filters"
+        },
+        "search": {
+          "title": "No containers match “{{q}}”.",
+          "action": "Clear search"
+        }
+      },
+      "unhealthy": "Unhealthy",
+      "self": {
+        "server": "Bayplan (this instance)",
+        "agent": "Bayplan agent"
+      },
+      "ports": {
+        "more": "+{{count}}"
+      },
+      "changes_one": "{{count}} change waiting",
+      "changes_other": "{{count}} changes waiting",
+      "showChanges": "Show changes",
+      "removed": "Removed"
+    }
+  }
+}

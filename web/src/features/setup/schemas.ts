@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { z } from "zod";
-
 import type { Problem } from "@/api/problem";
+import { z } from "@/lib/zod-config";
 
 // Validation here is UX only. The server enforces every rule again and answers
 // with the field codes routeServerError maps. Messages are i18n keys in the

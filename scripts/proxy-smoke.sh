@@ -14,6 +14,18 @@
 #   - the signed-in event stream sends its first frame at once (no buffering) and
 #     the same stream without a session answers 401 promptly
 #   - Bayplan shows no proxy warning for a correct setup
+#   - shell_ws_reaches_bayplan: the upgrade request of a browser shell
+#     (/api/env/<id>/shell-sessions/<id>/ws, with the session cookie and the public
+#     Origin) comes back as Bayplan's own JSON problem (environment_not_found, for an
+#     environment that does not exist), not a 400, 426 or 502 from the proxy
+#   - log_stream_prompt: a container log stream request
+#     (/api/env/<id>/containers/<id>/logs/stream) is answered with Bayplan's own JSON
+#     404 within 3 seconds, so the proxy does not hold the response back
+#
+# The two checks above use an environment that does not exist, so no container and no
+# Docker socket is needed. They prove the proxy carries the request and its headers to
+# Bayplan and returns the answer at once. They do not complete a shell upgrade (101) or
+# stream real log lines; the end-to-end suite does that behind Caddy at /bayplan.
 #
 # It then breaks nginx on purpose, three ways, and checks that Bayplan notices:
 # without the two Upgrade header lines the agent endpoint answers 426 and the
@@ -158,6 +170,27 @@ upgrade_request() {
   head -n 1 "${WORK}/upgrade.out" | tr -d '\r'
 }
 
+# problem_type prints the type of the JSON problem in the file given, or nothing.
+problem_type() {
+  jq -r '.type // empty' "$1" 2>/dev/null || true
+}
+
+# A signed-in request to an environment that does not exist is answered by Bayplan's
+# policy before any handler runs, so the answer is the same on every proxy and needs
+# no container.
+MISSING_ENV="01980000-0000-7000-8000-0000000000ff"
+
+# shell_ws_request sends the upgrade request of a browser shell and leaves the head
+# and body of the answer in ${WORK}/shellws.out. The status line is printed.
+shell_ws_request() {
+  curl -sS -i --http1.1 --max-time 5 -o "${WORK}/shellws.out" -H "Host: ${HOST}" \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H "Origin: http://${HOST}" \
+    -H "Cookie: bayplan_session=${SESSION}" \
+    "http://127.0.0.1:${PORT}${BASE}/api/env/${MISSING_ENV}/shell-sessions/x/ws" 2>/dev/null || true
+  head -n 1 "${WORK}/shellws.out" | tr -d '\r'
+}
+
 # warnings prints the ids of the proxy warnings the signed-in admin sees, sorted.
 warnings() {
   curl_proxy /api/warnings -H "Cookie: bayplan_session=${SESSION}" --max-time 5 \
@@ -232,8 +265,17 @@ run_scenario() {
   local ok_signed=1
   sign_in || { fail "${LABEL}: setup through the proxy failed"; ok_signed=0; }
 
-  # The index, with the base path the public URL decides.
-  if curl_proxy / --max-time 5 | grep -qF "<meta name=\"bayplan-base\" content=\"${BASE}\">"; then
+  # The index, with the base path the public URL decides. A busy runner can take longer
+  # than one short attempt to serve the first full page after setup, so it gets three.
+  local index_ok=0 _attempt
+  for _attempt in 1 2 3; do
+    if curl_proxy / --max-time 10 | grep -qF "<meta name=\"bayplan-base\" content=\"${BASE}\">"; then
+      index_ok=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "${index_ok}" = 1 ]; then
     pass "${LABEL}: the index carries the bayplan-base meta \"${BASE}\""
   else
     fail "${LABEL}: the index has no bayplan-base meta \"${BASE}\""
@@ -281,6 +323,34 @@ run_scenario() {
       pass "${LABEL}: the event stream's first frame arrives within 4 s, unbuffered"
     else
       fail "${LABEL}: the event stream sent nothing within 4 s (a proxy is buffering it)"
+    fi
+
+    if [ "${variant}" = ok ]; then
+      # shell_ws_reaches_bayplan: the shell's WebSocket upgrade request gets to Bayplan.
+      local shell_status shell_type
+      shell_status="$(shell_ws_request)"
+      shell_type="$(sed '1,/^\r\?$/d' "${WORK}/shellws.out" | jq -r '.type // empty' 2>/dev/null || true)"
+      case "${shell_status}" in
+        *" 404 "*)
+          if [ "${shell_type}" = environment_not_found ]; then
+            pass "${LABEL}: shell_ws_reaches_bayplan: the shell upgrade request reaches Bayplan (${shell_status}, ${shell_type})"
+          else
+            fail "${LABEL}: shell_ws_reaches_bayplan: ${shell_status} but the body is not Bayplan's environment_not_found problem ('${shell_type}')"
+          fi ;;
+        *) fail "${LABEL}: shell_ws_reaches_bayplan: the shell upgrade request answered '${shell_status}', want Bayplan's 404 environment_not_found" ;;
+      esac
+
+      # log_stream_prompt: a log stream request is answered at once, not held back.
+      local log_timing log_type
+      log_timing="$(curl_proxy "/api/env/${MISSING_ENV}/containers/x/logs/stream?sid=abcdefghijklmnopqrstuv" \
+        -H "Cookie: bayplan_session=${SESSION}" -H 'Accept: text/event-stream' -N \
+        -o "${WORK}/logstream.out" -w '%{http_code} %{time_total}' --max-time 5 || true)"
+      log_type="$(problem_type "${WORK}/logstream.out")"
+      if [ "${log_timing%% *}" = 404 ] && [ "${log_type}" = environment_not_found ] && awk -v t="${log_timing##* }" 'BEGIN { exit !(t < 3) }'; then
+        pass "${LABEL}: log_stream_prompt: the log stream request is answered by Bayplan at once (${log_timing##* } s)"
+      else
+        fail "${LABEL}: log_stream_prompt: the log stream request answered '${log_timing}' type '${log_type}', want 404 environment_not_found in under 3 s"
+      fi
     fi
 
     # What Bayplan itself says about the proxy.
