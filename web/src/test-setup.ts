@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { configure } from "@testing-library/react";
+
+// findBy and waitFor give up after 1 s by default, which a loaded CI runner (three or
+// four times slower than a quiet one) can miss for a render that is merely slow. 4 s
+// is the wait the load-error tests already chose one by one.
+configure({ asyncUtilTimeout: 4000 });
+
 // jsdom has no ResizeObserver (Radix checkboxes and menus measure with it) and
 // no matchMedia (the sidebar and the theme switch read it). These stand-ins
 // report nothing and never match, which is all the tests need.

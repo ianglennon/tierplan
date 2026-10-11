@@ -16,6 +16,10 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
+    // The CI runners are shared with the Docker-in-Docker jobs, and a loaded run takes
+    // three or four times as long as a quiet one (vitest 831 s against 240 s), so the
+    // default 5 s per test failed tests at random. A slow test still fails, just later.
+    testTimeout: 20_000,
     // Stylesheets are empty text in tests unless named here. The log palette test reads
     // index.css as text to keep it in step with the colours in code.
     css: { include: [/src\/index\.css\?raw$/] },
