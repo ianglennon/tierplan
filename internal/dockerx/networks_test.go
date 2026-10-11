@@ -7,10 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	cerrdefs "github.com/containerd/errdefs"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
@@ -485,5 +488,22 @@ func TestDaemonTextIsTheEnginesSentenceWithoutTheClientsWrapping(t *testing.T) {
 	}
 	if dockerx.IsRefusal(errors.New("connection refused")) {
 		t.Error("a failed connection is not a refusal")
+	}
+}
+
+// Engine 24 answers a connect address outside the network's subnets with a server error
+// (Engine 29 says 400); it is still the engine refusing the address, not a failed node.
+// Found by the Engine 24 integration run.
+func TestAnOlderEnginesAddressRefusalSentAsAServerErrorIsARefusal(t *testing.T) {
+	old := fmt.Errorf("connect to network on tcp://h: Error response from daemon: Invalid address 10.231.99.9: It does not belong to any of this network's subnets: %w", cerrdefs.ErrInternal)
+	if !dockerx.IsRefusal(old) {
+		t.Errorf("IsRefusal(%v) = false, want true", old)
+	}
+	other := fmt.Errorf("connect to network on tcp://h: Error response from daemon: failed to set up container networking: %w", cerrdefs.ErrInternal)
+	if dockerx.IsRefusal(other) {
+		t.Errorf("IsRefusal(%v) = true, want false: any other server error is not a refusal", other)
+	}
+	if dockerx.IsRefusal(nil) {
+		t.Error("IsRefusal(nil) = true")
 	}
 }

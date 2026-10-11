@@ -208,9 +208,34 @@ func (c *Client) NetworkDisconnect(ctx context.Context, networkID, containerID s
 // IsRefusal reports whether err is the engine itself answering that it will not do what
 // was asked (a bad parameter, a refusal, a missing object or a conflicting state), as
 // opposed to a connection that failed. The words are DaemonText.
+//
+// Older engines answer some refusals with a server error instead of a bad request:
+// Engine 24 says a connect address outside the network's subnets is "Invalid address
+// ...: It does not belong to any of this network's subnets" with status 500, where
+// Engine 29 answers 400. Those exact sentences count as a refusal too, so the person
+// is told about their address rather than that the node failed; any other server error
+// is still not one.
 func IsRefusal(err error) bool {
-	return cerrdefs.IsInvalidArgument(err) || cerrdefs.IsPermissionDenied(err) || cerrdefs.IsConflict(err) ||
-		cerrdefs.IsNotFound(err) || cerrdefs.IsFailedPrecondition(err)
+	if cerrdefs.IsInvalidArgument(err) || cerrdefs.IsPermissionDenied(err) || cerrdefs.IsConflict(err) ||
+		cerrdefs.IsNotFound(err) || cerrdefs.IsFailedPrecondition(err) {
+		return true
+	}
+	if err == nil || !cerrdefs.IsInternal(err) {
+		return false
+	}
+	text := strings.ToLower(DaemonText(err))
+	for _, phrase := range olderEngineRefusals {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// olderEngineRefusals are the engine sentences, lower-cased, that older engines send as a
+// server error although they refuse the request.
+var olderEngineRefusals = []string{
+	"does not belong to any of this network's subnets",
 }
 
 // DaemonText is the engine's own sentence in err, without the client's wrapping: what
