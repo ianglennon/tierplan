@@ -72,6 +72,15 @@ func (m *logAuditMemory) seen(k logAuditKey) bool {
 	return false
 }
 
+// forget drops a viewer, so the next stream of it is audited again. It is for a row
+// that could not be written: the viewer was marked by seen before the write, and a
+// failed write must not stand for an audit fact that was never recorded.
+func (m *logAuditMemory) forget(k logAuditKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.at, k)
+}
+
 // size is how many viewers are remembered, expired ones included until the next sweep.
 func (m *logAuditMemory) size() int {
 	m.mu.Lock()

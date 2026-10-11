@@ -974,7 +974,8 @@ func serveUnreadable(ctx context.Context, w http.ResponseWriter, d LogsDeps, p *
 // auditLogsViewed writes the logs.viewed row of a stream, once per viewer: a
 // reconnect that carries the same sid writes nothing (D-24).
 func auditLogsViewed(ctx context.Context, d LogsDeps, mem *logAuditMemory, p *rbac.Principal, envID, containerID, name, nodeID string, params logParams, userAgent string) {
-	if d.Audit == nil || mem.seen(logAuditKey{user: string(p.Type) + ":" + p.ID, container: containerID, sid: params.sid}) {
+	key := logAuditKey{user: string(p.Type) + ":" + p.ID, container: containerID, sid: params.sid}
+	if d.Audit == nil || mem.seen(key) {
 		return
 	}
 	details := map[string]string{"container": name, "node": nodeID, "sid": params.sid, "tail": params.tail}
@@ -987,7 +988,10 @@ func auditLogsViewed(ctx context.Context, d LogsDeps, mem *logAuditMemory, p *rb
 		IP: httpx.ClientIP(ctx), UserAgent: userAgent,
 		Details: details,
 	}); err != nil {
-		// The viewer must still get the log; the lost row is the server's fault.
+		// The viewer must still get the log; the lost row is the server's fault. The
+		// viewer is forgotten, so the next stream or page of it tries the row again
+		// rather than finding it "already audited" for the next hour.
+		mem.forget(key)
 		d.Log.Error("could not audit a log stream", "container", containerID, "error", err)
 	}
 }
