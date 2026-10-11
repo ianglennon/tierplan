@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -256,11 +257,26 @@ func encodeObject(doc map[string]any, what string) ([]byte, error) {
 // on a detail value.
 const auditOptionsMax = 500
 
-// secretWords are the parts of an option name that mark its value as a secret.
-var secretWords = []string{"pass", "secret", "credentials", "token"}
+// secretWords are the parts of an option name that mark its value as a secret. A volume
+// driver may take any option name, so the list errs on the side of masking: a key of any
+// kind (apikey, sshkey, key), an auth setting or file, a private key, a certificate and
+// an identity file hide their value too, as the audit writer's own key filter already
+// treats key as a secret word.
+var secretWords = []string{"pass", "secret", "credential", "token", "key", "auth", "private", "cert", "identity"}
+
+// userInfo matches the user[:password]@ part that follows // in a URL or a share path
+// (//user:pw@host/share, https://user:pw@host), which holds a credential whatever the
+// option is called.
+var userInfo = regexp.MustCompile(`//[^/\s@]+@`)
+
+// maskUserInfo replaces the user-info of every URL or share path in value.
+func maskUserInfo(value string) string {
+	return userInfo.ReplaceAllString(value, "//"+Placeholder+"@")
+}
 
 // secretName reports whether an option name says its value is a secret: a password
-// (password, passwd, pass), a secret, a credentials file or a token, in any case.
+// (password, passwd, pass), a secret, a credentials file, a token, a key, an auth
+// setting, a private key, a certificate or an identity file, in any case.
 func secretName(name string) bool {
 	lower := strings.ToLower(name)
 	for _, w := range secretWords {
@@ -273,8 +289,9 @@ func secretName(name string) bool {
 
 // AuditOptions renders the driver options of a volume for an audit row: the "name=value"
 // pairs sorted by name and joined with "; ", so the row says what was asked for without
-// holding a share's password (T-04-55). The value of an option whose name looks like a
-// secret is replaced by Placeholder, and so is that part of a comma-separated value such
+// holding a share's password (T-04-55). The user-info of any URL or share path in a value
+// (//user:pw@host/share) is replaced by Placeholder. The value of an option whose name
+// looks like a secret (see secretWords) is replaced by Placeholder, and so is that part of a comma-separated value such
 // as the local driver's o: "addr=h,username=u,password=p" becomes
 // "addr=h,username=u,password=<hidden>". The rest of a password that holds a comma (a
 // doubled comma is how cifs spells one) would otherwise stay behind, so the pieces with
@@ -291,7 +308,7 @@ func AuditOptions(opts map[string]string) string {
 		if secretName(name) {
 			value = Placeholder
 		} else {
-			value = maskSegments(value)
+			value = maskUserInfo(maskSegments(value))
 		}
 		parts = append(parts, name+"="+value)
 	}

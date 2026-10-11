@@ -329,6 +329,52 @@ func TestAuditOptionsReplacesTheWholeValueOfAKeyThatNamesASecret(t *testing.T) {
 	}
 }
 
+// WR-06: a plugin volume driver takes arbitrary option names, so more than password-like
+// names carry a secret.
+func TestAuditOptionsMasksKeyAuthPrivateCertAndIdentityOptionsAndTheSegmentsOfO(t *testing.T) {
+	for _, key := range []string{"key", "apikey", "api_key", "sshkey", "ssh-key", "AuthFile", "auth", "private", "private_key", "cert", "tls_cert", "identityfile", "IdentityFile"} {
+		got := redact.AuditOptions(map[string]string{key: "s3cr3t-value", "type": "x"})
+		if strings.Contains(got, "s3cr3t-value") {
+			t.Errorf("key %q: the value is in the audit text: %q", key, got)
+		}
+		if !strings.Contains(got, key+"="+redact.Placeholder) || !strings.Contains(got, "type=x") {
+			t.Errorf("key %q: AuditOptions = %q, want the key kept with the placeholder and other options kept", key, got)
+		}
+	}
+	got := redact.AuditOptions(map[string]string{"o": "addr=h,sshkey=/root/k,authfile=/a,identity=/i,rw"})
+	for _, leaked := range []string{"/root/k", "/a,", "/i"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("%q is in the audit text: %q", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "addr=h") {
+		t.Errorf("addr=h is missing: %q", got)
+	}
+}
+
+func TestAuditOptionsMasksTheUserInfoOfAURLOrSharePathInAnyOption(t *testing.T) {
+	for _, c := range []struct{ name, value, want, leak string }{
+		{"device", "//bob:pw0rd@fileserver/share", "//<hidden>@fileserver/share", "pw0rd"},
+		{"addr", "https://bob:pw0rd@host:8443/path", "https://<hidden>@host:8443/path", "pw0rd"},
+		{"endpoint", "s3://AKIAEXAMPLE:wJalrSecret@bucket/prefix", "s3://<hidden>@bucket/prefix", "wJalrSecret"},
+		{"o", "addr=h,device=//u:pw0rd@h/s,rw", "device=//<hidden>@h/s", "pw0rd"},
+	} {
+		got := redact.AuditOptions(map[string]string{c.name: c.value})
+		if strings.Contains(got, c.leak) {
+			t.Errorf("%s=%q: the credential is in the audit text: %q", c.name, c.value, got)
+		}
+		if !strings.Contains(got, c.want) {
+			t.Errorf("%s=%q: AuditOptions = %q, want it to contain %q", c.name, c.value, got, c.want)
+		}
+	}
+}
+
+func TestAuditOptionsKeepsAShareWithNoUserInfoAndAHostWithAnAtSignOutsideIt(t *testing.T) {
+	if got := redact.AuditOptions(map[string]string{"device": "//fileserver/share"}); got != "device=//fileserver/share" {
+		t.Errorf("AuditOptions = %q", got)
+	}
+}
+
 func TestAuditOptionsMasksEverySecretLikeSegmentNameInAnOptionList(t *testing.T) {
 	got := redact.AuditOptions(map[string]string{"o": "addr=h,pass=1,credentials=/etc/smb,token=t,secret=s,vers=3.0"})
 	for _, leaked := range []string{"pass=1", "/etc/smb", "token=t", "secret=s"} {
