@@ -324,8 +324,8 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	_, ch, stop := hub.Subscribe(ctx, env)
-	defer stop()
+	backlog, ch, stop := hub.Subscribe(ctx, env)
+	defer func() { stop() }()
 
 	name := "bp-ev-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
@@ -343,28 +343,47 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	timeout := time.After(5 * time.Second)
+	// isStart checks the start event of the test's container, with the allowlist applied.
+	isStart := func(ev dockerx.EventRow) bool {
+		if ev.Type != "container" || ev.Action != "start" || ev.Name != name {
+			return false
+		}
+		for k := range ev.Attributes {
+			if k != "name" && k != "image" && k != "exitCode" && k != "signal" && k != "com.docker.compose.project" && k != "com.docker.stack.namespace" {
+				t.Errorf("attribute %q passed the allowlist", k)
+			}
+		}
+		if ev.Attributes["image"] != "alpine:3" || ev.ID == "" || ev.TimeNano == 0 {
+			t.Errorf("start event = %+v", ev)
+		}
+		return true
+	}
+
+	// The feed's first stream replays what the daemon still buffers (up to 256 events
+	// from the backfill window). On an engine other tests have used, that burst can put
+	// a fresh subscriber more than 64 events behind, and the hub then closes its channel
+	// so it reconnects, as a browser does with Last-Event-ID. The test does the same:
+	// subscribe again and look in the backlog as well as the live channel.
+	timeout := time.After(15 * time.Second)
 	for {
+		for _, ev := range backlog {
+			if isStart(ev) {
+				return
+			}
+		}
+		backlog = nil
 		select {
 		case ev, ok := <-ch:
 			if !ok {
-				t.Fatal("the subscriber channel closed")
-			}
-			t.Logf("event: %s %s %s %v", ev.Type, ev.Action, ev.Name, ev.Attributes)
-			if ev.Type != "container" || ev.Action != "start" || ev.Name != name {
+				stop()
+				backlog, ch, stop = hub.Subscribe(ctx, env)
 				continue
 			}
-			for k := range ev.Attributes {
-				if k != "name" && k != "image" && k != "exitCode" && k != "signal" && k != "com.docker.compose.project" && k != "com.docker.stack.namespace" {
-					t.Errorf("attribute %q passed the allowlist", k)
-				}
+			if isStart(ev) {
+				return
 			}
-			if ev.Attributes["image"] != "alpine:3" || ev.ID == "" || ev.TimeNano == 0 {
-				t.Errorf("start event = %+v", ev)
-			}
-			return
 		case <-timeout:
-			t.Fatal("no container start event within 5 seconds")
+			t.Fatal("no container start event within 15 seconds")
 		}
 	}
 }
