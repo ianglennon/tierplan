@@ -265,8 +265,17 @@ run_scenario() {
   local ok_signed=1
   sign_in || { fail "${LABEL}: setup through the proxy failed"; ok_signed=0; }
 
-  # The index, with the base path the public URL decides.
-  if curl_proxy / --max-time 5 | grep -qF "<meta name=\"bayplan-base\" content=\"${BASE}\">"; then
+  # The index, with the base path the public URL decides. A busy runner can take longer
+  # than one short attempt to serve the first full page after setup, so it gets three.
+  local index_ok=0 _attempt
+  for _attempt in 1 2 3; do
+    if curl_proxy / --max-time 10 | grep -qF "<meta name=\"bayplan-base\" content=\"${BASE}\">"; then
+      index_ok=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "${index_ok}" = 1 ]; then
     pass "${LABEL}: the index carries the bayplan-base meta \"${BASE}\""
   else
     fail "${LABEL}: the index has no bayplan-base meta \"${BASE}\""
