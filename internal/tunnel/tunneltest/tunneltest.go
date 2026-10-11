@@ -239,6 +239,9 @@ func Start(t *testing.T, opts Options) *Server {
 		hubLog = opts.Log
 	}
 	hub := tunnel.NewHub(verifier, rec, hubLog, clock.Now).WithPublicURL(func() string { return "https://" + addr }).WithLastSeen(svc)
+	// A stall of the whole test process on a loaded CI runner must not read as a
+	// dead agent; the tests of the offline window use the fake clock, not these.
+	hub = hub.WithMuxTimeouts(time.Minute, time.Minute)
 	if opts.Notifier != nil {
 		hub = hub.WithNotifier(opts.Notifier)
 	}
@@ -516,6 +519,7 @@ func (p *Pending) Finish() *Conn {
 		}
 		cfg := yamux.DefaultConfig()
 		cfg.LogOutput = io.Discard
+		cfg.ConnectionWriteTimeout = time.Minute // see WithMuxTimeouts in Start
 		mux, err := yamux.Server(websocket.NetConn(ctx, ws, websocket.MessageBinary), cfg)
 		if err != nil {
 			t.Fatalf("tunneltest: start the multiplexer: %v", err)

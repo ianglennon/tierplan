@@ -141,6 +141,21 @@ func (h *Hub) WithWatchInterval(d time.Duration) *Hub {
 	return h
 }
 
+// WithMuxTimeouts sets how often the multiplexer pings the agent and how long a
+// ping or a write may wait before the session is taken for dead. A zero or
+// negative value keeps the default of 10 s. Tests that move tens of MiB under
+// -race on a loaded machine raise them, where a stall of the whole process would
+// otherwise read as a dead agent. Call it before the hub serves.
+func (h *Hub) WithMuxTimeouts(keepAlive, write time.Duration) *Hub {
+	if keepAlive > 0 {
+		h.muxKeepAlive = keepAlive
+	}
+	if write > 0 {
+		h.muxWriteTimeout = write
+	}
+	return h
+}
+
 // WithLastSeen sets where heartbeats and connects are recorded. Nil records
 // nothing. Call it before the hub serves.
 func (h *Hub) WithLastSeen(r LastSeenRecorder) *Hub {

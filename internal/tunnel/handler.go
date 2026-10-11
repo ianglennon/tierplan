@@ -82,7 +82,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conn := websocket.NetConn(sctx, c, websocket.MessageBinary)
-	ym, err := yamux.Client(conn, muxConfig())
+	ym, err := yamux.Client(conn, h.muxConfig())
 	if err != nil {
 		h.log.Error("start the agent multiplexer", "agent_id", acc.AgentID, "error", err)
 		return
