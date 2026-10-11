@@ -2,7 +2,7 @@
 
 This describes what Bayplan protects against in its first four builds (install, sign-in and a read-only view of the local Docker host in Phase 1; remote hosts and swarms through agents in Phase 2; users, teams, roles, encrypted backups, restore and key rotation in Phase 3; changes to containers, networks and volumes, logs and shells in Phase 4), what it does not, and the risks that remain. Threat IDs (T-01-nn to T-04-nn) refer to the plans in which each mitigation was designed and tested.
 
-Phase 4 widens what an agent forwards: container actions, logs, shells, and network and volume changes. This revision covers Phase 4 in "What Phase 4 adds" and in residual risks 10 and 25 to 29, with the Docker access rows in the boundary table; the end-to-end proof of Phase 4 is in "What Phase 4 adds" as well.
+This revision covers all four phases. Phase 4 is described in "What Phase 4 adds": Bayplan's own Docker writes, the agent's route table and read-only flag, the browser shell, masking, stream limits, logs, the Events page, the proxy smoke test and the end-to-end proof. Its accepted risks are residual risks 10 and 25 to 29, and its boundaries are in the trust-boundary table.
 
 ## The headline
 
