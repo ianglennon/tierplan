@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { ContainerRow } from "@/api/resources";
 import {
@@ -13,6 +13,7 @@ import {
   useShellPreference,
 } from "@/api/shells";
 import { Button } from "@/components/ui/button";
+import { fitToViewport } from "@/features/terminal/fit-to-viewport";
 import { IdleBanner } from "@/features/terminal/idle-banner";
 import { type Refusal, RefusalPanel } from "@/features/terminal/refusal-panels";
 import {
@@ -183,6 +184,7 @@ function ShellPanelBody({
   const socket = useRef<TerminalSocket | null>(null);
   const terminal = useRef<TerminalApi | null>(null);
   const toolbar = useRef<TerminalToolbarHandle>(null);
+  const box = useRef<HTMLDivElement>(null);
   const prefs = useTerminalPrefs();
   // Output that arrived before the terminal was up.
   const held = useRef<Uint8Array[]>([]);
@@ -228,6 +230,10 @@ function ShellPanelBody({
       setWarned(false);
     }
   }, [phase]);
+  // The terminal box reaches the bottom of the window, measured, so the page does not
+  // scroll as well as the terminal.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: phase and warned change what sits around the box, so it is measured again
+  useLayoutEffect(() => fitToViewport(box.current), [phase, warned]);
 
   // choice is what the launcher asked for; without one the last choice is used again.
   const start = useCallback(
@@ -406,9 +412,7 @@ function ShellPanelBody({
           onOpenWindow={popout ? undefined : openWindow}
           onEnd={endSession}
         />
-        <div
-          className={`relative min-h-80 ${popout ? "h-[calc(100svh-16rem)]" : "h-[calc(100svh-20rem)]"}`}
-        >
+        <div ref={box} className="relative min-h-80">
           {warned && !over ? <IdleBanner /> : null}
           <Terminal
             key={state.sessionId}
