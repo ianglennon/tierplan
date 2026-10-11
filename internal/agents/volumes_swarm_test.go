@@ -18,7 +18,16 @@ import (
 // the checks below do not trust the code under test to report its own effect.
 func volumeNames(t *testing.T, n *dockertest.Node, name string) []string {
 	t.Helper()
-	return strings.Fields(sh(t, n, "docker volume ls -q --filter name=^"+name+"$"))
+	// The name filter is a regular expression on Engine 29 but a plain substring match
+	// on Engine 24, so an anchored pattern finds nothing there: filter loosely and keep
+	// the exact names here.
+	var out []string
+	for _, v := range strings.Fields(sh(t, n, "docker volume ls -q --filter name="+name)) {
+		if v == name {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // TestSwarmVolumes creates and deletes volumes through the API on a real swarm of three

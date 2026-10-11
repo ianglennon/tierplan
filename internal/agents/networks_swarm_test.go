@@ -18,7 +18,16 @@ import (
 // them, so the checks below do not trust the code under test to report its own effect.
 func networkIDs(t *testing.T, n *dockertest.Node, name string) []string {
 	t.Helper()
-	return strings.Fields(sh(t, n, "docker network ls --no-trunc --filter name=^"+name+"$ --format '{{.ID}}'"))
+	// The name filter is a regular expression on Engine 29 but a plain substring match
+	// on Engine 24, so an anchored pattern finds nothing there: filter loosely and keep
+	// the exact names here.
+	var out []string
+	for _, line := range strings.Split(sh(t, n, "docker network ls --no-trunc --filter name="+name+" --format '{{.ID}} {{.Name}}'"), "\n") {
+		if id, got, ok := strings.Cut(strings.TrimSpace(line), " "); ok && got == name {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // TestSwarmNetworks creates and deletes networks through the API on a real swarm of three
