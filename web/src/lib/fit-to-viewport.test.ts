@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { afterEach, describe, expect, it } from "vitest";
-import { MIN_TERMINAL_HEIGHT, terminalHeight } from "@/features/terminal/fit-to-viewport";
+import { fitHeight } from "@/lib/fit-to-viewport";
+
+const MIN = 320;
 
 function rect(top: number, height: number): DOMRect {
   return {
@@ -28,23 +30,23 @@ function page(boxTop: number, boxHeight: number, afterBox: number, footer: numbe
   return box;
 }
 
-describe("terminalHeight", () => {
+describe("fitHeight", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
   it("leaves room for what follows the box, main's padding and the footer, so the page does not scroll", () => {
     // 900 tall window, box starts at 300, 40 px of panel below it, 24 px padding, 37 px footer.
-    expect(terminalHeight(page(300, 500, 40, 37), 900)).toBe(900 - 300 - 40 - 24 - 37);
+    expect(fitHeight(page(300, 500, 40, 37), 900, MIN)).toBe(900 - 300 - 40 - 24 - 37);
   });
 
   it("does not depend on the box's current height, so measuring again does not drift", () => {
-    expect(terminalHeight(page(300, 200, 40, 37), 900)).toBe(
-      terminalHeight(page(300, 800, 40, 37), 900),
+    expect(fitHeight(page(300, 200, 40, 37), 900, MIN)).toBe(
+      fitHeight(page(300, 800, 40, 37), 900, MIN),
     );
   });
 
   it("never goes below the minimum, so a short window scrolls the page instead", () => {
-    expect(terminalHeight(page(300, 500, 40, 37), 500)).toBe(MIN_TERMINAL_HEIGHT);
+    expect(fitHeight(page(300, 500, 40, 37), 500, MIN)).toBe(MIN);
   });
 });

@@ -13,7 +13,6 @@ import {
   useShellPreference,
 } from "@/api/shells";
 import { Button } from "@/components/ui/button";
-import { fitToViewport } from "@/features/terminal/fit-to-viewport";
 import { IdleBanner } from "@/features/terminal/idle-banner";
 import { type Refusal, RefusalPanel } from "@/features/terminal/refusal-panels";
 import {
@@ -38,6 +37,7 @@ import { YourShellsPopover } from "@/features/terminal/your-shells-popover";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { withBase } from "@/lib/base-path";
+import { fitToViewport } from "@/lib/fit-to-viewport";
 
 export interface ShellPanelProps {
   envId: string;
@@ -233,7 +233,7 @@ function ShellPanelBody({
   // The terminal box reaches the bottom of the window, measured, so the page does not
   // scroll as well as the terminal.
   // biome-ignore lint/correctness/useExhaustiveDependencies: phase and warned change what sits around the box, so it is measured again
-  useLayoutEffect(() => fitToViewport(box.current), [phase, warned]);
+  useLayoutEffect(() => fitToViewport(box.current, 320), [phase, warned]);
 
   // choice is what the launcher asked for; without one the last choice is used again.
   const start = useCallback(

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Check, ChevronsUpDown, Pause, Play, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { NoPermission } from "@/components/full-page-state";
 import { LiveChip } from "@/components/live-chip";
@@ -61,6 +61,7 @@ import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
+import { fitToViewport } from "@/lib/fit-to-viewport";
 
 // How many events the page keeps, newest first (D-48). Events are held in the
 // browser only and are not stored on the server.
@@ -230,6 +231,9 @@ function EventsView({
   const [paused, setPaused] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
+  // At most as tall as the window leaves room for, measured, so a long feed scrolls
+  // inside the table and not the page as well.
+  useLayoutEffect(() => fitToViewport(scroller.current, 256, "maxHeight"), []);
   const held = useRef<EventDTO[] | null>(null);
   const holding = paused || scrolled;
   if (!holding) held.current = null;
@@ -423,7 +427,7 @@ function EventsView({
         <div
           ref={scroller}
           onScroll={(e) => setScrolled(e.currentTarget.scrollTop > SCROLLED_PX)}
-          className="max-h-[calc(100svh-18rem)] min-h-64 overflow-auto"
+          className="min-h-64 overflow-auto"
         >
           {/* The pills sit over the table's first row and take no room of their own, so a
               pill appearing moves nothing. */}

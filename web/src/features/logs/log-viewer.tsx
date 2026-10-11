@@ -44,6 +44,7 @@ import { searchLines } from "@/features/logs/search";
 import { UnreadableNotice } from "@/features/logs/unreadable-notice";
 import { useT } from "@/i18n/use-t";
 import { withBase } from "@/lib/base-path";
+import { fitToViewport } from "@/lib/fit-to-viewport";
 
 // Rows drawn beyond the visible ones, so a fast scroll does not show a blank.
 const OVERSCAN = 20;
@@ -170,6 +171,10 @@ export function LogViewer({
   const theme = useTheme();
   const version = useSyncExternalStore(buffer.subscribe, buffer.getVersion);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The log surface reaches the bottom of the window, measured, so the page does not
+  // scroll as well as the log; measured again when a notice above or below it comes or goes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these change what sits around the surface
+  useLayoutEffect(() => fitToViewport(scrollRef.current, 320), [state.status]);
   const following = useRef(true);
   const [paused, setPaused] = useState(false);
   const pausedAt = useRef(0);
@@ -617,7 +622,7 @@ export function LogViewer({
           aria-busy={state.status === "connecting"}
           onScroll={onScroll}
           onKeyDown={onKeyDown}
-          className="h-[calc(100svh-20rem)] min-h-80 overflow-auto rounded-lg border bg-card focus-visible:ring-2 focus-visible:ring-accent-ink focus-visible:outline-none"
+          className="min-h-80 overflow-auto rounded-lg border bg-card focus-visible:ring-2 focus-visible:ring-accent-ink focus-visible:outline-none"
         >
           {loadFailed ? (
             <div

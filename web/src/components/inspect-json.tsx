@@ -2,12 +2,13 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Check, Copy, Download, Info } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { copyText } from "@/components/copyable-code";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/use-t";
+import { fitToViewport } from "@/lib/fit-to-viewport";
 import { toastError } from "@/lib/toast";
 
 // How long the Copy button says "Copied" before it goes back to "Copy JSON".
@@ -43,6 +44,10 @@ export function InspectJson({ name, value, masked, maskedNotice }: InspectJsonPr
   const [copied, setCopied] = useState(false);
   const sectionRef = useRef<HTMLDivElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
+  const scrollRef = useRef<HTMLElement>(null);
+  // At most as tall as the window leaves room for, measured, so a long document
+  // scrolls inside this box and not the page as well.
+  useLayoutEffect(() => fitToViewport(scrollRef.current, 240, "maxHeight"), []);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -110,8 +115,9 @@ export function InspectJson({ name, value, masked, maskedNotice }: InspectJsonPr
       <section
         // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
         tabIndex={0}
+        ref={scrollRef}
         aria-label={t("containerdetail.inspect.label", { name })}
-        className="max-h-[calc(100svh-280px)] min-h-60 overflow-auto rounded-lg border bg-muted p-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        className="min-h-60 overflow-auto rounded-lg border bg-muted p-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
       >
         <pre ref={preRef} className="font-mono text-xs leading-relaxed text-foreground">
           {text}
