@@ -127,6 +127,9 @@ export interface DisconnectTarget {
   networkId: string;
   containerId: string;
   nodeId: string;
+  // The container's name, typed, which the server asks for on Bayplan's own server
+  // container and on an agent's (422 confirmation_required).
+  confirm?: string;
 }
 
 // disconnectFromNetwork detaches one container from one network. It never retries: a
@@ -139,7 +142,11 @@ export async function disconnectFromNetwork(
   try {
     const res = await api.POST("/api/env/{envId}/networks/{networkId}/disconnect", {
       params: { path: { envId, networkId: target.networkId } },
-      body: { containerId: target.containerId, nodeId: target.nodeId },
+      body: {
+        containerId: target.containerId,
+        nodeId: target.nodeId,
+        ...(target.confirm ? { confirm: target.confirm } : {}),
+      },
     });
     if (!res.response.ok) {
       const problem = readProblem(res.error, res.response);

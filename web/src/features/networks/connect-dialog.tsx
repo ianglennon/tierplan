@@ -9,6 +9,7 @@ import { containerDetailQuery } from "@/api/container-detail";
 import { NetworkRequestError, networkDetailQuery, useConnectContainer } from "@/api/networks";
 import { containersQuery, networksQuery } from "@/api/resources";
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
+import { matchesName, TypeToConfirm } from "@/components/type-to-confirm";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,6 +59,8 @@ export interface ConnectContainer {
   id: string;
   name: string;
   nodeId: string;
+  // server or agent for one of Bayplan's own containers, when the page knows it.
+  selfKind?: string;
 }
 
 type ConnectDialogProps = {
@@ -78,6 +81,8 @@ interface Choice {
   nodeId: string;
   // The node's name, shown beside the name on a swarm.
   node: string;
+  // server or agent for one of Bayplan's own containers; empty for anything else.
+  selfKind: string;
 }
 
 const keyOf = (nodeId: string, id: string) => `${nodeId}|${id}`;
@@ -160,6 +165,7 @@ function useChoices(props: FormProps): { choices: Choice[]; loading: boolean; bl
           name: c.name,
           nodeId: c.nodeId,
           node: c.node,
+          selfKind: c.selfKind,
         }));
       return { choices: rows, loading: containers.isPending || attached.isPending, blocked: false };
     }
@@ -179,6 +185,7 @@ function useChoices(props: FormProps): { choices: Choice[]; loading: boolean; bl
         name: n.name,
         nodeId: n.nodeId,
         node: n.node,
+        selfKind: "",
       }));
     return { choices: rows, loading: networks.isPending || detail.isPending, blocked: false };
   }, [
@@ -210,12 +217,20 @@ function ConnectForm(props: FormProps) {
   const [errors, setErrors] = useState<{ ipv4?: string; ipv6?: string }>({});
   const [refusal, setRefusal] = useState<string | null>(null);
   const [agentPolicy, setAgentPolicy] = useState(false);
+  // Bayplan's own server and agent containers join a network only with their name typed.
+  // The page may know the container is one; if it did not, the server's
+  // confirmation_required makes the field appear.
+  const [typed, setTyped] = useState("");
+  const [asked, setAsked] = useState(false);
   // A second submit can land before the pending state has rendered.
   const inFlight = useRef(false);
 
   const what = network ? "container" : "network";
   const picked = choices.find((c) => c.key === chosen);
   const pending = connect.isPending;
+  const subject = container ?? picked;
+  const needName = Boolean(container ? container.selfKind : picked?.selfKind) || asked;
+  const nameMissing = needName && !matchesName(typed, subject?.name ?? "");
 
   function wording(err: NetworkRequestError, target: Choice): string {
     const names = {
@@ -249,7 +264,7 @@ function ConnectForm(props: FormProps) {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!picked || pending || inFlight.current) return;
+    if (!picked || pending || inFlight.current || nameMissing) return;
     const next: { ipv4?: string; ipv6?: string } = {};
     if (ipv4.trim() !== "" && !isIPv4(ipv4.trim())) next.ipv4 = t("networks.connect.errors.ipv4");
     if (ipv6.trim() !== "" && !isIPv6(ipv6.trim())) next.ipv6 = t("networks.connect.errors.ipv6");
@@ -272,6 +287,7 @@ function ConnectForm(props: FormProps) {
           ...(aliasText ? { alias: aliasText } : {}),
           ...(ipv4.trim() ? { ipv4: ipv4.trim() } : {}),
           ...(ipv6.trim() ? { ipv6: ipv6.trim() } : {}),
+          ...(needName ? { confirm: typed.trim() } : {}),
         },
       });
       toastSuccess(
@@ -284,7 +300,10 @@ function ConnectForm(props: FormProps) {
     } catch (err) {
       const e2 = err instanceof NetworkRequestError ? err : new NetworkRequestError(0);
       if (e2.type === "agent_policy_denied") setAgentPolicy(true);
-      else setRefusal(wording(e2, picked));
+      else if (e2.type === "confirmation_required") {
+        setAsked(true);
+        setRefusal(t("networks.connect.own"));
+      } else setRefusal(wording(e2, picked));
     } finally {
       inFlight.current = false;
     }
@@ -369,6 +388,19 @@ function ConnectForm(props: FormProps) {
             {errors.ipv6 ? <FieldError>{errors.ipv6}</FieldError> : null}
           </Field>
         </FieldGroup>
+        {needName && subject ? (
+          <>
+            <Alert role="note">
+              <AlertDescription>{t("networks.connect.own")}</AlertDescription>
+            </Alert>
+            <TypeToConfirm
+              name={subject.name}
+              value={typed}
+              onChange={setTyped}
+              disabled={pending}
+            />
+          </>
+        ) : null}
       </fieldset>
       <DialogFooter>
         <Button
@@ -380,7 +412,7 @@ function ConnectForm(props: FormProps) {
         >
           {t("networks.connect.cancel")}
         </Button>
-        <Button type="submit" className={TOUCH_HEIGHT} disabled={pending || !picked}>
+        <Button type="submit" className={TOUCH_HEIGHT} disabled={pending || !picked || nameMissing}>
           {pending ? (
             <>
               <Spinner aria-hidden="true" />

@@ -751,7 +751,7 @@ export interface paths {
         put?: never;
         /**
          * Connect a container to a network
-         * @description Connects one container to one network, once and never retried, with an optional alias and fixed addresses. The call goes to the node the container is on, named by nodeId. A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. 404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.
+         * @description Connects one container to one network, once and never retried, with an optional alias and fixed addresses. The call goes to the node the container is on, named by nodeId. A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. Bayplan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent; such a connect is audited before the call (stage initiated) and after it (stage completed). 404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.
          */
         post: operations["connectContainer"];
         delete?: never;
@@ -771,7 +771,7 @@ export interface paths {
         put?: never;
         /**
          * Disconnect a container from a network
-         * @description Disconnects one container from one network, once, never retried and never forced. The call goes to the node the container is on, named by nodeId. A container that is not on the network is 409 not_connected; 404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.disconnected, with result failure and the code when it was refused.
+         * @description Disconnects one container from one network, once, never retried and never forced. The call goes to the node the container is on, named by nodeId. A container that is not on the network is 409 not_connected; 404 network_not_found or container_not_found, Bayplan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent. Such a disconnect is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call, which is what cutting Bayplan off its own network does, is answered 204 and audited as stage connection_lost with result success. 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.disconnected, with result failure and the code when it was refused.
          */
         post: operations["disconnectContainer"];
         delete?: never;
@@ -3504,6 +3504,8 @@ export interface components {
         NetworkConnectRequest: {
             /** @description Another name other containers on the network can use to reach this one */
             alias?: string;
+            /** @description The container's name, typed. Needed to connect Bayplan's own server or an agent container (else 422 confirmation_required, and nothing is sent) */
+            confirm?: string;
             /** @description The container ID */
             containerId: string;
             /** @description An IPv4 address to give the container on the network, inside one of its subnets */
@@ -3605,6 +3607,8 @@ export interface components {
             scope: string;
         };
         NetworkDisconnectRequest: {
+            /** @description The container's name, typed. Needed to disconnect Bayplan's own server or an agent container (else 422 confirmation_required, and nothing is sent) */
+            confirm?: string;
             /** @description The container ID */
             containerId: string;
             /** @description The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node */

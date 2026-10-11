@@ -200,7 +200,7 @@ function mountNetwork(extra: Partial<typeof NET> = {}) {
   return { onOpenChange };
 }
 
-function mountContainer() {
+function mountContainer(selfKind?: string) {
   const onOpenChange = vi.fn();
   render(
     wrap(
@@ -208,7 +208,7 @@ function mountContainer() {
         envId={ENV}
         open
         onOpenChange={onOpenChange}
-        container={{ id: "web-id", name: "web", nodeId: "n1" }}
+        container={{ id: "web-id", name: "web", nodeId: "n1", ...(selfKind ? { selfKind } : {}) }}
       />,
     ),
   );
@@ -430,5 +430,64 @@ describe("ConnectDialog from a container", () => {
     expect(names.some((o) => o.startsWith("open-ovl"))).toBe(true);
     expect(names.some((o) => o.startsWith("closed-ovl"))).toBe(false);
     expect(names.some((o) => o.startsWith("far-net"))).toBe(false);
+  });
+});
+
+describe("ConnectDialog for Bayplan's own containers", () => {
+  it("needs the name of an own container typed before it connects, from the container's page", async () => {
+    mountContainer("server");
+    const dialog = await screen.findByRole("dialog");
+    await choose(dialog, "Network", "back-net");
+    const connect = within(dialog).getByRole("button", { name: "Connect container" });
+    expect(within(dialog).getByText(/one of Bayplan's own containers/)).toBeTruthy();
+    expect(connect.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Type web to confirm" }), {
+      target: { value: "web" },
+    });
+    expect(connect.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(connect);
+    await waitFor(() => expect(connects()).toHaveLength(1));
+    expect(connects()[0]?.body).toMatchObject({ containerId: "web-id", confirm: "web" });
+  });
+
+  it("needs the name of an own container chosen on a network's page", async () => {
+    containers = page([
+      { ...container("bayplan"), selfKind: "server", isSelf: true },
+      container("web"),
+    ]);
+    mountNetwork();
+    const dialog = await screen.findByRole("dialog");
+    await choose(dialog, "Container", "web");
+    expect(within(dialog).queryByRole("textbox", { name: /to confirm/ })).toBeNull();
+    await choose(dialog, "Container", "bayplan");
+    const input = await within(dialog).findByRole("textbox", { name: "Type bayplan to confirm" });
+    expect(
+      within(dialog).getByRole("button", { name: "Connect container" }).hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.change(input, { target: { value: "bayplan" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Connect container" }));
+    await waitFor(() => expect(connects()).toHaveLength(1));
+    expect(connects()[0]?.body).toMatchObject({ containerId: "bayplan-id", confirm: "bayplan" });
+  });
+
+  it("asks for the name when the server says the container is Bayplan's own though the page did not know", async () => {
+    mountContainer();
+    const dialog = await screen.findByRole("dialog");
+    await choose(dialog, "Network", "back-net");
+    expect(within(dialog).queryByRole("textbox", { name: /to confirm/ })).toBeNull();
+    answer = () => problem(422, "confirmation_required");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Connect container" }));
+    await within(dialog).findByRole("textbox", { name: "Type web to confirm" });
+    expect(connects()).toHaveLength(1);
+    expect(connects()[0]?.body?.confirm).toBeUndefined();
+  });
+
+  it("sends no confirm for an ordinary container", async () => {
+    mountContainer();
+    const dialog = await screen.findByRole("dialog");
+    await choose(dialog, "Network", "back-net");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Connect container" }));
+    await waitFor(() => expect(connects()).toHaveLength(1));
+    expect(connects()[0]?.body).not.toHaveProperty("confirm");
   });
 });

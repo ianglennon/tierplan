@@ -320,6 +320,7 @@ function NetworksCard({ envId, detail }: { envId: string; detail: ContainerDetai
                             containerId: detail.id,
                             containerName: detail.name,
                             nodeId: detail.nodeId,
+                            selfKind: detail.selfKind,
                           })
                       : undefined
                   }
@@ -337,7 +338,12 @@ function NetworksCard({ envId, detail }: { envId: string; detail: ContainerDetai
             envId={envId}
             open={connecting}
             onOpenChange={setConnecting}
-            container={{ id: detail.id, name: detail.name, nodeId: detail.nodeId }}
+            container={{
+              id: detail.id,
+              name: detail.name,
+              nodeId: detail.nodeId,
+              selfKind: detail.selfKind,
+            }}
           />
           <DisconnectDialog
             envId={envId}

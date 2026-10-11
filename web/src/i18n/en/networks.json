@@ -112,6 +112,7 @@
       "titleContainer": "Connect {{container}} to a network",
       "body": "The container is on the network straight away.",
       "notAttachable": "{{name}} isn't attachable, so standalone containers can't join it. Only swarm services can.",
+      "own": "This is one of Bayplan's own containers. Putting it on another network changes what can reach it, so its name has to be typed first.",
       "container": {
         "label": "Container",
         "placeholder": "Find a container…",
@@ -163,7 +164,9 @@
       "pending": "Disconnecting…",
       "done": "Disconnected {{container}} from {{network}}.",
       "notConnected": "{{container}} isn't on {{network}} any more.",
-      "gone": "{{container}} or {{network}} is already gone."
+      "gone": "{{container}} or {{network}} is already gone.",
+      "own": "This is one of Bayplan's own containers. Taking it off a network can cut Bayplan off from this host, and Bayplan can't put it back once that happens.",
+      "ownAsked": "This is one of Bayplan's own containers, so its name has to be typed first."
     },
     "usedBy": {
       "container": "{{name}} on {{node}}",

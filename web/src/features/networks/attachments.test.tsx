@@ -643,6 +643,34 @@ describe("Disconnect…", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   });
 
+  it("asks for the container's name when the server says it is Bayplan's own, and sends it as confirm", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    withRows();
+    disconnectAnswer = () => problem(422, "confirmation_required");
+    renderAt(ATTACHMENTS);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect web from app-net" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).queryByRole("textbox")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect container" }));
+    const input = await within(dialog).findByRole("textbox", { name: "Type web to confirm" });
+    expect(disconnects()).toHaveLength(1);
+    expect(disconnects()[0]?.body?.confirm).toBeUndefined();
+
+    // Disabled until the name matches: a click sends nothing.
+    const confirm = within(dialog).getByRole("button", { name: "Disconnect container" });
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(confirm);
+    expect(disconnects()).toHaveLength(1);
+
+    disconnectAnswer = () => new Response(null, { status: 204 });
+    fireEvent.change(input, { target: { value: "web" } });
+    expect(confirm.getAttribute("aria-disabled")).toBe("false");
+    fireEvent.click(confirm);
+    await waitFor(() => expect(disconnects()).toHaveLength(2));
+    expect(disconnects()[1]?.body).toMatchObject({ containerId: "web-id", confirm: "web" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
   it("keeps a refusal inside the dialog, and treats 'not connected' as already done", async () => {
     me = makeMe({ envs: { [ENV]: "operator" } });
     withRows();

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { NetworkRequestError, useDisconnectContainer } from "@/api/networks";
+import { matchesName, TypeToConfirm } from "@/components/type-to-confirm";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -29,6 +30,10 @@ export interface DisconnectDialogTarget {
   containerId: string;
   containerName: string;
   nodeId: string;
+  // server or agent for one of Bayplan's own containers, when the page knows it. The
+  // server decides in the end: a container the page did not know to be its own is asked
+  // for by name when the server answers confirmation_required.
+  selfKind?: string;
 }
 
 interface DisconnectDialogProps {
@@ -48,6 +53,16 @@ export function DisconnectDialog({ envId, target, onClose }: DisconnectDialogPro
   const t = useT();
   const mutation = useDisconnectContainer(envId);
   const [error, setError] = useState<string | null>(null);
+  // Bayplan's own server and agent containers are disconnected only with their name typed.
+  const [typed, setTyped] = useState("");
+  const [asked, setAsked] = useState(false);
+  useEffect(() => {
+    if (target) return;
+    setTyped("");
+    setAsked(false);
+  }, [target]);
+  const needName = Boolean(target?.selfKind) || asked;
+  const nameMissing = needName && !matchesName(typed, target?.containerName ?? "");
   // A second click can land before the pending state has rendered.
   const inFlight = useRef(false);
   const names = {
@@ -68,7 +83,7 @@ export function DisconnectDialog({ envId, target, onClose }: DisconnectDialogPro
   }
 
   async function disconnect() {
-    if (!target || inFlight.current) return;
+    if (!target || inFlight.current || nameMissing) return;
     inFlight.current = true;
     setError(null);
     try {
@@ -76,6 +91,7 @@ export function DisconnectDialog({ envId, target, onClose }: DisconnectDialogPro
         networkId: target.networkId,
         containerId: target.containerId,
         nodeId: target.nodeId,
+        ...(needName ? { confirm: typed.trim() } : {}),
       });
       toastSuccess(t("networks.disconnect.done", names));
       onClose();
@@ -87,6 +103,9 @@ export function DisconnectDialog({ envId, target, onClose }: DisconnectDialogPro
       } else if (err.type === "network_not_found" || err.type === "container_not_found") {
         toastInfo(t("networks.disconnect.gone", names));
         onClose();
+      } else if (err.type === "confirmation_required") {
+        setAsked(true);
+        setError(t("networks.disconnect.ownAsked"));
       } else {
         setError(wording(err));
       }
@@ -111,6 +130,19 @@ export function DisconnectDialog({ envId, target, onClose }: DisconnectDialogPro
           </AlertDialogTitle>
           <AlertDialogDescription>{t("networks.disconnect.body")}</AlertDialogDescription>
         </AlertDialogHeader>
+        {needName && target ? (
+          <>
+            <Alert role="note">
+              <AlertDescription>{t("networks.disconnect.own")}</AlertDescription>
+            </Alert>
+            <TypeToConfirm
+              name={target.containerName}
+              value={typed}
+              onChange={setTyped}
+              disabled={mutation.isPending}
+            />
+          </>
+        ) : null}
         {error ? (
           <Alert variant="destructive" role="alert">
             <AlertDescription>{error}</AlertDescription>
@@ -124,7 +156,7 @@ export function DisconnectDialog({ envId, target, onClose }: DisconnectDialogPro
           {/* Reversible, so the primary confirm and not the destructive one. */}
           <Button
             type="button"
-            aria-disabled={mutation.isPending}
+            aria-disabled={mutation.isPending || nameMissing}
             className={`${TOUCH_HEIGHT} aria-disabled:cursor-not-allowed aria-disabled:opacity-50`}
             onClick={() => void disconnect()}
           >

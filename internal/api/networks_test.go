@@ -1527,3 +1527,135 @@ func TestDisconnectContainerOnASwarmGoesToTheContainersNodeOnly(t *testing.T) {
 		t.Errorf("audit rows = %+v", rows)
 	}
 }
+
+// Bayplan's own containers (WR-05, D-11, D-12): a connect or disconnect of the server's
+// container or an agent's needs its name typed, from a fresh inspect, with the attempt
+// audited before the call and the outcome after it.
+
+func ownNetworkEngine() dockertest.FakeConfig {
+	onApp := map[string]dockertest.FakeEndpoint{"app-net": {NetworkID: "app0", IPv4: "10.20.0.4"}}
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Networks: []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+			{ID: "app0", Name: "app-net", Driver: "bridge", Scope: "local", Subnets: []string{"10.20.0.0/24"}},
+		},
+		Containers: []dockertest.FakeContainer{
+			{ID: selfCtr, Names: []string{"/bayplan"}, Image: "bayplan:edge", State: "running", Networks: onApp},
+			{ID: agentID, Names: []string{"/bayplan-agent"}, Image: "bayplan-agent:edge", State: "running",
+				Labels: map[string]string{"bayplan.agent": "true"}, Networks: onApp},
+			{ID: "c1", Names: []string{"/web"}, State: "running"},
+		},
+	}
+}
+
+func TestDisconnectOfAnOwnContainerNeedsItsNameTypedAndSendsNothingWithout(t *testing.T) {
+	for _, c := range []struct{ name, id, own, confirm string }{
+		{"the server, no name", selfCtr, "server", ""},
+		{"the server, another name", selfCtr, "server", "web"},
+		{"an agent, no name", agentID, "agent", ""},
+		{"an agent, the id instead of the name", agentID, "agent", agentID},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, e := dashEnv(t, ownNetworkEngine())
+			rec := f.disconnectNet(t, e, "app0", fmt.Sprintf(`{"containerId":%q,"confirm":%q}`, c.id, c.confirm))
+			if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
+				t.Fatalf("%d %q, want 422 confirmation_required: %s", rec.code, rec.ptyp, rec.body)
+			}
+			if w := f.fake.Writes(); len(w) != 0 {
+				t.Fatalf("the daemon saw %v, want nothing", w)
+			}
+			rows := f.networkAudits(t)
+			if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "confirmation_required" || rows[0].Details["own"] != c.own {
+				t.Fatalf("audit = %+v, want one refusal that names the own container", rows)
+			}
+		})
+	}
+}
+
+func TestDisconnectOfAnOwnContainerWithItsNameIsAuditedBeforeAndAfterTheCall(t *testing.T) {
+	for _, c := range []struct{ id, name, own string }{
+		{selfCtr, "bayplan", "server"},
+		{agentID, "bayplan-agent", "agent"},
+	} {
+		t.Run(c.own, func(t *testing.T) {
+			f, e := dashEnv(t, ownNetworkEngine())
+			rec := f.disconnectNet(t, e, "app0", fmt.Sprintf(`{"containerId":%q,"confirm":%q}`, c.id, c.name))
+			if rec.code != http.StatusNoContent {
+				t.Fatalf("%d: %s", rec.code, rec.body)
+			}
+			if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /networks/app0/disconnect"}) {
+				t.Fatalf("writes = %v, want the one disconnect", w)
+			}
+			rows := f.networkAudits(t)
+			if len(rows) != 2 {
+				t.Fatalf("audit = %+v, want an initiated row and a completed row", rows)
+			}
+			first, last := rows[0], rows[1]
+			if first.Action != audit.ActionNetworkDisconnected || first.Result != string(audit.ResultSuccess) ||
+				first.Details["stage"] != "initiated" || first.Details["own"] != c.own || first.Details["container"] != c.name {
+				t.Errorf("first row = %+v", first)
+			}
+			if last.Result != string(audit.ResultSuccess) || last.Details["stage"] != "completed" || last.Details["own"] != c.own || last.Details["code"] != "disconnected" {
+				t.Errorf("last row = %+v", last)
+			}
+		})
+	}
+}
+
+func TestConnectOfAnOwnContainerNeedsItsNameTypedAndIsAuditedBeforeAndAfter(t *testing.T) {
+	f, e := dashEnv(t, ownNetworkEngine())
+	rec := f.connectNet(t, e, "br0", fmt.Sprintf(`{"containerId":%q}`, agentID))
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
+		t.Fatalf("%d %q, want 422 confirmation_required: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("the daemon saw %v, want nothing", w)
+	}
+	rec = f.connectNet(t, e, "br0", fmt.Sprintf(`{"containerId":%q,"confirm":"bayplan-agent"}`, agentID))
+	if rec.code != http.StatusNoContent {
+		t.Fatalf("%d: %s", rec.code, rec.body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /networks/br0/connect"}) {
+		t.Fatalf("writes = %v, want the one connect", w)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 3 || rows[0].Reason != "confirmation_required" ||
+		rows[1].Details["stage"] != "initiated" || rows[1].Result != string(audit.ResultSuccess) ||
+		rows[2].Details["stage"] != "completed" || rows[2].Details["own"] != "agent" || rows[2].Details["code"] != "connected" {
+		t.Fatalf("audit = %+v, want the refusal, then initiated, then completed", rows)
+	}
+}
+
+func TestNetworkChangesOfAnOrdinaryContainerNeedNoNameAndCarryNoStage(t *testing.T) {
+	f, e := dashEnv(t, ownNetworkEngine())
+	if rec := f.connectNet(t, e, "app0", `{"containerId":"c1"}`); rec.code != http.StatusNoContent {
+		t.Fatalf("connect: %d: %s", rec.code, rec.body)
+	}
+	if rec := f.disconnectNet(t, e, "app0", `{"containerId":"c1"}`); rec.code != http.StatusNoContent {
+		t.Fatalf("disconnect: %d: %s", rec.code, rec.body)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 2 {
+		t.Fatalf("audit = %+v, want one row each", rows)
+	}
+	for _, r := range rows {
+		if r.Details["stage"] != "" || r.Details["own"] != "" {
+			t.Errorf("an ordinary container's row carries own-container fields: %+v", r)
+		}
+	}
+}
+
+func TestDisconnectOfAnOwnContainerThatDropsTheConnectionIsAcceptedAndAuditedAsConnectionLost(t *testing.T) {
+	cfg := ownNetworkEngine()
+	cfg.DropWrites = true
+	f, e := dashEnv(t, cfg)
+	rec := f.disconnectNet(t, e, "app0", fmt.Sprintf(`{"containerId":%q,"confirm":"bayplan"}`, selfCtr))
+	if rec.code != http.StatusNoContent {
+		t.Fatalf("%d: %s, want 204: cutting Bayplan off its network ends the call", rec.code, rec.body)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 2 || rows[0].Details["stage"] != "initiated" || rows[1].Details["stage"] != "connection_lost" || rows[1].Result != string(audit.ResultSuccess) {
+		t.Fatalf("audit = %+v, want initiated then connection_lost with result success", rows)
+	}
+}

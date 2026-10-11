@@ -294,9 +294,7 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
-	isSelf := func(id string) bool {
-		return len(d.SelfContainerID) >= minSelfIDLen && strings.HasPrefix(id, d.SelfContainerID)
-	}
+	isSelf := func(id string) bool { return isSelfContainer(d.SelfContainerID, id) }
 
 	httpx.Register(r, huma.Operation{
 		OperationID: "getContainer", Method: http.MethodGet, Path: "/api/env/{envId}/containers/{containerId}",

@@ -59,6 +59,9 @@ type NetworksDeps struct {
 	// Clusters reads the services of a swarm live before a delete.
 	Clusters *envs.Clusters
 	Audit    *audit.Writer
+	// SelfContainerID is Bayplan's own container ID; empty when it cannot tell. A
+	// connect or disconnect of that container, or of an agent's, needs its name typed.
+	SelfContainerID string
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -108,6 +111,7 @@ type NetworkConnectRequest struct {
 	Alias       string `json:"alias,omitempty" maxLength:"253" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]*$" doc:"Another name other containers on the network can use to reach this one"`
 	IPv4        string `json:"ipv4,omitempty" maxLength:"45" doc:"An IPv4 address to give the container on the network, inside one of its subnets"`
 	IPv6        string `json:"ipv6,omitempty" maxLength:"45" doc:"An IPv6 address to give the container on the network, inside one of its subnets"`
+	Confirm     string `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to connect Bayplan's own server or an agent container (else 422 confirmation_required, and nothing is sent)"`
 }
 
 // NetworkConnectInput is the path and body of the connect route.
@@ -124,6 +128,7 @@ type NetworkConnectInput struct {
 type NetworkDisconnectRequest struct {
 	NodeID      string `json:"nodeId,omitempty" maxLength:"128" doc:"The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node"`
 	ContainerID string `json:"containerId" minLength:"1" maxLength:"128" doc:"The container ID"`
+	Confirm     string `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to disconnect Bayplan's own server or an agent container (else 422 confirmation_required, and nothing is sent)"`
 }
 
 // NetworkDisconnectInput is the path and body of the disconnect route.
@@ -298,6 +303,7 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 			"A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); " +
 			"an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. " +
 			"A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. " +
+			"Bayplan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent; such a connect is audited before the call (stage initiated) and after it (stage completed). " +
 			"404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. " +
 			"Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
@@ -316,6 +322,7 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 		Description: "Disconnects one container from one network, once, never retried and never forced. " +
 			"The call goes to the node the container is on, named by nodeId. " +
 			"A container that is not on the network is 409 not_connected; 404 network_not_found or container_not_found, " +
+			"Bayplan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent. Such a disconnect is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call, which is what cutting Bayplan off its own network does, is answered 204 and audited as stage connection_lost with result success. " +
 			"409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. " +
 			"Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.disconnected, with result failure and the code when it was refused.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
@@ -1007,8 +1014,9 @@ func missingProblem(agg envs.Aggregate, code, detail string) error {
 
 // recordEndpoint audits one connect or disconnect attempt: the network, the container,
 // the container's node and, for a connect, the alias and addresses that were asked for.
-func recordEndpoint(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent, action string, row envs.NetworkRow, ct envs.ContainerRow, ep dockerx.EndpointSpec, code string) {
+func recordEndpoint(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent, action string, row envs.NetworkRow, ct envs.ContainerRow, ep dockerx.EndpointSpec, code string, own ownedAttempt) {
 	details := map[string]string{"network": row.Name, "container": ct.Name, "node": ct.NodeID, "code": code}
+	own.addTo(details)
 	for k, v := range map[string]string{"alias": ep.Alias, "ipv4": ep.IPv4, "ipv6": ep.IPv6} {
 		if v != "" {
 			details[k] = v
@@ -1019,6 +1027,84 @@ func recordEndpoint(ctx context.Context, d NetworksDeps, p *rbac.Principal, envI
 		rec = codeCreated
 	}
 	recordNetwork(ctx, d, p, envID, userAgent, action, row.ID, row.Name, rec, details)
+}
+
+// ownedAttempt says that a connect or disconnect is of one of Bayplan's own containers,
+// and at which stage of its audit trail the row is. The zero value is an ordinary
+// container, whose rows carry neither.
+type ownedAttempt struct {
+	// kind is ownServer or ownAgent; empty for any other container.
+	kind string
+	// stage is stageCompleted or stageConnectionLost once the call was made.
+	stage string
+}
+
+// addTo puts the own-container fields into the details of an audit row.
+func (o ownedAttempt) addTo(details map[string]string) {
+	if o.kind != "" {
+		details["own"] = o.kind
+	}
+	if o.stage != "" {
+		details["stage"] = o.stage
+	}
+}
+
+// isSelfContainer says whether id is Bayplan's own container: the ID, or a prefix of
+// it of at least minSelfIDLen characters, starts with the one Bayplan found for itself.
+func isSelfContainer(selfID, id string) bool {
+	return len(selfID) >= minSelfIDLen && strings.HasPrefix(id, selfID)
+}
+
+// ownContainerGate decides whether a connect or disconnect of ct is of one of Bayplan's
+// own containers, from a fresh inspect of it: the list can be seconds old, and neither
+// its flag nor anything the client sent is trusted (D-11). For the server's own container
+// or an agent's, it requires the container's name typed (422 confirmation_required, so
+// nothing is sent) and writes the initiated row, which is why it returns the attempt to
+// stamp on the final row. A failed inspect is mapped by problemFor, as the engine's own
+// answer to the write would be.
+func ownContainerGate(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent, action string, row envs.NetworkRow, ct envs.ContainerRow, ep dockerx.EndpointSpec, confirm string, problemFor func(error) (string, error)) (ownedAttempt, string, error) {
+	var own dockerx.ContainerOwnership
+	inspectCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
+	err := d.Aggregator.OnNode(inspectCtx, envID, ct.NodeID, func(c *dockerx.Client) error {
+		var e error
+		own, e = c.ContainerOwnership(inspectCtx, ct.ID)
+		return e
+	})
+	if err != nil {
+		code, problem := problemFor(err)
+		return ownedAttempt{}, code, problem
+	}
+	var attempt ownedAttempt
+	switch {
+	case isSelfContainer(d.SelfContainerID, own.ID):
+		attempt.kind = ownServer
+	case own.Labels[ownerLabelAgent] == ownerLabelAgentValue:
+		attempt.kind = ownAgent
+	default:
+		return attempt, "", nil
+	}
+	if own.Name == "" || confirm != own.Name {
+		return attempt, codeConfirmationRequired, httpx.Problem(http.StatusUnprocessableEntity, codeConfirmationRequired, "Type the container's name to confirm this.")
+	}
+	// The call may take the recorder down with it, so the attempt is written first. With
+	// no row, nothing is sent.
+	details := map[string]string{"network": row.Name, "container": own.Name, "node": ct.NodeID, "code": stageInitiated, "stage": stageInitiated, "own": attempt.kind}
+	for k, v := range map[string]string{"alias": ep.Alias, "ipv4": ep.IPv4, "ipv6": ep.IPv6} {
+		if v != "" {
+			details[k] = v
+		}
+	}
+	if err := d.Audit.Record(ctx, audit.Entry{
+		Actor: p.AuditActor(), Action: action, TargetType: networkTargetType, TargetID: row.ID,
+		EnvID: envID, Result: audit.ResultSuccess,
+		IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
+	}); err != nil {
+		d.Log.Error("could not audit the start of a network change of an own container", "container", own.Name, "network", row.Name, "error", err)
+		return attempt, codeActionFailed, httpx.Problem(http.StatusConflict, codeActionFailed, "The change could not be recorded in the audit log, so nothing was sent.")
+	}
+	attempt.stage = stageInitiated
+	return attempt, "", nil
 }
 
 // connectContainer attaches a container to a network. Everything the lists can say is
@@ -1037,8 +1123,9 @@ func connectContainer(ctx context.Context, d NetworksDeps, p *rbac.Principal, en
 		return err
 	}
 	ep := dockerx.EndpointSpec{Alias: body.Alias, IPv4: body.IPv4, IPv6: body.IPv6}
+	var own ownedAttempt
 	audited := func(code string) {
-		recordEndpoint(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkConnected, row, ct, ep, code)
+		recordEndpoint(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkConnected, row, ct, ep, code, own)
 	}
 	refuse := func(status int, code, detail string) error {
 		audited(code)
@@ -1061,13 +1148,29 @@ func connectContainer(ctx context.Context, d NetworksDeps, p *rbac.Principal, en
 	if slices.ContainsFunc(ct.Networks, func(cn dockerx.ContainerNet) bool { return cn.NetworkID == row.ID }) {
 		return refuse(http.StatusConflict, problemAlreadyConnected, ct.Name+" is already on "+row.Name+".")
 	}
+	own, code, err := ownContainerGate(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkConnected, row, ct, ep, body.Confirm,
+		func(err error) (string, error) { return networkConnectProblem(d.Log, envID, row, ct, err) })
+	if err != nil {
+		audited(code)
+		return err
+	}
 
 	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
 	err = d.Aggregator.WriteOnNode(writeCtx, envID, ct.NodeID, func(c *dockerx.Client) error {
 		return c.NetworkConnect(writeCtx, row.ID, ct.ID, ep)
 	})
+	if own.kind != "" {
+		own.stage = stageCompleted
+	}
 	if err != nil {
+		if own.kind != "" && isConnectionLost(err) {
+			// Joining a network can end the connection that carries this call; it is taken
+			// as accepted, and the page shows what happened.
+			own.stage = stageConnectionLost
+			audited(codeConnected)
+			return nil
+		}
 		code, problem := networkConnectProblem(d.Log, envID, row, ct, err)
 		audited(code)
 		return problem
@@ -1124,8 +1227,9 @@ func disconnectContainer(ctx context.Context, d NetworksDeps, p *rbac.Principal,
 	if err != nil {
 		return err
 	}
+	var own ownedAttempt
 	audited := func(code string) {
-		recordEndpoint(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkDisconnected, row, ct, dockerx.EndpointSpec{}, code)
+		recordEndpoint(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkDisconnected, row, ct, dockerx.EndpointSpec{}, code, own)
 	}
 	// A local network of another node cannot hold this container.
 	if row.Scope != dockerx.ScopeSwarm && row.NodeID != ct.NodeID {
@@ -1133,13 +1237,30 @@ func disconnectContainer(ctx context.Context, d NetworksDeps, p *rbac.Principal,
 		return httpx.Problem(http.StatusUnprocessableEntity, problemNodeMismatch,
 			row.Name+" is local to "+row.Node+", and "+ct.Name+" is on "+ct.Node+", so it can't be on it.")
 	}
+	own, code, err := ownContainerGate(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkDisconnected, row, ct, dockerx.EndpointSpec{}, body.Confirm,
+		func(err error) (string, error) { return networkDisconnectProblem(d.Log, envID, row, ct, err) })
+	if err != nil {
+		audited(code)
+		return err
+	}
 
 	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
 	err = d.Aggregator.WriteOnNode(writeCtx, envID, ct.NodeID, func(c *dockerx.Client) error {
 		return c.NetworkDisconnect(writeCtx, row.ID, ct.ID)
 	})
+	if own.kind != "" {
+		own.stage = stageCompleted
+	}
 	if err != nil {
+		if own.kind != "" && isConnectionLost(err) {
+			// Cutting the server or an agent off its own network ends the connection that
+			// carries this call, which is what it is meant to do here; it is taken as
+			// accepted, and the page shows what happened.
+			own.stage = stageConnectionLost
+			audited(codeDisconnected)
+			return nil
+		}
 		code, problem := networkDisconnectProblem(d.Log, envID, row, ct, err)
 		audited(code)
 		return problem
