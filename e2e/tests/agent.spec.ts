@@ -64,6 +64,13 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
   let envId = "";
   let command = "";
 
+  // A retry starts from a clean host: the first attempt's agent, its state (the
+  // identity it enrolled with) and the box it created are gone.
+  dockerExec(
+    "agenthost",
+    "docker rm -f bayplan-agent e2e-remote-box >/dev/null 2>&1; docker volume rm -f bayplan-agent >/dev/null 2>&1; true",
+  );
+
   await test.step("add an environment and read the Standalone command", async () => {
     await page.goto(at("/environments"));
     await expect(page.getByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
