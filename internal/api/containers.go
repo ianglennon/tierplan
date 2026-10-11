@@ -878,10 +878,12 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 }
 
 // isConnectionLost reports whether err is the end of a connection rather than an answer
-// from the engine: a dropped tunnel, a closed or reset socket, an unexpected end of stream.
+// from the engine: a dropped tunnel, a closed or reset socket, an unexpected end of stream,
+// or a broken pipe (the connection closed while a request body was still being written,
+// as a network disconnect that cuts Bayplan off can do).
 func isConnectionLost(err error) bool {
 	return errors.Is(err, tunnel.ErrAgentGone) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, net.ErrClosed)
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.Is(err, net.ErrClosed)
 }
 
 // confirmationRequired turns the one target that needs its name typed into the request's

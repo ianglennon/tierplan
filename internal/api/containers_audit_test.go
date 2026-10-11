@@ -6,7 +6,13 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
+	"os"
+	"syscall"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -72,5 +78,21 @@ func TestNetworkAndVolumeAuditRowsAreWrittenEvenWhenTheRequestWasCancelled(t *te
 		if n != 1 {
 			t.Errorf("audit rows for %s = %d, want 1", action, n)
 		}
+	}
+}
+
+// A connection that closes while a request body is still being written fails with a
+// broken pipe, not a reset: a network disconnect that cuts Bayplan off can end that way.
+// Found in CI under load, where it was answered as an offline environment.
+func TestABrokenPipeIsALostConnection(t *testing.T) {
+	err := fmt.Errorf("disconnect from network on unix:///x/d.sock: %w", &url.Error{
+		Op: "Post", URL: "http://docker/networks/app0/disconnect",
+		Err: &net.OpError{Op: "write", Net: "unix", Err: os.NewSyscallError("write", syscall.EPIPE)},
+	})
+	if !isConnectionLost(err) {
+		t.Errorf("isConnectionLost(%v) = false, want true", err)
+	}
+	if isConnectionLost(errors.New("Error response from daemon: network app0 not found")) {
+		t.Error("an engine answer was taken for a lost connection")
 	}
 }
