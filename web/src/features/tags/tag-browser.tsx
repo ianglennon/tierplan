@@ -4,7 +4,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
-import { type ReactNode, useId, useState } from "react";
+import { Fragment, type ReactNode, useId, useMemo, useState } from "react";
 import { Trans } from "react-i18next";
 
 import { isTagErrorType, type TagErrorType, TagsRequestError, tagsInfiniteQuery } from "@/api/tags";
@@ -30,7 +30,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SearchBox } from "@/features/containers/container-list";
+import { PlatformTable } from "@/features/tags/platform-chips";
 import { TagRow } from "@/features/tags/tag-row";
+import { useTagDetails } from "@/features/tags/use-tag-details";
+import { useVisibleRows } from "@/features/tags/use-visible-rows";
 import { useAnyEnvironmentPermission, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
@@ -94,7 +97,21 @@ export function TagBrowser({
 
   const pages = query.data?.pages ?? [];
   const first = pages[0];
-  const tags = pages.flatMap((p) => p.tags ?? []);
+  const listed = useMemo(
+    () => (query.data?.pages ?? []).flatMap((p) => p.tags ?? []),
+    [query.data],
+  );
+  const { visible, observe } = useVisibleRows();
+  const { ordered: tags, detailOf } = useTagDetails({ repo, envId, tags: listed, visible });
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const panelPrefix = useId();
+  function toggle(name: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(name)) next.add(name);
+      return next;
+    });
+  }
 
   const hidden = first?.hidden ?? 0;
   let body: ReactNode;
@@ -121,19 +138,50 @@ export function TagBrowser({
         <Table aria-label={t("tags.table.label", { repo: first?.repo ?? repo })}>
           <TableHeader>
             <TableRow>
+              {picker ? null : <TableHead className="w-10" />}
               <TableHead>{t("tags.columns.tag")}</TableHead>
+              {picker ? null : (
+                <TableHead className="min-w-44">{t("tags.columns.digest")}</TableHead>
+              )}
+              <TableHead className="min-w-28">{t("tags.columns.created")}</TableHead>
+              <TableHead className="min-w-48">{t("tags.columns.platforms")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {tags.map((tag) => (
-              <TagRow
-                key={tag.name}
-                tag={tag}
-                variant={variant}
-                selected={picker && selected === tag.name}
-                onSelect={onSelect}
-              />
-            ))}
+            {tags.map((tag) => {
+              const detail = detailOf(tag.name);
+              const open = !picker && expanded.has(tag.name);
+              const panelId = `${panelPrefix}-${tag.name}`;
+              const platforms = detail?.platforms?.length
+                ? detail.platforms
+                : (tag.platforms ?? []);
+              return (
+                <Fragment key={tag.name}>
+                  <TagRow
+                    tag={tag}
+                    detail={detail}
+                    variant={variant}
+                    selected={picker && selected === tag.name}
+                    onSelect={onSelect}
+                    expanded={open}
+                    panelId={panelId}
+                    onToggle={toggle}
+                    rowRef={observe}
+                  />
+                  {open && platforms.length > 1 ? (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell id={panelId} colSpan={5} className="bg-muted/30 pl-12">
+                        <PlatformTable
+                          tag={tag.name}
+                          digest={detail?.digest || tag.digest || ""}
+                          platforms={platforms}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                </Fragment>
+              );
+            })}
           </TableBody>
         </Table>
       </div>
@@ -168,7 +216,7 @@ export function TagBrowser({
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <p className="text-sm text-muted-foreground">
             {t("tags.caption", { count: tags.length })}
-            {first.capped ? ` ${t("tags.capped", { count: 10000 })}` : ""}
+            {first.capped ? ` ${t("tags.capped", { count: first.limit ?? 10000 })}` : ""}
           </p>
           {query.hasNextPage ? (
             <Button

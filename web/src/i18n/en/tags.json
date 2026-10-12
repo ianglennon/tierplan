@@ -19,7 +19,10 @@
       "scopeInstance": "Instance"
     },
     "columns": {
-      "tag": "Tag"
+      "tag": "Tag",
+      "digest": "Digest",
+      "created": "Created",
+      "platforms": "Platforms"
     },
     "filter": {
       "label": "Filter tags",
@@ -89,6 +92,21 @@
         "message": "Couldn't load the tags. Check the connection and try again.",
         "action": "Retry"
       }
+    },
+    "loading": "Loading…",
+    "none": "—",
+    "dateUnavailable": "Couldn't read this tag's date.",
+    "expand": "Show platforms for {{tag}}",
+    "platforms": {
+      "more": "+{{n}}",
+      "tableLabel": "Platforms of {{tag}}",
+      "caption": "Index digest {{digest}}",
+      "columns": {
+        "platform": "Platform",
+        "digest": "Digest",
+        "size": "Size"
+      },
+      "unknown": "—"
     }
   }
 }

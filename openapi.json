@@ -5510,6 +5510,40 @@
         ],
         "type": "object"
       },
+      "PlatformBody": {
+        "additionalProperties": false,
+        "properties": {
+          "arch": {
+            "description": "The CPU architecture by its OCI name, like amd64, arm64 or arm",
+            "type": "string"
+          },
+          "digest": {
+            "description": "The digest of this platform's manifest",
+            "type": "string"
+          },
+          "os": {
+            "description": "The operating system, like linux or windows",
+            "type": "string"
+          },
+          "size": {
+            "description": "The compressed size of the image in bytes, or 0 when the registry does not say",
+            "format": "int64",
+            "type": "integer"
+          },
+          "variant": {
+            "description": "The architecture variant, like v7; empty when there is none",
+            "type": "string"
+          }
+        },
+        "required": [
+          "os",
+          "arch",
+          "variant",
+          "digest",
+          "size"
+        ],
+        "type": "object"
+      },
       "PreviewTeamImpactInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -7176,11 +7210,111 @@
         ],
         "type": "object"
       },
+      "TagDetailBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Empty when everything was read; date_unavailable when the date could not be; tag_not_found when the registry no longer has the tag; otherwise why the registry could not be read",
+            "enum": [
+              "",
+              "date_unavailable",
+              "tag_not_found",
+              "needs_login",
+              "login_refused",
+              "registry_unreachable",
+              "registry_tls",
+              "rate_limited"
+            ],
+            "type": "string"
+          },
+          "created": {
+            "description": "When the image was built, from its config (Docker Hub: when the tag was pushed). Left out when it could not be read",
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest": {
+            "description": "The digest the tag points at; the index digest for a multi-platform tag. Empty when the registry could not be asked",
+            "type": "string"
+          },
+          "platforms": {
+            "description": "The runnable platforms of the tag, without attestation and unknown/unknown entries; one for a single-platform image, none when the registry could not be read",
+            "items": {
+              "$ref": "#/components/schemas/PlatformBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "tag": {
+            "description": "The tag asked about",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag",
+          "digest",
+          "platforms",
+          "code"
+        ],
+        "type": "object"
+      },
+      "TagDetailsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "One entry per tag asked about, in the same order",
+            "items": {
+              "$ref": "#/components/schemas/TagDetailBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "TagDetailsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "An environment whose own credentials are considered as well as the instance's, and whose nodes' architecture the created date prefers. The caller needs images.read on it (403 otherwise)",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "ref": {
+            "description": "The repository, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "tags": {
+            "description": "The tags to read, at most 25, as the list named them",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 25,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ref",
+          "tags"
+        ],
+        "type": "object"
+      },
       "TagListBody": {
         "additionalProperties": false,
         "properties": {
           "capped": {
-            "description": "True when the repository has more tags than the server reads (10,000); the list is then the first 10,000 by registry order",
+            "description": "True when the repository has more tags than the server reads; the list is then the first limit tags, by registry order or, on Docker Hub, the newest",
             "type": "boolean"
           },
           "credential": {
@@ -7202,6 +7336,11 @@
           "host": {
             "description": "The registry host: ghcr.io, or docker.io for Docker Hub",
             "type": "string"
+          },
+          "limit": {
+            "description": "How many tags the server reads of one repository: 10,000, or 2,000 on Docker Hub",
+            "format": "int64",
+            "type": "integer"
           },
           "more": {
             "description": "Whether another page follows this one",
@@ -7241,16 +7380,36 @@
           "total",
           "more",
           "page",
-          "capped"
+          "capped",
+          "limit"
         ],
         "type": "object"
       },
       "TagNameBody": {
         "additionalProperties": false,
         "properties": {
+          "created": {
+            "description": "When the tag was last pushed, with the same limit as the digest",
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest": {
+            "description": "The digest the tag points at, for a repository whose registry lists it with the names (Docker Hub). Left out otherwise: ask for the details of the tags on screen",
+            "type": "string"
+          },
           "name": {
             "description": "The tag, as the registry names it",
             "type": "string"
+          },
+          "platforms": {
+            "description": "The platforms of the tag, with the same limit as the digest",
+            "items": {
+              "$ref": "#/components/schemas/PlatformBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -14393,6 +14552,55 @@
           }
         },
         "summary": "List the tags of a repository",
+        "tags": [
+          "registries"
+        ]
+      }
+    },
+    "/api/registries/tags/details": {
+      "post": {
+        "description": "Reads the digest, the created date and the platforms of up to 25 tags of a repository, for the rows the person can see. The server asks the registry with the same credential and the same authorisation as the tag list: images.read on at least one environment, and on envId when it is given (403, audited), an unparsable reference is 422 ref_invalid, and 26 tags are 422. Docker Hub is read through its tags API, which costs no pulls; any other registry through a manifest HEAD and, per digest, the manifest and the config of one platform (linux/amd64, else the environment's node architecture, else the first). Results are cached per credential, repository and digest. A tag that could not be read carries a code, never a failure of the request. Not audited.",
+        "operationId": "browseTagDetails",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagDetailsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagDetailsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the digest, date and platforms of tags",
         "tags": [
           "registries"
         ]

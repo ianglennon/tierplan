@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -47,9 +49,14 @@ type TagError struct {
 func (e *TagError) Error() string { return "registry: list tags: " + e.Code }
 func (e *TagError) Unwrap() error { return e.Err }
 
-// TagName is one tag of a repository. Digest, creation time and platforms come with 05-19.
+// TagName is one tag of a repository. Docker Hub's tags API gives the digest, creation time
+// and platforms with the name, so for a Hub repository they are set; for any other registry
+// they are left empty and Details reads them for the rows on screen (D-20).
 type TagName struct {
-	Name string
+	Name      string
+	Digest    string
+	Created   *time.Time
+	Platforms []Platform
 }
 
 // TagPage is one page of a repository's tag list.
@@ -62,8 +69,9 @@ type TagPage struct {
 	Hidden, Total int
 	// More is true when a later page exists.
 	More bool
-	// Capped is true when the repository has more tags than the server reads.
+	// Capped is true when the repository has more tags than the server reads, which is Limit.
 	Capped bool
+	Limit  int
 }
 
 // signatureSuffixes end the name of a signature, attestation or software bill of materials tag.
@@ -111,6 +119,9 @@ type nameKey struct {
 // never changed after it is made.
 type nameList struct {
 	names []string
+	// hub holds what the Docker Hub tags API said about each name; nil for any other
+	// registry.
+	hub map[string]hubTag
 	// lower and hidden are what each name is searched with and whether HiddenTag hides it,
 	// worked out once for the cache's minute.
 	lower  []string
@@ -124,6 +135,14 @@ type TagService struct {
 	clients *ClientCache
 	log     *slog.Logger
 	names   *lru[nameKey, nameList]
+	// heads, details and hubTags are the caches of Details (D-20, D-24a): the digest a tag
+	// pointed at, a digest's platforms and date, and a tag read from the Docker Hub API. Every
+	// key holds the credential's identity.
+	heads   *lru[headKey, string]
+	details *lru[detailKey, detailEntry]
+	hubTags *lru[hubKey, hubTag]
+	hub     *hubClient
+	flight  singleflight.Group
 }
 
 // NewTagService returns a TagService whose registry calls dial through egress and carry the
@@ -135,7 +154,24 @@ func NewTagService(clients *ClientCache, egress EgressPolicy, version string, lo
 	if clients == nil {
 		clients = NewClientCache(egress, version, log)
 	}
-	return &TagService{clients: clients, log: log, names: newLRU[nameKey, nameList](nameCacheEntries, nil)}
+	return &TagService{
+		clients: clients, log: log,
+		names:   newLRU[nameKey, nameList](nameCacheEntries, nil),
+		heads:   newLRU[headKey, string](detailCacheEntries, nil),
+		details: newLRU[detailKey, detailEntry](detailCacheEntries, nil),
+		hubTags: newLRU[hubKey, hubTag](detailCacheEntries, nil),
+		hub:     newHubClient(egress, version),
+	}
+}
+
+// credIdentity names the sign-in a cached result was fetched with: the credential's ID and
+// the time it was last changed, or "anon". A result fetched with one sign-in is never served
+// to a call that cannot use that sign-in (T-05-60, D-24a).
+func credIdentity(cred *ResolvedCredential) string {
+	if cred == nil {
+		return "anon"
+	}
+	return cred.ID + "@" + strconv.FormatInt(cred.UpdatedAt.UnixNano(), 10)
 }
 
 // List lists one page of the tags of ref's repository with cred (nil is anonymous). Tags are
@@ -150,7 +186,10 @@ func (s *TagService) List(ctx context.Context, cred *ResolvedCredential, ref Ref
 		return TagPage{}, err
 	}
 	q = strings.ToLower(strings.TrimSpace(q))
-	out := TagPage{Repo: ref.Path, Host: ref.Domain, Capped: list.capped}
+	out := TagPage{Repo: ref.Path, Host: ref.Domain, Capped: list.capped, Limit: nameListMax}
+	if list.hub != nil {
+		out.Limit = hubListMax
+	}
 	skip := max(page, 0) * TagPageSize
 	for i, name := range list.names {
 		if q != "" && !strings.Contains(list.lower[i], q) {
@@ -163,7 +202,11 @@ func (s *TagService) List(ctx context.Context, cred *ResolvedCredential, ref Ref
 			}
 		}
 		if out.Total >= skip && len(out.Tags) < TagPageSize {
-			out.Tags = append(out.Tags, TagName{Name: name})
+			tag := TagName{Name: name}
+			if h, ok := list.hub[name]; ok {
+				tag.Digest, tag.Created, tag.Platforms = h.Digest, h.Created, h.Platforms
+			}
+			out.Tags = append(out.Tags, tag)
 		}
 		out.Total++
 	}
@@ -173,19 +216,27 @@ func (s *TagService) List(ctx context.Context, cred *ResolvedCredential, ref Ref
 
 // nameList returns the repository's tag names, from the cache when it holds them.
 func (s *TagService) nameList(ctx context.Context, cred *ResolvedCredential, ref Ref) (nameList, error) {
-	key := nameKey{cred: "anon", host: ref.Domain, repo: ref.Path}
-	if cred != nil {
-		key.cred = cred.ID + "@" + strconv.FormatInt(cred.UpdatedAt.UnixNano(), 10)
-	}
+	key := nameKey{cred: credIdentity(cred), host: ref.Domain, repo: ref.Path}
 	if l, ok := s.names.Get(key); ok {
 		return l, nil
 	}
-	var c *Client
-	if cred == nil {
-		c = s.clients.Anonymous(ref.Domain)
-	} else {
-		c = s.clients.ForCredential(cred.ID, cred.UpdatedAt, cred.HostOptions)
+	if strings.EqualFold(ref.Domain, hubDomain) {
+		// Docker Hub is listed through its tags API, which costs no pulls and brings the
+		// digests, dates and platforms. Only a rate limit or a cancelled call is the answer;
+		// any other failure (a private repository, a refused token) is worded by the registry
+		// path below, which lists names and costs no pulls either.
+		l, err := s.hubNames(ctx, cred, ref)
+		switch {
+		case err == nil:
+			s.names.Put(key, l, nameTTL)
+			return l, nil
+		case errors.Is(err, errHubRateLimited):
+			return nameList{}, &TagError{Code: CodeRateLimited, Err: err}
+		case ctx.Err() != nil:
+			return nameList{}, ctx.Err()
+		}
 	}
+	c := s.clientFor(cred, ref.Domain)
 	// One more than the cap, to know whether the repository has more.
 	names, err := c.TagList(ctx, ref.Path, nameListMax+1)
 	if err != nil {
@@ -213,10 +264,27 @@ func capNames(names []string) nameList {
 	return l
 }
 
-// sortNames puts a name list in list order and works out what List searches it with.
+// sortNames puts a name list in list order and works out what List searches it with. Where
+// the creation dates are known (a Docker Hub list) the newest tag is first and ties go by
+// CompareTags; otherwise it is CompareTags alone (D-21).
 func sortNames(l nameList) nameList {
 	l.names = slices.Clone(l.names)
-	slices.SortFunc(l.names, CompareTags)
+	slices.SortFunc(l.names, func(a, b string) int {
+		if l.hub != nil {
+			ca, cb := l.hub[a].Created, l.hub[b].Created
+			switch {
+			case ca != nil && cb != nil:
+				if c := cb.Compare(*ca); c != 0 {
+					return c
+				}
+			case ca != nil:
+				return -1
+			case cb != nil:
+				return 1
+			}
+		}
+		return CompareTags(a, b)
+	})
 	l.lower = make([]string, len(l.names))
 	l.hidden = make([]bool, len(l.names))
 	for i, n := range l.names {

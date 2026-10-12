@@ -423,7 +423,12 @@ describe("TagBrowser filter, hide switch and paging", () => {
     expect(screen.getByText("That's every tag.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Load 100 more" })).toBeNull();
     expect(screen.getByText("Showing 4 tags")).toBeTruthy();
-    expect(rows().map((r) => r.textContent)).toEqual(["v1.10.0", "v1.9.2", "latest", "v0.1.0"]);
+    expect(rows().map((r) => r.getAttribute("data-tag"))).toEqual([
+      "v1.10.0",
+      "v1.9.2",
+      "latest",
+      "v0.1.0",
+    ]);
   });
 
   it("shows no match for the filter, with a button that clears it", async () => {
@@ -540,7 +545,9 @@ describe("TagBrowser details", () => {
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" envId="e1" />);
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
     scrollTo(["v1.10.0"]);
-    await waitFor(() => expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"));
+    await waitFor(() =>
+      expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"),
+    );
     expect(detailsSent[0]).toEqual({ ref: "ghcr.io/acme/app", envId: "e1", tags: ["v1.10.0"] });
 
     const cells = cellsOf(rowOf("v1.10.0"));
@@ -559,9 +566,7 @@ describe("TagBrowser details", () => {
     const releases: (() => void)[] = [];
     detailsAnswer = (body) =>
       new Promise<Response>((resolve) =>
-        releases.push(() =>
-          resolve(Response.json({ items: body.tags.map((tag) => detail(tag)) })),
-        ),
+        releases.push(() => resolve(Response.json({ items: body.tags.map((tag) => detail(tag)) }))),
       );
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
     await waitFor(() => expect(screen.getByText("v0")).toBeTruthy());
@@ -585,7 +590,9 @@ describe("TagBrowser details", () => {
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
     scrollTo(["v1.10.0"]);
-    await waitFor(() => expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"));
+    await waitFor(() =>
+      expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"),
+    );
     scrollTo(["v1.10.0"], false);
     scrollTo(["v1.10.0", "v1.9.2"]);
     await waitFor(() => expect(detailsSent).toHaveLength(2));
@@ -605,15 +612,20 @@ describe("TagBrowser details", () => {
     detailsAnswer = (body) => Response.json({ items: body.tags.map((tag) => detail(tag)) });
     scrollTo(["v1.10.0"], false);
     scrollTo(["v1.10.0"]);
-    await waitFor(() => expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"));
+    await waitFor(() =>
+      expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"),
+    );
   });
 
   it("reorders the batch that arrived by date, newest first, once, in the places it occupied", async () => {
-    const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const ago = (days: number) =>
+      new Date(Date.now() - days * 86_400_000 - 3_600_000).toISOString();
     detailsAnswer = (body) =>
       Response.json({
         items: body.tags.map((tag) =>
-          detail(tag, { created: tag === "latest" ? ago(1) : tag === "v1.10.0" ? ago(3) : ago(10) }),
+          detail(tag, {
+            created: tag === "latest" ? ago(1) : tag === "v1.10.0" ? ago(3) : ago(10),
+          }),
         ),
       });
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
@@ -632,7 +644,8 @@ describe("TagBrowser details", () => {
   });
 
   it("does not reorder rows whose dates the list already carried", async () => {
-    const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const ago = (days: number) =>
+      new Date(Date.now() - days * 86_400_000 - 3_600_000).toISOString();
     answer = () =>
       Response.json(
         list({
@@ -651,7 +664,7 @@ describe("TagBrowser details", () => {
     await waitFor(() => expect(screen.getByText("new")).toBeTruthy());
     scrollTo(["new", "old"]);
     await waitFor(() => expect(detailsSent).toHaveLength(1));
-    await waitFor(() => expect(cellsOf(rowOf("new"))[3]?.textContent).toBe("1 d ago"));
+    await waitFor(() => expect(cellsOf(rowOf("old"))[3]?.textContent).toBe("1 d ago"));
     expect(rows().map((r) => r.getAttribute("data-tag"))).toEqual(["new", "old"]);
   });
 
@@ -663,7 +676,9 @@ describe("TagBrowser details", () => {
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
     scrollTo(["v1.10.0"]);
-    await waitFor(() => expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"));
+    await waitFor(() =>
+      expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"),
+    );
     const created = cellsOf(rowOf("v1.10.0"))[3] as HTMLElement;
     expect(created.textContent).toBe("—");
     expect(created.getAttribute("aria-busy")).not.toBe("true");
@@ -727,7 +742,9 @@ describe("TagBrowser platforms", () => {
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
     scrollTo(["v1.10.0"]);
-    await waitFor(() => expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"));
+    await waitFor(() =>
+      expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"),
+    );
     return cellsOf(rowOf("v1.10.0"))[4] as HTMLElement;
   }
 
@@ -750,20 +767,30 @@ describe("TagBrowser platforms", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    const region = document.getElementById(toggle.getAttribute("aria-controls") ?? "") as HTMLElement;
+    const region = document.getElementById(
+      toggle.getAttribute("aria-controls") ?? "",
+    ) as HTMLElement;
     expect(region).toBeTruthy();
     const table = within(region).getByRole("table");
-    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
-      "Platform",
-      "Digest",
-      "Size",
-    ]);
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Platform", "Digest", "Size"]);
     expect(within(table).getByText(`Index digest ${D1}`)).toBeTruthy();
     const body = within(table).getAllByRole("row").slice(1);
     expect(body).toHaveLength(6);
-    expect(cellsOf(body[0] as HTMLElement).map((c) => c.textContent)).toEqual(["linux/amd64", AMD, "5 MiB"]);
+    expect(cellsOf(body[0] as HTMLElement).map((c) => c.textContent)).toEqual([
+      "linux/amd64",
+      AMD,
+      "5 MiB",
+    ]);
     expect(cellsOf(body[2] as HTMLElement)[0]?.textContent).toBe("linux/arm/v7");
-    expect(cellsOf(body[5] as HTMLElement).map((c) => c.textContent)).toEqual(["windows/amd64", `sha256:${"18".repeat(32)}`, "—"]);
+    expect(cellsOf(body[5] as HTMLElement).map((c) => c.textContent)).toEqual([
+      "windows/amd64",
+      `sha256:${"18".repeat(32)}`,
+      "—",
+    ]);
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(document.getElementById(toggle.getAttribute("aria-controls") ?? "")).toBeNull();

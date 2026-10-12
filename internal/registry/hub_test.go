@@ -349,14 +349,14 @@ func TestHubPrivateRepositoryListsWithATokenFromTheCredential(t *testing.T) {
 	s := hubService(t, h)
 	cred := &ResolvedCredential{
 		Candidate:   Candidate{ID: "c1", Layer: LayerInstance},
-		HostOptions: HostOptions{Host: "docker.io", Username: "ana", Password: "dckr_pat_secret"},
+		HostOptions: HostOptions{Host: "docker.io", Username: "ana", Password: "pat"},
 		UpdatedAt:   tagsT0,
 	}
 	page, err := s.List(context.Background(), cred, hubRef(t), "", true, 0)
 	if err != nil || len(page.Tags) != 3 {
 		t.Fatalf("list: %v %v", page, err)
 	}
-	if len(h.bodies) != 1 || !strings.Contains(h.bodies[0], `"identifier":"ana"`) || !strings.Contains(h.bodies[0], `"secret":"dckr_pat_secret"`) {
+	if len(h.bodies) != 1 || !strings.Contains(h.bodies[0], `"identifier":"ana"`) || !strings.Contains(h.bodies[0], `"secret":"pat"`) {
 		t.Errorf("token request bodies = %v", h.bodies)
 	}
 	// The token is kept for the next call.

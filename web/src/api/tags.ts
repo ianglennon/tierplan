@@ -9,6 +9,11 @@ import type { components } from "@/api/schema";
 
 export type TagList = components["schemas"]["TagListBody"];
 export type TagName = components["schemas"]["TagNameBody"];
+export type TagDetail = components["schemas"]["TagDetailBody"];
+export type Platform = components["schemas"]["PlatformBody"];
+
+// How many tags one details request asks about, as the server allows.
+export const TAG_DETAILS_BATCH = 25;
 
 // The problem types a tag listing fails with, each worded by the tag browser. Anything else
 // is shown as the generic failure.
@@ -117,4 +122,25 @@ export function tagsInfiniteQuery(p: TagsParams) {
     retry: false,
     staleTime: 30_000,
   });
+}
+
+// What a details request is asked for: the repository as it was typed, and the environment
+// whose credentials and node architecture count.
+export interface TagDetailsParams {
+  repo: string;
+  envId?: string;
+}
+
+// fetchTagDetails reads the digest, date and platforms of up to TAG_DETAILS_BATCH tags. A tag
+// the registry could not read comes back with a code; only a request that failed as a whole
+// throws.
+export async function fetchTagDetails(p: TagDetailsParams, tags: string[]): Promise<TagDetail[]> {
+  const res = await api.POST("/api/registries/tags/details", {
+    body: { ref: p.repo, envId: p.envId, tags },
+  });
+  if (!res.data) {
+    const problem = readProblem(res.error, res.response);
+    throw new TagsRequestError(problem.status, problem.type, problem.fields);
+  }
+  return res.data.items ?? [];
 }

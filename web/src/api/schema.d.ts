@@ -1802,6 +1802,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/registries/tags/details": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the digest, date and platforms of tags
+         * @description Reads the digest, the created date and the platforms of up to 25 tags of a repository, for the rows the person can see. The server asks the registry with the same credential and the same authorisation as the tag list: images.read on at least one environment, and on envId when it is given (403, audited), an unparsable reference is 422 ref_invalid, and 26 tags are 422. Docker Hub is read through its tags API, which costs no pulls; any other registry through a manifest HEAD and, per digest, the manifest and the config of one platform (linux/amd64, else the environment's node architecture, else the first). Results are cached per credential, repository and digest. A tag that could not be read carries a code, never a failure of the request. Not audited.
+         */
+        post: operations["browseTagDetails"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/registries/test": {
         parameters: {
             query?: never;
@@ -4666,6 +4686,21 @@ export interface components {
             /** @description Installation-wide permissions */
             global: string[] | null;
         };
+        PlatformBody: {
+            /** @description The CPU architecture by its OCI name, like amd64, arm64 or arm */
+            arch: string;
+            /** @description The digest of this platform's manifest */
+            digest: string;
+            /** @description The operating system, like linux or windows */
+            os: string;
+            /**
+             * Format: int64
+             * @description The compressed size of the image in bytes, or 0 when the registry does not say
+             */
+            size: number;
+            /** @description The architecture variant, like v7; empty when there is none */
+            variant: string;
+        };
         PreviewTeamImpactInputBody: {
             /**
              * @description The change to preview
@@ -5358,8 +5393,38 @@ export interface components {
              */
             type?: "swarm-manager" | "swarm-worker" | "standalone";
         };
+        TagDetailBody: {
+            /**
+             * @description Empty when everything was read; date_unavailable when the date could not be; tag_not_found when the registry no longer has the tag; otherwise why the registry could not be read
+             * @enum {string}
+             */
+            code: "" | "date_unavailable" | "tag_not_found" | "needs_login" | "login_refused" | "registry_unreachable" | "registry_tls" | "rate_limited";
+            /**
+             * Format: date-time
+             * @description When the image was built, from its config (Docker Hub: when the tag was pushed). Left out when it could not be read
+             */
+            created?: string;
+            /** @description The digest the tag points at; the index digest for a multi-platform tag. Empty when the registry could not be asked */
+            digest: string;
+            /** @description The runnable platforms of the tag, without attestation and unknown/unknown entries; one for a single-platform image, none when the registry could not be read */
+            platforms: components["schemas"]["PlatformBody"][] | null;
+            /** @description The tag asked about */
+            tag: string;
+        };
+        TagDetailsBody: {
+            /** @description One entry per tag asked about, in the same order */
+            items: components["schemas"]["TagDetailBody"][] | null;
+        };
+        TagDetailsRequest: {
+            /** @description An environment whose own credentials are considered as well as the instance's, and whose nodes' architecture the created date prefers. The caller needs images.read on it (403 otherwise) */
+            envId?: string;
+            /** @description The repository, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid */
+            ref: string;
+            /** @description The tags to read, at most 25, as the list named them */
+            tags: string[] | null;
+        };
         TagListBody: {
-            /** @description True when the repository has more tags than the server reads (10,000); the list is then the first 10,000 by registry order */
+            /** @description True when the repository has more tags than the server reads; the list is then the first limit tags, by registry order or, on Docker Hub, the newest */
             capped: boolean;
             /** @description The stored credential the registry was asked with, or null when it was asked anonymously. Never the secret */
             credential: components["schemas"]["ResolvedCredentialBody"] | null;
@@ -5370,6 +5435,11 @@ export interface components {
             hidden: number;
             /** @description The registry host: ghcr.io, or docker.io for Docker Hub */
             host: string;
+            /**
+             * Format: int64
+             * @description How many tags the server reads of one repository: 10,000, or 2,000 on Docker Hub
+             */
+            limit: number;
             /** @description Whether another page follows this one */
             more: boolean;
             /**
@@ -5388,8 +5458,17 @@ export interface components {
             total: number;
         };
         TagNameBody: {
+            /**
+             * Format: date-time
+             * @description When the tag was last pushed, with the same limit as the digest
+             */
+            created?: string;
+            /** @description The digest the tag points at, for a repository whose registry lists it with the names (Docker Hub). Left out otherwise: ask for the details of the tags on screen */
+            digest?: string;
             /** @description The tag, as the registry names it */
             name: string;
+            /** @description The platforms of the tag, with the same limit as the digest */
+            platforms?: components["schemas"]["PlatformBody"][] | null;
         };
         TeamBody: {
             /**
@@ -9461,6 +9540,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TagListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    browseTagDetails: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagDetailsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagDetailsBody"];
                 };
             };
             /** @description Error */
