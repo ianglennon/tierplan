@@ -446,6 +446,13 @@ describe("images list on a read-only host", () => {
   });
 
   it("warns above the table and disables Pull image with the reason when every node is read-only", async () => {
+    me = makeMe({
+      instanceAdmin: true,
+      permissions: {
+        global: [],
+        environments: { e1: ["environments.read", ...READS, "images.pull"] },
+      },
+    });
     answers["/api/env/e1/images/pull-targets"] = () =>
       Response.json({ swarm: false, nodes: [node("n1", true)] });
     renderAt("/env/e1/images");

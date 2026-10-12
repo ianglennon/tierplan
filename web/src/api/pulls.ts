@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { queryOptions, useMutation } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
@@ -12,6 +12,8 @@ export type PullStarted = components["schemas"]["PullStartBody"];
 export type PullJob = components["schemas"]["PullJobBody"];
 export type PullItem = components["schemas"]["PullItemBody"];
 export type PullLayer = components["schemas"]["PullLayerBody"];
+export type PullTargets = components["schemas"]["PullTargetsBody"];
+export type PullTarget = components["schemas"]["PullTargetBody"];
 export type PullState = PullJob["state"];
 export type PullItemState = PullItem["state"];
 
@@ -73,3 +75,38 @@ export const pullQuery = (jobId: string) =>
     },
     retry: false,
   });
+
+export const pullTargetsKey = (envId: string) => ["pull-targets", envId] as const;
+
+// pullTargetsQuery lists the nodes of an environment with their role, architecture and
+// whether they can be reached and written to now. It is read for the node chooser and for
+// the read-only state of the Images page.
+export const pullTargetsQuery = (envId: string) =>
+  queryOptions({
+    queryKey: pullTargetsKey(envId),
+    queryFn: async (): Promise<PullTargets> => {
+      const res = await api.GET("/api/env/{envId}/images/pull-targets", {
+        params: { path: { envId } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new PullRequestError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    staleTime: 10_000,
+    retry: false,
+  });
+
+// allReadOnly is true when the environment has nodes and every one is read-only: nothing
+// can be pulled or removed there until its owner changes the host.
+export function allReadOnly(targets: PullTargets | undefined): boolean {
+  const nodes = targets?.nodes ?? [];
+  return nodes.length > 0 && nodes.every((n) => n.readOnly);
+}
+
+// useAllReadOnly reads the targets for the Images page and its Pull button.
+export function useAllReadOnly(envId: string): boolean {
+  const { data } = useQuery(pullTargetsQuery(envId));
+  return allReadOnly(data);
+}

@@ -3,10 +3,13 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { TriangleAlert } from "lucide-react";
 
+import { useAllReadOnly } from "@/api/pulls";
 import { type ImageRow, imagesQuery } from "@/api/resources";
 import { NoPermission } from "@/components/full-page-state";
 import { RelativeTime } from "@/components/relative-time";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { PullImageButton } from "@/features/pulls/pull-dialog";
 import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
@@ -23,6 +26,19 @@ import { formatBytes } from "@/lib/format";
 
 // The engine reports an untagged image as "<none>" or "<none>:<none>".
 const isNone = (tag: string) => tag === "<none>" || tag === "<none>:<none>";
+
+// ReadOnlyAlert is the warning above the table when the owner of every node's host turned
+// writes off: images can be looked at, not pulled or removed (D-30).
+function ReadOnlyAlert({ envId }: { envId: string }) {
+  const t = useT();
+  if (!useAllReadOnly(envId)) return null;
+  return (
+    <Alert variant="warning">
+      <TriangleAlert aria-hidden="true" />
+      <AlertDescription className="text-foreground">{t("pulls.readOnly.alert")}</AlertDescription>
+    </Alert>
+  );
+}
 
 function Images() {
   const { envId } = Route.useParams();
@@ -88,7 +104,12 @@ function Images() {
             }
           : undefined
       }
-      banner={swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : undefined}
+      banner={
+        <>
+          {swarm ? <NodesBanner notReporting={query.data?.notReporting} /> : null}
+          <ReadOnlyAlert envId={envId} />
+        </>
+      }
       getRowKey={(i) => nodeRowKey(i.node, i.id)}
       captionExtra={
         <div className="ml-auto flex flex-wrap items-center gap-2">

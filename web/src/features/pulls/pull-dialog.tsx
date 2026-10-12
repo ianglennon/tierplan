@@ -2,12 +2,18 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 
-import { type PullRequestError, type PullStarted, useStartPull } from "@/api/pulls";
+import {
+  allReadOnly,
+  type PullRequestError,
+  type PullStarted,
+  pullTargetsQuery,
+  useStartPull,
+} from "@/api/pulls";
 import { listKey } from "@/api/resources";
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
 import { NeedsTooltip } from "@/components/needs-tooltip";
@@ -23,7 +29,10 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
+import { NodeChooser } from "@/features/images/node-chooser";
 import { failureMessage } from "@/features/pulls/pull-node-row";
 import { PullProgress } from "@/features/pulls/pull-progress";
 import { usePullJob } from "@/features/pulls/pull-stream";
@@ -205,6 +214,14 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
   const ids = useId();
   const start = useStartPull(envId);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
+  // Where it pulls: every node, or the ones chosen. Only a swarm has the choice.
+  const targets = useQuery(pullTargetsQuery(envId));
+  const nodes = targets.data?.nodes ?? [];
+  const isSwarm = targets.data ? targets.data.swarm : swarm;
+  const chooseable = isSwarm && nodes.length > 0;
+  const [mode, setMode] = useState<"all" | "choose">("all");
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [noneChosen, setNoneChosen] = useState(false);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: { ref: initialRef },
@@ -228,6 +245,10 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
         return { message: t("pulls.errors.hostReadOnly"), agentPolicy: false };
       case "node_unavailable":
         return { message: t("pulls.errors.nodeUnreachable"), agentPolicy: false };
+      case "nodes_unknown":
+        return { message: t("pulls.errors.nodesUnknown"), agentPolicy: false };
+      case "nodes_required":
+        return { message: t("pulls.errors.nodesRequired"), agentPolicy: false };
     }
     if (err.status === 403) return { message: t("pulls.errors.permission"), agentPolicy: false };
     return { message: t("pulls.errors.generic"), agentPolicy: false };
@@ -236,8 +257,14 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
   function submit(values: Values) {
     if (start.isPending) return;
     setRefusal(null);
+    const choosing = chooseable && mode === "choose";
+    if (choosing && chosen.length === 0) {
+      setNoneChosen(true);
+      return;
+    }
     start.mutate(
-      { ref: values.ref },
+      // Nodes are named only when they were chosen: leaving them out pulls everywhere.
+      choosing ? { ref: values.ref, nodeIds: chosen } : { ref: values.ref },
       {
         onSuccess: (started) => onStarted(started, values.ref),
         onError: (err) => setRefusal(refusalOf(err)),
@@ -278,11 +305,58 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
             </FieldDescription>
             {error ? <FieldError id={`${ids}-ref-error`}>{error}</FieldError> : null}
           </Field>
-          <p className="text-sm text-muted-foreground">
-            {swarm
-              ? t("pulls.form.targetSwarm", { host: hostName })
-              : t("pulls.form.targetStandalone", { host: hostName })}
-          </p>
+          {chooseable ? (
+            <fieldset className="flex flex-col gap-2">
+              <legend className="mb-1 text-sm font-medium">{t("pulls.targets.legend")}</legend>
+              <RadioGroup
+                value={mode}
+                onValueChange={(v) => {
+                  setMode(v === "choose" ? "choose" : "all");
+                  setNoneChosen(false);
+                }}
+                aria-label={t("pulls.targets.legend")}
+                className="gap-1"
+              >
+                {(["all", "choose"] as const).map((m) => (
+                  <Label
+                    key={m}
+                    htmlFor={`${ids}-mode-${m}`}
+                    className="min-h-11 cursor-pointer font-normal md:min-h-8"
+                  >
+                    <RadioGroupItem id={`${ids}-mode-${m}`} value={m} />
+                    {m === "all"
+                      ? t("pulls.targets.all", { count: nodes.length })
+                      : t("pulls.targets.choose")}
+                  </Label>
+                ))}
+              </RadioGroup>
+              {mode === "choose" ? (
+                <>
+                  <NodeChooser
+                    nodes={nodes}
+                    value={chosen}
+                    invalid={noneChosen}
+                    describedBy={noneChosen ? `${ids}-nodes-error` : undefined}
+                    onChange={(next) => {
+                      setChosen(next);
+                      if (next.length > 0) setNoneChosen(false);
+                    }}
+                  />
+                  {noneChosen ? (
+                    <FieldError id={`${ids}-nodes-error`}>{t("pulls.targets.none")}</FieldError>
+                  ) : null}
+                </>
+              ) : null}
+            </fieldset>
+          ) : isSwarm && targets.isPending ? (
+            <p className="text-sm text-muted-foreground">{t("pulls.targets.loading")}</p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {isSwarm
+                ? t("pulls.form.targetSwarm", { host: hostName })
+                : t("pulls.form.targetStandalone", { host: hostName })}
+            </p>
+          )}
         </FieldGroup>
       </fieldset>
       <DialogFooter>
@@ -310,9 +384,12 @@ export function PullImageButton({ envId, hostName, swarm }: PullImageButtonProps
   const t = useT();
   const pull = useNeeds("images.pull", envId);
   const [open, setOpen] = useState(false);
+  // A permission the person lacks is said first; then a host whose owner turned writes off.
+  const { data: targets } = useQuery(pullTargetsQuery(envId));
+  const reason = pull.reason ?? (allReadOnly(targets) ? t("pulls.readOnly.reason") : undefined);
   return (
     <>
-      <NeedsTooltip reason={pull.reason}>
+      <NeedsTooltip reason={reason}>
         <Button className="max-md:h-11" onClick={pull.allowed ? () => setOpen(true) : undefined}>
           <Download aria-hidden="true" />
           {t("pulls.button")}

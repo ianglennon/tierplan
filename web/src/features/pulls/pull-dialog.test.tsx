@@ -155,6 +155,9 @@ function mount(props: Partial<Parameters<typeof PullDialog>[0]> = {}) {
 
 const source = () => FakeEventSource.instances[0] as FakeEventSource;
 
+// The stream is opened by an effect, which React may run just after the panel is on screen.
+const streamOpen = () => waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
 async function submit(ref: string) {
   const dialog = await screen.findByRole("dialog", { name: "Pull an image" });
   fireEvent.change(within(dialog).getByLabelText("Image"), { target: { value: ref } });
@@ -220,7 +223,7 @@ describe("PullDialog (the form)", () => {
     await waitFor(() => expect(document.activeElement).toBe(heading));
     expect(within(dialog).queryByLabelText("Image")).toBeNull();
     expect(within(dialog).getAllByText("Waiting")).toHaveLength(1);
-    expect(FakeEventSource.instances).toHaveLength(1);
+    await streamOpen();
     expect(source().url).toContain("/api/pulls/j1/stream");
   });
 
@@ -286,6 +289,7 @@ describe("PullDialog (the progress)", () => {
     mount();
     const dialog = await submit("nginx:1.27");
     await within(dialog).findByRole("heading", { name: `Pulling ${REF}` });
+    await streamOpen();
     return dialog;
   }
 
@@ -405,6 +409,7 @@ describe("PullDialog (the progress)", () => {
     );
     const dialog = await submit("nginx:1.27");
     await within(dialog).findByRole("heading", { name: `Pulling ${REF}` });
+    await streamOpen();
     rerender(
       <QueryClientProvider client={client}>
         <TestRouter>
@@ -428,7 +433,6 @@ describe("PullDialog (the progress)", () => {
     expect(await screen.findByText(`Pulled ${REF}.`)).toBeTruthy();
   });
 });
-
 
 describe("PullDialog (where it pulls)", () => {
   const radio = (dialog: HTMLElement, name: RegExp | string) =>
@@ -514,7 +518,7 @@ describe("PullDialog (where it pulls)", () => {
       answer = () => problem(422, type);
       fireEvent.change(within(dialog).getByLabelText("Image"), { target: { value: "nginx" } });
       fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
-      expect((await within(dialog).findByRole("alert")).textContent).toContain(text);
+      await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain(text));
     }
     expect(within(dialog).getByLabelText("Image")).toBeTruthy();
   });
@@ -524,6 +528,7 @@ describe("PullDialog (where it pulls)", () => {
     mount();
     const dialog = await submit("nginx:1.27");
     await within(dialog).findByRole("heading", { name: `Pulling ${REF}` });
+    await streamOpen();
     act(() =>
       source().sendFrame(
         "done",
@@ -591,7 +596,10 @@ describe("PullImageButton", () => {
     targetsAnswer = () =>
       Response.json({
         swarm: true,
-        nodes: [target("n1", "node-1", { readOnly: true }), target("n2", "node-2", { readOnly: true })],
+        nodes: [
+          target("n1", "node-1", { readOnly: true }),
+          target("n2", "node-2", { readOnly: true }),
+        ],
       });
     mountButton("operator");
     await waitFor(() => expect(pullButton().getAttribute("aria-disabled")).toBe("true"));

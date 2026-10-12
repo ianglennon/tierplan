@@ -23,7 +23,9 @@
       "permission": "You no longer have permission to do that. Your access may have changed.",
       "hostReadOnly": "This host is read-only (set on the host).",
       "nodeUnreachable": "The node isn't connected to Bayplan right now. Try again when it's back.",
-      "generic": "Couldn't start the pull. Try again."
+      "generic": "Couldn't start the pull. Try again.",
+      "nodesUnknown": "One of the chosen nodes isn't part of this environment any more. Reload the page and choose again.",
+      "nodesRequired": "Choose at least one node."
     },
     "progress": {
       "title": "Pulling {{ref}}",
@@ -89,6 +91,24 @@
       "partial": "Pulled on {{done}}, {{failed}} failed",
       "failed": "Couldn't pull {{ref}}. {{reason}}",
       "details": "Details"
+    },
+    "targets": {
+      "legend": "Where to pull",
+      "all": "All nodes ({{count}})",
+      "choose": "Choose nodes",
+      "chooserLabel": "Nodes to pull on",
+      "count": "{{selected}} of {{total}} selected",
+      "manager": "Manager",
+      "worker": "Worker",
+      "notReachable": "Not reachable",
+      "unreachableReason": "{{node}} isn't reachable right now.",
+      "readOnlyReason": "This host is read-only (set on the host)",
+      "none": "Choose at least one node.",
+      "loading": "Loading nodes…"
+    },
+    "readOnly": {
+      "reason": "This host is read-only (set on the host)",
+      "alert": "This host is read-only. Changes are turned off on the host itself, so you can look at images but not pull or remove them."
     }
   }
 }
