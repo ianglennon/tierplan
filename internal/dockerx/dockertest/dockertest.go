@@ -134,6 +134,9 @@ type FakeConfig struct {
 	// message an agent gives for a request its policy refuses: agent_policy_denied:
 	// followed by the method and path.
 	PolicyDeny bool
+	// HistoryDeny makes only the image history route answer 403 agent_policy_denied, as
+	// an agent older than the route does, while the lists and the image inspect answer.
+	HistoryDeny bool
 	// Events is the history the daemon has buffered when it starts, oldest
 	// first, as /events replays it to a client that passes since.
 	Events []FakeEvent
@@ -310,6 +313,26 @@ type FakeImage struct {
 	Size     int64
 	Created  int64
 	Labels   map[string]string
+	// RepoDigests are the repo@sha256 names of the image, shown by its inspect.
+	RepoDigests []string
+	// OS and Architecture default to linux and amd64 in the inspect; Variant is omitted
+	// when empty.
+	OS, Architecture, Variant string
+	// Env is the image config's environment, "NAME=value" each. The inspect carries it in
+	// Config.Env and in ContainerConfig.Env, as an older engine does.
+	Env []string
+	// History is the layers /images/{name}/history answers, newest first. Empty gives one
+	// layer.
+	History []FakeLayer
+}
+
+// FakeLayer is one entry of an image's history.
+type FakeLayer struct {
+	ID        string
+	CreatedBy string
+	Comment   string
+	Size      int64
+	Created   int64
 }
 
 // FakeVolume is one entry of /volumes. CreatedAt is RFC 3339, or empty.

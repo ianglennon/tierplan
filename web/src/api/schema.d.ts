@@ -732,6 +732,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/images/{imageId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One image: its names, details, labels and the nodes that have it
+         * @description Everything the image detail page shows, read live from the engines. The image is named by its ID (sha256: and 64 hexadecimal characters; anything else is 422). Every reporting node whose image list has the ID is asked, and the names (tags, then digests) are merged; node limits the read to one node by its nodeId. nodes says, for every node read, whether it has the image and under which names. 404 image_not_found when no reporting node has the image (it may have been removed, or its tag moved); 503 node_unavailable when node is not a connected node of the environment. Needs images.read (Viewer) on the environment. Reads are not audited.
+         */
+        get: operations["getImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/networks": {
         parameters: {
             query?: never;
@@ -3809,6 +3829,37 @@ export interface components {
              */
             role: "viewer" | "operator" | "admin";
         };
+        ImageDetailBody: {
+            /** @description The CPU architecture the image is built for */
+            architecture: string;
+            /** Format: date-time */
+            created?: string;
+            /** @description True when the image has no tag on any node read */
+            dangling: boolean;
+            /** @description The full image ID */
+            id: string;
+            /** @description Every label of the image */
+            labels: {
+                [key: string]: string;
+            };
+            /** @description Every tag, then every digest, the image has on the nodes read, each once, by name */
+            names: components["schemas"]["ImageNameBody"][] | null;
+            /** @description One entry per node read, by display name: whether it has the image and its names there */
+            nodes: components["schemas"]["ImageNodeBody"][] | null;
+            /** @description Nodes that should have answered and did not, so names and nodes may be incomplete */
+            notReporting: string[] | null;
+            /** @description The operating system the image is built for */
+            os: string;
+            /** @description The first 12 characters of the ID, without the sha256: prefix */
+            shortId: string;
+            /**
+             * Format: int64
+             * @description Size in bytes
+             */
+            size: number;
+            /** @description The architecture variant, for example v8; empty when there is none */
+            variant: string;
+        };
         ImageItem: {
             /** Format: date-time */
             created?: string;
@@ -3840,6 +3891,25 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        ImageNameBody: {
+            /**
+             * @description tag for a repository:tag name, digest for a repo@sha256 name
+             * @enum {string}
+             */
+            kind: "tag" | "digest";
+            /** @description repository:tag for a tag, repository@sha256:... for a digest */
+            name: string;
+        };
+        ImageNodeBody: {
+            /** @description The display name of the node */
+            name: string;
+            /** @description The tags and digests the image has on this node; empty when it is not there or has none */
+            names: string[] | null;
+            /** @description The ID of the node */
+            nodeId: string;
+            /** @description True when the node has the image */
+            present: boolean;
         };
         ImpactBody: {
             /** @description Who loses which environment access, sorted by username then environment. Empty when no one does */
@@ -6893,6 +6963,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PullTargetsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getImage: {
+        parameters: {
+            query?: {
+                /** @description Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them) */
+                node?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The image ID: sha256: and 64 hexadecimal characters */
+                imageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageDetailBody"];
                 };
             };
             /** @description Error */

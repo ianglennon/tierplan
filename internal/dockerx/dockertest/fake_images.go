@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -15,6 +16,75 @@ import (
 
 var _ = registerFakeHandler((*Fake).serveImageCreate)
 var _ = registerFakeHandler((*Fake).serveDistribution)
+var _ = registerFakeHandler((*Fake).serveImageInspect)
+
+// imageInspectPath matches /images/{name}/json. The list, /images/json, has no name in front
+// of its /json and is not matched.
+var imageInspectPath = regexp.MustCompile(`^/images/(.+)/json$`)
+
+// resolveImage finds an image by its ID, by the ID without sha256:, or by one of its tags.
+func (c FakeConfig) resolveImage(name string) (FakeImage, bool) {
+	for _, fi := range c.Images {
+		if fi.ID == name || strings.TrimPrefix(fi.ID, "sha256:") == name {
+			return fi, true
+		}
+		for _, rt := range fi.RepoTags {
+			if normaliseImage(rt) == normaliseImage(name) {
+				return fi, true
+			}
+		}
+	}
+	return FakeImage{}, false
+}
+
+// serveImageInspect answers GET /images/{name}/json: the image as the daemon documents it,
+// with its names, platform, labels and its config environment, or the 404 a real daemon gives.
+func (f *Fake) serveImageInspect(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	m := imageInspectPath.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	fi, ok := cfg.resolveImage(m[1])
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such image: " + m[1]})
+		return true
+	}
+	os, arch := fi.OS, fi.Architecture
+	if os == "" {
+		os = "linux"
+	}
+	if arch == "" {
+		arch = "amd64"
+	}
+	doc := map[string]any{
+		"Id": fi.ID, "RepoTags": orEmpty(fi.RepoTags), "RepoDigests": orEmpty(fi.RepoDigests),
+		"Os": os, "Architecture": arch, "Size": fi.Size,
+		"Config": map[string]any{"Env": orEmpty(fi.Env), "Labels": fi.Labels},
+		"RootFS": map[string]any{"Type": "layers", "Layers": []string{fakeDigest("layer:" + fi.ID)}},
+	}
+	if fi.Variant != "" {
+		doc["Variant"] = fi.Variant
+	}
+	if fi.Created > 0 {
+		doc["Created"] = time.Unix(fi.Created, 0).UTC().Format(time.RFC3339Nano)
+	}
+	if len(fi.Env) > 0 {
+		doc["ContainerConfig"] = map[string]any{"Env": fi.Env}
+	}
+	writeJSON(w, http.StatusOK, doc)
+	return true
+}
+
+// orEmpty is s, or an empty list for nil, so the document carries [] and not null.
+func orEmpty[S ~[]E, E any](s S) S {
+	if s == nil {
+		return S{}
+	}
+	return s
+}
 
 // serveDistribution answers GET /distribution/{name}/json, the check of whether the daemon
 // can read a manifest. It records the X-Registry-Auth header, then answers as the

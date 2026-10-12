@@ -3605,6 +3605,95 @@
         ],
         "type": "object"
       },
+      "ImageDetailBody": {
+        "additionalProperties": false,
+        "properties": {
+          "architecture": {
+            "description": "The CPU architecture the image is built for",
+            "type": "string"
+          },
+          "created": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "dangling": {
+            "description": "True when the image has no tag on any node read",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The full image ID",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every label of the image",
+            "type": "object"
+          },
+          "names": {
+            "description": "Every tag, then every digest, the image has on the nodes read, each once, by name",
+            "items": {
+              "$ref": "#/components/schemas/ImageNameBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "nodes": {
+            "description": "One entry per node read, by display name: whether it has the image and its names there",
+            "items": {
+              "$ref": "#/components/schemas/ImageNodeBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notReporting": {
+            "description": "Nodes that should have answered and did not, so names and nodes may be incomplete",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "os": {
+            "description": "The operating system the image is built for",
+            "type": "string"
+          },
+          "shortId": {
+            "description": "The first 12 characters of the ID, without the sha256: prefix",
+            "type": "string"
+          },
+          "size": {
+            "description": "Size in bytes",
+            "format": "int64",
+            "type": "integer"
+          },
+          "variant": {
+            "description": "The architecture variant, for example v8; empty when there is none",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "shortId",
+          "names",
+          "dangling",
+          "size",
+          "os",
+          "architecture",
+          "variant",
+          "labels",
+          "nodes",
+          "notReporting"
+        ],
+        "type": "object"
+      },
       "ImageItem": {
         "additionalProperties": false,
         "properties": {
@@ -3698,6 +3787,62 @@
           "truncated",
           "nodes",
           "notReporting"
+        ],
+        "type": "object"
+      },
+      "ImageNameBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "tag for a repository:tag name, digest for a repo@sha256 name",
+            "enum": [
+              "tag",
+              "digest"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "repository:tag for a tag, repository@sha256:... for a digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ImageNodeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The display name of the node",
+            "type": "string"
+          },
+          "names": {
+            "description": "The tags and digests the image has on this node; empty when it is not there or has none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "nodeId": {
+            "description": "The ID of the node",
+            "type": "string"
+          },
+          "present": {
+            "description": "True when the node has the image",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "nodeId",
+          "name",
+          "present",
+          "names"
         ],
         "type": "object"
       },
@@ -10212,6 +10357,80 @@
         "summary": "The nodes a pull can run on",
         "tags": [
           "images"
+        ]
+      }
+    },
+    "/api/env/{envId}/images/{imageId}": {
+      "get": {
+        "description": "Everything the image detail page shows, read live from the engines. The image is named by its ID (sha256: and 64 hexadecimal characters; anything else is 422). Every reporting node whose image list has the ID is asked, and the names (tags, then digests) are merged; node limits the read to one node by its nodeId. nodes says, for every node read, whether it has the image and under which names. 404 image_not_found when no reporting node has the image (it may have been removed, or its tag moved); 503 node_unavailable when node is not a connected node of the environment. Needs images.read (Viewer) on the environment. Reads are not audited.",
+        "operationId": "getImage",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The image ID: sha256: and 64 hexadecimal characters",
+            "in": "path",
+            "name": "imageId",
+            "required": true,
+            "schema": {
+              "description": "The image ID: sha256: and 64 hexadecimal characters",
+              "maxLength": 71,
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them)",
+            "explode": false,
+            "in": "query",
+            "name": "node",
+            "schema": {
+              "description": "Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them)",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageDetailBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One image: its names, details, labels and the nodes that have it",
+        "tags": [
+          "environments"
         ]
       }
     },

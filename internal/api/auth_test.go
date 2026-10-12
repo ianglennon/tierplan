@@ -291,6 +291,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterVolumes(r, api.VolumesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SizesTimeout: f.volumeSizesTimeout, Log: log})
+		api.RegisterImages(r, api.ImagesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		if f.jobHub == nil {
 			f.jobHub = jobs.New(jobs.Options{})
 			t.Cleanup(f.jobHub.Close)

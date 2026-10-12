@@ -1,0 +1,292 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { setCsrfToken } from "@/api/client";
+import { detailRetry } from "@/api/container-detail";
+import type { ImageDetail } from "@/api/images";
+import { queryClient } from "@/api/query-client";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
+import { routeTree } from "@/routeTree.gen";
+import "@/i18n";
+import { makeMe } from "@/test-me";
+
+// The image page: header, Dangling and node-count badges, Pull… and More, the Overview
+// tab and the states of loading, failing and being gone (plan 05-14, RES-09, D-18).
+
+const ENV = "e1";
+const ID = `sha256:${"a".repeat(64)}`;
+const PAGE = `/env/${ENV}/images/${ID}`;
+
+function detail(extra: Partial<ImageDetail> = {}): ImageDetail {
+  return {
+    id: ID,
+    shortId: "a".repeat(12),
+    names: [
+      { name: "nginx:1.27", kind: "tag" },
+      { name: "nginx:latest", kind: "tag" },
+      { name: `nginx@sha256:${"c".repeat(64)}`, kind: "digest" },
+    ],
+    dangling: false,
+    size: 4096,
+    created: "2026-10-01T10:00:00Z",
+    os: "linux",
+    architecture: "arm64",
+    variant: "v8",
+    labels: { maintainer: "ops" },
+    nodes: [{ nodeId: "n1", name: "node-1", present: true, names: ["nginx:1.27"] }],
+    notReporting: [],
+    ...extra,
+  };
+}
+
+interface Sent {
+  method: string;
+  path: string;
+  search: string;
+}
+
+let sent: Sent[];
+let me: ReturnType<typeof makeMe>;
+let answer: () => Response | Promise<Response>;
+let envType: "standalone" | "swarm";
+const defaults = queryClient.getDefaultOptions();
+
+beforeEach(() => {
+  sent = [];
+  envType = "standalone";
+  me = makeMe({ envs: { [ENV]: "admin" } });
+  answer = () => Response.json(detail());
+  queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
+  detailRetry.attempts = 0;
+  setCsrfToken(null);
+  FakeEventSource.reset();
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (req: Request) => {
+      const url = new URL(req.url);
+      // The client writes the colon of an image ID as %3A.
+      const path = decodeURIComponent(url.pathname);
+      sent.push({ method: req.method, path, search: url.search });
+      switch (path) {
+        case "/api/instance":
+          return Response.json({ instanceName: "Lab", needsSetup: false, rememberDays: 30 });
+        case "/api/me":
+          return Response.json(me);
+        case "/api/version":
+          return Response.json({
+            commit: "",
+            display: "v0.1.0",
+            sourceTreeUrl: "https://example.test/tree",
+            sourceUrl: "https://example.test",
+            version: "v0.1.0",
+          });
+        case "/api/environments":
+          return Response.json({
+            items: [
+              {
+                id: ENV,
+                name: "Lab host",
+                kind: "local",
+                type: envType,
+                envType,
+                enabled: true,
+                isSelfHost: true,
+                createdAt: "2026-10-01T10:00:00Z",
+                status: { state: "online" },
+              },
+            ],
+            total: 1,
+          });
+        case `/api/env/${ENV}/summary`:
+          return Response.json({
+            environment: { id: ENV, name: "Lab host", type: envType, status: { state: "online" } },
+            engine: { name: "Docker Engine", version: "29.1.0", apiVersion: "1.52" },
+            counts: {
+              containers: 0,
+              containersRunning: 0,
+              containersStopped: 0,
+              images: 1,
+              volumes: 0,
+              networks: 0,
+            },
+            isWorker: false,
+            fetchedAt: "2026-10-01T10:00:00Z",
+          });
+        case `/api/env/${ENV}/images/${ID}`:
+          return answer();
+        case `/api/env/${ENV}/images/pull-targets`:
+          return Response.json({ nodes: [] });
+        case `/api/env/${ENV}/images`:
+          return Response.json({
+            items: [],
+            total: 0,
+            truncated: false,
+            nodes: [],
+            notReporting: [],
+          });
+      }
+      return Response.json({}, { status: 404 });
+    }),
+  );
+});
+
+afterEach(() => {
+  toast.dismiss();
+  cleanup();
+  vi.unstubAllGlobals();
+  queryClient.clear();
+  queryClient.setDefaultOptions(defaults);
+  detailRetry.attempts = 1;
+  document.title = "";
+});
+
+function renderAt(path = PAGE) {
+  const router = createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries: [path] }),
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+  return router;
+}
+
+describe("image page header", () => {
+  it("shows the breadcrumb and the first tag as the title in mono, and sets the document title", async () => {
+    renderAt();
+    const heading = await screen.findByRole("heading", { level: 2, name: "nginx:1.27" });
+    expect(heading.className).toContain("font-mono");
+    expect(heading.className).toContain("line-clamp-2");
+    const crumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(crumb).getByRole("link", { name: "Images" }).getAttribute("href")).toBe(
+      `/env/${ENV}/images`,
+    );
+    expect(within(crumb).getByText("nginx:1.27")).toBeTruthy();
+    expect(screen.queryByText("Dangling")).toBeNull();
+    await waitFor(() => expect(document.title).toContain("nginx:1.27"));
+    expect(sent.some((s) => s.path === `/api/env/${ENV}/images/${ID}`)).toBe(true);
+  });
+
+  it("shows the tabs and a skeleton before the image has loaded, then the Overview with its cards", async () => {
+    let release: (r: Response) => void = () => undefined;
+    answer = () => new Promise<Response>((resolve) => (release = resolve));
+    renderAt();
+    expect(await screen.findByRole("tab", { name: "Overview" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
+    release(Response.json(detail()));
+    expect(await screen.findByRole("region", { name: "Names" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Details" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Labels" })).toBeTruthy();
+  });
+
+  it("calls an untagged image by its short ID and badges it Dangling", async () => {
+    answer = () => Response.json(detail({ names: [], dangling: true }));
+    renderAt();
+    expect(await screen.findByRole("heading", { level: 2, name: "a".repeat(12) })).toBeTruthy();
+    expect(screen.getByText("Dangling")).toBeTruthy();
+    expect(await screen.findByText("No names. This image is dangling.")).toBeTruthy();
+  });
+
+  it("badges a swarm image with the nodes that have it and shows the On nodes card", async () => {
+    envType = "swarm";
+    answer = () =>
+      Response.json(
+        detail({
+          nodes: [
+            { nodeId: "n1", name: "mgr-1", present: true, names: ["nginx:1.27"] },
+            { nodeId: "n2", name: "mgr-2", present: true, names: ["nginx:1.27", "nginx:latest"] },
+            { nodeId: "n3", name: "wrk-1", present: false, names: [] },
+          ],
+        }),
+      );
+    renderAt();
+    expect(await screen.findByText("on 2/3 nodes")).toBeTruthy();
+    const card = await screen.findByRole("region", { name: "On nodes" });
+    expect(within(card).getByText("mgr-2")).toBeTruthy();
+    expect(within(card).getByText("Not on this node")).toBeTruthy();
+  });
+
+  it("has no On nodes card on a standalone host", async () => {
+    renderAt();
+    await screen.findByRole("region", { name: "Names" });
+    expect(screen.queryByRole("region", { name: "On nodes" })).toBeNull();
+  });
+
+  it("passes the node of the address on to the read", async () => {
+    renderAt(`${PAGE}?node=n1`);
+    await screen.findByRole("heading", { level: 2, name: "nginx:1.27" });
+    expect(
+      sent.some((s) => s.path === `/api/env/${ENV}/images/${ID}` && s.search === "?node=n1"),
+    ).toBe(true);
+  });
+});
+
+describe("image page actions", () => {
+  it("opens the pull form with the first tag from Pull…", async () => {
+    renderAt();
+    fireEvent.click(await screen.findByRole("button", { name: "Pull nginx:1.27 again" }));
+    const dialog = await screen.findByRole("dialog");
+    expect((within(dialog).getByLabelText("Image") as HTMLInputElement).value).toBe("nginx:1.27");
+  });
+
+  it("makes Pull… unavailable, with the reason, for a viewer", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    renderAt();
+    const button = await screen.findByRole("button", { name: "Pull nginx:1.27 again" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(button);
+    expect((await screen.findAllByText("Needs Operator")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("has Copy image ID under More", async () => {
+    const write = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: write } });
+    renderAt();
+    const more = await screen.findByRole("button", { name: "More actions" });
+    fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+    fireEvent.click(more);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy image ID" }));
+    await waitFor(() => expect(write).toHaveBeenCalledWith(ID));
+  });
+});
+
+describe("image page states", () => {
+  it("replaces the page with This image is gone when no node has the image", async () => {
+    answer = () =>
+      Response.json({ type: "image_not_found", title: "x", status: 404 }, { status: 404 });
+    renderAt();
+    expect(await screen.findByText("This image is gone")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Back to images" })).toBeTruthy();
+  });
+
+  it("says it could not load the image, with Retry, when the read fails", async () => {
+    let fail = true;
+    answer = () =>
+      fail ? Response.json({ title: "x", status: 502 }, { status: 502 }) : Response.json(detail());
+    renderAt();
+    expect(await screen.findByText(/Couldn't load aaaaaaaaaaaa/)).toBeTruthy();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "nginx:1.27" })).toBeTruthy();
+  });
+
+  it("shows No permission to a caller without images.read", async () => {
+    me = makeMe({ envs: {} });
+    renderAt();
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { level: 2, name: "nginx:1.27" })).toBeNull(),
+    );
+    expect(sent.some((s) => s.path === `/api/env/${ENV}/images/${ID}`)).toBe(false);
+  });
+});

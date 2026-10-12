@@ -195,3 +195,48 @@ func TestDistributionInspectFailuresAreClassifiedAsAPullIs(t *testing.T) {
 		})
 	}
 }
+
+// One image's detail (plan 05-14).
+
+const (
+	imgA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	imgB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+func TestImageDetailReadsTheImageWithItsNamesPlatformLabelsAndTheRawDocument(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Images: []dockertest.FakeImage{
+		{ID: imgA, RepoTags: []string{"nginx:1.27", "nginx:latest"}, RepoDigests: []string{"nginx@sha256:" + strings.Repeat("c", 64)},
+			Size: 4096, Created: 1788000000, OS: "linux", Architecture: "arm64", Variant: "v8",
+			Labels: map[string]string{"maintainer": "x"}, Env: []string{"A=1"}},
+		{ID: imgB},
+	}})
+	c := newClient(t, fake)
+	d, raw, err := c.ImageDetail(context.Background(), imgA)
+	if err != nil {
+		t.Fatalf("ImageDetail: %v", err)
+	}
+	if d.ID != imgA || !slices.Equal(d.RepoTags, []string{"nginx:1.27", "nginx:latest"}) ||
+		!slices.Equal(d.RepoDigests, []string{"nginx@sha256:" + strings.Repeat("c", 64)}) ||
+		d.Size != 4096 || d.Created.Unix() != 1788000000 || d.OS != "linux" || d.Architecture != "arm64" || d.Variant != "v8" ||
+		d.Labels["maintainer"] != "x" {
+		t.Errorf("detail = %+v", d)
+	}
+	if !strings.Contains(string(raw), `"Architecture"`) || !strings.Contains(string(raw), `"A=1"`) {
+		t.Errorf("raw = %s, want the engine's own document", raw)
+	}
+	bare, _, err := c.ImageDetail(context.Background(), imgB)
+	if err != nil || bare.RepoTags == nil || bare.RepoDigests == nil || bare.Labels == nil || !bare.Created.IsZero() {
+		t.Errorf("an image with none: %+v, %v; want empty lists and maps (never nil) and no created time", bare, err)
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Errorf("a read wrote: %v", w)
+	}
+}
+
+func TestImageDetailAnImageTheEngineLacksIsNotFound(t *testing.T) {
+	c := newClient(t, dockertest.NewFake(t, dockertest.FakeConfig{Images: []dockertest.FakeImage{{ID: imgA}}}))
+	_, _, err := c.ImageDetail(context.Background(), imgB)
+	if !dockerx.IsNotFound(err) {
+		t.Fatalf("ImageDetail(unknown) = %v, want a not-found error", err)
+	}
+}

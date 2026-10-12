@@ -4,11 +4,14 @@
 package dockerx
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
@@ -217,4 +220,52 @@ func PullFailure(err error) string {
 		return PullCodeRegistryHTTP
 	}
 	return PullCodeFailed
+}
+
+// ImageDetail is one image as its page shows it. The labels and the names are what the
+// engine reports; the image's configuration, which can hold secrets, is only in the raw
+// document ImageDetail returns beside it, and a caller sends that to a browser only
+// through the redaction package.
+type ImageDetail struct {
+	// ID is the image ID, sha256: and 64 hexadecimal characters.
+	ID string
+	// RepoTags are the names the image has on this node, RepoDigests the repo@sha256 names.
+	// Both are never nil.
+	RepoTags, RepoDigests []string
+	Size                  int64
+	// Created is zero when the engine does not say.
+	Created                   time.Time
+	OS, Architecture, Variant string
+	// Labels are never nil.
+	Labels map[string]string
+}
+
+// ImageDetail reads one image by ID with the engine's own raw inspect document, which is
+// the Inspect tab's. Bayplan asks for no manifests and no platform: the image the engine
+// holds for the ID is the one answered. An image the engine does not have is an error
+// IsNotFound reports.
+func (c *Client) ImageDetail(ctx context.Context, id string) (ImageDetail, []byte, error) {
+	var raw bytes.Buffer
+	res, err := c.cur().ImageInspect(ctx, id, client.ImageInspectWithRawResponse(&raw))
+	if err != nil {
+		return ImageDetail{}, nil, fmt.Errorf("inspect image on %s: %w", c.t.Describe(), err)
+	}
+	d := ImageDetail{
+		ID: res.ID, RepoTags: slices.Clone(res.RepoTags), RepoDigests: slices.Clone(res.RepoDigests),
+		Size: res.Size, OS: res.Os, Architecture: res.Architecture, Variant: res.Variant,
+		Labels: map[string]string{},
+	}
+	if d.RepoTags == nil {
+		d.RepoTags = []string{}
+	}
+	if d.RepoDigests == nil {
+		d.RepoDigests = []string{}
+	}
+	if res.Config != nil {
+		maps.Copy(d.Labels, res.Config.Labels)
+	}
+	if t, err := time.Parse(time.RFC3339Nano, res.Created); err == nil && t.Year() > 1 {
+		d.Created = t
+	}
+	return d, raw.Bytes(), nil
 }

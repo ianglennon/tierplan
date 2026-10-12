@@ -1,0 +1,79 @@
+{
+  "images": {
+    "detail": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "images": "Images"
+      },
+      "tabs": {
+        "label": "Image sections",
+        "overview": "Overview"
+      },
+      "header": {
+        "dangling": "Dangling",
+        "onNodes": "on {{present}}/{{total}} nodes"
+      },
+      "actions": {
+        "pull": "Pull…",
+        "pullLabel": "Pull {{name}} again",
+        "more": "More actions",
+        "moreText": "More",
+        "copyId": "Copy image ID",
+        "copied": "Copied the image ID",
+        "copyFailed": "Couldn't copy the image ID. Select it in Details and copy it by hand."
+      },
+      "error": {
+        "loadFailed": "Couldn't load {{name}}. Docker may be unreachable. Try again.",
+        "retry": "Retry"
+      },
+      "gone": {
+        "heading": "This image is gone",
+        "body": "It was removed, or the tag moved to another image. Go back to the list to find it.",
+        "back": "Back to images"
+      },
+      "overview": {
+        "loading": "Loading the image",
+        "names": {
+          "title": "Names",
+          "label": "Names of the image",
+          "empty": "No names. This image is dangling.",
+          "columns": {
+            "name": "Name",
+            "type": "Type"
+          },
+          "type": {
+            "tag": "Tag",
+            "digest": "Digest"
+          },
+          "copy": "Copy",
+          "copyLabel": "Copy {{name}}",
+          "copied": "Copied {{name}}",
+          "copyFailed": "Couldn't copy the name. Select it and copy it by hand."
+        },
+        "details": {
+          "title": "Details",
+          "id": "ID",
+          "idLabel": "the image ID",
+          "size": "Size",
+          "created": "Created",
+          "os": "Operating system",
+          "architecture": "Architecture"
+        },
+        "nodes": {
+          "title": "On nodes",
+          "columns": {
+            "node": "Node",
+            "names": "Names on this node"
+          },
+          "absent": "Not on this node",
+          "noNames": "No names"
+        },
+        "labels": {
+          "title": "Labels",
+          "label": "Labels",
+          "empty": "No labels."
+        }
+      }
+    }
+  }
+}

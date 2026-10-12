@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
 
 import { useAllReadOnly } from "@/api/pulls";
@@ -60,10 +60,20 @@ function Images() {
       header: t(`${key}.columns.repository`),
       cell: (i) => {
         const tags = (i.repoTags ?? []).filter((tag) => !isNone(tag));
-        return tags.length > 0 ? (
-          <TruncatedText>{tags.join(", ")}</TruncatedText>
-        ) : (
-          <span className="text-muted-foreground">{t("dashboard.lists.untagged")}</span>
+        // The name opens the image's page. The merged view has one row per image, so the
+        // link names the image and leaves the node to the page (D-18).
+        return (
+          <Link
+            to="/env/$envId/images/$imageId"
+            params={{ envId, imageId: i.id }}
+            className="block min-w-0 rounded-sm text-accent-ink hover:underline"
+          >
+            {tags.length > 0 ? (
+              <TruncatedText>{tags.join(", ")}</TruncatedText>
+            ) : (
+              <span className="text-muted-foreground">{t("dashboard.lists.untagged")}</span>
+            )}
+          </Link>
         );
       },
     },
