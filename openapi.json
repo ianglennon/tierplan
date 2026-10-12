@@ -11880,6 +11880,57 @@
         ]
       }
     },
+    "/api/pulls/{jobId}/cancel": {
+      "post": {
+        "description": "Stops the nodes that have not finished: their downloads are cancelled, their items end cancelled and write an image.pulled audit row with the code cancelled. Nodes that had finished keep the image and stay done. The job ends cancelled when no node finished and partial otherwise, and the answer is the job as it stands, normally already ended. Only the user who started the pull, or a holder of images.pull on the pull's environment, may cancel it: anyone else who may not see the pull gets 404 pull_not_found, and one who sees it but cannot cancel gets 403 (audited as permission.denied). A pull that has already ended answers 409 pull_finished and nothing changes, so cancelling twice is safe. A cancel is a change and is never retried.",
+        "operationId": "cancelPull",
+        "parameters": [
+          {
+            "description": "The pull job ID",
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "description": "The pull job ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullJobBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Cancel a pull that is running",
+        "tags": [
+          "images"
+        ]
+      }
+    },
     "/api/settings": {
       "get": {
         "description": "publicUrlLocked is true when the BAYPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when BAYPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19). agentEndpointRefused is true when agentEndpoint is plain ws:// for a host that is not this machine and BAYPLAN_AGENT_ALLOW_INSECURE is off: agents cannot connect to it (G-02-R4-3).",

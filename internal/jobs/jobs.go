@@ -43,7 +43,9 @@ const (
 
 // The states of a job. It is running until every item has ended, then done when every
 // item is done, partial when some are and some are not, failed when none is and one
-// failed, and cancelled when none is done and none failed.
+// failed, and cancelled when none is done and none failed. A job that was cancelled while
+// it ran ends cancelled when no item finished, whatever else happened to the rest, and
+// partial when some did.
 const (
 	JobRunning   = "running"
 	JobDone      = "done"
@@ -60,8 +62,16 @@ const (
 	EventDone = "done"
 )
 
-// CodeInterrupted is the code of an item the run ended without finishing.
-const CodeInterrupted = "interrupted"
+// The codes the hub gives an item the run left unfinished.
+const (
+	// CodeInterrupted is the code of an item the run ended without finishing.
+	CodeInterrupted = "interrupted"
+	// CodeCancelled is the code of an item that ended because the job was cancelled.
+	CodeCancelled = "cancelled"
+)
+
+// messageCancelled is the sentence for CodeCancelled: built here, never from a remote answer.
+const messageCancelled = "Cancelled before it finished."
 
 // Errors returned by the hub.
 var (
@@ -70,6 +80,8 @@ var (
 	// ErrNotFound means there is no job of that ID: it never existed, or it finished
 	// longer ago than the hub keeps it.
 	ErrNotFound = errors.New("jobs: no such job")
+	// ErrFinished means the job has ended, so there is nothing to cancel.
+	ErrFinished = errors.New("jobs: the job has finished")
 )
 
 // ItemSpec names one item of a job.
@@ -210,9 +222,12 @@ func New(o Options) *Hub {
 type entry struct {
 	job    Job
 	cancel context.CancelFunc
-	nextID uint64
-	ring   []Event
-	subs   map[*sub]struct{}
+	// cancelRequested is set by Cancel, so the job ends cancelled rather than failed when
+	// no item finished.
+	cancelRequested bool
+	nextID          uint64
+	ring            []Event
+	subs            map[*sub]struct{}
 	// last is when each item last published an event; pending are the items whose latest
 	// state is not published yet, and timers the flush scheduled for them.
 	last    map[string]time.Time
@@ -439,6 +454,8 @@ func (h *Hub) finishIfAllLocked(e *entry) {
 		e.job.State = JobDone
 	case done > 0:
 		e.job.State = JobPartial
+	case e.cancelRequested:
+		e.job.State = JobCancelled
 	case failed > 0:
 		e.job.State = JobFailed
 	default:
@@ -467,7 +484,7 @@ func (h *Hub) settle(e *entry, cancelled bool) {
 			continue
 		}
 		if cancelled {
-			it.State = ItemCancelled
+			it.State, it.Code, it.Message = ItemCancelled, CodeCancelled, messageCancelled
 		} else {
 			it.State, it.Code, it.Message = ItemFailed, CodeInterrupted, "The job ended before this step finished."
 		}
@@ -605,16 +622,51 @@ func (h *Hub) Subscribe(ctx context.Context, id string, after uint64) (Job, <-ch
 }
 
 // Cancel cancels the context of a running job. Its run decides how fast it stops; the
-// items it leaves unfinished end as cancelled. Cancelling a finished job does nothing.
+// items it leaves unfinished end as cancelled with CodeCancelled, and the ones that had
+// finished keep their result. It is ErrFinished for a job that has ended, which it leaves
+// as it is, so cancelling twice changes nothing.
 func (h *Hub) Cancel(id string) error {
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sweepLocked(h.opt.Now())
 	e, ok := h.jobs[id]
-	h.mu.Unlock()
 	if !ok {
 		return ErrNotFound
 	}
+	if e.job.Finished() {
+		return ErrFinished
+	}
+	e.cancelRequested = true
 	e.cancel()
 	return nil
+}
+
+// Wait returns the job once it has ended. If ctx ends first it returns the job as it
+// stands with the context's error, and it is ErrNotFound for a job the hub does not have.
+func (h *Hub) Wait(ctx context.Context, id string) (Job, error) {
+	for {
+		snap, ch, cancel, err := h.Subscribe(ctx, id, 0)
+		if err != nil {
+			return Job{}, err
+		}
+		if snap.Finished() {
+			cancel()
+			return snap, nil
+		}
+		for range ch {
+		}
+		cancel()
+		job, ok := h.Get(id)
+		switch {
+		case !ok:
+			return Job{}, ErrNotFound
+		case job.Finished():
+			return job, nil
+		case ctx.Err() != nil:
+			return job, ctx.Err()
+		}
+		// The reader fell behind and was dropped: look again.
+	}
 }
 
 // Close cancels every running job, waits for their runs to return and closes every

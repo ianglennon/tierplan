@@ -50,6 +50,10 @@ const (
 	problemTooManyStreams = "too_many_streams"
 	problemPullFinished   = "pull_finished"
 
+	// pullCancelWait is how long a cancel waits for the nodes to stop before it answers with
+	// the job as it stands. The pulls stop as soon as their requests are cancelled.
+	pullCancelWait = 5 * time.Second
+
 	// metaOwnerName and metaEnvName are what a job keeps of who started it and where, so the
 	// list can name them without reading a user or an environment again.
 	metaOwnerName = "ownerName"
@@ -234,6 +238,13 @@ type PullJobInput struct {
 	JobID string `path:"jobId" doc:"The pull job ID"`
 }
 
+// PullCancelInput is the path of the cancel route.
+type PullCancelInput struct {
+	JobID string `path:"jobId" doc:"The pull job ID"`
+	// UserAgent is read only to record a refusal in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
 // PullJobOutput wraps PullJobBody for huma.
 type PullJobOutput struct {
 	CacheControl string `header:"Cache-Control"`
@@ -314,6 +325,19 @@ func RegisterPulls(r *httpx.Router, d PullsDeps) {
 			return &PullJobOutput{CacheControl: "no-store", Body: pullJobBody(job)}, nil
 		})
 
+	httpx.Register(r, huma.Operation{
+		OperationID: "cancelPull", Method: http.MethodPost, Path: "/api/pulls/{jobId}/cancel",
+		Summary: "Cancel a pull that is running",
+		Description: "Stops the nodes that have not finished: their downloads are cancelled, their items end cancelled and write an image.pulled audit row with the code cancelled. " +
+			"Nodes that had finished keep the image and stay done. The job ends cancelled when no node finished and partial otherwise, and the answer is the job as it stands, normally already ended. " +
+			"Only the user who started the pull, or a holder of images.pull on the pull's environment, may cancel it: anyone else who may not see the pull gets 404 pull_not_found, and one who sees it but cannot cancel gets 403 (audited as permission.denied). " +
+			"A pull that has already ended answers 409 pull_finished and nothing changes, so cancelling twice is safe. A cancel is a change and is never retried.",
+		Tags: []string{"images"},
+	}, rbac.SelfService,
+		func(ctx context.Context, in *PullCancelInput) (*PullJobOutput, error) {
+			return cancelPull(ctx, d, in)
+		})
+
 	lim := &streamLimiter{max: d.MaxStreamsPerUser, open: map[string]int{}}
 	r.Guarded(http.MethodGet, "/api/pulls/{jobId}/stream", rbac.SelfService, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		servePullStream(w, req, d, lim)
@@ -362,6 +386,66 @@ func listPulls(ctx context.Context, d PullsDeps) (*PullListOutput, error) {
 		body.Pulls = append(body.Pulls, row)
 	}
 	return &PullListOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+// cancelPull stops the nodes of a pull that have not finished and answers with the job.
+func cancelPull(ctx context.Context, d PullsDeps, in *PullCancelInput) (*PullJobOutput, error) {
+	p := httpx.PrincipalFrom(ctx)
+	if p == nil || d.Jobs == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Pulls are not available right now.")
+	}
+	gone := httpx.Problem(http.StatusNotFound, problemPullNotFound, "This pull is no longer here. Pulls are kept for 10 minutes after they end.")
+	job, ok := d.Jobs.Get(in.JobID)
+	if !ok || !d.pullVisible(ctx, p, job) {
+		return nil, gone
+	}
+	if job.Owner != pullOwner(p) && !d.canPullOn(ctx, p, job.EnvID) {
+		return nil, d.refuseCancel(ctx, p, job, in.UserAgent)
+	}
+	switch err := d.Jobs.Cancel(in.JobID); {
+	case errors.Is(err, jobs.ErrFinished):
+		return nil, httpx.Problem(http.StatusConflict, problemPullFinished, "This pull has already ended.")
+	case errors.Is(err, jobs.ErrNotFound):
+		return nil, gone
+	case err != nil:
+		d.Log.Error("could not cancel a pull", "job", in.JobID, "error", err)
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	// The nodes stop as soon as their requests are cancelled; the answer waits for that so
+	// it can say how many were stopped, and falls back to the job as it stands.
+	wctx, cancel := context.WithTimeout(ctx, pullCancelWait)
+	defer cancel()
+	job, err := d.Jobs.Wait(wctx, in.JobID)
+	if errors.Is(err, jobs.ErrNotFound) {
+		return nil, gone
+	}
+	return &PullJobOutput{CacheControl: "no-store", Body: pullJobBody(job)}, nil
+}
+
+// canPullOn reports whether the caller holds images.pull on the environment.
+func (d PullsDeps) canPullOn(ctx context.Context, p *rbac.Principal, envID string) bool {
+	if d.Checker == nil || envID == "" {
+		return false
+	}
+	dec := d.Checker.Check(ctx, p, rbac.Requirement{Perm: rbac.PermImagesPull, Scope: rbac.ScopeEnvironment}, envID)
+	return dec.Err == nil && dec.Allowed
+}
+
+// refuseCancel audits a cancel by someone who can see the pull but may not stop it, and
+// answers 403. A refusal nobody can see must not look like a normal one (T-05-17).
+func (d PullsDeps) refuseCancel(ctx context.Context, p *rbac.Principal, job jobs.Job, userAgent string) error {
+	if d.Audit != nil {
+		if err := d.Audit.Record(ctx, audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionPermissionDenied, Result: audit.ResultDenied,
+			Reason: rbac.ReasonForbidden, TargetType: "route", TargetID: "POST /api/pulls/{jobId}/cancel", EnvID: job.EnvID,
+			IP: httpx.ClientIP(ctx), UserAgent: userAgent,
+			Details: map[string]string{"permission": string(rbac.PermImagesPull)},
+		}); err != nil {
+			d.Log.Error("could not audit a refused cancel", "error", err)
+			return huma.Error500InternalServerError("internal error")
+		}
+	}
+	return httpx.Problem(http.StatusForbidden, "", "You do not have permission to cancel this pull.")
 }
 
 // pullOwner is how a job records who started it.

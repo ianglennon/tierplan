@@ -1514,6 +1514,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/pulls/{jobId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a pull that is running
+         * @description Stops the nodes that have not finished: their downloads are cancelled, their items end cancelled and write an image.pulled audit row with the code cancelled. Nodes that had finished keep the image and stay done. The job ends cancelled when no node finished and partial otherwise, and the answer is the job as it stands, normally already ended. Only the user who started the pull, or a holder of images.pull on the pull's environment, may cancel it: anyone else who may not see the pull gets 404 pull_not_found, and one who sees it but cannot cancel gets 403 (audited as permission.denied). A pull that has already ended answers 409 pull_finished and nothing changes, so cancelling twice is safe. A cancel is a change and is never retried.
+         */
+        post: operations["cancelPull"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -7935,6 +7955,39 @@ export interface operations {
         };
     };
     getPull: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The pull job ID */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullJobBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    cancelPull: {
         parameters: {
             query?: never;
             header?: never;
