@@ -199,7 +199,14 @@ export function PullNodeRow({ item, imageRef, envId }: PullNodeRowProps) {
 
       {failed && agentPolicy ? <AgentUpdateNotice envId={envId} /> : null}
       {failed && !agentPolicy ? (
-        <p role="alert" className="text-sm break-words text-status-offline-text">
+        // A node the person cancelled is told in plain words, not as an alarm.
+        <p
+          role={item.state === "cancelled" ? "status" : "alert"}
+          className={cn(
+            "text-sm break-words",
+            item.state === "cancelled" ? "text-muted-foreground" : "text-status-offline-text",
+          )}
+        >
           {failureMessage(t, item.code, item.name, imageRef)}
         </p>
       ) : null}

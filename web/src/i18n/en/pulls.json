@@ -32,13 +32,15 @@
       "titleDone": "Pulled {{ref}}",
       "titleFailed": "Couldn't pull {{ref}}",
       "credential": "Credential: anonymous",
-      "helper": "You can close this. The pull keeps running.",
+      "helper": "You can close this. The pull keeps running. Find it under Pulls.",
       "close": "Close",
       "tryAgain": "Try again",
       "nodes": "Pull progress by node",
       "lost": "This pull is no longer listed. Pulls are kept for 10 minutes after they end. The audit log has its result.",
       "accessLost": "You can no longer follow this pull.",
-      "reconnecting": "Reconnecting…"
+      "reconnecting": "Reconnecting…",
+      "cancel": "Cancel pull",
+      "cancelling": "Cancelling…"
     },
     "node": {
       "status": {
@@ -123,7 +125,16 @@
         "partial": "Partly done",
         "failed": "Failed",
         "cancelled": "Cancelled"
-      }
+      },
+      "cancel": "Cancel",
+      "cancelLabel": "Cancel pull of {{ref}}"
+    },
+    "cancel": {
+      "done_one": "Cancelled the pull on {{count}} node.",
+      "done_other": "Cancelled the pull on {{count}} nodes.",
+      "finished": "This pull has already ended.",
+      "failed": "Couldn't cancel the pull. Try again.",
+      "permission": "You no longer have permission to do that. Your access may have changed."
     }
   }
 }

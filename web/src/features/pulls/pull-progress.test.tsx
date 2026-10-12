@@ -349,7 +349,7 @@ describe("PullProgress", () => {
       job(
         [
           item({ state: "done", digest: DIGEST }),
-          item({ nodeId: "n2", name: "node-2", state: "cancelled" }),
+          item({ nodeId: "n2", name: "node-2", state: "cancelled", code: "cancelled" }),
         ],
         "partial",
       ),

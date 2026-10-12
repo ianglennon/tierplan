@@ -133,7 +133,7 @@ describe("PullsIndicator", () => {
     pulls = [summary()];
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Pulls, 1 in progress" }));
-    fireEvent.click(await screen.findByRole("button", { name: /nginx:1.27/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Pulling on 3 of 3 nodes/ }));
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: `Pulling ${REF}` })).toBeTruthy();
@@ -227,7 +227,7 @@ describe("PullsIndicator", () => {
     fireEvent.click(await screen.findByRole("button", { name: `Cancel pull of ${REF}` }));
     expect(await screen.findByText("Cancelled the pull on 2 nodes.")).toBeTruthy();
     expect(calls.filter((c) => c === "POST /api/pulls/j1/cancel")).toHaveLength(1);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("heading", { name: `Pulling ${REF}` })).toBeNull();
   });
 
   it("does not retry a cancel that failed, and says so", async () => {

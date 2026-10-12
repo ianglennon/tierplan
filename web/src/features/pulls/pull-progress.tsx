@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { type Ref, useMemo } from "react";
+import { type Ref, useMemo, useRef } from "react";
 
-import type { PullItem, PullJob } from "@/api/pulls";
+import { type PullItem, type PullJob, useCancelPull } from "@/api/pulls";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { PullNodeRow } from "@/features/pulls/pull-node-row";
 import type { PullStreamStatus } from "@/features/pulls/pull-stream";
 import { useT } from "@/i18n/use-t";
+import { toastError, toastInfo, toastSuccess } from "@/lib/toast";
 
 interface PullProgressProps {
   envId: string;
@@ -23,6 +25,10 @@ interface PullProgressProps {
   onClose: () => void;
   // Opens the form again with the reference. A failed pull is never retried by itself.
   onTryAgain?: () => void;
+  // Stops the nodes that have not finished. The button is offered only while the pull runs.
+  onCancel?: () => void;
+  // A cancel is on its way: the button is disabled so it is sent once.
+  cancelling?: boolean;
   // The heading takes focus when the panel replaces the form.
   headingRef?: Ref<HTMLHeadingElement>;
 }
@@ -57,6 +63,8 @@ export function PullProgress({
   accessLost,
   onClose,
   onTryAgain,
+  onCancel,
+  cancelling,
   headingRef,
 }: PullProgressProps) {
   const t = useT();
@@ -70,6 +78,7 @@ export function PullProgress({
   const finished = job !== undefined && job.state !== "running";
   const anyDone = items.some((i) => i.state === "done");
   const allFailed = finished && items.length > 0 && items.every((i) => i.state === "failed");
+  const running = !finished && !gone && !accessLost;
   const title = !finished
     ? "pulls.progress.title"
     : anyDone
@@ -115,7 +124,7 @@ export function PullProgress({
         ))}
       </ul>
 
-      {!finished && !gone && !accessLost ? (
+      {running ? (
         <p className="text-sm text-muted-foreground">{t("pulls.progress.helper")}</p>
       ) : null}
 
@@ -125,9 +134,21 @@ export function PullProgress({
             {t("pulls.progress.tryAgain")}
           </Button>
         ) : null}
+        {running && onCancel ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="max-md:h-11"
+            disabled={cancelling}
+            onClick={onCancel}
+          >
+            {cancelling ? <Spinner aria-hidden="true" /> : null}
+            {t("pulls.progress.cancel")}
+          </Button>
+        ) : null}
         <Button
           type="button"
-          variant={finished || gone || accessLost ? "outline" : "ghost"}
+          variant={running ? "ghost" : "outline"}
           className="max-md:h-11"
           onClick={onClose}
         >
@@ -136,4 +157,38 @@ export function PullProgress({
       </div>
     </div>
   );
+}
+
+// useCancelPullAction is Cancel pull for any button: it sends one cancel at a time, and says
+// afterwards how many nodes were stopped, that the pull had already ended, or that the
+// cancel did not work. It never sends a second cancel by itself.
+export function useCancelPullAction(): { cancel: (jobId: string) => void; pending: boolean } {
+  const t = useT();
+  // The mutation's own pending flag reaches a click a tick late, so a double click is
+  // stopped here: one cancel is on its way until its answer comes.
+  const sending = useRef(false);
+  const mutation = useCancelPull({
+    onSettled: () => {
+      sending.current = false;
+    },
+    onSuccess: (job) => {
+      const items = job.items ?? [];
+      const stopped = items.filter((i) => i.state === "cancelled").length;
+      if (stopped > 0) toastSuccess(t("pulls.cancel.done", { count: stopped }));
+      else toastInfo(t("pulls.cancel.finished"));
+    },
+    onError: (error) => {
+      if (error.type === "pull_finished") toastInfo(t("pulls.cancel.finished"));
+      else if (error.status === 403) toastError(t("pulls.cancel.permission"));
+      else toastError(t("pulls.cancel.failed"));
+    },
+  });
+  return {
+    pending: mutation.isPending,
+    cancel: (jobId) => {
+      if (sending.current) return;
+      sending.current = true;
+      mutation.mutate(jobId);
+    },
+  };
 }

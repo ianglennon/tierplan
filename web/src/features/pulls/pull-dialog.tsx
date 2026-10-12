@@ -34,7 +34,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
 import { NodeChooser } from "@/features/images/node-chooser";
 import { failureMessage } from "@/features/pulls/pull-node-row";
-import { PullProgress } from "@/features/pulls/pull-progress";
+import { PullProgress, useCancelPullAction } from "@/features/pulls/pull-progress";
 import { usePullJob } from "@/features/pulls/pull-stream";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -98,8 +98,9 @@ export function PullDialog({
   const [tracked, setTracked] = useState<PullStarted | null>(
     jobId ? { jobId, ref: jobRef ?? "", credential: null, nodes: [] } : null,
   );
-  const [typed, setTyped] = useState(initialRef ?? "");
+  const [typed, setTyped] = useState(initialRef ?? jobRef ?? "");
   const stream = usePullJob(tracked?.jobId ?? null);
+  const cancelAction = useCancelPullAction();
   const headingRef = useRef<HTMLHeadingElement>(null);
   // A pull the dialog was opened on has been announced by whoever started it.
   const toasted = useRef<string | null>(jobId ?? null);
@@ -202,6 +203,8 @@ export function PullDialog({
               headingRef={headingRef}
               onClose={() => onOpenChange(false)}
               onTryAgain={() => setView("form")}
+              onCancel={() => cancelAction.cancel(tracked.jobId)}
+              cancelling={cancelAction.pending}
             />
           </>
         )}

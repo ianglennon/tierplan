@@ -29,6 +29,7 @@ interface Sent {
 let sent: Sent[];
 let answer: (req: Sent) => Response | Promise<Response>;
 let targetsAnswer: () => Response | Promise<Response>;
+let cancelAnswer: () => Response | Promise<Response>;
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 
@@ -99,6 +100,8 @@ beforeEach(() => {
   me = makeMe({ envs: { [ENV]: "operator" } });
   answer = () => started();
   targetsAnswer = () => Response.json({}, { status: 404 });
+  cancelAnswer = () =>
+    Response.json(job([item({ state: "cancelled", code: "cancelled" })], "cancelled"));
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   FakeEventSource.reset();
@@ -109,13 +112,20 @@ beforeEach(() => {
       const entry: Sent = {
         method: req.method,
         path: new URL(req.url).pathname,
-        body: req.method === "POST" ? await req.clone().json() : undefined,
+        body:
+          req.method === "POST"
+            ? await req
+                .clone()
+                .json()
+                .catch(() => undefined)
+            : undefined,
       };
       sent.push(entry);
       if (entry.path === "/api/me") return Response.json(me);
       if (entry.path === `/api/env/${ENV}/images/pull` && req.method === "POST")
         return answer(entry);
       if (entry.path === `/api/env/${ENV}/images/pull-targets`) return targetsAnswer();
+      if (entry.path === "/api/pulls/j1/cancel" && req.method === "POST") return cancelAnswer();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -320,6 +330,28 @@ describe("PullDialog (the progress)", () => {
     expect(within(dialog).getByText("Done")).toBeTruthy();
     expect(within(dialog).getByText("Digest sha256:aaaaaaaaaaaa")).toBeTruthy();
     expect(source().closed).toBe(true);
+  });
+
+  it("cancels a running pull once, with the CSRF header, and says how many nodes it stopped", async () => {
+    setCsrfToken("csrf-1");
+    cancelAnswer = () =>
+      Response.json(
+        job(
+          [
+            item({ state: "done", digest: DIGEST }),
+            item({ nodeId: "n2", name: "node-2", state: "cancelled", code: "cancelled" }),
+            item({ nodeId: "n3", name: "node-3", state: "cancelled", code: "cancelled" }),
+          ],
+          "partial",
+        ),
+      );
+    const dialog = await startedPull();
+    act(() => source().sendFrame("snapshot", job([item({ state: "running" })])));
+    const cancel = await within(dialog).findByRole("button", { name: "Cancel pull" });
+    fireEvent.click(cancel);
+    fireEvent.click(cancel);
+    expect(await screen.findByText("Cancelled the pull on 2 nodes.")).toBeTruthy();
+    expect(posts().filter((p) => p.path === "/api/pulls/j1/cancel")).toHaveLength(1);
   });
 
   it("toasts Pulled {ref}. when a one-node pull finishes, once", async () => {

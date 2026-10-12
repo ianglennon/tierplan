@@ -64,6 +64,48 @@ export function useStartPull(envId: string) {
 
 export const pullsListKey = ["pulls"] as const;
 
+// postCancelPull asks the server to stop the nodes of a pull that have not finished. It
+// answers the job as it stands, normally already ended. It never retries: a cancel is a
+// change, and one whose answer was lost may have worked (P2 D-42). The type of an error is
+// the problem type: pull_finished (409) when the pull had already ended, pull_not_found.
+export async function postCancelPull(jobId: string): Promise<PullJob> {
+  try {
+    const res = await api.POST("/api/pulls/{jobId}/cancel", { params: { path: { jobId } } });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new PullRequestError(problem.status, problem.type);
+    }
+    return res.data;
+  } catch (e) {
+    throw e instanceof PullRequestError ? e : new PullRequestError(0);
+  }
+}
+
+interface CancelPullHandlers {
+  onSuccess?: (job: PullJob) => void;
+  onError?: (error: PullRequestError) => void;
+  // After either, with the Pulls list already asked to read again.
+  onSettled?: () => void;
+}
+
+// useCancelPull is the mutation behind every Cancel pull button. The handlers are the
+// mutation's own, so they still run when the button that sent the cancel has gone (a
+// popover that closed). It does not retry, and the Pulls list is read again afterwards
+// whatever the answer was.
+export function useCancelPull(handlers: CancelPullHandlers = {}) {
+  const queryClient = useQueryClient();
+  return useMutation<PullJob, PullRequestError, string>({
+    mutationFn: postCancelPull,
+    retry: false,
+    onSuccess: (job) => handlers.onSuccess?.(job),
+    onError: (error) => handlers.onError?.(error),
+    onSettled: () => {
+      handlers.onSettled?.();
+      return queryClient.invalidateQueries({ queryKey: pullsListKey });
+    },
+  });
+}
+
 // Polled every 3 seconds while a pull runs and every 30 otherwise (UI-SPEC "Pulls indicator").
 export const PULLS_POLL_RUNNING_MS = 3_000;
 export const PULLS_POLL_IDLE_MS = 30_000;

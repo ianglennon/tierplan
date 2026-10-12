@@ -11,8 +11,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PullDialog } from "@/features/pulls/pull-dialog";
+import { useCancelPullAction } from "@/features/pulls/pull-progress";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -133,6 +135,7 @@ export function PullsIndicator() {
 function PullRow({ pull, onOpen }: { pull: PullSummary; onOpen: () => void }) {
   const t = useT();
   const state = pullStateKey(pull);
+  const action = useCancelPullAction();
   return (
     <li className="flex min-w-0 items-center gap-2 rounded-md hover:bg-muted/50">
       <button
@@ -164,6 +167,20 @@ function PullRow({ pull, onOpen }: { pull: PullSummary; onOpen: () => void }) {
           ) : null}
         </span>
       </button>
+      {pull.state === "running" ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="shrink-0 max-md:h-11"
+          disabled={action.pending}
+          aria-label={t("pulls.indicator.cancelLabel", { ref: pull.ref })}
+          onClick={() => action.cancel(pull.id)}
+        >
+          {action.pending ? <Spinner aria-hidden="true" /> : null}
+          {t("pulls.indicator.cancel")}
+        </Button>
+      ) : null}
     </li>
   );
 }
