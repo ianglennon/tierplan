@@ -435,6 +435,39 @@ describe("images list", () => {
   });
 });
 
+describe("images list on a read-only host", () => {
+  const node = (id: string, readOnly: boolean) => ({
+    nodeId: id,
+    name: id,
+    role: "standalone",
+    arch: "amd64",
+    readOnly,
+    reachable: true,
+  });
+
+  it("warns above the table and disables Pull image with the reason when every node is read-only", async () => {
+    answers["/api/env/e1/images/pull-targets"] = () =>
+      Response.json({ swarm: false, nodes: [node("n1", true)] });
+    renderAt("/env/e1/images");
+    const alert = await screen.findByText(
+      "This host is read-only. Changes are turned off on the host itself, so you can look at images but not pull or remove them.",
+    );
+    expect(alert.closest('[data-slot="alert"]')).toBeTruthy();
+    const pull = await screen.findByRole("button", { name: "Pull image" });
+    await waitFor(() => expect(pull.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain("This host is read-only (set on the host)");
+  });
+
+  it("shows no warning when a node can still be written to", async () => {
+    answers["/api/env/e1/images/pull-targets"] = () =>
+      Response.json({ swarm: true, nodes: [node("n1", true), node("n2", false)] });
+    renderAt("/env/e1/images");
+    await screen.findByText("nginx:1.27, nginx:latest");
+    await waitFor(() => expect(sentUrls.some((u) => u.includes("pull-targets"))).toBe(true));
+    expect(screen.queryByText(/This host is read-only\./)).toBeNull();
+  });
+});
+
 describe("volumes list", () => {
   it("shows Name, Driver, Used by, Size and Created, with a dash when the engine gave no time", async () => {
     renderAt("/env/e1/volumes?group=none");

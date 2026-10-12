@@ -269,4 +269,51 @@ describe("PullProgress", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the rows in node-name order while the pull runs, whatever order the server sent", () => {
+    const names = ["wrk-2", "mgr-1", "wrk-1"];
+    const rows = (states: PullItem["state"][]) =>
+      names.map((name, i) => item({ nodeId: `id-${name}`, name, state: states[i] ?? "waiting" }));
+    const labels = () =>
+      screen.getAllByRole("progressbar").map((b) => b.getAttribute("aria-label"));
+    mount(job(rows(["waiting", "waiting", "waiting"])));
+    expect(labels()).toEqual([
+      "Pull progress on mgr-1",
+      "Pull progress on wrk-1",
+      "Pull progress on wrk-2",
+    ]);
+    cleanup();
+    mount(job(rows(["done", "running", "failed"])));
+    expect(labels()).toEqual([
+      "Pull progress on mgr-1",
+      "Pull progress on wrk-1",
+      "Pull progress on wrk-2",
+    ]);
+  });
+
+  it("lists forty nodes, each with a row at least 44px tall under 768px", () => {
+    const many = Array.from({ length: 40 }, (_, i) =>
+      item({ nodeId: `n${i}`, name: `node-${String(i).padStart(2, "0")}` }),
+    );
+    mount(job(many));
+    const list = screen.getByRole("list", { name: "Pull progress by node" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(40);
+    const toggle = within(list).getByRole("button", { name: "Show layers on node-00" });
+    expect(toggle.className).toContain("max-md:size-11");
+  });
+
+  it("says a read-only node is read-only in its own row and the others are not", () => {
+    mount(
+      job(
+        [
+          item({ state: "failed", code: "host_read_only" }),
+          item({ nodeId: "n2", name: "node-2", state: "done", digest: DIGEST }),
+        ],
+        "partial",
+      ),
+    );
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.textContent).toBe("This host is read-only (set on the host).");
+  });
 });

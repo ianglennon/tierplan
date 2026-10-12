@@ -28,6 +28,7 @@ interface Sent {
 
 let sent: Sent[];
 let answer: (req: Sent) => Response | Promise<Response>;
+let targetsAnswer: () => Response | Promise<Response>;
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 
@@ -44,6 +45,24 @@ const started = (nodes = 1) =>
     },
     { status: 202 },
   );
+const target = (id: string, name: string, over: Record<string, unknown> = {}) => ({
+  nodeId: id,
+  name,
+  role: "worker",
+  arch: "amd64",
+  readOnly: false,
+  reachable: true,
+  ...over,
+});
+const SWARM_TARGETS = () =>
+  Response.json({
+    swarm: true,
+    nodes: [
+      target("n1", "node-1", { role: "manager" }),
+      target("n2", "node-2", { arch: "arm64" }),
+      target("n3", "node-3", { reachable: false }),
+    ],
+  });
 const problem = (status: number, type: string) =>
   Response.json({ type, title: "x", status, detail: "d" }, { status });
 
@@ -79,6 +98,7 @@ beforeEach(() => {
   sent = [];
   me = makeMe({ envs: { [ENV]: "operator" } });
   answer = () => started();
+  targetsAnswer = () => Response.json({}, { status: 404 });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   FakeEventSource.reset();
@@ -95,6 +115,7 @@ beforeEach(() => {
       if (entry.path === "/api/me") return Response.json(me);
       if (entry.path === `/api/env/${ENV}/images/pull` && req.method === "POST")
         return answer(entry);
+      if (entry.path === `/api/env/${ENV}/images/pull-targets`) return targetsAnswer();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -155,10 +176,15 @@ describe("PullDialog (the form)", () => {
     expect(posts()).toEqual([]);
   });
 
-  it("says it pulls on every node of a swarm", async () => {
+  it("says it pulls on every node of a swarm whose nodes could not be listed, and sends no choice", async () => {
     mount({ swarm: true, hostName: "Cluster" });
     const dialog = await screen.findByRole("dialog");
-    expect(dialog.textContent).toContain("Pulls on every node of Cluster.");
+    await waitFor(() => expect(dialog.textContent).toContain("Pulls on every node of Cluster."));
+    expect(within(dialog).queryByRole("radio")).toBeNull();
+    fireEvent.change(within(dialog).getByLabelText("Image"), { target: { value: "nginx" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
+    await within(dialog).findByRole("heading", { name: /Pulling/ });
+    expect(posts()[0]?.body).toEqual({ ref: "nginx" });
   });
 
   it("prefills the image from a previous try", async () => {
@@ -403,6 +429,124 @@ describe("PullDialog (the progress)", () => {
   });
 });
 
+
+describe("PullDialog (where it pulls)", () => {
+  const radio = (dialog: HTMLElement, name: RegExp | string) =>
+    within(dialog).getByRole("radio", { name });
+
+  async function swarmDialog() {
+    targetsAnswer = SWARM_TARGETS;
+    mount({ swarm: true, hostName: "Cluster" });
+    const dialog = await screen.findByRole("dialog", { name: "Pull an image" });
+    await within(dialog).findByRole("radio", { name: "All nodes (3)" });
+    return dialog;
+  }
+
+  it("shows All nodes (n) checked on a swarm, with the chooser hidden, and sends no choice for it", async () => {
+    const dialog = await swarmDialog();
+    expect(radio(dialog, "All nodes (3)").getAttribute("aria-checked")).toBe("true");
+    expect(radio(dialog, "Choose nodes").getAttribute("aria-checked")).toBe("false");
+    expect(within(dialog).queryAllByRole("checkbox")).toHaveLength(0);
+    fireEvent.change(within(dialog).getByLabelText("Image"), { target: { value: "nginx" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
+    await within(dialog).findByRole("heading", { name: /Pulling/ });
+    expect(posts()[0]?.body).toEqual({ ref: "nginx" });
+  });
+
+  it("reveals the chooser for Choose nodes, with each node's role and architecture and the count", async () => {
+    const dialog = await swarmDialog();
+    fireEvent.click(radio(dialog, "Choose nodes"));
+    expect(within(dialog).getAllByRole("checkbox")).toHaveLength(3);
+    expect(within(dialog).getByText("Manager")).toBeTruthy();
+    expect(within(dialog).getByText("arm64")).toBeTruthy();
+    expect(within(dialog).getByText("0 of 3 selected")).toBeTruthy();
+    const down = within(dialog).getByRole("checkbox", { name: /node-3/ });
+    expect(down.hasAttribute("disabled")).toBe(true);
+    expect(dialog.textContent).toContain("node-3 isn't reachable right now.");
+  });
+
+  it("asks for at least one node and sends nothing when none is chosen", async () => {
+    const dialog = await swarmDialog();
+    fireEvent.click(radio(dialog, "Choose nodes"));
+    fireEvent.change(within(dialog).getByLabelText("Image"), { target: { value: "nginx" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
+    expect(await within(dialog).findByText("Choose at least one node.")).toBeTruthy();
+    expect(posts()).toEqual([]);
+  });
+
+  it("sends the chosen node IDs only when Choose nodes is on", async () => {
+    const dialog = await swarmDialog();
+    fireEvent.click(radio(dialog, "Choose nodes"));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /node-2/ }));
+    expect(within(dialog).getByText("1 of 3 selected")).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText("Image"), { target: { value: "nginx" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
+    await within(dialog).findByRole("heading", { name: /Pulling/ });
+    expect(posts()[0]?.body).toEqual({ ref: "nginx", nodeIds: ["n2"] });
+  });
+
+  it("goes back to every node when All nodes is chosen again", async () => {
+    const dialog = await swarmDialog();
+    fireEvent.click(radio(dialog, "Choose nodes"));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /node-2/ }));
+    fireEvent.click(radio(dialog, "All nodes (3)"));
+    fireEvent.change(within(dialog).getByLabelText("Image"), { target: { value: "nginx" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
+    await within(dialog).findByRole("heading", { name: /Pulling/ });
+    expect(posts()[0]?.body).toEqual({ ref: "nginx" });
+  });
+
+  it("shows one line and no chooser on a standalone host", async () => {
+    targetsAnswer = () => Response.json({ swarm: false, nodes: [target("e1", "Home lab")] });
+    mount({ swarm: false });
+    const dialog = await screen.findByRole("dialog", { name: "Pull an image" });
+    await waitFor(() => expect(dialog.textContent).toContain("Pulls on Home lab."));
+    expect(within(dialog).queryByRole("radio")).toBeNull();
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+  });
+
+  it("words a node choice the server refused, and keeps the form", async () => {
+    const dialog = await swarmDialog();
+    for (const [type, text] of [
+      ["nodes_unknown", "isn't part of this environment"],
+      ["nodes_required", "Choose at least one node."],
+    ] as const) {
+      answer = () => problem(422, type);
+      fireEvent.change(within(dialog).getByLabelText("Image"), { target: { value: "nginx" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
+      expect((await within(dialog).findByRole("alert")).textContent).toContain(text);
+    }
+    expect(within(dialog).getByLabelText("Image")).toBeTruthy();
+  });
+
+  it("toasts Pulled on 4, 1 failed with Details when one of five nodes failed", async () => {
+    answer = () => started(5);
+    mount();
+    const dialog = await submit("nginx:1.27");
+    await within(dialog).findByRole("heading", { name: `Pulling ${REF}` });
+    act(() =>
+      source().sendFrame(
+        "done",
+        job(
+          [1, 2, 3, 4, 5].map((n) =>
+            item({
+              nodeId: `n${n}`,
+              name: `node-${n}`,
+              state: n === 5 ? "failed" : "done",
+              code: n === 5 ? "pull_denied" : "",
+              digest: n === 5 ? "" : DIGEST,
+            }),
+          ),
+          "partial",
+        ),
+        "9",
+      ),
+    );
+    expect(await screen.findByText("Pulled on 4, 1 failed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+  });
+});
+
 describe("PullImageButton", () => {
   function mountButton(role: "viewer" | "operator") {
     me = makeMe({ envs: { [ENV]: role } });
@@ -441,5 +585,32 @@ describe("PullImageButton", () => {
     fireEvent.click(pullButton());
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(await screen.findAllByText("Needs Operator")).toBeTruthy();
+  });
+
+  it("is unavailable and says the host is read-only when every node is read-only", async () => {
+    targetsAnswer = () =>
+      Response.json({
+        swarm: true,
+        nodes: [target("n1", "node-1", { readOnly: true }), target("n2", "node-2", { readOnly: true })],
+      });
+    mountButton("operator");
+    await waitFor(() => expect(pullButton().getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain("This host is read-only (set on the host)");
+    fireEvent.click(pullButton());
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("stays available when only some nodes are read-only", async () => {
+    targetsAnswer = () =>
+      Response.json({
+        swarm: true,
+        nodes: [target("n1", "node-1", { readOnly: true }), target("n2", "node-2")],
+      });
+    mountButton("operator");
+    await screen.findByRole("button", { name: "Pull image" });
+    await waitFor(() => {
+      fireEvent.click(pullButton());
+      expect(screen.getByRole("dialog", { name: "Pull an image" })).toBeTruthy();
+    });
   });
 });
