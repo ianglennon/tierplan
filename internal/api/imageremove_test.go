@@ -28,6 +28,10 @@ var (
 	rmBase  = hexID("b")
 	rmUsed  = hexID("c")
 	rmMulti = hexID("d")
+	// rmDang2 and rmDangUsed are untagged: the first is free, the second is used by a stopped
+	// container on mgr-1 of the swarm fixture (plan 05-17).
+	rmDang2    = hexID("9")
+	rmDangUsed = hexID("8")
 )
 
 func removeEngine() dockertest.FakeConfig {
@@ -36,6 +40,7 @@ func removeEngine() dockertest.FakeConfig {
 		Images: []dockertest.FakeImage{
 			{ID: rmApp, RepoTags: []string{"ghcr.io/acme/app:1"}, Created: 40},
 			{ID: rmBase, Created: 30},
+			{ID: rmDang2, Created: 25},
 			{ID: rmUsed, RepoTags: []string{"redis:8"}, Created: 20},
 			{ID: rmMulti, RepoTags: []string{"nginx:1.27", "nginx:latest", "mirror/nginx:1.27"}, RepoDigests: []string{"nginx@sha256:" + strings.Repeat("e", 64)}, Created: 10},
 		},
@@ -274,10 +279,12 @@ func removeSwarmCfgs(t *testing.T) (*swarmFix, map[string]dockertest.FakeConfig)
 			{ID: rmSvc, RepoTags: []string{"nginx:1.27"}, Created: 40},
 			{ID: rmFree, RepoTags: []string{"busybox:1"}, Created: 30},
 			{ID: rmMulti, RepoTags: []string{"app:1", "app:2"}, Created: 20},
+			{ID: rmDangUsed, Created: 10},
 		}
 		if host == "mgr-1" {
 			cfg.Containers = append(cfg.Containers,
-				dockertest.FakeContainer{ID: "c-old", Names: []string{"/old-cache"}, Image: "redis:8", ImageID: rmUsed, State: "exited"})
+				dockertest.FakeContainer{ID: "c-old", Names: []string{"/old-cache"}, Image: "redis:8", ImageID: rmUsed, State: "exited"},
+				dockertest.FakeContainer{ID: "c-dang", Names: []string{"/old-build"}, Image: rmDangUsed, ImageID: rmDangUsed, State: "exited"})
 		}
 		if strings.HasPrefix(host, "mgr-") {
 			cfg.ServiceRows = append(cfg.ServiceRows,
@@ -340,6 +347,116 @@ func TestRemoveImageAContainerBlocksOnlyItsOwnNodeAndTheOthersAreRemoved(t *test
 	}
 	if rows[0].Result != string(audit.ResultFailure) || rows[0].Details["code"] != "image_in_use" || rows[1].Result != string(audit.ResultSuccess) {
 		t.Errorf("rows = %+v, want a failure then successes in request order", rows)
+	}
+}
+
+func TestRemoveImageDanglingBulkSkipsANamedImageAndRemovesTheUntaggedOnesUnderOneBulkID(t *testing.T) {
+	f, e := dashEnv(t, removeEngine())
+	post := f.imageDeleter(t, e, "ops", "operator")
+	rec := post("remove", removeImagesJSON([2]string{e.ID, rmBase}, [2]string{e.ID, rmApp}, [2]string{e.ID, rmDang2}))
+	var got imagesRemoved
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK || len(got.Results) != 3 {
+		t.Fatalf("%d body = %s (%v)", rec.Code, rec.Body, err)
+	}
+	if r := got.Results[1]; r.Result != "skipped" || r.Code != "not_dangling" {
+		t.Errorf("the tagged image = %+v, want skipped not_dangling", r)
+	}
+	if got.Results[0].Result != "done" || got.Results[2].Result != "done" {
+		t.Errorf("the dangling ones = %+v %+v, want done", got.Results[0], got.Results[2])
+	}
+	if got.BulkID == "" {
+		t.Fatal("no bulk ID answered")
+	}
+	w := imageWrites(f.fake)
+	if len(w) == 0 || slices.ContainsFunc(w, func(x string) bool { return strings.Contains(x, rmApp) || strings.Contains(x, "ghcr.io") }) {
+		t.Fatalf("writes = %v, want deletes of the untagged images only", w)
+	}
+	rows := f.imageAudits(t)
+	if len(rows) != 2 {
+		t.Fatalf("audit rows = %+v, want one per image removed and none for the skipped one", rows)
+	}
+	for i, r := range rows {
+		if r.Details["bulk"] != got.BulkID || r.Result != string(audit.ResultSuccess) {
+			t.Errorf("row %d = %+v, want a success with bulk %q", i, r, got.BulkID)
+		}
+	}
+}
+
+func TestRemoveImageDanglingASingleTargetStillRemovesATaggedImage(t *testing.T) {
+	f, e := dashEnv(t, removeEngine())
+	post := f.imageDeleter(t, e, "ops", "operator")
+	rec := post("remove", removeImagesJSON([2]string{e.ID, rmApp}))
+	var got imagesRemoved
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 || got.Results[0].Result != "done" {
+		t.Fatalf("%d body = %s (%v), want done", rec.Code, rec.Body, err)
+	}
+}
+
+func TestRemoveImageDanglingBulkNeverRemovesANamedImageWhateverTheBrowserSends(t *testing.T) {
+	f, e := dashEnv(t, removeEngine())
+	post := f.imageDeleter(t, e, "ops", "operator")
+	rec := post("remove", removeImagesJSON([2]string{e.ID, rmApp}, [2]string{e.ID, rmUsed}, [2]string{e.ID, rmMulti}))
+	var got imagesRemoved
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 3 {
+		t.Fatalf("%d body = %s (%v)", rec.Code, rec.Body, err)
+	}
+	for _, r := range got.Results {
+		if r.Result != "skipped" || r.Code != "not_dangling" {
+			t.Errorf("result = %+v, want skipped not_dangling", r)
+		}
+	}
+	if w := imageWrites(f.fake); len(w) != 0 {
+		t.Fatalf("writes = %v, want none", w)
+	}
+	if rows := f.imageAudits(t); len(rows) != 0 {
+		t.Fatalf("audit rows = %+v, want none", rows)
+	}
+}
+
+func TestRemoveImageDanglingBulkOnASwarmSkipsANamedImageAndRefusesAnUsedOneByNode(t *testing.T) {
+	s := removeSwarm(t)
+	rec, got := s.postImages(t, "remove", removeImagesJSON([2]string{s.m1.id, rmDangUsed}, [2]string{s.m2.id, rmDangUsed}, [2]string{s.m1.id, rmMulti}))
+	if rec.code != http.StatusOK || len(got.Results) != 3 {
+		t.Fatalf("%d %s", rec.code, rec.body)
+	}
+	if r := got.Results[0]; r.Result != "failed" || r.Code != "image_in_use" || !strings.Contains(r.Detail, "old-build") {
+		t.Errorf("mgr-1 = %+v, want image_in_use naming old-build", r)
+	}
+	if r := got.Results[1]; r.Result != "done" {
+		t.Errorf("mgr-2 = %+v, want done", r)
+	}
+	if r := got.Results[2]; r.Result != "skipped" || r.Code != "not_dangling" {
+		t.Errorf("the named image = %+v, want skipped not_dangling", r)
+	}
+	if d := s.imageDeletesOn(); len(d["m1"]) != 0 || len(d["m2"]) == 0 {
+		t.Fatalf("deletes = %v, want none on mgr-1 (used, and the named one skipped) and some on mgr-2", d)
+	}
+	rows := s.imageAudits(t)
+	if len(rows) != 2 {
+		t.Fatalf("audit rows = %+v, want the refusal and the removal and none for the skipped one", rows)
+	}
+	for i, r := range rows {
+		if r.Details["bulk"] != got.BulkID {
+			t.Errorf("row %d bulk = %q, want %q", i, r.Details["bulk"], got.BulkID)
+		}
+	}
+}
+
+func TestRemoveImageDanglingASingleImageSentWithABulkIDIsStillADanglingOnlyRequest(t *testing.T) {
+	f, e := dashEnv(t, removeEngine())
+	post := f.imageDeleter(t, e, "ops", "operator")
+	bulk := "0198f8d0-4c2a-7000-8000-000000000001"
+	body := fmt.Sprintf(`{"bulkId":%q,"targets":[{"nodeId":%q,"imageId":%q}]}`, bulk, e.ID, rmApp)
+	rec := post("remove", body)
+	var got imagesRemoved
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Results) != 1 {
+		t.Fatalf("%d body = %s (%v)", rec.Code, rec.Body, err)
+	}
+	if r := got.Results[0]; r.Result != "skipped" || r.Code != "not_dangling" {
+		t.Fatalf("result = %+v, want skipped not_dangling", r)
+	}
+	if w := imageWrites(f.fake); len(w) != 0 {
+		t.Fatalf("writes = %v, want none", w)
 	}
 }
 

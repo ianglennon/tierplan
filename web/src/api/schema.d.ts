@@ -743,7 +743,7 @@ export interface paths {
         put?: never;
         /**
          * Remove images
-         * @description Removes up to 25 image copies, each named by its node ID and image ID, and answers one result per target in request order. An image with several names has each name untagged first and is then deleted by ID, so the engine's must-be-forced refusal never stops a removal; force is never sent. An image that any container on its node, running or stopped, references is never removed there, and an image that any swarm service spec references, even with no task, is never removed on any node, because Swarm would pull it again: the result is failed with code image_in_use and the detail names up to 5 users. The containers are read again from the node just before each removal and the service specs from a manager, and a container that starts between the check and the call makes the engine refuse and is answered image_in_use too. On a swarm whose services cannot be read nothing is removed and the target is node_unreachable. An image the node does not have is failed with code not_found and writes no audit row. One that fails never stops the others. Needs images.delete (Operator) on the environment. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Every attempt on an image the node has is audited as image.removed, failures included.
+         * @description Removes up to 25 image copies, each named by its node ID and image ID, and answers one result per target in request order. An image with several names has each name untagged first and is then deleted by ID, so the engine's must-be-forced refusal never stops a removal; force is never sent. An image that any container on its node, running or stopped, references is never removed there, and an image that any swarm service spec references, even with no task, is never removed on any node, because Swarm would pull it again: the result is failed with code image_in_use and the detail names up to 5 users. The containers are read again from the node just before each removal and the service specs from a manager, and a container that starts between the check and the call makes the engine refuse and is answered image_in_use too. On a swarm whose services cannot be read nothing is removed and the target is node_unreachable. An image the node does not have is failed with code not_found and writes no audit row. One that fails never stops the others. A request that names more than one image, or sends a bulkId, is a bulk delete of dangling images: a target whose image has a name is skipped with code not_dangling, nothing is sent for it and it writes no audit row, whatever the browser sent. One image, on one or several nodes, is removed whatever its names. Needs images.delete (Operator) on the environment. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Every attempt on an image the node has is audited as image.removed, failures included.
          */
         post: operations["removeImages"];
         delete?: never;
@@ -4101,10 +4101,10 @@ export interface components {
         };
         ImageRemoveResult: {
             /**
-             * @description Why a target failed. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed or was skipped. not_dangling (with result skipped): the image has a name and the request was a bulk delete of dangling images; nothing was sent. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
-            code?: "image_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
+            code?: "image_in_use" | "not_dangling" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
             /** @description A plain sentence, or for action_failed the engine's message, at most 300 characters */
             detail?: string;
             /** @description The image ID the request named */
@@ -4112,10 +4112,10 @@ export interface components {
             /** @description The node ID the request named */
             nodeId: string;
             /**
-             * @description done: the image and all its names are gone from the node. failed: it was refused or could not be sent; code says why
+             * @description done: the image and all its names are gone from the node. failed: it was refused or could not be sent; code says why. skipped: not acted on because the image has a name and the request was a bulk delete of dangling images; code is not_dangling
              * @enum {string}
              */
-            result: "done" | "failed";
+            result: "done" | "failed" | "skipped";
         };
         ImageRemoveTarget: {
             /** @description The full image ID: sha256: and 64 hexadecimal characters */

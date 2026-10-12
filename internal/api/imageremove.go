@@ -28,6 +28,10 @@ const (
 	// codeLastNameInUse is the result of an untag of the last name of an image that is in use:
 	// untagging it would remove the image (D-29).
 	codeLastNameInUse = "last_name_in_use"
+	// codeNotDangling is the result of a target that has a name in a request of more than one
+	// image: a bulk removes untagged, unused images only, so it is skipped and nothing is sent
+	// for it (D-17, T-05-58). One is removed alone, with the name shown in the dialog.
+	codeNotDangling = "not_dangling"
 )
 
 // ImageRemoveTarget names one image on one node. An image ID is the same on every node that
@@ -55,8 +59,8 @@ type ImageRemoveInput struct {
 type ImageRemoveResult struct {
 	NodeID  string `json:"nodeId" doc:"The node ID the request named"`
 	ImageID string `json:"imageId" doc:"The image ID the request named"`
-	Result  string `json:"result" enum:"done,failed" doc:"done: the image and all its names are gone from the node. failed: it was refused or could not be sent; code says why"`
-	Code    string `json:"code,omitempty" enum:"image_in_use,not_found,node_unreachable,host_read_only,agent_policy_denied,action_failed" doc:"Why a target failed. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message"`
+	Result  string `json:"result" enum:"done,failed,skipped" doc:"done: the image and all its names are gone from the node. failed: it was refused or could not be sent; code says why. skipped: not acted on because the image has a name and the request was a bulk delete of dangling images; code is not_dangling"`
+	Code    string `json:"code,omitempty" enum:"image_in_use,not_dangling,not_found,node_unreachable,host_read_only,agent_policy_denied,action_failed" doc:"Why a target failed or was skipped. not_dangling (with result skipped): the image has a name and the request was a bulk delete of dangling images; nothing was sent. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message"`
 	Detail  string `json:"detail,omitempty" doc:"A plain sentence, or for action_failed the engine's message, at most 300 characters"`
 }
 
@@ -140,6 +144,7 @@ func registerImageRemove(r *httpx.Router, d ImagesDeps) {
 			"An image that any container on its node, running or stopped, references is never removed there, and an image that any swarm service spec references, even with no task, is never removed on any node, because Swarm would pull it again: the result is failed with code image_in_use and the detail names up to 5 users. " +
 			"The containers are read again from the node just before each removal and the service specs from a manager, and a container that starts between the check and the call makes the engine refuse and is answered image_in_use too. On a swarm whose services cannot be read nothing is removed and the target is node_unreachable. " +
 			"An image the node does not have is failed with code not_found and writes no audit row. One that fails never stops the others. " +
+			"A request that names more than one image, or sends a bulkId, is a bulk delete of dangling images: a target whose image has a name is skipped with code not_dangling, nothing is sent for it and it writes no audit row, whatever the browser sent. One image, on one or several nodes, is removed whatever its names. " +
 			"Needs images.delete (Operator) on the environment. " +
 			"With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. " +
 			"Every attempt on an image the node has is audited as image.removed, failures included.",
@@ -225,6 +230,9 @@ type imageOp struct {
 	nodeID, imageID string
 	// untag is the name to take off; empty removes the image.
 	untag string
+	// danglingOnly refuses an image that has a name: set on every target of a bulk delete,
+	// which removes untagged images only (D-17).
+	danglingOnly bool
 }
 
 // imageOutcome is what happened to one op, and what its audit row needs.
@@ -312,6 +320,10 @@ func runImageOp(ctx context.Context, d ImagesDeps, envID string, chk imageCheck,
 		out.attempted = false
 		return fail(codeNotFound, op.untag+" is already gone.")
 	}
+	if op.danglingOnly && op.untag == "" && slices.ContainsFunc(row.RepoTags, func(tag string) bool { return !isNoneTag(tag) }) {
+		out.attempted = false
+		return fail(codeNotDangling, out.ref+" has a name, so it was not deleted with the others. Open the image to remove it.")
+	}
 	if chk.svcErr != nil {
 		return fail(codeNodeUnreachable, "Can't tell whether "+out.ref+" is in use: no manager answered. Try again when one is back.")
 	}
@@ -391,9 +403,17 @@ func removeImages(ctx context.Context, d ImagesDeps, p *rbac.Principal, envID st
 	if err != nil {
 		return nil, err
 	}
+	// A request that names more than one image, or that carries a bulk ID (the later chunks of
+	// a long delete), is a bulk delete of dangling images. One image on several nodes is a
+	// remove of that image from the nodes chosen, which may be a named one (D-28).
+	images := map[string]bool{}
+	for _, t := range in.Body.Targets {
+		images[t.ImageID] = true
+	}
+	bulk := len(images) > 1 || in.Body.BulkID != ""
 	ops := make([]imageOp, len(in.Body.Targets))
 	for i, t := range in.Body.Targets {
-		ops[i] = imageOp{nodeID: t.NodeID, imageID: t.ImageID}
+		ops[i] = imageOp{nodeID: t.NodeID, imageID: t.ImageID, danglingOnly: bulk}
 	}
 	outs := runImageOps(ctx, d, p, envID, in.UserAgent, bulkID, chk, ops)
 	results := make([]ImageRemoveResult, len(outs))
@@ -401,6 +421,9 @@ func removeImages(ctx context.Context, d ImagesDeps, p *rbac.Principal, envID st
 		results[i] = ImageRemoveResult{NodeID: ops[i].nodeID, ImageID: ops[i].imageID, Result: actionDone}
 		if o.code != "" {
 			results[i].Result, results[i].Code, results[i].Detail = actionFailed, o.code, o.detail
+			if o.code == codeNotDangling {
+				results[i].Result = actionSkipped
+			}
 		}
 	}
 	return &ImageRemoveOutput{CacheControl: "no-store", Body: ImageRemoveResponse{BulkID: bulkID, Results: results}}, nil
