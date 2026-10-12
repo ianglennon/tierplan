@@ -10,6 +10,20 @@ import (
 	"database/sql"
 )
 
+const clearRegistryCredentialFailure = `-- name: ClearRegistryCredentialFailure :execrows
+UPDATE registry_credentials SET last_failure_at = NULL, last_failure_code = ''
+WHERE id = ? AND last_failure_at IS NOT NULL
+`
+
+// A pull that worked with the credential clears the failure it had. Writes only when there is one.
+func (q *Queries) ClearRegistryCredentialFailure(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearRegistryCredentialFailure, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteRegistryCredential = `-- name: DeleteRegistryCredential :one
 DELETE FROM registry_credentials WHERE id = ? RETURNING id
 `
@@ -112,6 +126,18 @@ func (q *Queries) GetRegistryCredential(ctx context.Context, id string) (GetRegi
 		&i.CreatedBy,
 	)
 	return i, err
+}
+
+const getRegistryCredentialSecret = `-- name: GetRegistryCredentialSecret :one
+SELECT secret_sealed FROM registry_credentials WHERE id = ?
+`
+
+// The sealed secret and nothing else: only the resolver reads it, and only to open it for one pull.
+func (q *Queries) GetRegistryCredentialSecret(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getRegistryCredentialSecret, id)
+	var secret_sealed string
+	err := row.Scan(&secret_sealed)
+	return secret_sealed, err
 }
 
 const insertRegistryCredential = `-- name: InsertRegistryCredential :exec
@@ -292,6 +318,25 @@ func (q *Queries) ListRegistryCredentials(ctx context.Context) ([]ListRegistryCr
 		return nil, err
 	}
 	return items, nil
+}
+
+const setRegistryCredentialFailure = `-- name: SetRegistryCredentialFailure :execrows
+UPDATE registry_credentials SET last_failure_at = ?, last_failure_code = ? WHERE id = ?
+`
+
+type SetRegistryCredentialFailureParams struct {
+	LastFailureAt   sql.NullInt64
+	LastFailureCode string
+	ID              string
+}
+
+// Remembers the most recent pull or browse that the registry refused to sign in (D-07).
+func (q *Queries) SetRegistryCredentialFailure(ctx context.Context, arg SetRegistryCredentialFailureParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setRegistryCredentialFailure, arg.LastFailureAt, arg.LastFailureCode, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateRegistryCredential = `-- name: UpdateRegistryCredential :execrows

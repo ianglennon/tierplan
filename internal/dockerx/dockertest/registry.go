@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -197,4 +199,40 @@ func PushImage(t testing.TB, node *Node, src, target string, login *Login) strin
 	}
 	t.Fatalf("push %s printed no digest:\n%s", target, out)
 	return ""
+}
+
+// HtpasswdFor returns the content of an htpasswd file with one user, hashed with bcrypt as the
+// registry requires. It is for test setup only: Bayplan never writes one.
+func HtpasswdFor(user, password string) []byte {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	if err != nil {
+		// Only a password over 72 bytes fails, and a fixture's is never that long.
+		panic("dockertest: bcrypt: " + err.Error())
+	}
+	return []byte(user + ":" + string(hash) + "\n")
+}
+
+// Logout signs the node's Docker client out of the fixture registry and removes its client
+// configuration, so what follows proves a pull needs nothing the node holds: PushImage signs
+// in only to push.
+func Logout(t testing.TB, node *Node) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if out, err := node.Sh(ctx, "docker logout "+registryHost+" >/dev/null 2>&1; rm -f \"$HOME/.docker/config.json\""); err != nil {
+		t.Fatalf("sign out on %s: %v\n%s", node.Hostname, err, out)
+	}
+}
+
+// HasClientConfig reports whether the node has a Docker client configuration file, which is
+// where a docker login would have written a credential.
+func HasClientConfig(t testing.TB, node *Node) bool {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := node.Sh(ctx, "if [ -e \"$HOME/.docker/config.json\" ]; then echo present; else echo absent; fi")
+	if err != nil {
+		t.Fatalf("look for the client configuration on %s: %v\n%s", node.Hostname, err, out)
+	}
+	return strings.TrimSpace(out) == "present"
 }

@@ -294,6 +294,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		}
 		api.RegisterPulls(r, api.PullsDeps{
 			Aggregator: f.agg, Jobs: f.jobHub, Audit: f.aud, Checker: checker, Heartbeat: f.pullsHeartbeat,
+			Resolver:          registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			MaxStreamsPerUser: f.pullsMaxStreams, MaxLifetime: f.pullsMaxLifetime, NodeTimeout: f.pullsNodeTimeout, Log: log,
 		})
 		var logsSrc api.LogsSource = f.agg

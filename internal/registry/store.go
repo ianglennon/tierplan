@@ -361,6 +361,45 @@ func (s *Store) Candidates(ctx context.Context, envID string) ([]Candidate, erro
 	return out, nil
 }
 
+// openSecret opens the secret of one credential under its own ID. It is read for one pull and
+// never kept: the caller holds the plaintext only as long as it takes to encode the header.
+// The error names the credential and never a value.
+func (s *Store) openSecret(ctx context.Context, id string) ([]byte, error) {
+	sealed, err := s.st.RQ.GetRegistryCredentialSecret(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("registry: read the secret of credential %s: %w", id, err)
+	}
+	plain, err := s.v.Open(vault.ContextRegistryCred+id, sealed)
+	if err != nil {
+		return nil, fmt.Errorf("registry: open the secret of credential %s: %w", id, err)
+	}
+	return plain, nil
+}
+
+// RecordFailure remembers that the registry refused to sign in with the credential, now, with
+// the code the pull failed with (D-07). A credential deleted meanwhile is not an error.
+func (s *Store) RecordFailure(ctx context.Context, id, code string) error {
+	_, err := s.st.Q.SetRegistryCredentialFailure(ctx, sqlc.SetRegistryCredentialFailureParams{
+		LastFailureAt: sql.NullInt64{Int64: s.now().UnixNano(), Valid: true}, LastFailureCode: code, ID: id,
+	})
+	if err != nil {
+		return fmt.Errorf("registry: record the failure of credential %s: %w", id, err)
+	}
+	return nil
+}
+
+// ClearFailure forgets the failure of a credential after a pull with it worked. It writes
+// nothing when there is none.
+func (s *Store) ClearFailure(ctx context.Context, id string) error {
+	if _, err := s.st.Q.ClearRegistryCredentialFailure(ctx, id); err != nil {
+		return fmt.Errorf("registry: clear the failure of credential %s: %w", id, err)
+	}
+	return nil
+}
+
 // clash maps a unique-index failure to the typed conflict the caller words, naming the other
 // credential that holds what was asked for. The message names the columns of the index that
 // refused the row. self is the credential being written, which is never its own conflict.

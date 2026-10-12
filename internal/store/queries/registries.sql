@@ -58,3 +58,16 @@ FROM registry_credentials c
 LEFT JOIN environments e ON e.id = c.env_id
 WHERE c.env_id IS NULL OR c.env_id = sqlc.arg(env_id)
 ORDER BY (c.env_id IS NOT NULL), c.host, c.prefix, c.name, c.id;
+
+-- name: GetRegistryCredentialSecret :one
+-- The sealed secret and nothing else: only the resolver reads it, and only to open it for one pull.
+SELECT secret_sealed FROM registry_credentials WHERE id = ?;
+
+-- name: SetRegistryCredentialFailure :execrows
+-- Remembers the most recent pull or browse that the registry refused to sign in (D-07).
+UPDATE registry_credentials SET last_failure_at = ?, last_failure_code = ? WHERE id = ?;
+
+-- name: ClearRegistryCredentialFailure :execrows
+-- A pull that worked with the credential clears the failure it had. Writes only when there is one.
+UPDATE registry_credentials SET last_failure_at = NULL, last_failure_code = ''
+WHERE id = ? AND last_failure_at IS NOT NULL;

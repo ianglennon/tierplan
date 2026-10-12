@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -59,6 +60,11 @@ const (
 	metaOwnerName = "ownerName"
 	metaEnvName   = "envName"
 
+	// metaCredID and metaCredLayer are the rest of what a job keeps of its credential, beside
+	// its name under "credential". Never the header (T-05-30).
+	metaCredID    = "credentialId"
+	metaCredLayer = "credentialLayer"
+
 	// maxPullLayers bounds the layers one item lists; an image has a few dozen.
 	maxPullLayers = 256
 	// maxPullText bounds a layer ID or status taken from the engine's progress.
@@ -95,6 +101,8 @@ type PullsDeps struct {
 	Audit *audit.Writer
 	// Checker decides whether a caller is an instance admin, who may see every pull.
 	Checker *rbac.Checker
+	// Resolver chooses the stored credential a pull is sent with. Nil pulls anonymously.
+	Resolver *registry.Resolver
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 	// Heartbeat is how often an idle stream gets a ping. Zero means 15 seconds.
@@ -524,6 +532,19 @@ func startPull(ctx context.Context, d PullsDeps, in *PullStartInput) (*PullStart
 		nodes = picked
 	}
 
+	// The credential is chosen once for the whole job and its header is sent with every
+	// node's call (D-25). It lives in the run's closure and in PullOptions and nowhere else.
+	var header string
+	var used *registry.Candidate
+	if d.Resolver != nil {
+		var rerr error
+		header, used, rerr = d.Resolver.AuthFor(ctx, env.ID, ref)
+		if rerr != nil {
+			// The error names the credential's ID and holds no value.
+			d.Log.Error("could not resolve the registry credential of a pull", "environment", env.ID, "ref", ref.String(), "error", rerr)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+	}
 	spec := jobs.Spec{
 		Kind: pullJobKind, EnvID: env.ID, Owner: pullOwner(p),
 		Meta: map[string]string{
@@ -532,6 +553,10 @@ func startPull(ctx context.Context, d PullsDeps, in *PullStartInput) (*PullStart
 		},
 	}
 	body := PullStartBody{Ref: ref.String(), Nodes: make([]PullNodeBody, 0, len(nodes))}
+	if used != nil {
+		spec.Meta["credential"], spec.Meta[metaCredID], spec.Meta[metaCredLayer] = used.Name, used.ID, used.Layer
+		body.Credential = Some(PullCredentialBody{ID: used.ID, Name: used.Name, Layer: used.Layer})
+	}
 	for _, n := range nodes {
 		spec.Items = append(spec.Items, jobs.ItemSpec{ID: n.ID, Label: n.Name})
 		body.Nodes = append(body.Nodes, PullNodeBody{NodeID: n.ID, Name: n.Name})
@@ -542,7 +567,7 @@ func startPull(ctx context.Context, d PullsDeps, in *PullStartInput) (*PullStart
 	reqCtx := context.WithoutCancel(ctx)
 	run := &pullRun{
 		d: d, actor: p.AuditActor(), envID: env.ID, ref: ref, userAgent: in.UserAgent,
-		ip: httpx.ClientIP(ctx), nodes: nodes, audit: reqCtx,
+		ip: httpx.ClientIP(ctx), nodes: nodes, audit: reqCtx, header: header, used: used,
 	}
 	job, err := d.Jobs.Start(spec, run.run)
 	if errors.Is(err, jobs.ErrTooMany) {
@@ -604,6 +629,17 @@ type pullRun struct {
 	nodes     []envs.NodeRef
 	// audit carries the request's values with its cancellation removed.
 	audit context.Context
+	// header is the X-Registry-Auth value of the credential chosen for the job, empty for an
+	// anonymous pull. It is a credential: it goes to PullOptions and nowhere else.
+	header string
+	// used is the credential the header was made from, nil for an anonymous pull.
+	used *registry.Candidate
+
+	// mu guards failed and cleared: the nodes end concurrently, and the credential's last
+	// failure is written once per job, never cleared after a node of the job failed to sign in.
+	mu      sync.Mutex
+	failed  bool
+	cleared bool
 }
 
 // run pulls on every node, at most bulkParallel at once and perNodeCalls per node. A node
@@ -643,7 +679,7 @@ func (pr *pullRun) pullOnNode(ctx context.Context, r *jobs.Reporter, n envs.Node
 	var res dockerx.PullResult
 	err := pr.d.Aggregator.WriteOnNode(nctx, pr.envID, n.ID, func(c *dockerx.Client) error {
 		var e error
-		res, e = c.ImagePull(nctx, pr.ref.String(), dockerx.PullOptions{}, func(ev dockerx.PullEvent) {
+		res, e = c.ImagePull(nctx, pr.ref.String(), dockerx.PullOptions{EncodedAuth: pr.header}, func(ev dockerx.PullEvent) {
 			r.Update(n.ID, func(it *jobs.Item) { applyPullEvent(it, index, ev) })
 		})
 		return e
@@ -663,8 +699,12 @@ func (pr *pullRun) pullOnNode(ctx context.Context, r *jobs.Reporter, n envs.Node
 // finish writes the audit row of a node and then ends its item, so a browser that sees the
 // node done or failed can find the row in the log.
 func (pr *pullRun) finish(r *jobs.Reporter, n envs.NodeRef, res dockerx.PullResult, code string) {
+	credential := credentialAnonymous
+	if pr.used != nil {
+		credential = pr.used.Name
+	}
 	details := map[string]string{
-		"ref": pr.ref.String(), "node": n.ID, "credential": credentialAnonymous, "bulk": r.JobID(),
+		"ref": pr.ref.String(), "node": n.ID, "credential": credential, "bulk": r.JobID(),
 	}
 	result, reason := audit.ResultSuccess, ""
 	switch {
@@ -687,6 +727,7 @@ func (pr *pullRun) finish(r *jobs.Reporter, n envs.NodeRef, res dockerx.PullResu
 		pr.d.Log.Error("could not audit a pull", "ref", pr.ref.String(), "node", n.ID, "error", err)
 	}
 	cancel()
+	pr.noteCredential(code)
 
 	if code == "" {
 		r.Update(n.ID, func(it *jobs.Item) {
@@ -703,6 +744,37 @@ func (pr *pullRun) finish(r *jobs.Reporter, n envs.NodeRef, res dockerx.PullResu
 		state = jobs.ItemCancelled
 	}
 	r.Finish(n.ID, state, code, pullMessages[code], nil)
+}
+
+// noteCredential keeps the credential's bookkeeping (D-07): a node the registry refused to sign
+// in records the failure with its code once per job, and a node that pulled clears it unless a
+// node of this job failed to sign in. A failed write is logged and changes nothing else.
+func (pr *pullRun) noteCredential(code string) {
+	if pr.used == nil {
+		return
+	}
+	ctx, cancel := doneActionAuditContext(pr.audit)
+	defer cancel()
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	var err error
+	switch {
+	case code == dockerx.PullCodeUnauthorized || code == dockerx.PullCodeDenied:
+		if pr.failed {
+			return
+		}
+		pr.failed = true
+		err = pr.d.Resolver.RecordFailure(ctx, pr.used.ID, code)
+	case code == "":
+		if pr.failed || pr.cleared {
+			return
+		}
+		pr.cleared = true
+		err = pr.d.Resolver.ClearFailure(ctx, pr.used.ID)
+	}
+	if err != nil {
+		pr.d.Log.Error("could not update a credential's last failure", "credential", pr.used.ID, "error", err)
+	}
 }
 
 // pullErrorCode maps the error of one node's pull to an item code.
@@ -797,6 +869,9 @@ func pullJobBody(j jobs.Job) PullJobBody {
 	b := PullJobBody{
 		ID: j.ID, EnvID: j.EnvID, Ref: j.Meta["ref"], State: j.State,
 		CreatedAt: rfc3339(j.CreatedAt), FinishedAt: rfc3339(j.FinishedAt), Items: make([]PullItemBody, 0, len(j.Items)),
+	}
+	if id := j.Meta[metaCredID]; id != "" {
+		b.Credential = Some(PullCredentialBody{ID: id, Name: j.Meta["credential"], Layer: j.Meta[metaCredLayer]})
 	}
 	for _, it := range j.Items {
 		b.Items = append(b.Items, pullItemBody(it))

@@ -79,6 +79,8 @@ func newHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
 
 // Server is the assembled application.
 type Server struct {
+	// resolver chooses the stored credential a pull or a service write is sent with.
+	resolver *registry.Resolver
 	// refusals folds a signed-in user's repeated refusals into one audit entry.
 	refusals *auth.RefusalCoalescer
 	cfg      config.Config
@@ -662,6 +664,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The job hub holds the pulls in progress. It is memory only; the audit log is the
 	// record, and Close ends every running job before the database closes (D-26).
 	jobHub := jobs.New(jobs.Options{})
+	registryStore := registry.NewStore(st, vlt, nil)
+	resolver := registry.NewResolver(registryStore)
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -726,8 +730,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, SelfContainerID: selfID, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, SelfContainerID: selfID, Log: log},
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
-		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Log: log},
-		Registries:    api.RegistriesDeps{Store: registry.NewStore(st, vlt, nil), Envs: envSvc, Audit: aud, Checker: checker, Log: log},
+		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
+		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Audit: aud, Checker: checker, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
@@ -778,6 +782,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		broker:     broker,
 		shells:     shellRegistry,
 		jobs:       jobHub,
+		resolver:   resolver,
 		tunnel:     tunnelHub,
 		agents:     agentSvc,
 		updater:    updater,
@@ -825,6 +830,9 @@ func (s *Server) Refusals() *auth.RefusalCoalescer { return s.refusals }
 
 // Vault is the loaded master key, for the dependencies later plans add.
 func (s *Server) Vault() *vault.Vault { return s.vault }
+
+// Resolver is the registry credential resolver: AuthFor gives the header for an image.
+func (s *Server) Resolver() *registry.Resolver { return s.resolver }
 
 // Audit is the audit-log writer every mutation records through.
 func (s *Server) Audit() *audit.Writer { return s.audit }

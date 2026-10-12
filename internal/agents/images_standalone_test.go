@@ -5,11 +5,13 @@
 package agents_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/server/servertest"
 )
 
@@ -62,5 +64,85 @@ func TestStandaloneAgentImagePull(t *testing.T) {
 	}
 	if rows := srv.AuditRows("image.pulled"); len(rows) != 2 {
 		t.Errorf("audit rows after the second pull = %d, want 2", len(rows))
+	}
+}
+
+// TestStandaloneAgentPrivatePull pulls an image from a registry that requires a sign-in, on a
+// standalone host through a real agent (plan 05-09, IMG-02, D-14, D-25): the stored instance
+// credential is sent with the pull, the host is never logged in and holds no Docker client
+// configuration afterwards, and a wrong password ends the item pull_unauthorized with the
+// credential's failure recorded, then a corrected one pulls again and clears it. It runs on the
+// engine BAYPLAN_TEST_ENGINE names, so the same test covers Engine 24 where a refusal can
+// arrive inside the progress stream instead of as an HTTP status.
+func TestStandaloneAgentPrivatePull(t *testing.T) {
+	const user, password = "bot", "registry-pass-0123456789"
+	host := dockertest.StartHost(t, "")
+	dockertest.LoadAgentImage(t, host)
+	dumpOnFailure(t, host)
+	srv := servertest.Start(t, servertest.Options{Host: host.Gateway})
+
+	addr := dockertest.StartRegistry(t, host, dockertest.RegistryOptions{Htpasswd: dockertest.HtpasswdFor(user, password)})
+	ref := addr + "/private/busybox:1"
+	pushed := dockertest.PushImage(t, host, "busybox:1.36.1", ref, &dockertest.Login{User: user, Password: password})
+	// Signed in for the push only. From here on the host knows no credential, and the pull must
+	// fetch the image rather than find it.
+	dockertest.Logout(t, host)
+	sh(t, host, "docker image rm "+ref+" busybox:1.36.1")
+
+	env := srv.CreateAgentEnvironment("")
+	sh(t, host, env.Install.Standalone.Command)
+	srv.WaitOnline(env.ID, 60*time.Second)
+
+	creds := registry.NewStore(srv.Core().Store(), srv.Core().Vault(), nil)
+	ctx := context.Background()
+	cred, err := creds.Create(ctx, registry.CreateInput{
+		Name: "private-bot", Type: registry.TypeGeneric, Host: addr, Prefix: "private", Username: user, Secret: "wrong-" + password,
+	}, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failureOf := func() *registry.LastFailure {
+		c, err := creds.Get(ctx, cred.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.LastFailure
+	}
+
+	// A wrong password: refused, recorded, and not retried.
+	job := pullAndWait(t, srv, env.ID, ref, nil)
+	if job.State != "failed" || len(job.Items) != 1 || job.Items[0].Code != "pull_unauthorized" {
+		t.Fatalf("job with a wrong password = %+v, want failed with pull_unauthorized", job)
+	}
+	if f := failureOf(); f == nil || f.Code != "pull_unauthorized" {
+		t.Fatalf("credential failure = %+v, want pull_unauthorized", f)
+	}
+	rows := srv.AuditRows("image.pulled")
+	if len(rows) != 1 || rows[0].Result != "failure" || rows[0].Details["credential"] != "private-bot" {
+		t.Fatalf("audit rows = %+v, want one failure naming the credential", rows)
+	}
+
+	// The right password: pulls, clears the failure, and the host was never logged in.
+	if _, _, err := creds.Update(ctx, cred.ID, registry.UpdateInput{
+		Name: cred.Name, Type: cred.Type, Host: cred.Host, Prefix: cred.Prefix, Username: user, Secret: password,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	job = pullAndWait(t, srv, env.ID, ref, nil)
+	if job.State != "done" || len(job.Items) != 1 || job.Items[0].State != "done" || job.Items[0].Digest != pushed {
+		t.Fatalf("job = %+v, want done with the digest %s", job, pushed)
+	}
+	if f := failureOf(); f != nil {
+		t.Errorf("credential failure = %+v, want it cleared by a pull that worked", f)
+	}
+	if got := strings.TrimSpace(sh(t, host, "docker image inspect -f '{{.Id}}' "+ref)); !strings.HasPrefix(got, "sha256:") {
+		t.Errorf("the host does not have %s after the pull: %q", ref, got)
+	}
+	if dockertest.HasClientConfig(t, host) {
+		t.Errorf("the host has a Docker client configuration after the pull: Bayplan must not log in")
+	}
+	rows = srv.AuditRows("image.pulled")
+	if len(rows) != 2 || rows[1].Result != "success" || rows[1].Details["credential"] != "private-bot" {
+		t.Fatalf("audit rows = %+v, want the success naming the credential", rows)
 	}
 }

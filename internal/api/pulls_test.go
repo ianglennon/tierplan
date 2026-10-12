@@ -4,6 +4,9 @@
 package api_test
 
 import (
+	"context"
+	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +20,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/bayplan/proto/wire"
@@ -985,5 +989,179 @@ func TestCancelPullIsAllowedToAnEnvAdminAndAnInstanceAdminAndNeverToAnyoneWhoCan
 	id = start()
 	if rec := f.cancelPull(t, id, f.cookie, f.csrf); rec.Code != http.StatusOK {
 		t.Errorf("an instance admin: %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+// Pulls with a stored credential (plan 05-09, IMG-02, D-07, D-14, D-25).
+
+const (
+	pullCredSecret = "pat_super-secret-token-0123456789"
+	privateRef     = "localhost:5000/private/busybox:1"
+)
+
+// addPullCredential stores a credential for localhost:5000/private and returns it.
+func (f *authFixture) addPullCredential(t *testing.T, name, envID string) registry.Credential {
+	t.Helper()
+	c, err := registry.NewStore(f.st, f.v, f.clk.now).Create(context.Background(), registry.CreateInput{
+		EnvID: envID, Name: name, Type: registry.TypeGeneric, Host: "localhost:5000", Prefix: "private",
+		Username: "bot", Secret: pullCredSecret,
+	}, "admin", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func lastFailure(t *testing.T, f *authFixture, id string) (code string, set bool) {
+	t.Helper()
+	var at sql.NullInt64
+	if err := f.st.Read.QueryRow(`SELECT last_failure_at, last_failure_code FROM registry_credentials WHERE id = ?`, id).Scan(&at, &code); err != nil {
+		t.Fatal(err)
+	}
+	return code, at.Valid
+}
+
+func decodedPullAuth(t *testing.T, header string) (user, password, server string) {
+	t.Helper()
+	raw, err := base64.URLEncoding.DecodeString(header)
+	if err != nil {
+		t.Fatalf("header %q: %v", header, err)
+	}
+	var a struct{ Username, Password, ServerAddress string }
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatal(err)
+	}
+	return a.Username, a.Password, a.ServerAddress
+}
+
+func TestAPullWithAMatchingCredentialSendsItOnEveryNodeAndNamesItEverywhereButTheHeader(t *testing.T) {
+	f, env, x, y := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	cred := f.addPullCredential(t, "local-bot", "")
+
+	rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/images/pull", `{"ref":"`+privateRef+`"}`)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	started := decode[pullStarted](t, rec)
+	wantCred := `{"id":"` + cred.ID + `","name":"local-bot","layer":"instance"}`
+	if string(started.Credential) != wantCred {
+		t.Errorf("answer credential = %s, want %s", started.Credential, wantCred)
+	}
+	job := f.pullDone(t, started.JobID)
+	if job.State != "done" {
+		t.Fatalf("job = %+v", job)
+	}
+	var got struct{ Credential json.RawMessage }
+	if err := json.Unmarshal(f.getPull(t, started.JobID).body, &got); err != nil || string(got.Credential) != wantCred {
+		t.Errorf("job credential = %s (%v), want %s", got.Credential, err, wantCred)
+	}
+
+	var headers []string
+	for _, n := range []*agentConn{x, y} {
+		h := n.fake.PullAuth()
+		if len(h) != 1 || h[0] == "" {
+			t.Fatalf("a node received %q, want exactly one header", h)
+		}
+		user, pw, server := decodedPullAuth(t, h[0])
+		if user != "bot" || pw != pullCredSecret || server != "localhost:5000" {
+			t.Errorf("decoded header = %q %q %q", user, pw, server)
+		}
+		headers = append(headers, h[0])
+	}
+	if headers[0] != headers[1] {
+		t.Errorf("the nodes got different headers: the credential is resolved once per job")
+	}
+
+	rows := f.pullAudits(t)
+	if len(rows) != 2 {
+		t.Fatalf("audit rows = %+v", rows)
+	}
+	for _, r := range rows {
+		if r.Details["credential"] != "local-bot" {
+			t.Errorf("audit row %+v does not name the credential", r)
+		}
+	}
+
+	// Nothing the browser, the audit log or the server log holds has the header or the secret.
+	seen := []string{string(rec.body), string(f.getPull(t, started.JobID).body), f.logs.String()}
+	for _, r := range rows {
+		b, _ := json.Marshal(r.Details)
+		seen = append(seen, string(b))
+	}
+	for _, s := range seen {
+		if strings.Contains(s, pullCredSecret) || strings.Contains(s, headers[0]) {
+			t.Errorf("the header or the secret leaked: %s", s)
+		}
+	}
+	if code, set := lastFailure(t, f.authFixture, cred.ID); set || code != "" {
+		t.Errorf("a pull that worked left the failure %q", code)
+	}
+
+	// An image of another registry is pulled anonymously.
+	rec = f.req(t, http.MethodPost, "/api/env/"+env.ID+"/images/pull", `{"ref":"busybox:1.36.1"}`)
+	started = decode[pullStarted](t, rec)
+	f.pullDone(t, started.JobID)
+	if string(started.Credential) != "null" {
+		t.Errorf("credential = %s, want null", started.Credential)
+	}
+	if h := x.fake.PullAuth(); len(h) != 2 || h[1] != "" {
+		t.Errorf("headers = %q, want the second pull anonymous", h)
+	}
+}
+
+func TestARefusedPullRecordsTheCredentialsFailureOnceAndALaterSuccessClearsItWithNoRetryAndNoFallback(t *testing.T) {
+	f, env, x, y := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true, PullStatus: dockertest.FakePullStatus{Code: http.StatusUnauthorized, Message: "unauthorized: bad token"}},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true, PullStatus: dockertest.FakePullStatus{Code: http.StatusUnauthorized, Message: "unauthorized: bad token"}},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	cred := f.addPullCredential(t, "local-bot", "")
+	// A second, shorter credential for the same registry: it must not be tried after a failure.
+	if _, err := registry.NewStore(f.st, f.v, f.clk.now).Create(context.Background(), registry.CreateInput{
+		Name: "local-all", Type: registry.TypeGeneric, Host: "localhost:5000", Username: "other", Secret: "other-secret-value-xyz",
+	}, "admin", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/images/pull", `{"ref":"`+privateRef+`"}`)
+	job := f.pullDone(t, decode[pullStarted](t, rec).JobID)
+	if job.State != "failed" || job.Items[0].Code != "pull_unauthorized" || job.Items[1].Code != "pull_unauthorized" {
+		t.Fatalf("job = %+v", job)
+	}
+	if code, set := lastFailure(t, f.authFixture, cred.ID); !set || code != "pull_unauthorized" {
+		t.Errorf("failure = %q set=%v, want pull_unauthorized", code, set)
+	}
+	for _, n := range []*agentConn{x, y} {
+		if h := n.fake.PullAuth(); len(h) != 1 {
+			t.Errorf("a node saw %d pulls, want exactly one: no retry, no second credential", len(h))
+		} else if user, _, _ := decodedPullAuth(t, h[0]); user != "bot" {
+			t.Errorf("the pull was made as %q, want the best match", user)
+		}
+	}
+	for _, r := range f.pullAudits(t) {
+		if r.Details["credential"] != "local-bot" {
+			t.Errorf("audit row %+v does not name the credential", r)
+		}
+	}
+	if strings.Contains(f.logs.String(), pullCredSecret) {
+		t.Errorf("the server log holds the secret")
+	}
+}
+
+func TestAPullThatWorksAfterAFailureClearsIt(t *testing.T) {
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
+	cred := f.addPullCredential(t, "local-bot", "")
+	if err := registry.NewStore(f.st, f.v, f.clk.now).RecordFailure(context.Background(), cred.ID, "pull_denied"); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.startPull(t, e, `{"ref":"`+privateRef+`"}`)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	f.pullDone(t, decode[pullStarted](t, rec).JobID)
+	if code, set := lastFailure(t, f.authFixture, cred.ID); set || code != "" {
+		t.Errorf("failure = %q set=%v, want cleared", code, set)
 	}
 }
