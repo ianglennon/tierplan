@@ -71,11 +71,15 @@ function platform(arch: string, digest: string, over: Record<string, unknown> = 
   return { os: "linux", arch, variant: "", digest, size: 5_242_880, ...over };
 }
 
+// One date for every default detail: the browser puts a batch newest first, and equal dates
+// keep the order the list gave.
+const AN_HOUR_AGO = new Date(Date.now() - 3_600_000).toISOString();
+
 function detail(tag: string, over: Record<string, unknown> = {}) {
   return {
     tag,
     digest: D1,
-    created: new Date(Date.now() - 3_600_000).toISOString(),
+    created: AN_HOUR_AGO,
     platforms: [platform("amd64", AMD)],
     code: "",
     runningIn: [],
@@ -1162,6 +1166,8 @@ describe("TagBrowser picker", () => {
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="picker" onSelect={onSelect} {...props} />);
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
     scrollTo(["v1.10.0", "v1.9.2", "latest"]);
+    // The rows settle once the details have come: they are put newest first when they do.
+    await waitFor(() => expect(screen.queryAllByText("Loading…")).toHaveLength(0));
     return onSelect;
   }
   const pickerRows = () => screen.getAllByRole("row").slice(1);

@@ -160,7 +160,9 @@ beforeEach(() => {
           items: ((entry.body?.tags as string[]) ?? []).map((tag) => ({
             tag,
             digest: DIGEST,
-            created: new Date(Date.now() - 3_600_000).toISOString(),
+            // One date for every tag: the browser puts a batch newest first, and equal dates
+            // keep the order the list gave.
+            created: "2026-10-12T10:00:00Z",
             platforms: [{ os: "linux", arch: "amd64", variant: "", digest: DIGEST, size: 1024 }],
             code: "",
             runningIn: [],
@@ -878,6 +880,8 @@ describe("PullDialog (Browse tags)", () => {
     fireEvent.change(input, { target: { value: "nginx" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Browse tags" }));
     await within(dialog).findByText("latest");
+    // The rows settle once the details have come: they are put newest first when they do.
+    await waitFor(() => expect(within(dialog).queryAllByText("Loading…")).toHaveLength(0));
     const rows = within(dialog).getAllByRole("row").slice(1);
     rows[0]?.focus();
     fireEvent.keyDown(rows[0] as HTMLElement, { key: "ArrowDown" });
