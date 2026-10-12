@@ -295,6 +295,51 @@ describe("RegistriesPage permissions", () => {
     expect(changes).toEqual([{ credential: "alpha" }]);
   });
 
+  it("offers a manager Edit and a destructive Delete… after a separator", async () => {
+    me = makeMe({ instanceAdmin: true });
+    credentials = [credential("alpha", { canManage: true })];
+    mount();
+    await screen.findByText("alpha");
+    const actions = screen.getByRole("button", { name: "Actions for alpha" });
+    fireEvent.pointerDown(actions, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(actions);
+    const items = await screen.findAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["Edit", "Delete…"]);
+    expect(screen.getAllByRole("separator").length).toBeGreaterThan(0);
+    expect(items[1]?.getAttribute("data-variant")).toBe("destructive");
+    fireEvent.click(items[0] as HTMLElement);
+    expect(changes).toEqual([{ credential: "alpha" }]);
+  });
+
+  it("opens the delete confirmation from Delete… and removes the credential", async () => {
+    me = makeMe({ instanceAdmin: true });
+    credentials = [credential("alpha", { canManage: true })];
+    const deleted: string[] = [];
+    const base = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (req.method === "DELETE") {
+          deleted.push(new URL(req.url).pathname);
+          credentials = [];
+          return new Response(null, { status: 204 });
+        }
+        return base(req);
+      }),
+    );
+    mount();
+    await screen.findByText("alpha");
+    const actions = screen.getByRole("button", { name: "Actions for alpha" });
+    fireEvent.pointerDown(actions, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(actions);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+    expect(await screen.findByText("Delete “alpha”?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Delete credential" }));
+    await waitFor(() => expect(deleted).toEqual(["/api/registries/alpha"]));
+    await waitFor(() => expect(screen.queryByText("Delete “alpha”?")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "alpha" })).toBeNull());
+  });
+
   it("opens a credential from its name", async () => {
     credentials = [credential("alpha")];
     mount();
@@ -351,6 +396,27 @@ describe("RegistriesPage sheet deep links", () => {
     expect(screen.getByText("You can see this credential but not change it.")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0] as HTMLElement);
     expect(changes).toContainEqual({ credential: undefined });
+  });
+});
+
+describe("RegistriesPage edit deep link", () => {
+  it("opens ?credential={id} as the edit form for a credential the caller manages", async () => {
+    me = makeMe({ instanceAdmin: true });
+    credentials = [credential("alpha", { canManage: true })];
+    search = { credential: "alpha" };
+    const base = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (new URL(req.url).pathname === "/api/registries/alpha") {
+          return Response.json(credential("alpha", { canManage: true }));
+        }
+        return base(req);
+      }),
+    );
+    mount();
+    expect(await screen.findByText("Edit alpha")).toBeTruthy();
+    expect(screen.getByLabelText("New secret (optional)")).toBeTruthy();
   });
 });
 

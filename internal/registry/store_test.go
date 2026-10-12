@@ -376,3 +376,34 @@ func TestUpdateRollsBackWhenTheHookFails(t *testing.T) {
 		t.Errorf("after the rollback = %+v, %v; a change must not exist without its audit row", got, err)
 	}
 }
+func TestDeleteRemovesTheCredentialAndASecondDeleteIsNotFound(t *testing.T) {
+	s, st, _ := newStore(t)
+	c := create(t, s, nil)
+	var seen registry.Credential
+	got, err := s.Delete(context.Background(), c.ID, func(_ context.Context, _ *sql.Tx, d registry.Credential) error {
+		seen = d
+		return nil
+	})
+	if err != nil || got.ID != c.ID || got.Name != c.Name || seen.ID != c.ID {
+		t.Fatalf("Delete = %+v, %v (hook saw %+v)", got, err, seen)
+	}
+	var n int
+	if err := st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("rows = %d, %v", n, err)
+	}
+	if _, err := s.Delete(context.Background(), c.ID, nil); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("second Delete: %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteRollsBackWhenTheHookFails(t *testing.T) {
+	s, _, _ := newStore(t)
+	c := create(t, s, nil)
+	boom := errors.New("audit write failed")
+	if _, err := s.Delete(context.Background(), c.ID, func(context.Context, *sql.Tx, registry.Credential) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("Delete: %v, want the hook's error", err)
+	}
+	if _, err := s.Get(context.Background(), c.ID); err != nil {
+		t.Errorf("the credential is gone though its audit row failed: %v", err)
+	}
+}

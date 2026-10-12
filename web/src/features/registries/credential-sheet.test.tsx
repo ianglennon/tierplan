@@ -547,3 +547,89 @@ describe("CredentialSheet edit mode", () => {
     await waitFor(() => expect(closed).toBe(1));
   });
 });
+
+describe("CredentialSheet conflicts", () => {
+  const taken = (type: string, name?: string) => {
+    patchStatus = 409;
+    patchBody = {
+      title: "Conflict",
+      status: 409,
+      type,
+      ...(name ? { errors: [{ location: "conflict.credential", message: name }] } : {}),
+    };
+  };
+  const saveChanges = () => fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+  it("shows a name another credential has as an alert in the edit sheet and saves nothing", async () => {
+    taken("credential_name_taken", "other");
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    type("Name", "other");
+    saveChanges();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "A credential named other already exists in all environments.",
+    );
+    expect(closed).toBe(0);
+    expect(field("Name").value).toBe("other");
+  });
+
+  it("names the host and prefix another credential already covers", async () => {
+    taken("host_prefix_taken", "ghcr-acme-2");
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    type("Namespace (optional)", "team");
+    saveChanges();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "All environments already has a credential for ghcr.io/team. Edit that one instead.",
+    );
+    expect(closed).toBe(0);
+  });
+
+  it("names the credential that already uses all Docker Hub pulls, from the server's answer", async () => {
+    stored = credential({ type: "dockerhub", host: "docker.io", prefix: "acme", name: "hub-ns" });
+    taken("hub_fallback_taken", "hub-all");
+    mount("edit", "c1");
+    await screen.findByText("Edit hub-ns");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use for all Docker Hub pulls" }));
+    saveChanges();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "“hub-all” already uses all Docker Hub pulls for all environments. Untick it there first.",
+    );
+    expect(closed).toBe(0);
+  });
+
+  it("names the credential in the add sheet too", async () => {
+    postStatus = 409;
+    postBody = {
+      title: "Conflict",
+      status: 409,
+      type: "hub_fallback_taken",
+      errors: [{ location: "conflict.credential", message: "hub-all" }],
+    };
+    mount();
+    await screen.findByText("Add a registry credential");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use for all Docker Hub pulls" }));
+    type("Name", "hub-two");
+    type("Username", "me");
+    type("Secret", SECRET);
+    save();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("“hub-all” already uses all Docker Hub pulls");
+    expect(closed).toBe(0);
+  });
+
+  it("shows a lost permission as an alert in the edit sheet", async () => {
+    patchStatus = 403;
+    patchBody = { title: "Forbidden", status: 403 };
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    type("Username", "x");
+    saveChanges();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("You no longer have permission to do that.");
+    expect(closed).toBe(0);
+  });
+});

@@ -597,3 +597,94 @@ func TestEditingOntoAnotherCredentialIsAConflictNamingIt(t *testing.T) {
 		})
 	}
 }
+
+// Deleting a credential (plan 05-07, D-08, D-31).
+
+func TestAnAdminDeletesACredentialAndASecondDeleteIsNotFoundAndWritesNothing(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	c := f.storeCredential(t, admin, ghcrAcme)
+
+	rec := f.credCall(t, admin, http.MethodDelete, "/api/registries/"+c.ID, "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
+	}
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("rows = %d, %v", n, err)
+	}
+	if got := f.credCall(t, admin, http.MethodGet, "/api/registries/"+c.ID, ""); got.Code != http.StatusNotFound {
+		t.Errorf("get after delete: %d", got.Code)
+	}
+
+	again := f.credCall(t, admin, http.MethodDelete, "/api/registries/"+c.ID, "")
+	if again.Code != http.StatusNotFound || problemType(t, again) != "credential_not_found" {
+		t.Errorf("second delete: %d %s, want 404 credential_not_found", again.Code, again.Body)
+	}
+	actions, details := f.registryAudit(t)
+	if !slices.Equal(actions, []string{"registry.credential_created", "registry.credential_deleted"}) {
+		t.Fatalf("actions = %v; the repeated delete must write nothing", actions)
+	}
+	want := map[string]string{"name": "ghcr-acme", "layer": "instance", "host": "ghcr.io", "prefix": "acme"}
+	for k, v := range want {
+		if details[1][k] != v {
+			t.Errorf("details[%s] = %q, want %q", k, details[1][k], v)
+		}
+	}
+	for k, v := range details[1] {
+		for _, leak := range []string{credToken, "SECRETtoken", "WXYZ"} {
+			if strings.Contains(v, leak) {
+				t.Errorf("audit detail %s = %q carries %q", k, v, leak)
+			}
+		}
+	}
+}
+
+func TestOnlyAnInstanceAdminMayDeleteAnInstanceCredential(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addEnvironmentRow(t, "env-a")
+	c := f.storeCredential(t, f.asAdmin(t), ghcrAcme)
+	for name, u := range map[string]credentialUser{
+		"env admin": f.asRoleOn(t, "envadmin", "env-a", "admin"),
+		"operator":  f.asRoleOn(t, "operator", "env-a", "operator"),
+		"viewer":    f.asRoleOn(t, "viewer", "env-a", "viewer"),
+	} {
+		if rec := f.credCall(t, u, http.MethodDelete, "/api/registries/"+c.ID, ""); rec.Code != http.StatusForbidden {
+			t.Errorf("%s: %d %s, want 403", name, rec.Code, rec.Body)
+		}
+	}
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("rows = %d, %v; a refused delete removes nothing", n, err)
+	}
+}
+
+func TestAnEnvironmentLayerCredentialCannotBeDeletedThroughTheInstanceFamily(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addEnvironmentRow(t, "env-a")
+	if _, err := f.st.Write.Exec(`INSERT INTO registry_credentials (id, env_id, name, type, host, prefix, username, secret_sealed, created_at, updated_at, created_by)
+		VALUES ('env-cred', 'env-a', 'env-one', 'ghcr', 'ghcr.io', 'acme', 'bot', 'sealed', 1, 1, 'x')`); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.credCall(t, f.asAdmin(t), http.MethodDelete, "/api/registries/env-cred", "")
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "credential_not_found" {
+		t.Errorf("%d %s, want 404 credential_not_found", rec.Code, rec.Body)
+	}
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("rows = %d, %v", n, err)
+	}
+}
+
+func TestACreateThatClashesNamesTheOtherCredential(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	f.storeCredential(t, admin, `{"name":"hub-all","type":"dockerhub","hubFallback":true,"username":"u","secret":"s3cret-token-value"}`)
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries",
+		`{"name":"hub-two","type":"dockerhub","prefix":"acme","hubFallback":true,"username":"u","secret":"s3cret-token-value"}`)
+	p := decodeProblem(t, rec)
+	if rec.Code != http.StatusConflict || p.Type != "hub_fallback_taken" || len(p.Errors) != 1 ||
+		p.Errors[0].Location != "conflict.credential" || p.Errors[0].Message != "hub-all" {
+		t.Errorf("%d %s, want 409 hub_fallback_taken naming hub-all", rec.Code, rec.Body)
+	}
+}
