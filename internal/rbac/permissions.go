@@ -39,6 +39,7 @@ const (
 	PermContainersRead        Perm = "containers.read"
 	PermImagesRead            Perm = "images.read"
 	PermImagesPull            Perm = "images.pull"
+	PermImagesDelete          Perm = "images.delete"
 	PermVolumesRead           Perm = "volumes.read"
 	PermNetworksRead          Perm = "networks.read"
 	PermContainersControl     Perm = "containers.control"
@@ -88,6 +89,7 @@ var defaultRegistry = Registry{
 	{Name: PermContainersControl, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Start, stop, restart, kill, pause and unpause containers"},
 	{Name: PermContainersRemove, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Remove containers"},
 	{Name: PermImagesPull, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Pull images"},
+	{Name: PermImagesDelete, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Remove and untag images"},
 	{Name: PermNetworksManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create and delete networks"},
 	{Name: PermNetworksConnect, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Connect and disconnect containers and networks"},
 	{Name: PermVolumesCreate, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create volumes"},

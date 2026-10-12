@@ -4008,6 +4008,120 @@
         ],
         "type": "object"
       },
+      "ImageRemoveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "bulkId": {
+            "description": "Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it",
+            "format": "uuid",
+            "type": "string"
+          },
+          "targets": {
+            "description": "The image copies to remove, at most 25. Each is answered separately; one that fails never stops the others",
+            "items": {
+              "$ref": "#/components/schemas/ImageRemoveTarget"
+            },
+            "maxItems": 25,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "type": "object"
+      },
+      "ImageRemoveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "bulkId": {
+            "description": "The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent",
+            "type": "string"
+          },
+          "results": {
+            "description": "One entry per requested target, in request order",
+            "items": {
+              "$ref": "#/components/schemas/ImageRemoveResult"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "type": "object"
+      },
+      "ImageRemoveResult": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Why a target failed. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message",
+            "enum": [
+              "image_in_use",
+              "not_found",
+              "node_unreachable",
+              "host_read_only",
+              "agent_policy_denied",
+              "action_failed"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "description": "A plain sentence, or for action_failed the engine's message, at most 300 characters",
+            "type": "string"
+          },
+          "imageId": {
+            "description": "The image ID the request named",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node ID the request named",
+            "type": "string"
+          },
+          "result": {
+            "description": "done: the image and all its names are gone from the node. failed: it was refused or could not be sent; code says why",
+            "enum": [
+              "done",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "imageId",
+          "result"
+        ],
+        "type": "object"
+      },
+      "ImageRemoveTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "imageId": {
+            "description": "The full image ID: sha256: and 64 hexadecimal characters",
+            "maxLength": 71,
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node the copy is on: the nodeId of its row in the images list. Never the display name",
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "imageId"
+        ],
+        "type": "object"
+      },
       "ImageUsedByBody": {
         "additionalProperties": false,
         "properties": {
@@ -10649,6 +10763,67 @@
         "summary": "The nodes a pull can run on",
         "tags": [
           "images"
+        ]
+      }
+    },
+    "/api/env/{envId}/images/remove": {
+      "post": {
+        "description": "Removes up to 25 image copies, each named by its node ID and image ID, and answers one result per target in request order. An image with several names has each name untagged first and is then deleted by ID, so the engine's must-be-forced refusal never stops a removal; force is never sent. An image that any container on its node, running or stopped, references is never removed: the result is failed with code image_in_use and the detail names up to 5 users. The users are read again from the node just before each removal, and a container that starts between the check and the call makes the engine refuse and is answered image_in_use too. An image the node does not have is failed with code not_found and writes no audit row. One that fails never stops the others. Needs images.delete (Operator) on the environment. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Every attempt on an image the node has is audited as image.removed, failures included.",
+        "operationId": "removeImages",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageRemoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageRemoveResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Remove images",
+        "tags": [
+          "environments"
         ]
       }
     },

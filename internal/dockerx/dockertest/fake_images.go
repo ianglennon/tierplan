@@ -32,7 +32,7 @@ func (c FakeConfig) resolveImage(name string) (FakeImage, bool) {
 		if fi.ID == name || strings.TrimPrefix(fi.ID, "sha256:") == name {
 			return fi, true
 		}
-		for _, rt := range fi.RepoTags {
+		for _, rt := range append(slices.Clone(fi.RepoTags), fi.RepoDigests...) {
 			if normaliseImage(rt) == normaliseImage(name) {
 				return fi, true
 			}
@@ -294,11 +294,118 @@ func (f *Fake) PullAuth() []string {
 	return slices.Clone(f.pullAuth)
 }
 
-// withImages returns c with the images pulled through the daemon listed after its own.
-func (c FakeConfig) withImages(pulled []FakeImage) FakeConfig {
-	if len(pulled) == 0 {
+// withImages returns c with the images pulled through the daemon listed after its own, the
+// images removed through it dropped and the names taken off an image gone. The slices are
+// copied, so the Fake's own configuration is not touched.
+func (c FakeConfig) withImages(pulled []FakeImage, gone map[string]bool, untagged map[string]map[string]bool) FakeConfig {
+	if len(pulled) == 0 && len(gone) == 0 && len(untagged) == 0 {
 		return c
 	}
-	c.Images = append(slices.Clone(c.Images), pulled...)
+	all := append(slices.Clone(c.Images), pulled...)
+	out := make([]FakeImage, 0, len(all))
+	for _, fi := range all {
+		if gone[fi.ID] {
+			continue
+		}
+		if off := untagged[fi.ID]; len(off) > 0 {
+			keep := func(n string) bool { return !off[normaliseImage(n)] }
+			fi.RepoTags = slices.DeleteFunc(slices.Clone(fi.RepoTags), func(n string) bool { return !keep(n) })
+			fi.RepoDigests = slices.DeleteFunc(slices.Clone(fi.RepoDigests), func(n string) bool { return !keep(n) })
+		}
+		out = append(out, fi)
+	}
+	c.Images = out
 	return c
+}
+
+var _ = registerFakeHandler((*Fake).serveImageRemove)
+
+// imageDeletePath matches /images/{name}, a name that has no further segment such as /json.
+var imageDeletePath = regexp.MustCompile(`^/images/(.+)$`)
+
+// serveImageRemove answers DELETE /images/{name} as a daemon does. By a name (a tag or a
+// repo@digest) it untags that name and keeps the image while another name remains; the last
+// name deletes the image unless a container was created from it (409, cannot be forced). By
+// the image ID it deletes the image, but an image with several names is a 409 "must be
+// forced", and one a container uses a 409 "being used by". An unknown name is 404. The write
+// is recorded with its query whatever the answer, so a test can see that force was never sent.
+func (f *Fake) serveImageRemove(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodDelete {
+		return false
+	}
+	m := imageDeletePath.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	name := m[1]
+	fi, ok := cfg.resolveImage(name)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such image: " + name})
+		return true
+	}
+	force := r.URL.Query().Get("force") != ""
+	byID := fi.ID == name || strings.TrimPrefix(fi.ID, "sha256:") == name
+	names := append(slices.Clone(fi.RepoTags), fi.RepoDigests...)
+	users := f.imageUsers(cfg, fi.ID)
+	short := strings.TrimPrefix(fi.ID, "sha256:")[:min(12, len(strings.TrimPrefix(fi.ID, "sha256:")))]
+	if !force {
+		switch {
+		case byID && len(names) > 1:
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "unable to delete " + short + " (must be forced) - image is referenced in multiple repositories"})
+			return true
+		case len(users) > 0 && (byID || len(names) <= 1):
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "conflict: unable to delete " + short + " (cannot be forced) - image is being used by stopped container " + users[0]})
+			return true
+		}
+	}
+	var resp []map[string]string
+	f.mu.Lock()
+	if f.imgUntagged == nil {
+		f.imgUntagged = map[string]map[string]bool{}
+	}
+	if f.imgGone == nil {
+		f.imgGone = map[string]bool{}
+	}
+	drop := names
+	if !byID && len(names) > 1 {
+		drop = []string{name}
+	}
+	for _, n := range drop {
+		if f.imgUntagged[fi.ID] == nil {
+			f.imgUntagged[fi.ID] = map[string]bool{}
+		}
+		f.imgUntagged[fi.ID][normaliseImage(n)] = true
+		resp = append(resp, map[string]string{"Untagged": n})
+	}
+	if byID || len(names) <= 1 {
+		f.imgGone[fi.ID] = true
+		resp = append(resp, map[string]string{"Deleted": fi.ID})
+	}
+	f.mu.Unlock()
+	writeJSON(w, http.StatusOK, resp)
+	return true
+}
+
+// imageUsers are the IDs of the containers created from an image, or one stand-in for a
+// container that started in between when the image is in BusyImages.
+func (f *Fake) imageUsers(cfg FakeConfig, id string) []string {
+	var out []string
+	for _, c := range cfg.Containers {
+		if c.ImageID == id {
+			out = append(out, c.ID)
+		}
+	}
+	if slices.Contains(cfg.BusyImages, id) {
+		out = append(out, "started-meanwhile")
+	}
+	return out
 }

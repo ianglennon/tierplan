@@ -115,6 +115,10 @@ type FakeConfig struct {
 	// BusyVolumes are volumes the daemon refuses to remove as in use although no container
 	// in its list mounts them, as when a container starts between a check and the call.
 	BusyVolumes []string
+	// BusyImages are image IDs the daemon refuses to remove as in use although no container
+	// in its list was created from them, as when a container starts between a check and the
+	// call.
+	BusyImages []string
 	// Nodes and Services are how many swarm nodes and services /nodes and
 	// /services list. A fake that is not a swarm manager answers both with the
 	// 503 a real worker gives, so a client that asks anyway fails loudly.
@@ -440,6 +444,10 @@ type Fake struct {
 	// pullAuth the X-Registry-Auth header of every pull, in order (fake_images.go).
 	pulled   []FakeImage
 	pullAuth []string
+	// imgGone are the IDs of the images removed through the fake, and imgUntagged the names
+	// (normalised) taken off an image, by its ID.
+	imgGone     map[string]bool
+	imgUntagged map[string]map[string]bool
 	// distAuth and distRefs are the header and reference of each distribution check.
 	distAuth, distRefs []string
 
@@ -564,7 +572,7 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

@@ -30,6 +30,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { RemoveImageDialog } from "@/features/images/remove-image-dialog";
 import { IMAGE_TABS } from "@/features/images/tabs";
 import { usedWhat } from "@/features/images/used-by";
 import { PullDialog } from "@/features/pulls/pull-dialog";
@@ -131,7 +132,13 @@ function HeaderActions({
   const pull = useNeeds("images.pull", envId);
   const { data: targets } = useQuery(pullTargetsQuery(envId));
   const reason = pull.reason ?? (allReadOnly(targets) ? t("pulls.readOnly.reason") : undefined);
+  const remove = useNeeds("images.delete", envId);
+  // Who may comes first, then whether the host lets anything change (D-30).
+  const removeReason =
+    remove.reason ?? (allReadOnly(targets) ? t("pulls.readOnly.reason") : undefined);
   const [open, setOpen] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const holders = (detail.nodes ?? []).filter((n) => n.present);
   const firstTag = (detail.names ?? []).find((n) => n.kind === "tag")?.name;
 
   async function copyId() {
@@ -153,6 +160,17 @@ function HeaderActions({
           {t("images.detail.actions.pull")}
         </Button>
       </NeedsTooltip>
+      <NeedsTooltip reason={removeReason}>
+        <Button
+          type="button"
+          variant="outline"
+          className="max-md:h-11 border-destructive-fill text-destructive"
+          aria-label={t("images.remove.label", { name: title })}
+          onClick={remove.allowed && !removeReason ? () => setRemoving(true) : undefined}
+        >
+          {t("images.remove.action")}
+        </Button>
+      </NeedsTooltip>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -171,6 +189,16 @@ function HeaderActions({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {remove.allowed ? (
+        <RemoveImageDialog
+          envId={envId}
+          imageId={detail.id}
+          name={title}
+          nodes={holders.map((n) => ({ nodeId: n.nodeId, name: n.name }))}
+          open={removing}
+          onClose={() => setRemoving(false)}
+        />
+      ) : null}
       {pull.allowed ? (
         <PullDialog
           envId={envId}

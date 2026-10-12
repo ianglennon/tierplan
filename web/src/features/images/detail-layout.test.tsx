@@ -281,6 +281,47 @@ describe("image page actions", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("makes Remove… unavailable, with the reason, for a viewer", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    renderAt();
+    const button = await screen.findByRole("button", { name: "Remove nginx:1.27" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(button);
+    expect((await screen.findAllByText("Needs Operator")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("removes the image from Remove…, and the page turns to the gone state", async () => {
+    let removed = false;
+    const inner = answer;
+    answer = () =>
+      removed
+        ? Response.json(
+            { title: "gone", status: 404, type: "image_not_found" },
+            { status: 404, headers: { "Content-Type": "application/problem+json" } },
+          )
+        : inner();
+    const fetchStub = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (new URL(req.url).pathname === `/api/env/${ENV}/images/remove`) {
+          sent.push({ method: req.method, path: new URL(req.url).pathname, search: "" });
+          removed = true;
+          return Response.json({ results: [{ nodeId: "n1", imageId: ID, result: "done" }] });
+        }
+        return fetchStub(req);
+      }),
+    );
+    renderAt();
+    fireEvent.click(await screen.findByRole("button", { name: "Remove nginx:1.27" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Remove nginx:1.27?")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove image" }));
+    expect(await screen.findByText("This image is gone")).toBeTruthy();
+    expect(sent.filter((s) => s.path.endsWith("/images/remove"))).toHaveLength(1);
+  });
+
   it("has Copy image ID under More", async () => {
     const write = vi.fn(async () => undefined);
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: write } });

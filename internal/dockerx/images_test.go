@@ -282,3 +282,112 @@ func TestImageHistoryAnImageTheEngineLacksIsNotFoundAndAnAgentThatRefusesIsPolic
 		t.Fatalf("ImageHistory on a refusing agent = %v, want agent_policy_denied", err)
 	}
 }
+
+func removeFake(t *testing.T, cfg dockertest.FakeConfig) (*dockertest.Fake, *dockerx.Client) {
+	t.Helper()
+	fake := dockertest.NewFake(t, cfg)
+	return fake, newClient(t, fake)
+}
+
+func TestImageRemoveUntagsEveryNameThenDeletesTheImageAndNeverSendsForce(t *testing.T) {
+	digest := "app@sha256:" + strings.Repeat("c", 64)
+	fake, c := removeFake(t, dockertest.FakeConfig{Images: []dockertest.FakeImage{
+		{ID: imgA, RepoTags: []string{"app:1", "app:latest", "mirror/app:1"}, RepoDigests: []string{digest}},
+		{ID: imgB, RepoTags: []string{"keep:1"}},
+	}})
+	names := []string{"app:1", "app:latest", "mirror/app:1", digest}
+	if err := c.ImageRemove(context.Background(), imgA, names); err != nil {
+		t.Fatalf("ImageRemove: %v", err)
+	}
+	want := []string{"DELETE /images/app:1", "DELETE /images/app:latest", "DELETE /images/mirror/app:1", "DELETE /images/" + digest}
+	got := fake.Writes()
+	if len(got) < len(want) || !slices.Equal(got[:len(want)], want) {
+		t.Fatalf("writes = %v, want the untags %v first", got, want)
+	}
+	for _, w := range got {
+		if strings.Contains(w, "force") {
+			t.Errorf("a write sent force: %s", w)
+		}
+	}
+	if _, _, err := c.ImageDetail(context.Background(), imgA); !dockerx.IsNotFound(err) {
+		t.Errorf("the image is still there: %v", err)
+	}
+	if _, _, err := c.ImageDetail(context.Background(), imgB); err != nil {
+		t.Errorf("another image went with it: %v", err)
+	}
+}
+
+func TestImageRemoveAnImageWithNoNameIsDeletedByID(t *testing.T) {
+	fake, c := removeFake(t, dockertest.FakeConfig{Images: []dockertest.FakeImage{{ID: imgA}}})
+	if err := c.ImageRemove(context.Background(), imgA, nil); err != nil {
+		t.Fatalf("ImageRemove: %v", err)
+	}
+	if w := fake.Writes(); len(w) != 1 || !strings.HasPrefix(w[0], "DELETE /images/"+imgA) {
+		t.Errorf("writes = %v, want one delete by ID", w)
+	}
+}
+
+func TestImageRemoveRefusesAnImageAContainerUsesAsAConflictAndNeverForces(t *testing.T) {
+	fake, c := removeFake(t, dockertest.FakeConfig{
+		Images:     []dockertest.FakeImage{{ID: imgA, RepoTags: []string{"app:1"}}},
+		Containers: []dockertest.FakeContainer{{ID: "c1", Names: []string{"/old"}, ImageID: imgA, State: "exited"}},
+	})
+	err := c.ImageRemove(context.Background(), imgA, []string{"app:1"})
+	if !dockerx.IsConflict(err) {
+		t.Fatalf("ImageRemove = %v, want a conflict", err)
+	}
+	for _, w := range fake.Writes() {
+		if strings.Contains(w, "force") {
+			t.Errorf("a write sent force: %s", w)
+		}
+	}
+	if _, _, err := c.ImageDetail(context.Background(), imgA); err != nil {
+		t.Errorf("the image used by a container was removed: %v", err)
+	}
+}
+
+func TestImageRemoveAnImageTheEngineLacksIsNotFound(t *testing.T) {
+	_, c := removeFake(t, dockertest.FakeConfig{Images: []dockertest.FakeImage{{ID: imgA, RepoTags: []string{"app:1"}}}})
+	if err := c.ImageRemove(context.Background(), imgB, []string{"gone:1"}); !dockerx.IsNotFound(err) {
+		t.Fatalf("ImageRemove(unknown) = %v, want a not-found error", err)
+	}
+}
+
+func TestImageUntagKeepsTheImageWhileAnotherNameRemainsAndRemovesItWithTheLast(t *testing.T) {
+	_, c := removeFake(t, dockertest.FakeConfig{Images: []dockertest.FakeImage{{ID: imgA, RepoTags: []string{"app:1", "app:2"}}}})
+	removed, err := c.ImageUntag(context.Background(), "app:1")
+	if err != nil || removed {
+		t.Fatalf("first untag = %v, %v, want the image kept", removed, err)
+	}
+	d, _, err := c.ImageDetail(context.Background(), imgA)
+	if err != nil || !slices.Equal(d.RepoTags, []string{"app:2"}) {
+		t.Fatalf("after the first untag: %+v, %v", d, err)
+	}
+	removed, err = c.ImageUntag(context.Background(), "app:2")
+	if err != nil || !removed {
+		t.Fatalf("last untag = %v, %v, want the image removed", removed, err)
+	}
+	if _, err := c.ImageUntag(context.Background(), "app:2"); !dockerx.IsNotFound(err) {
+		t.Fatalf("untag of a name that is gone = %v, want not found", err)
+	}
+}
+
+func TestImageUsersNamesTheContainersCreatedFromTheImageWhetherTheyRunOrNot(t *testing.T) {
+	_, c := removeFake(t, dockertest.FakeConfig{
+		Images: []dockertest.FakeImage{{ID: imgA, RepoTags: []string{"app:1"}}, {ID: imgB}},
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/old"}, ImageID: imgA, State: "exited"},
+			{ID: "c2", Names: []string{"/web"}, ImageID: imgA, State: "running"},
+			{ID: "c3", Names: []string{"/other"}, ImageID: imgB, State: "running"},
+		},
+	})
+	got, err := c.ImageUsers(context.Background(), imgA)
+	slices.Sort(got)
+	if err != nil || !slices.Equal(got, []string{"old", "web"}) {
+		t.Fatalf("ImageUsers = %v, %v", got, err)
+	}
+	none, err := c.ImageUsers(context.Background(), "sha256:"+strings.Repeat("9", 64))
+	if err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("ImageUsers of an unused image = %v, %v, want an empty list", none, err)
+	}
+}

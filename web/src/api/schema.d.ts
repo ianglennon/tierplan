@@ -732,6 +732,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/images/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove images
+         * @description Removes up to 25 image copies, each named by its node ID and image ID, and answers one result per target in request order. An image with several names has each name untagged first and is then deleted by ID, so the engine's must-be-forced refusal never stops a removal; force is never sent. An image that any container on its node, running or stopped, references is never removed: the result is failed with code image_in_use and the detail names up to 5 users. The users are read again from the node just before each removal, and a container that starts between the check and the call makes the engine refuse and is answered image_in_use too. An image the node does not have is failed with code not_found and writes no audit row. One that fails never stops the others. Needs images.delete (Operator) on the environment. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Every attempt on an image the node has is audited as image.removed, failures included.
+         */
+        post: operations["removeImages"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/images/{imageId}": {
         parameters: {
             query?: never;
@@ -4044,6 +4064,45 @@ export interface components {
             /** @description True when the node has the image */
             present: boolean;
         };
+        ImageRemoveRequest: {
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
+             */
+            bulkId?: string;
+            /** @description The image copies to remove, at most 25. Each is answered separately; one that fails never stops the others */
+            targets: components["schemas"]["ImageRemoveTarget"][] | null;
+        };
+        ImageRemoveResponse: {
+            /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one target. Absent for a single target with none sent */
+            bulkId?: string;
+            /** @description One entry per requested target, in request order */
+            results: components["schemas"]["ImageRemoveResult"][] | null;
+        };
+        ImageRemoveResult: {
+            /**
+             * @description Why a target failed. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @enum {string}
+             */
+            code?: "image_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
+            /** @description A plain sentence, or for action_failed the engine's message, at most 300 characters */
+            detail?: string;
+            /** @description The image ID the request named */
+            imageId: string;
+            /** @description The node ID the request named */
+            nodeId: string;
+            /**
+             * @description done: the image and all its names are gone from the node. failed: it was refused or could not be sent; code says why
+             * @enum {string}
+             */
+            result: "done" | "failed";
+        };
+        ImageRemoveTarget: {
+            /** @description The full image ID: sha256: and 64 hexadecimal characters */
+            imageId: string;
+            /** @description The node the copy is on: the nodeId of its row in the images list. Never the display name */
+            nodeId: string;
+        };
         ImageUsedByBody: {
             /** @description Containers, running or stopped, on the nodes that hold the image, then swarm services whose spec names it, even with no task */
             items: components["schemas"]["ImageUsedByItem"][] | null;
@@ -7140,6 +7199,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PullTargetsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeImages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageRemoveRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRemoveResponse"];
                 };
             };
             /** @description Error */

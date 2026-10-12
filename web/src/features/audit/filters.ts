@@ -100,6 +100,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "volume.created",
   "volume.removed",
   "image.pulled",
+  "image.removed",
+  "image.untagged",
   "registry.credential_created",
   "registry.credential_updated",
   "registry.credential_deleted",

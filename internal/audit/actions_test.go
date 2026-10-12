@@ -135,6 +135,10 @@ var phase4DetailKeys = map[string][]string{
 // stopped on and the job ID as bulk (plan 05-01, D-31).
 var phase5DetailKeys = map[string][]string{
 	audit.ActionImagePulled: {"ref", "digest", "node", "credential", "layer", "code", "bulk"},
+	// A remove or an untag records one row per node: the image's name as it was shown, the node,
+	// the code of a refusal and the bulk ID (plan 05-16, D-31).
+	audit.ActionImageRemoved:  {"ref", "node", "code", "bulk"},
+	audit.ActionImageUntagged: {"ref", "node", "code", "bulk"},
 	// A credential row names what was stored and never the secret or any part of it: the
 	// name, the layer, the host and prefix, the type, the username, whether it is the Docker
 	// Hub fallback and the expiry day (plan 05-05, D-31).
@@ -171,6 +175,8 @@ func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	}
 	for key, constant := range map[string]string{
 		"image.pulled":                audit.ActionImagePulled,
+		"image.removed":               audit.ActionImageRemoved,
+		"image.untagged":              audit.ActionImageUntagged,
 		"registry.credential_created": audit.ActionRegistryCredentialCreated,
 		"registry.credential_updated": audit.ActionRegistryCredentialUpdated,
 		"registry.credential_deleted": audit.ActionRegistryCredentialDeleted,

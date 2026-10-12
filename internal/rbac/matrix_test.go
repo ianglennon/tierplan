@@ -28,6 +28,7 @@ func TestRequirementOfEveryRegisteredPermission(t *testing.T) {
 		rbac.PermContainersControl:     {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
 		rbac.PermContainersRemove:      {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
 		rbac.PermImagesPull:            {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
+		rbac.PermImagesDelete:          {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
 		rbac.PermNetworksManage:        {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
 		rbac.PermNetworksConnect:       {Kind: rbac.NeedRole, Role: rbac.RoleOperator},
 		rbac.PermVolumesCreate:         {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},

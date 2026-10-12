@@ -184,7 +184,9 @@
         "removed": "Volume removed"
       },
       "image": {
-        "pulled": "Image pulled"
+        "pulled": "Image pulled",
+        "removed": "Image removed",
+        "untagged": "Image name removed"
       },
       "registry": {
         "credential_created": "Registry credential added",

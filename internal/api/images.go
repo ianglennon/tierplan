@@ -182,6 +182,7 @@ func RegisterImages(r *httpx.Router, d ImagesDeps) {
 		d.Log = slog.Default()
 	}
 	problems := problemResponses(r)
+	registerImageRemove(r, d)
 	httpx.Register(r, huma.Operation{
 		OperationID: "listImages", Method: http.MethodGet, Path: "/api/env/{envId}/images",
 		Summary: "List the images of an environment",

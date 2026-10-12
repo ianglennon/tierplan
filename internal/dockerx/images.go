@@ -299,3 +299,67 @@ func (c *Client) ImageHistory(ctx context.Context, id string) ([]HistoryRow, err
 	}
 	return out, nil
 }
+
+// ImageUntag removes one name (repository:tag or repository@digest) of an image on this
+// node. The engine keeps the image while another name of it remains, and deletes it when
+// that was the last one, so removed says which happened. It never sends force: an image
+// that a container still uses is refused with a conflict IsConflict reports, and a name
+// the node does not have is an error IsNotFound reports.
+func (c *Client) ImageUntag(ctx context.Context, name string) (removed bool, err error) {
+	res, err := c.cur().ImageRemove(ctx, name, client.ImageRemoveOptions{PruneChildren: true})
+	if err != nil {
+		return false, fmt.Errorf("untag image on %s: %w", c.t.Describe(), err)
+	}
+	for _, it := range res.Items {
+		if it.Deleted != "" {
+			removed = true
+		}
+	}
+	return removed, nil
+}
+
+// ImageRemove removes the image id and every one of its names on this node, without force.
+// An engine refuses to delete by ID an image that has several names (it "must be forced"),
+// so each name in names is untagged first and the image is deleted by ID only if it is
+// still there afterwards. A name the engine no longer has is skipped: someone else removed
+// it. An image that a container uses is refused with a conflict IsConflict reports, and an
+// image that is not there at all is an error IsNotFound reports.
+func (c *Client) ImageRemove(ctx context.Context, id string, names []string) error {
+	untagged := false
+	for _, name := range names {
+		_, err := c.ImageUntag(ctx, name)
+		switch {
+		case err == nil:
+			untagged = true
+		case !IsNotFound(err):
+			return err
+		}
+	}
+	if _, err := c.cur().ImageInspect(ctx, id); err != nil {
+		if IsNotFound(err) && untagged {
+			// The untag of its last name deleted it.
+			return nil
+		}
+		return fmt.Errorf("inspect image on %s: %w", c.t.Describe(), err)
+	}
+	if _, err := c.cur().ImageRemove(ctx, id, client.ImageRemoveOptions{PruneChildren: true}); err != nil {
+		return fmt.Errorf("remove image on %s: %w", c.t.Describe(), err)
+	}
+	return nil
+}
+
+// ImageUsers names the containers on this node, running or not, that were created from the
+// image id: the engine's own list of every container, read now.
+func (c *Client) ImageUsers(ctx context.Context, id string) ([]string, error) {
+	cs, err := c.cur().ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list containers on %s: %w", c.t.Describe(), err)
+	}
+	users := []string{}
+	for _, row := range containerRows(cs.Items) {
+		if row.ImageID == id {
+			users = append(users, row.Name)
+		}
+	}
+	return users, nil
+}
