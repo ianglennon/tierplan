@@ -39,6 +39,9 @@ type fakeRegistry struct {
 	// scheme is https for the usual fake and http for the plain one.
 	scheme string
 
+	// extra, when set, answers any request the fake does not (manifests and blobs).
+	extra http.HandlerFunc
+
 	user, pass string
 	mu         sync.Mutex
 	paths      []string
@@ -122,6 +125,8 @@ func (f *fakeRegistry) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.serveTags(w, r, repo)
+	case f.extra != nil:
+		f.extra(w, r)
 	default:
 		http.NotFound(w, r)
 	}

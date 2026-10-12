@@ -4,14 +4,19 @@
 package api_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
@@ -323,5 +328,204 @@ func TestBrowseTagsRefusesAParameterOutOfRange(t *testing.T) {
 		if rec := f.browse(t, admin, reg, "acme/app", query); rec.Code != http.StatusUnprocessableEntity {
 			t.Errorf("%s: %d %s, want 422", name, rec.Code, rec.Body)
 		}
+	}
+}
+
+// The details of the tags on screen (plan 05-19, IMG-03, D-20, D-24a).
+
+type tagDetailsResp struct {
+	Items []struct {
+		Tag       string  `json:"tag"`
+		Digest    string  `json:"digest"`
+		Created   *string `json:"created"`
+		Code      string  `json:"code"`
+		Platforms []struct {
+			OS      string `json:"os"`
+			Arch    string `json:"arch"`
+			Variant string `json:"variant"`
+			Digest  string `json:"digest"`
+			Size    int64  `json:"size"`
+		} `json:"platforms"`
+		RunningIn []struct {
+			EnvID   string `json:"envId"`
+			EnvName string `json:"envName"`
+		} `json:"runningIn"`
+	} `json:"items"`
+}
+
+// imageServer makes the registry serve one single-platform image, acme/app:1.0, and count the
+// manifest requests it gets.
+type imageServer struct {
+	manifestRequests atomic.Int32
+	digest           string
+	configDigest     string
+}
+
+func serveImage(reg *fakeRegistry, created time.Time) *imageServer {
+	cfg := []byte(`{"architecture":"arm64","os":"linux","created":"` + created.UTC().Format(time.RFC3339) + `"}`)
+	sum := func(b []byte) string { h := sha256.Sum256(b); return "sha256:" + hex.EncodeToString(h[:]) }
+	is := &imageServer{configDigest: sum(cfg)}
+	man := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"` +
+		is.configDigest + `","size":` + strconv.Itoa(len(cfg)) + `},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"` + sum([]byte("layer")) + `","size":2048}]}`)
+	is.digest = sum(man)
+	reg.extra = func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer good" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="`+reg.srv.URL+`/token",service="fake",scope="repository:acme/app:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/manifests/1.0"), strings.HasSuffix(r.URL.Path, "/manifests/"+is.digest):
+			is.manifestRequests.Add(1)
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", is.digest)
+			w.Header().Set("Content-Length", strconv.Itoa(len(man)))
+			if r.Method != http.MethodHead {
+				_, _ = w.Write(man)
+			}
+		case strings.HasSuffix(r.URL.Path, "/blobs/"+is.configDigest):
+			w.Header().Set("Content-Length", strconv.Itoa(len(cfg)))
+			_, _ = w.Write(cfg)
+		default:
+			http.NotFound(w, r)
+		}
+	}
+	return is
+}
+
+func (f *authFixture) details(t *testing.T, u credentialUser, reg *fakeRegistry, repo, envID string, tags ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := map[string]any{"ref": reg.host() + "/" + repo, "tags": tags}
+	if envID != "" {
+		body["envId"] = envID
+	}
+	b, _ := json.Marshal(body)
+	return f.credCall(t, u, http.MethodPost, "/api/registries/tags/details", string(b))
+}
+
+func TestBrowseTagDetailsGiveTheDigestDateAndPlatformsOfTheTagsAsked(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	created := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	img := serveImage(reg, created)
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
+
+	rec := f.details(t, admin, reg, "acme/app", "", "1.0", "gone")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("details: %d %s", rec.Code, rec.Body)
+	}
+	got := decodeRec[tagDetailsResp](t, rec)
+	if len(got.Items) != 2 {
+		t.Fatalf("items = %+v", got.Items)
+	}
+	one := got.Items[0]
+	if one.Tag != "1.0" || one.Digest != img.digest || one.Code != "" || one.Created == nil || *one.Created != "2026-02-03T04:05:06Z" {
+		t.Errorf("1.0 = %+v, want digest %s and the date of the config", one, img.digest)
+	}
+	if len(one.Platforms) != 1 || one.Platforms[0].Arch != "arm64" || one.Platforms[0].OS != "linux" || one.Platforms[0].Size != 2048 || one.Platforms[0].Digest != img.digest {
+		t.Errorf("platforms = %+v", one.Platforms)
+	}
+	if got.Items[1].Tag != "gone" || got.Items[1].Code != "tag_not_found" || got.Items[1].Created != nil {
+		t.Errorf("gone = %+v, want tag_not_found", got.Items[1])
+	}
+	if strings.Contains(rec.Body.String(), reg.pass) || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("the answer carries the secret or is cacheable: %s %v", rec.Body, rec.Header())
+	}
+	if actions, _ := f.registryAudit(t); !slices.Equal(actions, []string{"registry.credential_created"}) {
+		t.Errorf("registry audit actions = %v; reading details is not audited", actions)
+	}
+}
+
+func TestBrowseTagDetailsRefusesZeroTagsMoreThan25AndAnUnparsableReference(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	serveImage(reg, time.Now())
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	many := make([]string, 26)
+	for i := range many {
+		many[i] = fmt.Sprintf("t%d", i)
+	}
+	if rec := f.details(t, admin, reg, "acme/app", "", many...); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("26 tags: %d %s, want 422", rec.Code, rec.Body)
+	}
+	if rec := f.details(t, admin, reg, "acme/app", ""); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("no tags: %d %s, want 422", rec.Code, rec.Body)
+	}
+	if rec := f.details(t, admin, reg, "acme/app", "", many[:25]...); rec.Code != http.StatusOK {
+		t.Errorf("25 tags: %d %s, want 200", rec.Code, rec.Body)
+	}
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/tags/details", `{"ref":"NOT A REF!!","tags":["1.0"]}`)
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "ref_invalid" {
+		t.Errorf("invalid: %d %s, want 422 ref_invalid", rec.Code, rec.Body)
+	}
+}
+
+func TestBrowseTagDetailsAuthoriseExactlyAsBrowseTagsBeforeAnythingIsRead(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, b := f.twoEnvironments(t)
+	reg := newFakeRegistry(t)
+	img := serveImage(reg, time.Now())
+	f.trusting(t, reg)
+	f.addUser(t, "nobody", false)
+	nobodyCookie, nobodyCSRF := f.signIn(t, "nobody", false)
+	viewerA := f.asRoleOn(t, "viewera", a.ID, "viewer")
+	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
+
+	for name, tc := range map[string]struct {
+		u     credentialUser
+		envID string
+		want  int
+	}{
+		"no grant at all":      {credentialUser{nobodyCookie, nobodyCSRF}, "", http.StatusForbidden},
+		"no grant, with envId": {credentialUser{nobodyCookie, nobodyCSRF}, a.ID, http.StatusForbidden},
+		"viewer of A on B":     {viewerA, b.ID, http.StatusForbidden},
+		"viewer of A on A":     {viewerA, a.ID, http.StatusOK},
+		"viewer of A":          {viewerA, "", http.StatusOK},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := img.manifestRequests.Load()
+			rec := f.details(t, tc.u, reg, "acme/app", tc.envID, "1.0")
+			if rec.Code != tc.want {
+				t.Errorf("details: %d %s, want %d", rec.Code, rec.Body, tc.want)
+			}
+			if tc.want == http.StatusForbidden && img.manifestRequests.Load() != before {
+				t.Error("a refused caller reached the registry")
+			}
+		})
+	}
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT count(*) FROM audit_log WHERE action = 'permission.denied' AND target_id = 'POST /api/registries/tags/details'`).Scan(&n); err != nil || n != 3 {
+		t.Errorf("refusals audited = %d, %v, want 3", n, err)
+	}
+}
+
+func TestBrowseTagDetailsNeverServeWhatACredentialSawToACallerWhoCannotUseIt(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, b := f.twoEnvironments(t)
+	reg := newFakeRegistry(t)
+	img := serveImage(reg, time.Now())
+	f.trusting(t, reg)
+	admin := credentialUser{f.cookie, f.csrf}
+	if rec := f.credCall(t, admin, http.MethodPost, "/api/env/"+b.ID+"/registries", reg.credentialBody("fake-in-b")); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	viewerA := f.asRoleOn(t, "viewera", a.ID, "viewer")
+
+	rec := f.details(t, admin, reg, "acme/app", b.ID, "1.0")
+	if rec.Code != http.StatusOK || decodeRec[tagDetailsResp](t, rec).Items[0].Digest != img.digest {
+		t.Fatalf("admin: %d %s", rec.Code, rec.Body)
+	}
+	// The viewer of A has no credential that applies: the registry is asked anonymously and
+	// refuses, and nothing the admin's credential saw is in the answer.
+	rec = f.details(t, viewerA, reg, "acme/app", "", "1.0")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("viewer: %d %s", rec.Code, rec.Body)
+	}
+	item := decodeRec[tagDetailsResp](t, rec).Items[0]
+	if item.Code != "needs_login" || item.Digest != "" || item.Created != nil || len(item.Platforms) != 0 {
+		t.Errorf("viewer item = %+v, want needs_login and nothing the credential saw", item)
 	}
 }

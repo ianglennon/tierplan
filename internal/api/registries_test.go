@@ -1171,6 +1171,8 @@ type fakeRegistry struct {
 	tags       []string
 	tagLists   atomic.Int32
 	user, pass string
+	// extra, when set, answers any request the fake does not (manifests and blobs).
+	extra http.HandlerFunc
 }
 
 func newFakeRegistry(t *testing.T) *fakeRegistry {
@@ -1212,6 +1214,8 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": names})
 			}
+		case f.extra != nil:
+			f.extra(w, r)
 		default:
 			http.NotFound(w, r)
 		}
