@@ -329,6 +329,8 @@ type FakeImage struct {
 	// Env is the image config's environment, "NAME=value" each. The inspect carries it in
 	// Config.Env and in ContainerConfig.Env, as an older engine does.
 	Env []string
+	// Cmd and Entrypoint are the image config's command, carried in Config when set.
+	Cmd, Entrypoint []string
 	// History is the layers /images/{name}/history answers, newest first. Empty gives one
 	// layer.
 	History []FakeLayer

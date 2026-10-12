@@ -841,7 +841,7 @@ export interface paths {
         };
         /**
          * The layers of one image
-         * @description The image's history from the engine, newest layer first, for the Layers tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422, 404 image_not_found, 503 node_unavailable). 502 agent_policy_denied when the node's agent is older than this server and does not know the history route. The commands are shown as the engine reports them. Needs images.read (Viewer) on the environment. Reads are not audited.
+         * @description The image's history from the engine, newest layer first, for the Layers tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422, 404 image_not_found, 503 node_unavailable). 502 agent_policy_denied when the node's agent is older than this server and does not know the history route. For a caller without secrets.reveal on the environment each command is reduced to its kind of instruction (ENV <hidden>), because a build writes ENV and ARG values and RUN arguments into it; masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.
          */
         get: operations["imageHistory"];
         put?: never;
@@ -861,7 +861,7 @@ export interface paths {
         };
         /**
          * One image's raw inspect document
-         * @description The engine's inspect document of the image as it is, for the Inspect tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found, 503 node_unavailable). The environment variables of the image's configuration can hold a secret a build baked in: for a caller without secrets.reveal on the environment each value is replaced by the placeholder <hidden> on the server, and masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.
+         * @description The engine's inspect document of the image as it is, for the Inspect tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found, 503 node_unavailable). The image's configuration can hold a secret a build baked in: for a caller without secrets.reveal on the environment the value of each environment variable, the command (Cmd, Entrypoint, OnBuild) and the health check command are replaced by the placeholder <hidden> on the server, as for a container, and so is the value of a label whose name says it is a secret (the org.opencontainers.image.* annotations stay); masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.
          */
         get: operations["inspectImage"];
         put?: never;
@@ -4075,10 +4075,12 @@ export interface components {
             dangling: boolean;
             /** @description The full image ID */
             id: string;
-            /** @description Every label of the image */
+            /** @description Every label of the image. For a caller without secrets.reveal on the environment the value of a label whose name says it is a secret (token, password, key, ...) is replaced by <hidden>, and so is the user-info of a URL in a value; the org.opencontainers.image.* annotations are shown as they are */
             labels: {
                 [key: string]: string;
             };
+            /** @description True when a label value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked?: boolean;
             /** @description Every tag, then every digest, the image has on the nodes read, each once, by name */
             names: components["schemas"]["ImageNameBody"][] | null;
             /** @description One entry per node read, by display name: whether it has the image and its names there */
@@ -4100,6 +4102,8 @@ export interface components {
         ImageHistoryBody: {
             /** @description The layers in the order the engine answers: the newest first */
             layers: components["schemas"]["ImageLayerBody"][] | null;
+            /** @description True when a command was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked?: boolean;
         };
         ImageHolderBody: {
             /**
@@ -4113,7 +4117,7 @@ export interface components {
             nodeId: string;
         };
         ImageInspectBody: {
-            /** @description The engine's inspect document, with the values of the image configuration's environment (Config.Env, and ContainerConfig.Env of an older engine) replaced by <hidden> unless the caller holds secrets.reveal */
+            /** @description The engine's inspect document, with the values of the image configuration's environment (Config.Env, and ContainerConfig.Env of an older engine), its command (Cmd, Entrypoint, OnBuild), its health check command and the values of secret-named labels replaced by <hidden> unless the caller holds secrets.reveal */
             inspect: {
                 [key: string]: unknown;
             };
@@ -4160,7 +4164,7 @@ export interface components {
             comment: string;
             /** Format: date-time */
             created?: string;
-            /** @description The command that made the layer, as the engine reports it. A build can have a secret in one; it is not masked */
+            /** @description The command that made the layer. A build can have a secret in one, so for a caller without secrets.reveal on the environment only the kind of instruction is kept and its text replaced by <hidden> (ENV <hidden>, RUN <hidden>) */
             createdBy: string;
             /** @description The layer's ID as the engine gives it: sha256: and 64 hexadecimal characters, <missing> for a layer of a pulled image, or empty */
             id: string;

@@ -564,3 +564,99 @@ func TestImageListWithNoImagesIsEmptyNotNull(t *testing.T) {
 		t.Errorf("empty = %+v", got)
 	}
 }
+
+// A Viewer cannot read from the image's other documents what the inspect hides: its history, its
+// command and its labels are withheld as its environment is (CR-B02, WR-A04).
+
+func imageSecretsEngine() dockertest.FakeConfig {
+	cfg := imageInspectEngine()
+	cfg.Images[0].Cmd = []string{"serve", "--password=" + imageSecret}
+	cfg.Images[0].Entrypoint = []string{"/entry", "--token=" + imageSecret}
+	cfg.Images[0].Labels = map[string]string{"ci.api_token": imageSecret, "org.opencontainers.image.source": "https://example.org/r"}
+	cfg.Images[0].History = []dockertest.FakeLayer{
+		{ID: imgEnv, CreatedBy: "/bin/sh -c #(nop)  ENV API_KEY=" + imageSecret, Created: 1788000000},
+		{ID: "<missing>", CreatedBy: "RUN /bin/sh -c curl -H 'Authorization: " + imageSecret + "' https://x # buildkit", Size: 300, Created: 1787999000},
+	}
+	return cfg
+}
+
+func TestImageHistoryAViewerSeesTheKindOfEachInstructionAndNotItsText(t *testing.T) {
+	f, e := dashEnv(t, imageSecretsEngine())
+	get := f.asRole(t, e, "img-viewer", "viewer")
+	rec := get("images/" + imgEnv + "/history")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("history: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), imageSecret) {
+		t.Fatalf("a viewer's history carries the baked-in secret: %s", rec.Body)
+	}
+	var h struct {
+		Masked bool `json:"masked"`
+		Layers []struct {
+			CreatedBy string `json:"createdBy"`
+			Size      int64  `json:"size"`
+		} `json:"layers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &h); err != nil {
+		t.Fatal(err)
+	}
+	if !h.Masked || len(h.Layers) != 2 || h.Layers[0].CreatedBy != "ENV <hidden>" || h.Layers[1].CreatedBy != "RUN <hidden>" || h.Layers[1].Size != 300 {
+		t.Errorf("history = %+v, want the kind of instruction and the size kept and masked set", h)
+	}
+}
+
+func TestImageHistoryAHolderOfSecretsRevealSeesTheCommandsAsTheEngineGaveThem(t *testing.T) {
+	f, e := dashEnv(t, imageSecretsEngine())
+	get := f.asRole(t, e, "img-admin", "admin")
+	rec := get("images/" + imgEnv + "/history")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ENV API_KEY="+imageSecret) || strings.Contains(rec.Body.String(), `"masked":true`) {
+		t.Errorf("admin history: %d %s, want the commands unmasked", rec.Code, rec.Body)
+	}
+}
+
+func TestImageInspectAViewerDoesNotGetTheCommandOrASecretNamedLabel(t *testing.T) {
+	f, e := dashEnv(t, imageSecretsEngine())
+	viewer := f.asRole(t, e, "img-viewer", "viewer")
+	rec := viewer("images/" + imgEnv + "/inspect")
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), imageSecret) {
+		t.Fatalf("viewer inspect: %d, carries the secret: %s", rec.Code, rec.Body)
+	}
+	var got imageInspect
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := got.Inspect["Config"].(map[string]any)
+	if cmd, _ := cfg["Cmd"].([]any); len(cmd) != 1 || cmd[0] != "<hidden>" {
+		t.Errorf("Config.Cmd = %v, want the placeholder", cfg["Cmd"])
+	}
+	if ep, _ := cfg["Entrypoint"].([]any); len(ep) != 1 || ep[0] != "<hidden>" {
+		t.Errorf("Config.Entrypoint = %v, want the placeholder", cfg["Entrypoint"])
+	}
+
+	// The detail route's labels follow the same rule, and say so.
+	rec = viewer("images/" + imgEnv)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), imageSecret) {
+		t.Fatalf("viewer detail: %d, carries the secret: %s", rec.Code, rec.Body)
+	}
+	var d struct {
+		Masked bool              `json:"masked"`
+		Labels map[string]string `json:"labels"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+		t.Fatal(err)
+	}
+	if !d.Masked || d.Labels["ci.api_token"] != "<hidden>" || d.Labels["org.opencontainers.image.source"] != "https://example.org/r" {
+		t.Errorf("detail = %+v", d)
+	}
+
+	// A holder of secrets.reveal gets everything as the engine sent it.
+	admin := f.asRole(t, e, "img-admin", "admin")
+	rec = admin("images/" + imgEnv + "/inspect")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "--password="+imageSecret) {
+		t.Errorf("admin inspect: %d %s, want the command unmasked", rec.Code, rec.Body)
+	}
+	rec = admin("images/" + imgEnv)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), imageSecret) || strings.Contains(rec.Body.String(), `"masked":true`) {
+		t.Errorf("admin detail: %d %s, want the labels unmasked", rec.Code, rec.Body)
+	}
+}

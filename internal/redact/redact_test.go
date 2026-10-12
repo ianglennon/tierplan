@@ -6,6 +6,7 @@ package redact_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -589,7 +590,9 @@ func TestArgvWithholdsANonEmptyCommandUnlessTheCallerMayReveal(t *testing.T) {
 // An image's inspect document carries its config environment, which a build can have baked a
 // secret into, so Env values are withheld from a caller who may not reveal secrets (plan
 // 05-14, D-18, T-05-47).
-const imageInspectFixture = `{"Id":"sha256:abc","RepoTags":["app:1"],"Config":{"Env":["A=1","PASSWORD=hunter2","TOKEN=a=b=c","BARE"],"Labels":{"x":"y"},"Cmd":["serve"]},` +
+const imageInspectFixture = `{"Id":"sha256:abc","RepoTags":["app:1"],"Config":{"Env":["A=1","PASSWORD=hunter2","TOKEN=a=b=c","BARE"],"Labels":{"x":"y","ci.api_token":"tok-9f3","org.opencontainers.image.authors":"ops@example.org","src":"https://bot:pw0rd@git.example.org/r"},` +
+	`"Cmd":["serve","--password=cmdsecret"],"Entrypoint":["/entry","--key=entrysecret"],"OnBuild":["ENV P=onbuildsecret"],` +
+	`"Healthcheck":{"Test":["CMD-SHELL","curl -u admin:hcsecret localhost"],"Interval":30000000000}},` +
 	`"ContainerConfig":{"Env":["OLD_SECRET=s3cret"]},"Size":12345678901234567890}`
 
 func TestMaskImageInspectReplacesEveryEnvValueInConfigAndContainerConfigAndKeepsTheRest(t *testing.T) {
@@ -600,16 +603,22 @@ func TestMaskImageInspectReplacesEveryEnvValueInConfigAndContainerConfigAndKeeps
 	if !masked {
 		t.Error("masked = false, want true")
 	}
-	for _, leak := range []string{"hunter2", "s3cret", "a=b=c", "=1"} {
+	for _, leak := range []string{"hunter2", "s3cret", "a=b=c", "=1", "cmdsecret", "entrysecret", "onbuildsecret", "hcsecret", "tok-9f3", "pw0rd"} {
 		if strings.Contains(string(out), leak) {
 			t.Errorf("output carries %q: %s", leak, out)
 		}
 	}
 	var got struct {
 		Config struct {
-			Env    []string
-			Labels map[string]string
-			Cmd    []string
+			Env         []string
+			Labels      map[string]string
+			Cmd         []string
+			Entrypoint  []string
+			OnBuild     []string
+			Healthcheck struct {
+				Test     []string
+				Interval int64
+			}
 		}
 		ContainerConfig struct{ Env []string }
 		RepoTags        []string
@@ -624,7 +633,16 @@ func TestMaskImageInspectReplacesEveryEnvValueInConfigAndContainerConfigAndKeeps
 	if !slices.Equal(got.ContainerConfig.Env, []string{"OLD_SECRET=" + redact.Placeholder}) {
 		t.Errorf("ContainerConfig.Env = %v", got.ContainerConfig.Env)
 	}
-	if got.Config.Labels["x"] != "y" || !slices.Equal(got.Config.Cmd, []string{"serve"}) || !slices.Equal(got.RepoTags, []string{"app:1"}) {
+	hidden := []string{redact.Placeholder}
+	if !slices.Equal(got.Config.Cmd, hidden) || !slices.Equal(got.Config.Entrypoint, hidden) || !slices.Equal(got.Config.OnBuild, hidden) ||
+		!slices.Equal(got.Config.Healthcheck.Test, []string{"CMD-SHELL", redact.Placeholder}) || got.Config.Healthcheck.Interval != 30000000000 {
+		t.Errorf("the command was not withheld as a container's is: %+v", got.Config)
+	}
+	if l := got.Config.Labels; l["x"] != "y" || l["ci.api_token"] != redact.Placeholder || l["org.opencontainers.image.authors"] != "ops@example.org" ||
+		l["src"] != "https://"+redact.Placeholder+"@git.example.org/r" {
+		t.Errorf("labels = %v; want the secret-named one and the URL user-info withheld and the rest kept", l)
+	}
+	if !slices.Equal(got.RepoTags, []string{"app:1"}) {
 		t.Errorf("the rest of the document changed: %+v", got)
 	}
 	if !strings.Contains(string(out), "12345678901234567890") {
@@ -671,6 +689,53 @@ func TestMaskImageInspectOfAnythingThatIsNotAJSONObjectIsAnErrorNeverAPassthroug
 		out, masked, err := redact.MaskImageInspect([]byte(raw), false)
 		if err == nil || out != nil || masked {
 			t.Errorf("MaskImageInspect(%q) = %q, %v, %v; want an error and no output", raw, out, masked, err)
+		}
+	}
+}
+
+func TestMaskLabelsWithholdsSecretNamedValuesAndUserInfoButNotAnnotations(t *testing.T) {
+	in := map[string]string{
+		"ci.deploy_token": "t0k", "org.opencontainers.image.authors": "a@b.c", "vendor": "acme",
+		"git": "https://u:p@h/x", "empty_password": "",
+	}
+	got, masked := redact.MaskLabels(in, false)
+	want := map[string]string{
+		"ci.deploy_token": redact.Placeholder, "org.opencontainers.image.authors": "a@b.c", "vendor": "acme",
+		"git": "https://" + redact.Placeholder + "@h/x", "empty_password": "",
+	}
+	if !masked || !maps.Equal(got, want) {
+		t.Errorf("MaskLabels = %v, %v; want %v, masked", got, masked, want)
+	}
+	if in["ci.deploy_token"] != "t0k" {
+		t.Error("MaskLabels changed its input")
+	}
+	if got, masked := redact.MaskLabels(in, true); masked || !maps.Equal(got, in) {
+		t.Errorf("reveal = %v, %v; want the labels as they are", got, masked)
+	}
+	if got, masked := redact.MaskLabels(map[string]string{"vendor": "acme"}, false); masked || got["vendor"] != "acme" {
+		t.Errorf("harmless labels = %v, %v; want them kept, not masked", got, masked)
+	}
+}
+
+func TestMaskHistoryCommandKeepsOnlyTheKindOfInstruction(t *testing.T) {
+	for in, want := range map[string]string{
+		"/bin/sh -c #(nop)  ENV API_KEY=sekrit":                "ENV <hidden>",
+		"/bin/sh -c #(nop)  ARG TOKEN=sekrit":                  "ARG <hidden>",
+		"/bin/sh -c #(nop) COPY file:abc in /app":              "COPY <hidden>",
+		"/bin/sh -c curl -H 'Authorization: sekrit' https://x": "RUN <hidden>",
+		"|1 TOKEN=sekrit /bin/sh -c make":                      "RUN <hidden>",
+		"ENV API_KEY=sekrit":                                   "ENV <hidden>",
+		"RUN /bin/sh -c echo sekrit # buildkit":                "RUN <hidden>",
+		"env lower=sekrit":                                     "ENV <hidden>",
+		"something the engine never sends sekrit":              "<hidden>",
+		"": "",
+	} {
+		got, masked := redact.MaskHistoryCommand(in, false)
+		if got != want || masked != (in != "") || strings.Contains(got, "sekrit") {
+			t.Errorf("MaskHistoryCommand(%q) = %q, %v; want %q", in, got, masked, want)
+		}
+		if shown, m := redact.MaskHistoryCommand(in, true); shown != in || m {
+			t.Errorf("reveal MaskHistoryCommand(%q) = %q, %v; want it as it is", in, shown, m)
 		}
 	}
 }

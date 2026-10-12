@@ -234,7 +234,9 @@ func MaskVolumeInspect(raw []byte, reveal bool) (out []byte, masked bool, err er
 // true the document is returned as it is and masked is false. Otherwise the value of every
 // entry of the image configuration's environment, Config.Env and the ContainerConfig.Env an
 // older engine also sends ("NAME=value" becomes "NAME=<hidden>"), is replaced by Placeholder:
-// a build can bake a secret into an image's environment. The rest of the document is kept as
+// a build can bake a secret into an image's environment. The command (Cmd, Entrypoint, OnBuild)
+// and the health check command are withheld exactly as MaskContainerInspect withholds a
+// container's, and so are the values of labels whose names say they are secrets (maskLabel). The rest of the document is kept as
 // it was, re-encoded with two-space indentation. masked is true when anything was replaced.
 // An environment or a configuration of a shape the engine does not send is withheld whole
 // rather than passed through. A document that is not a JSON object is an error, never passed
@@ -260,6 +262,37 @@ func MaskImageInspect(raw []byte, reveal bool) (out []byte, masked bool, err err
 				cfg["Env"] = Placeholder
 				masked = true
 			}
+			// The command a build set can carry a secret too, exactly as a container's does, and
+			// so can ONBUILD, which is a list of build instructions. Same rule as a container's.
+			for _, key := range []string{"Cmd", "Entrypoint", "OnBuild"} {
+				if maskArgv(cfg, key) {
+					masked = true
+				}
+			}
+			if hc, ok := cfg["Healthcheck"].(map[string]any); ok {
+				if test, ok := hc["Test"].([]any); ok && len(test) > 1 {
+					hc["Test"] = []any{test[0], Placeholder}
+					masked = true
+				}
+			}
+			switch labels := cfg["Labels"].(type) {
+			case map[string]any:
+				for name, v := range labels {
+					if text, isString := v.(string); isString {
+						if shown, changed := maskLabel(name, text); changed {
+							labels[name] = shown
+							masked = true
+						}
+					} else if v != nil {
+						labels[name] = Placeholder
+						masked = true
+					}
+				}
+			case nil:
+			default:
+				cfg["Labels"] = Placeholder
+				masked = true
+			}
 		case nil:
 		default:
 			doc[section] = Placeholder
@@ -268,6 +301,83 @@ func MaskImageInspect(raw []byte, reveal bool) (out []byte, masked bool, err err
 	}
 	out, err = encodeObject(doc, "image inspect")
 	return out, masked, err
+}
+
+// provenanceLabelPrefix is the namespace of the OCI image annotations (source, title, authors,
+// revision, ...): public provenance, never a secret, and a name like authors would otherwise
+// match the word auth.
+const provenanceLabelPrefix = "org.opencontainers.image."
+
+// maskLabel is the value of an image label as a caller who may not reveal secrets sees it, and
+// whether it differs from the engine's. The value of a label whose name says it is a secret (see
+// secretWords) is withheld whole, and the user-info of any URL in another is. The OCI
+// annotations are shown as they are.
+func maskLabel(name, value string) (string, bool) {
+	if strings.HasPrefix(strings.ToLower(name), provenanceLabelPrefix) {
+		return value, false
+	}
+	if secretName(name) {
+		if value == "" {
+			return value, false // nothing to withhold
+		}
+		return Placeholder, true
+	}
+	shown := maskUserInfo(value)
+	return shown, shown != value
+}
+
+// MaskLabels returns the labels of an image as a caller sees them. With reveal true they are
+// returned as they are. Otherwise a new map is returned, with the values maskLabel withholds
+// replaced, and masked says one was. The input is not changed.
+func MaskLabels(labels map[string]string, reveal bool) (out map[string]string, masked bool) {
+	if reveal || len(labels) == 0 {
+		return labels, false
+	}
+	out = make(map[string]string, len(labels))
+	for name, value := range labels {
+		shown, changed := maskLabel(name, value)
+		out[name] = shown
+		masked = masked || changed
+	}
+	return out, masked
+}
+
+// historyKeywords are the build instructions whose text MaskHistoryCommand names.
+var historyKeywords = map[string]bool{
+	"ADD": true, "ARG": true, "CMD": true, "COPY": true, "ENTRYPOINT": true, "ENV": true, "EXPOSE": true,
+	"HEALTHCHECK": true, "LABEL": true, "MAINTAINER": true, "ONBUILD": true, "RUN": true, "SHELL": true,
+	"STOPSIGNAL": true, "USER": true, "VOLUME": true, "WORKDIR": true,
+}
+
+// MaskHistoryCommand is the command that made an image layer as a caller sees it. With reveal
+// true it is returned as the engine gave it. Otherwise only the kind of build instruction is
+// kept and its text withheld ("ENV <hidden>", "RUN <hidden>"): a build writes ENV and ARG values
+// and the arguments of a RUN into the history verbatim, which is the secret that the image
+// inspect hides from the same caller. A command that is not recognised is withheld whole, and an
+// empty one stays empty. masked says the text differs from the engine's.
+func MaskHistoryCommand(createdBy string, reveal bool) (shown string, masked bool) {
+	if reveal || strings.TrimSpace(createdBy) == "" {
+		return createdBy, false
+	}
+	t := strings.TrimSpace(createdBy)
+	if rest, shell := strings.CutPrefix(t, "/bin/sh -c "); shell {
+		// A classic build: "/bin/sh -c #(nop)  ENV A=b" for a metadata instruction, and
+		// "/bin/sh -c apt-get ..." for a RUN.
+		nop, isNop := strings.CutPrefix(strings.TrimSpace(rest), "#(nop)")
+		if !isNop {
+			return "RUN " + Placeholder, true
+		}
+		t = strings.TrimSpace(nop)
+	}
+	first, _, _ := strings.Cut(t, " ")
+	switch {
+	case historyKeywords[strings.ToUpper(first)]:
+		return strings.ToUpper(first) + " " + Placeholder, true
+	case strings.HasPrefix(first, "|"):
+		// "|1 ARG=value /bin/sh -c cmd": a RUN that was given build arguments.
+		return "RUN " + Placeholder, true
+	}
+	return Placeholder, true
 }
 
 // decodeObject reads raw as one JSON object, keeping every number with its exact digits. Text

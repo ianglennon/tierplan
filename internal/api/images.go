@@ -132,7 +132,8 @@ type ImageDetailBody struct {
 	OS           string            `json:"os" doc:"The operating system the image is built for"`
 	Architecture string            `json:"architecture" doc:"The CPU architecture the image is built for"`
 	Variant      string            `json:"variant" doc:"The architecture variant, for example v8; empty when there is none"`
-	Labels       map[string]string `json:"labels" doc:"Every label of the image"`
+	Labels       map[string]string `json:"labels" doc:"Every label of the image. For a caller without secrets.reveal on the environment the value of a label whose name says it is a secret (token, password, key, ...) is replaced by <hidden>, and so is the user-info of a URL in a value; the org.opencontainers.image.* annotations are shown as they are"`
+	Masked       bool              `json:"masked,omitempty" doc:"True when a label value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
 	Nodes        []ImageNodeBody   `json:"nodes" doc:"One entry per node read, by display name: whether it has the image and its names there"`
 	NotReporting []string          `json:"notReporting" doc:"Nodes that should have answered and did not, so names and nodes may be incomplete"`
 }
@@ -146,7 +147,7 @@ type ImageDetailOutput struct {
 // ImageInspectBody is the raw inspect document of one image.
 type ImageInspectBody struct {
 	Masked  bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
-	Inspect map[string]any `json:"inspect" doc:"The engine's inspect document, with the values of the image configuration's environment (Config.Env, and ContainerConfig.Env of an older engine) replaced by <hidden> unless the caller holds secrets.reveal"`
+	Inspect map[string]any `json:"inspect" doc:"The engine's inspect document, with the values of the image configuration's environment (Config.Env, and ContainerConfig.Env of an older engine), its command (Cmd, Entrypoint, OnBuild), its health check command and the values of secret-named labels replaced by <hidden> unless the caller holds secrets.reveal"`
 }
 
 // ImageInspectOutput wraps ImageInspectBody for huma.
@@ -158,7 +159,7 @@ type ImageInspectOutput struct {
 // ImageLayerBody is one layer of an image's history.
 type ImageLayerBody struct {
 	ID        string `json:"id" doc:"The layer's ID as the engine gives it: sha256: and 64 hexadecimal characters, <missing> for a layer of a pulled image, or empty"`
-	CreatedBy string `json:"createdBy" doc:"The command that made the layer, as the engine reports it. A build can have a secret in one; it is not masked"`
+	CreatedBy string `json:"createdBy" doc:"The command that made the layer. A build can have a secret in one, so for a caller without secrets.reveal on the environment only the kind of instruction is kept and its text replaced by <hidden> (ENV <hidden>, RUN <hidden>)"`
 	Size      int64  `json:"size" doc:"The layer's size in bytes; 0 for a layer that only changes metadata"`
 	Created   string `json:"created,omitempty" format:"date-time"`
 	Comment   string `json:"comment" doc:"The layer's comment, usually empty"`
@@ -167,6 +168,7 @@ type ImageLayerBody struct {
 // ImageHistoryBody is the layers of one image.
 type ImageHistoryBody struct {
 	Layers []ImageLayerBody `json:"layers" doc:"The layers in the order the engine answers: the newest first"`
+	Masked bool             `json:"masked,omitempty" doc:"True when a command was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
 }
 
 // ImageHistoryOutput wraps ImageHistoryBody for huma.
@@ -234,11 +236,11 @@ func RegisterImages(r *httpx.Router, d ImagesDeps) {
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *ImageDetailInput) (*ImageDetailOutput, error) {
-			env := httpx.EnvFrom(ctx)
-			if env == nil {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
-			body, err := getImage(ctx, d, env.ID, in)
+			body, err := getImage(ctx, d, env.ID, in, redact.CanReveal(ctx, d.Checker, p, env.ID))
 			if err != nil {
 				return nil, err
 			}
@@ -250,7 +252,7 @@ func RegisterImages(r *httpx.Router, d ImagesDeps) {
 		Summary: "One image's raw inspect document",
 		Description: "The engine's inspect document of the image as it is, for the Inspect tab, read from the first node that has the image or from the node named. " +
 			"The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found, 503 node_unavailable). " +
-			"The environment variables of the image's configuration can hold a secret a build baked in: for a caller without secrets.reveal on the environment each value is replaced by the placeholder <hidden> on the server, and masked says something was. " +
+			"The image's configuration can hold a secret a build baked in: for a caller without secrets.reveal on the environment the value of each environment variable, the command (Cmd, Entrypoint, OnBuild) and the health check command are replaced by the placeholder <hidden> on the server, as for a container, and so is the value of a label whose name says it is a secret (the org.opencontainers.image.* annotations stay); masked says something was. " +
 			"Needs images.read (Viewer) on the environment. Reads are not audited.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
@@ -282,15 +284,15 @@ func RegisterImages(r *httpx.Router, d ImagesDeps) {
 		Description: "The image's history from the engine, newest layer first, for the Layers tab, read from the first node that has the image or from the node named. " +
 			"The image is named as the detail route names it, with the same rules and problems (422, 404 image_not_found, 503 node_unavailable). " +
 			"502 agent_policy_denied when the node's agent is older than this server and does not know the history route. " +
-			"The commands are shown as the engine reports them. Needs images.read (Viewer) on the environment. Reads are not audited.",
+			"For a caller without secrets.reveal on the environment each command is reduced to its kind of instruction (ENV <hidden>), because a build writes ENV and ARG values and RUN arguments into it; masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *ImageDetailInput) (*ImageHistoryOutput, error) {
-			env := httpx.EnvFrom(ctx)
-			if env == nil {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
-			body, err := imageLayers(ctx, d, env.ID, in)
+			body, err := imageLayers(ctx, d, env.ID, in, redact.CanReveal(ctx, d.Checker, p, env.ID))
 			if err != nil {
 				return nil, err
 			}
@@ -447,7 +449,9 @@ func imageUsedBy(ctx context.Context, d ImagesDeps, envID string, in *ImageDetai
 }
 
 // imageLayers reads the history of the image from the first node that has it, or the node named.
-func imageLayers(ctx context.Context, d ImagesDeps, envID string, in *ImageDetailInput) (ImageHistoryBody, error) {
+// A caller who may not reveal secrets sees each command reduced to its kind of instruction
+// (CR-B02, WR-A04): a build writes ENV and ARG values and RUN arguments into it verbatim.
+func imageLayers(ctx context.Context, d ImagesDeps, envID string, in *ImageDetailInput, reveal bool) (ImageHistoryBody, error) {
 	_, holders, err := imageHolders(ctx, d, envID, in.ImageID, in.Node)
 	if err != nil {
 		return ImageHistoryBody{}, err
@@ -462,7 +466,9 @@ func imageLayers(ctx context.Context, d ImagesDeps, envID string, in *ImageDetai
 	}
 	body := ImageHistoryBody{Layers: make([]ImageLayerBody, 0, len(rows))}
 	for _, r := range rows {
-		body.Layers = append(body.Layers, ImageLayerBody{ID: r.ID, CreatedBy: r.CreatedBy, Size: r.Size, Created: rfc3339(r.Created), Comment: r.Comment})
+		createdBy, masked := redact.MaskHistoryCommand(r.CreatedBy, reveal)
+		body.Masked = body.Masked || masked
+		body.Layers = append(body.Layers, ImageLayerBody{ID: r.ID, CreatedBy: createdBy, Size: r.Size, Created: rfc3339(r.Created), Comment: r.Comment})
 	}
 	return body, nil
 }
@@ -577,17 +583,18 @@ func readImage(ctx context.Context, d ImagesDeps, envID, imageID, node string, e
 }
 
 // getImage builds the detail page's answer from the nodes that have the image.
-func getImage(ctx context.Context, d ImagesDeps, envID string, in *ImageDetailInput) (ImageDetailBody, error) {
+func getImage(ctx context.Context, d ImagesDeps, envID string, in *ImageDetailInput, reveal bool) (ImageDetailBody, error) {
 	agg, reads, failed, err := readImage(ctx, d, envID, in.ImageID, in.Node, true)
 	if err != nil {
 		return ImageDetailBody{}, err
 	}
 	first := reads[0].detail
+	labels, labelsMasked := redact.MaskLabels(first.Labels, reveal)
 	body := ImageDetailBody{
 		ID: first.ID, ShortID: shortImageID(first.ID),
 		Names: []ImageNameBody{}, Size: first.Size, Created: rfc3339(first.Created),
 		OS: first.OS, Architecture: first.Architecture, Variant: first.Variant,
-		Labels: first.Labels, Nodes: []ImageNodeBody{}, NotReporting: mergeNames(agg.NotReporting, failed),
+		Labels: labels, Masked: labelsMasked, Nodes: []ImageNodeBody{}, NotReporting: mergeNames(agg.NotReporting, failed),
 	}
 	var tags, digests []string
 	have := map[string]imageRead{}

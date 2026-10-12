@@ -75,6 +75,12 @@ func (f *Fake) serveImageInspect(w http.ResponseWriter, r *http.Request, p strin
 	if fi.Created > 0 {
 		doc["Created"] = time.Unix(fi.Created, 0).UTC().Format(time.RFC3339Nano)
 	}
+	if len(fi.Cmd) > 0 {
+		doc["Config"].(map[string]any)["Cmd"] = fi.Cmd
+	}
+	if len(fi.Entrypoint) > 0 {
+		doc["Config"].(map[string]any)["Entrypoint"] = fi.Entrypoint
+	}
 	if len(fi.Env) > 0 {
 		doc["ContainerConfig"] = map[string]any{"Env": fi.Env}
 	}

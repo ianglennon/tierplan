@@ -3728,8 +3728,12 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Every label of the image",
+            "description": "Every label of the image. For a caller without secrets.reveal on the environment the value of a label whose name says it is a secret (token, password, key, ...) is replaced by \u003chidden\u003e, and so is the user-info of a URL in a value; the org.opencontainers.image.* annotations are shown as they are",
             "type": "object"
+          },
+          "masked": {
+            "description": "True when a label value was replaced by the placeholder \u003chidden\u003e because the caller may not reveal secrets on this environment",
+            "type": "boolean"
           },
           "names": {
             "description": "Every tag, then every digest, the image has on the nodes read, each once, by name",
@@ -3806,6 +3810,10 @@
               "array",
               "null"
             ]
+          },
+          "masked": {
+            "description": "True when a command was replaced by the placeholder \u003chidden\u003e because the caller may not reveal secrets on this environment",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3842,7 +3850,7 @@
         "properties": {
           "inspect": {
             "additionalProperties": {},
-            "description": "The engine's inspect document, with the values of the image configuration's environment (Config.Env, and ContainerConfig.Env of an older engine) replaced by \u003chidden\u003e unless the caller holds secrets.reveal",
+            "description": "The engine's inspect document, with the values of the image configuration's environment (Config.Env, and ContainerConfig.Env of an older engine), its command (Cmd, Entrypoint, OnBuild), its health check command and the values of secret-named labels replaced by \u003chidden\u003e unless the caller holds secrets.reveal",
             "type": "object"
           },
           "masked": {
@@ -3950,7 +3958,7 @@
             "type": "string"
           },
           "createdBy": {
-            "description": "The command that made the layer, as the engine reports it. A build can have a secret in one; it is not masked",
+            "description": "The command that made the layer. A build can have a secret in one, so for a caller without secrets.reveal on the environment only the kind of instruction is kept and its text replaced by \u003chidden\u003e (ENV \u003chidden\u003e, RUN \u003chidden\u003e)",
             "type": "string"
           },
           "id": {
@@ -11713,7 +11721,7 @@
     },
     "/api/env/{envId}/images/{imageId}/history": {
       "get": {
-        "description": "The image's history from the engine, newest layer first, for the Layers tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422, 404 image_not_found, 503 node_unavailable). 502 agent_policy_denied when the node's agent is older than this server and does not know the history route. The commands are shown as the engine reports them. Needs images.read (Viewer) on the environment. Reads are not audited.",
+        "description": "The image's history from the engine, newest layer first, for the Layers tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422, 404 image_not_found, 503 node_unavailable). 502 agent_policy_denied when the node's agent is older than this server and does not know the history route. For a caller without secrets.reveal on the environment each command is reduced to its kind of instruction (ENV \u003chidden\u003e), because a build writes ENV and ARG values and RUN arguments into it; masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.",
         "operationId": "imageHistory",
         "parameters": [
           {
@@ -11787,7 +11795,7 @@
     },
     "/api/env/{envId}/images/{imageId}/inspect": {
       "get": {
-        "description": "The engine's inspect document of the image as it is, for the Inspect tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found, 503 node_unavailable). The environment variables of the image's configuration can hold a secret a build baked in: for a caller without secrets.reveal on the environment each value is replaced by the placeholder \u003chidden\u003e on the server, and masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.",
+        "description": "The engine's inspect document of the image as it is, for the Inspect tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found, 503 node_unavailable). The image's configuration can hold a secret a build baked in: for a caller without secrets.reveal on the environment the value of each environment variable, the command (Cmd, Entrypoint, OnBuild) and the health check command are replaced by the placeholder \u003chidden\u003e on the server, as for a container, and so is the value of a label whose name says it is a secret (the org.opencontainers.image.* annotations stay); masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.",
         "operationId": "inspectImage",
         "parameters": [
           {
