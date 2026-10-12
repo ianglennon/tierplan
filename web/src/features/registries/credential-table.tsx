@@ -60,10 +60,16 @@ export interface ScopeOption {
   name: string;
 }
 
+// What the bell reports about a credential, and what ?alert= filters the table to.
+export const ALERT_FILTERS = ["expiring", "expired", "auth_failed"] as const;
+export type AlertFilter = (typeof ALERT_FILTERS)[number];
+
 export interface CredentialFilters {
   q?: string;
   // "instance" or an environment's ID; absent for every scope.
   scope?: string;
+  // Only the credentials the bell reports for this reason; absent for all of them.
+  alert?: AlertFilter;
 }
 
 // byText orders as a person reads: case does not matter, then the exact text so the
@@ -123,10 +129,37 @@ function inScope(c: Credential, scope: string | undefined): boolean {
   return c.scope.envId === scope;
 }
 
-// filterCredentials applies the search and the Scope filter, in the default order.
-export function filterCredentials(rows: readonly Credential[], filters: CredentialFilters) {
+// alertOf is what the bell says about a credential at nowMs, by the server's rules (D-07):
+// an expiry day lasts to the end of that day UTC, which is the instant the API sends, and the
+// 7-day warning counts back from that same instant. A credential has at most one alert, the
+// most severe: expired, then refused, then expiring.
+export function alertOf(c: Credential, nowMs: number): AlertFilter | undefined {
+  const expiry = c.expiresAt === null ? null : Date.parse(c.expiresAt);
+  if (expiry !== null && nowMs > expiry) return "expired";
+  const failure = c.lastFailure;
+  if (failure !== null) {
+    const passedSince =
+      c.lastTest?.ok === true && Date.parse(c.lastTest.at) > Date.parse(failure.at);
+    if (!passedSince) return "auth_failed";
+  }
+  if (expiry !== null && expiry - nowMs <= WARN_DAYS * DAY_MS) return "expiring";
+  return undefined;
+}
+
+// filterCredentials applies the search, the Scope filter and the alert filter, in the default
+// order. nowMs is when the alert filter judges expiry.
+export function filterCredentials(
+  rows: readonly Credential[],
+  filters: CredentialFilters,
+  nowMs: number = Date.now(),
+) {
   return rows
-    .filter((c) => inScope(c, filters.scope) && (!filters.q || matches(c, filters.q)))
+    .filter(
+      (c) =>
+        inScope(c, filters.scope) &&
+        (!filters.q || matches(c, filters.q)) &&
+        (filters.alert === undefined || alertOf(c, nowMs) === filters.alert),
+    )
     .sort(byDefaultOrder);
 }
 
@@ -287,11 +320,12 @@ export function CredentialTable({
   const reasonIds = useId();
   const [sorted, setSorted] = useState<{ key: SortKey; dir: "asc" | "desc" } | null>(null);
 
+  const now = useNow();
   const rows = useMemo(() => {
-    const found = filterCredentials(credentials ?? [], filters);
+    const found = filterCredentials(credentials ?? [], filters, now);
     return sorted ? [...found].sort(compareBy(sorted.key, sorted.dir)) : found;
-  }, [credentials, filters, sorted]);
-  const filtered = Boolean(filters.q) || filters.scope !== undefined;
+  }, [credentials, filters, sorted, now]);
+  const filtered = Boolean(filters.q) || filters.scope !== undefined || filters.alert !== undefined;
   const loaded = credentials !== undefined;
   const total = credentials?.length ?? 0;
 
@@ -484,11 +518,16 @@ export function CredentialTable({
           </SelectContent>
         </Select>
       </div>
+      {filters.alert ? (
+        <Badge variant="outline" className="self-center">
+          {t(`registries.toolbar.alert.${filters.alert}`)}
+        </Badge>
+      ) : null}
       {filtered ? (
         <Button
           variant="ghost"
           className="max-md:h-11"
-          onClick={() => onFiltersChange({ q: undefined, scope: undefined })}
+          onClick={() => onFiltersChange({ q: undefined, scope: undefined, alert: undefined })}
         >
           {t("registries.toolbar.clear")}
         </Button>
@@ -519,7 +558,7 @@ export function CredentialTable({
         <Button
           variant="outline"
           className="max-md:h-11"
-          onClick={() => onFiltersChange({ q: undefined, scope: undefined })}
+          onClick={() => onFiltersChange({ q: undefined, scope: undefined, alert: undefined })}
         >
           {t("registries.empty.filtered.action")}
         </Button>

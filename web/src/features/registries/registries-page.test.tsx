@@ -13,6 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import { CREDENTIALS_REFETCH_MS, credentialsQuery } from "@/api/registries";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -246,6 +247,95 @@ describe("RegistriesPage table", () => {
     mount();
     await screen.findByText("beta");
     expect(screen.queryByText("alpha")).toBeNull();
+  });
+});
+
+describe("RegistriesPage live cells", () => {
+  it("reads the list again every 60 s and on window focus, so Expires and Last use stay current", () => {
+    expect(CREDENTIALS_REFETCH_MS).toBe(60_000);
+    expect(credentialsQuery.refetchInterval).toBe(60_000);
+    expect(credentialsQuery.refetchOnWindowFocus).toBe(true);
+  });
+
+  it("reads the day of an expiry from the end of that day, in whole days left, rounded up", async () => {
+    const day = 86_400_000;
+    credentials = [
+      // 2 days and 8 hours left: 3 days.
+      credential("three", {
+        expiresAt: new Date(Date.now() + 2 * day + 8 * 3_600_000).toISOString(),
+      }),
+      // Exactly 7 days left is still inside the warning; a minute more is not.
+      credential("edge", { expiresAt: new Date(Date.now() + 7 * day - 60_000).toISOString() }),
+      credential("outside", {
+        expiresAt: new Date(Date.now() + 7 * day + 3_600_000).toISOString(),
+      }),
+      credential("never"),
+    ];
+    mount();
+    await screen.findByText("three");
+    expect(screen.getByText("Expires in 3 days")).toBeTruthy();
+    expect(screen.getByText("Expires in 7 days")).toBeTruthy();
+    expect(screen.queryByText("Expires in 8 days")).toBeNull();
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+  });
+});
+
+describe("RegistriesPage alert filter", () => {
+  const day = 86_400_000;
+  const later = (ms: number) => new Date(Date.now() + ms).toISOString();
+
+  beforeEach(() => {
+    credentials = [
+      credential("soon", { expiresAt: later(3 * day) }),
+      credential("gone", { expiresAt: later(-day) }),
+      credential("refused", { lastFailure: { at: later(-3_600_000), code: "unauthorized" } }),
+      credential("fine", { expiresAt: later(90 * day) }),
+      // Expired and refused: the most severe, expired, is the one it is filtered by.
+      credential("both", {
+        expiresAt: later(-2 * day),
+        lastFailure: { at: later(-3_600_000), code: "unauthorized" },
+      }),
+    ];
+  });
+
+  const names = () => bodyRows().map((r) => within(r).getAllByRole("button")[0]?.textContent);
+
+  it("shows only the credentials that expire within 7 days for ?alert=expiring", async () => {
+    search = { alert: "expiring" };
+    mount();
+    await screen.findByText("soon");
+    expect(names()).toEqual(["soon"]);
+    expect(screen.getByText("Expiring within 7 days")).toBeTruthy();
+    expect(screen.getByText("1 of 5 credentials")).toBeTruthy();
+  });
+
+  it("shows only the expired credentials for ?alert=expired", async () => {
+    search = { alert: "expired" };
+    mount();
+    await screen.findByText("gone");
+    expect(names()).toEqual(["both", "gone"]);
+  });
+
+  it("shows only the refused credentials for ?alert=auth_failed", async () => {
+    search = { alert: "auth_failed" };
+    mount();
+    await screen.findByText("refused");
+    expect(names()).toEqual(["refused"]);
+  });
+
+  it("offers Clear filters, which drops the alert", async () => {
+    search = { alert: "expired" };
+    mount();
+    await screen.findByText("gone");
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(changes).toContainEqual({ q: undefined, scope: undefined, alert: undefined });
+  });
+
+  it("says nothing matches when no credential has that alert", async () => {
+    credentials = [credential("fine", { expiresAt: later(90 * day) })];
+    search = { alert: "auth_failed" };
+    mount();
+    expect(await screen.findByText("No credentials match these filters.")).toBeTruthy();
   });
 });
 

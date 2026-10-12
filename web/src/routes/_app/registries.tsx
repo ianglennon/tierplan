@@ -29,6 +29,8 @@ function Registries() {
   return <RegistriesPage search={search} onSearchChange={change} />;
 }
 
+// The search is the schema in the page: q, scope, credential (the sheet), and alert
+// (expiring, expired or auth_failed), which the header bell's links for several credentials use.
 export const Route = createFileRoute("/_app/registries")({
   validateSearch: registriesSearchSchema,
   component: Registries,

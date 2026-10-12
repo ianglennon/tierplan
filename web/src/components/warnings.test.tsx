@@ -935,17 +935,19 @@ const ENV_ADMIN = makeMe({ envs: { "env-a": "admin" } });
 const ENV_OPERATOR = makeMe({ envs: { "env-a": "operator" } });
 const ENV_VIEWER = makeMe({ envs: { "env-a": "viewer" } });
 
-const expiring = (id: string, name: string, days: number, extra: Record<string, unknown> = {}) => ({
-  kind: "expiring",
+const alertOf = (kind: string, id: string, name: string, extra: Record<string, unknown> = {}) => ({
+  kind,
   credentialId: id,
   name,
   host: "ghcr.io",
   prefix: "",
   scope: { kind: "instance", envId: null, envName: null },
-  days,
+  days: 3,
   at: "2026-10-15T23:59:59Z",
   ...extra,
 });
+const expiring = (id: string, name: string, days: number, extra: Record<string, unknown> = {}) =>
+  alertOf("expiring", id, name, { days, ...extra });
 
 describe("HealthBell registry credential items", () => {
   it("lists an instance credential that expires in 3 days and opens its sheet", async () => {
@@ -1020,5 +1022,109 @@ describe("HealthBell registry credential items", () => {
     await queryClient.invalidateQueries({ queryKey: ["registries"] });
     await waitFor(() => expect(screen.queryByText("“ghcr-acme” expires in 3 days")).toBeNull());
     expect(await screen.findByText("No warnings")).toBeTruthy();
+  });
+
+  it("lists an expired credential as an error and links to it", async () => {
+    me = REGISTRY_ADMIN;
+    registryItems = [
+      alertOf("expired", "cred-3", "old-token", { at: "2026-10-01T23:59:59Z", days: undefined }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("“old-token” has expired")).toBeTruthy();
+    expect(
+      screen.getByText("Instance credential for ghcr.io. Pulls that use it are being refused."),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open registries" }).getAttribute("href")).toBe(
+      "/registries?credential=cred-3",
+    );
+  });
+
+  it("lists a refused credential with when it failed and a Test credential link", async () => {
+    me = REGISTRY_ADMIN;
+    const failed = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    registryItems = [alertOf("auth_failed", "cred-4", "ghcr-acme", { at: failed })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("“ghcr-acme” was refused by ghcr.io")).toBeTruthy();
+    expect(
+      screen.getByText(/^Its last use failed .+\. Check its token or test it\.$/),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Test credential" }).getAttribute("href")).toBe(
+      "/registries?credential=cred-4",
+    );
+  });
+
+  it("collapses several of a kind into one item that links to the filtered table", async () => {
+    me = REGISTRY_ADMIN;
+    registryItems = [
+      alertOf("expiring", "cred-1", "one", { days: 2 }),
+      alertOf("expiring", "cred-2", "two", { days: 5 }),
+      alertOf("expired", "cred-3", "three"),
+      alertOf("expired", "cred-4", "four"),
+      alertOf("auth_failed", "cred-5", "five"),
+      alertOf("auth_failed", "cred-6", "six"),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 3 items");
+    expect(await screen.findByText("2 registry credentials have expired")).toBeTruthy();
+    expect(screen.getByText("2 registry credentials were refused")).toBeTruthy();
+    expect(screen.getByText("2 registry credentials expire within 7 days")).toBeTruthy();
+    expect(screen.getByText("Pulls that use them are being refused.")).toBeTruthy();
+    expect(screen.getByText("Pulls that use them fail after that.")).toBeTruthy();
+    expect(
+      screen.getByText("Their last use failed. Check their tokens or test them."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/“one”/)).toBeNull();
+    // Most severe first: expired, then refused, then the expiry to come.
+    expect(listed().map(([id]) => id)).toEqual([
+      "registry_expired",
+      "registry_auth_failed",
+      "registry_expiring",
+    ]);
+    expect(
+      screen.getAllByRole("link", { name: "Open registries" }).map((l) => l.getAttribute("href")),
+    ).toEqual([
+      "/registries?alert=expired",
+      "/registries?alert=auth_failed",
+      "/registries?alert=expiring",
+    ]);
+  });
+
+  it("puts an expired credential among the errors, before the warnings", async () => {
+    me = REGISTRY_ADMIN;
+    plainHttp = true;
+    registryItems = [alertOf("expiring", "cred-1", "soon"), alertOf("expired", "cred-2", "gone")];
+    renderWarnings();
+    await openBell("Warnings, 3 items");
+    await screen.findByText("“gone” has expired");
+    expect(listed().map(([id]) => id)).toEqual([
+      "registry_expired",
+      "plain_http",
+      "registry_expiring",
+    ]);
+  });
+
+  it("truncates a long name with its whole text on hover and wraps a long host", async () => {
+    me = REGISTRY_ADMIN;
+    const name = "a-very-long-credential-name-".repeat(6);
+    const host = `${"registry-".repeat(12)}example.org`;
+    registryItems = [alertOf("expired", "cred-7", name, { host })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    const title = await screen.findByText(`“${name}” has expired`);
+    expect(title.className).toContain("truncate");
+    expect(title.getAttribute("title")).toBe(`“${name}” has expired`);
+    const description = screen.getByText(new RegExp(host));
+    expect(description.className).toContain("wrap-anywhere");
+  });
+
+  it("renders a name that holds markup as text", async () => {
+    me = REGISTRY_ADMIN;
+    registryItems = [alertOf("expired", "cred-8", "<img src=x onerror=alert(1)>")];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("“<img src=x onerror=alert(1)>” has expired")).toBeTruthy();
+    expect(document.querySelector("img")).toBeNull();
   });
 });

@@ -10,7 +10,7 @@ import { NoPermission } from "@/components/full-page-state";
 import { MAX_QUERY } from "@/features/containers/list-search";
 import { BrowseBox } from "@/features/registries/browse-box";
 import { CredentialSheet } from "@/features/registries/credential-sheet";
-import { CredentialTable } from "@/features/registries/credential-table";
+import { ALERT_FILTERS, CredentialTable } from "@/features/registries/credential-table";
 import { CredentialTester } from "@/features/registries/credential-tester";
 import { DeleteCredentialDialog } from "@/features/registries/delete-credential-dialog";
 import {
@@ -27,13 +27,16 @@ import { z } from "@/lib/zod-config";
 const MAX_ID = 64;
 
 // The route's search (UI-SPEC "Screens"): the search text, the Scope filter ("instance"
-// or an environment's ID) and the credential whose sheet is open ("new" for the add
+// or an environment's ID), the alert filter and the credential whose sheet is open ("new" for the add
 // form, an ID for a credential). A value that does not fit is dropped, so a stale or
 // hand-edited link shows the default list instead of an error.
 export const registriesSearchSchema = z.object({
   q: z.string().min(1).max(MAX_QUERY).optional().catch(undefined),
   scope: z.string().min(1).max(MAX_ID).optional().catch(undefined),
   credential: z.string().min(1).max(MAX_ID).optional().catch(undefined),
+  // The bell's links for several credentials at once: only those that expire within 7 days,
+  // have expired or were refused by their registry.
+  alert: z.enum(ALERT_FILTERS).optional().catch(undefined),
 });
 
 export type RegistriesSearch = z.output<typeof registriesSearchSchema>;
@@ -103,7 +106,7 @@ export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) 
         isError={credentials.isError}
         isFetching={credentials.isFetching}
         refetch={credentials.refetch}
-        filters={{ q: search.q, scope: search.scope }}
+        filters={{ q: search.q, scope: search.scope, alert: search.alert }}
         onFiltersChange={onSearchChange}
         scopes={scopes}
         canAdd={canAdd}

@@ -134,8 +134,18 @@ type Entry =
   | { kind: "backupFailed"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "unknownAgents"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "env"; key: string; severity: EnvWarning["severity"]; since?: string; w: EnvWarning }
-  | { kind: "registry"; key: string; severity: "warning"; since?: string; alert: CredentialAlert }
+  | {
+      kind: "registry";
+      key: string;
+      severity: EnvWarning["severity"];
+      since?: string;
+      alertKind: CredentialAlert["kind"];
+      alerts: CredentialAlert[];
+    }
   | { kind: "manyOffline"; key: string; severity: "error"; since?: string; count: number };
+
+// The registry credential items, most severe first (D-07).
+const REGISTRY_KINDS = ["expired", "auth_failed", "expiring"] as const;
 
 const entryKey = (w: EnvWarning) => `${w.id}:${w.envId ?? ""}:${w.agentId ?? w.node ?? ""}`;
 
@@ -196,13 +206,17 @@ export function bellEntries(
   for (const w of instance.unknownAgents ?? []) {
     entries.push({ kind: "unknownAgents", key: "unknown_agents", severity: "warning", w });
   }
-  for (const alert of instance.registry ?? []) {
-    if (alert.kind !== "expiring") continue;
+  // One item per kind. A credential has at most one alert (the most severe), so the
+  // items never repeat a credential, and several of a kind collapse into one.
+  for (const alertKind of REGISTRY_KINDS) {
+    const alerts = (instance.registry ?? []).filter((a) => a.kind === alertKind);
+    if (alerts.length === 0) continue;
     entries.push({
       kind: "registry",
-      key: `registry:${alert.kind}:${alert.credentialId}`,
-      severity: "warning",
-      alert,
+      key: `registry:${alertKind}`,
+      severity: alertKind === "expired" ? "error" : "warning",
+      alertKind,
+      alerts,
     });
   }
   if (instance.keyBackup)
@@ -306,28 +320,63 @@ function scopeText(alert: CredentialAlert, t: ReturnType<typeof useT>): string {
   return alert.scope.envName || t("bell.registry.scope.unnamed");
 }
 
-// A credential that is about to stop working (D-07). Its name and host were typed by a
-// person, so they are React strings, truncated with their whole text on hover. The link
-// opens the credential's sheet.
-function RegistryEntry({ alert, close }: { alert: CredentialAlert; close: () => void }) {
+// A credential that needs its managers' attention (D-07): about to stop working, expired,
+// or refused by its registry. One credential reads with its name and links to its sheet;
+// several of a kind read as a count and link to the Registries page filtered to them. The
+// names and hosts were typed by people, so they are React strings; the title truncates with
+// its whole text on hover and the description wraps, so a long one never widens the popover.
+function RegistryEntry({
+  alertKind,
+  alerts,
+  close,
+}: {
+  alertKind: CredentialAlert["kind"];
+  alerts: CredentialAlert[];
+  close: () => void;
+}) {
   const t = useT();
-  const name = alert.name;
-  const title = t("bell.registry.expiring.title", { count: alert.days ?? 1, name });
+  const now = useNow();
+  const [first] = alerts;
+  if (!first) return null;
+  const base = `bell.registry.${alertKind}`;
+  const className = `${linkClass} text-sm ${touchLink}`;
+
+  if (alerts.length > 1) {
+    return (
+      <BellItem
+        id={`registry_${alertKind}`}
+        title={t(`${base}.titleMany`, { count: alerts.length })}
+      >
+        <ItemDescription className="line-clamp-none wrap-anywhere">
+          {t(`${base}.descriptionMany`)}
+        </ItemDescription>
+        <Link to="/registries" search={{ alert: alertKind }} className={className} onClick={close}>
+          {t("bell.registry.link")}
+        </Link>
+      </BellItem>
+    );
+  }
+
+  const params = {
+    name: first.name,
+    host: first.host,
+    scope: scopeText(first, t),
+    time: formatRelative(first.at, new Date(now), t),
+    // Only the expiry reads a number of days, so only it has plural forms.
+    ...(alertKind === "expiring" ? { count: first.days ?? 1 } : {}),
+  };
   return (
-    <BellItem id={`registry_${alert.kind}`} title={title}>
+    <BellItem id={`registry_${alertKind}`} title={t(`${base}.title`, params)}>
       <ItemDescription className="line-clamp-none wrap-anywhere">
-        {t("bell.registry.expiring.description", {
-          scope: scopeText(alert, t),
-          host: alert.host,
-        })}
+        {t(`${base}.description`, params)}
       </ItemDescription>
       <Link
         to="/registries"
-        search={{ credential: alert.credentialId }}
-        className={`${linkClass} text-sm ${touchLink}`}
+        search={{ credential: first.credentialId }}
+        className={className}
         onClick={close}
       >
-        {t("bell.registry.expiring.link")}
+        {t(alertKind === "auth_failed" ? "bell.registry.test" : "bell.registry.link")}
       </Link>
     </BellItem>
   );
@@ -723,7 +772,12 @@ export function HealthBell() {
                       );
                     case "registry":
                       return (
-                        <RegistryEntry key={entry.key} alert={entry.alert} close={actions.close} />
+                        <RegistryEntry
+                          key={entry.key}
+                          alertKind={entry.alertKind}
+                          alerts={entry.alerts}
+                          close={actions.close}
+                        />
                       );
                     case "backupFailed":
                       return (

@@ -48,6 +48,11 @@
         "all": "All scopes",
         "instance": "Instance"
       },
+      "alert": {
+        "expiring": "Expiring within 7 days",
+        "expired": "Expired",
+        "auth_failed": "Sign-in refused"
+      },
       "clear": "Clear filters"
     },
     "empty": {
