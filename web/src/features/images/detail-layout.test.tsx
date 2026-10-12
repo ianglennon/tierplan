@@ -334,7 +334,9 @@ describe("image Inspect tab", () => {
       ),
     ).toBeTruthy();
     expect(
-      sent.some((s) => s.path === `/api/env/${ENV}/images/${ID}/inspect` && s.search === "?node=n1"),
+      sent.some(
+        (s) => s.path === `/api/env/${ENV}/images/${ID}/inspect` && s.search === "?node=n1",
+      ),
     ).toBe(true);
   });
 

@@ -269,3 +269,33 @@ func (c *Client) ImageDetail(ctx context.Context, id string) (ImageDetail, []byt
 	}
 	return d, raw.Bytes(), nil
 }
+
+// HistoryRow is one layer of an image's history, as the engine reports it. CreatedBy is the
+// command that made the layer, which a build can have a secret in; it is shown as the
+// engine says it.
+type HistoryRow struct {
+	// ID is the layer's image ID, or "<missing>" for a layer of a pulled image; empty when
+	// the engine gives none.
+	ID, CreatedBy, Comment string
+	Size                   int64
+	// Created is zero when the engine does not say.
+	Created time.Time
+}
+
+// ImageHistory reads the layers of one image by ID, in the order the engine answers: the
+// newest layer first. An image the engine does not have is an error IsNotFound reports.
+func (c *Client) ImageHistory(ctx context.Context, id string) ([]HistoryRow, error) {
+	res, err := c.cur().ImageHistory(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("image history on %s: %w", c.t.Describe(), err)
+	}
+	out := make([]HistoryRow, 0, len(res.Items))
+	for _, h := range res.Items {
+		row := HistoryRow{ID: h.ID, CreatedBy: h.CreatedBy, Comment: h.Comment, Size: h.Size}
+		if h.Created > 0 {
+			row.Created = time.Unix(h.Created, 0).UTC()
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}

@@ -60,3 +60,56 @@ export function imageQuery(envId: string, imageId: string, node?: string) {
     refetchInterval: DETAIL_REFETCH_MS,
   });
 }
+
+export type ImageInspect = components["schemas"]["ImageInspectBody"];
+
+// The raw inspect document of one image, under the key of its detail, so the events feed and
+// every write refresh an open Inspect tab with the page. The server has already replaced the
+// values of the image's configuration environment unless the caller may reveal secrets.
+export function imageInspectQuery(envId: string, imageId: string, node?: string) {
+  return queryOptions({
+    queryKey: [...imageDetailKey(envId, imageId, node), "inspect"] as const,
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/images/{imageId}/inspect", {
+        params: { path: { envId, imageId }, query: node ? { node } : undefined },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new ImageLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isImageGone(error) && count < detailRetry.attempts,
+    refetchInterval: DETAIL_REFETCH_MS,
+  });
+}
+
+export type ImageHistory = components["schemas"]["ImageHistoryBody"];
+export type ImageLayer = components["schemas"]["ImageLayerBody"];
+
+// isAgentTooOld says whether the error is the node's agent refusing the history route by its
+// own policy, which is what an agent older than the server does for a route it does not know.
+export function isAgentTooOld(error: unknown): boolean {
+  return error instanceof ImageLoadError && error.type === "agent_policy_denied";
+}
+
+// The layers of one image, under the key of its detail.
+export function imageHistoryQuery(envId: string, imageId: string, node?: string) {
+  return queryOptions({
+    queryKey: [...imageDetailKey(envId, imageId, node), "history"] as const,
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/images/{imageId}/history", {
+        params: { path: { envId, imageId }, query: node ? { node } : undefined },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new ImageLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    // Neither an image that is gone nor an agent that is too old gets better on a second try.
+    retry: (count, error) =>
+      !isImageGone(error) && !isAgentTooOld(error) && count < detailRetry.attempts,
+    refetchInterval: DETAIL_REFETCH_MS,
+  });
+}

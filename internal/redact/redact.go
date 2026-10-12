@@ -140,19 +140,8 @@ func MaskContainerInspect(raw []byte, reveal bool) (out []byte, masked bool, err
 				masked = true
 			}
 		}
-		if env, ok := cfg["Env"].([]any); ok {
-			for i, e := range env {
-				kv, isString := e.(string)
-				if !isString {
-					env[i] = Placeholder
-					masked = true
-					continue
-				}
-				if name, _, hasValue := strings.Cut(kv, "="); hasValue {
-					env[i] = name + "=" + Placeholder
-					masked = true
-				}
-			}
+		if env, ok := cfg["Env"].([]any); ok && maskEnvEntries(env) {
+			masked = true
 		}
 	}
 	// The log driver's options can hold credentials too (a Splunk token, a syslog
@@ -169,6 +158,25 @@ func MaskContainerInspect(raw []byte, reveal bool) (out []byte, masked bool, err
 	}
 	out, err = encodeObject(doc, "container inspect")
 	return out, masked, err
+}
+
+// maskEnvEntries replaces the value of every "NAME=value" entry of env by Placeholder, in
+// place, and an entry that is not text altogether: the name is not a secret, the value is. An
+// entry with no "=" has no value to withhold. It reports whether it replaced something.
+func maskEnvEntries(env []any) (masked bool) {
+	for i, e := range env {
+		kv, isString := e.(string)
+		if !isString {
+			env[i] = Placeholder
+			masked = true
+			continue
+		}
+		if name, _, hasValue := strings.Cut(kv, "="); hasValue {
+			env[i] = name + "=" + Placeholder
+			masked = true
+		}
+	}
+	return masked
 }
 
 // maskArgv replaces the array at m[key] by one Placeholder when it has any element.
@@ -219,6 +227,46 @@ func MaskVolumeInspect(raw []byte, reveal bool) (out []byte, masked bool, err er
 		masked = true
 	}
 	out, err = encodeObject(doc, "volume inspect")
+	return out, masked, err
+}
+
+// MaskImageInspect prepares the raw inspect document of an image for a browser. With reveal
+// true the document is returned as it is and masked is false. Otherwise the value of every
+// entry of the image configuration's environment, Config.Env and the ContainerConfig.Env an
+// older engine also sends ("NAME=value" becomes "NAME=<hidden>"), is replaced by Placeholder:
+// a build can bake a secret into an image's environment. The rest of the document is kept as
+// it was, re-encoded with two-space indentation. masked is true when anything was replaced.
+// An environment or a configuration of a shape the engine does not send is withheld whole
+// rather than passed through. A document that is not a JSON object is an error, never passed
+// through, so a malformed answer cannot carry a value past the mask.
+func MaskImageInspect(raw []byte, reveal bool) (out []byte, masked bool, err error) {
+	if reveal {
+		return raw, false, nil
+	}
+	doc, err := decodeObject(raw, "image inspect")
+	if err != nil {
+		return nil, false, err
+	}
+	for _, section := range []string{"Config", "ContainerConfig"} {
+		switch cfg := doc[section].(type) {
+		case map[string]any:
+			switch env := cfg["Env"].(type) {
+			case []any:
+				if maskEnvEntries(env) {
+					masked = true
+				}
+			case nil:
+			default:
+				cfg["Env"] = Placeholder
+				masked = true
+			}
+		case nil:
+		default:
+			doc[section] = Placeholder
+			masked = true
+		}
+	}
+	out, err = encodeObject(doc, "image inspect")
 	return out, masked, err
 }
 

@@ -752,6 +752,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/images/{imageId}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The layers of one image
+         * @description The image's history from the engine, newest layer first, for the Layers tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422, 404 image_not_found, 503 node_unavailable). 502 agent_policy_denied when the node's agent is older than this server and does not know the history route. The commands are shown as the engine reports them. Needs images.read (Viewer) on the environment. Reads are not audited.
+         */
+        get: operations["imageHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/{imageId}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One image's raw inspect document
+         * @description The engine's inspect document of the image as it is, for the Inspect tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found, 503 node_unavailable). The environment variables of the image's configuration can hold a secret a build baked in: for a caller without secrets.reveal on the environment each value is replaced by the placeholder <hidden> on the server, and masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.
+         */
+        get: operations["inspectImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/networks": {
         parameters: {
             query?: never;
@@ -3860,6 +3900,18 @@ export interface components {
             /** @description The architecture variant, for example v8; empty when there is none */
             variant: string;
         };
+        ImageHistoryBody: {
+            /** @description The layers in the order the engine answers: the newest first */
+            layers: components["schemas"]["ImageLayerBody"][] | null;
+        };
+        ImageInspectBody: {
+            /** @description The engine's inspect document, with the values of the image configuration's environment (Config.Env, and ContainerConfig.Env of an older engine) replaced by <hidden> unless the caller holds secrets.reveal */
+            inspect: {
+                [key: string]: unknown;
+            };
+            /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
+            masked: boolean;
+        };
         ImageItem: {
             /** Format: date-time */
             created?: string;
@@ -3874,6 +3926,21 @@ export interface components {
             /**
              * Format: int64
              * @description Size in bytes
+             */
+            size: number;
+        };
+        ImageLayerBody: {
+            /** @description The layer's comment, usually empty */
+            comment: string;
+            /** Format: date-time */
+            created?: string;
+            /** @description The command that made the layer, as the engine reports it. A build can have a secret in one; it is not masked */
+            createdBy: string;
+            /** @description The layer's ID as the engine gives it: sha256: and 64 hexadecimal characters, <missing> for a layer of a pulled image, or empty */
+            id: string;
+            /**
+             * Format: int64
+             * @description The layer's size in bytes; 0 for a layer that only changes metadata
              */
             size: number;
         };
@@ -7001,6 +7068,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    imageHistory: {
+        parameters: {
+            query?: {
+                /** @description Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them) */
+                node?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The image ID: sha256: and 64 hexadecimal characters */
+                imageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageHistoryBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    inspectImage: {
+        parameters: {
+            query?: {
+                /** @description Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them) */
+                node?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The image ID: sha256: and 64 hexadecimal characters */
+                imageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageInspectBody"];
                 };
             };
             /** @description Error */

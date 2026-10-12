@@ -7,7 +7,9 @@
       },
       "tabs": {
         "label": "Image sections",
-        "overview": "Overview"
+        "overview": "Overview",
+        "layers": "Layers",
+        "inspect": "Inspect"
       },
       "header": {
         "dangling": "Dangling",
@@ -73,6 +75,30 @@
           "label": "Labels",
           "empty": "No labels."
         }
+      },
+      "inspect": {
+        "loading": "Loading the inspect output",
+        "loadFailed": "Couldn't load the inspect output of {{name}}.",
+        "retry": "Retry",
+        "masked": "Environment variable values are hidden. Needs the reveal secrets permission to show them."
+      },
+      "layers": {
+        "loading": "Loading the layers",
+        "loadFailed": "Couldn't load the layers of this image. Docker may be unreachable. Try again.",
+        "retry": "Retry",
+        "label": "Layers",
+        "region": "Layers of the image",
+        "empty": "No layers.",
+        "caption_one": "{{count, number}} layer, {{size}} in total",
+        "caption_other": "{{count, number}} layers, {{size}} in total",
+        "columns": {
+          "layer": "Layer",
+          "createdBy": "Created by",
+          "size": "Size",
+          "created": "Created"
+        },
+        "showMore": "Show more",
+        "showLess": "Show less"
       }
     }
   }

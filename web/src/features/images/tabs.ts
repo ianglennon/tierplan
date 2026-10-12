@@ -8,7 +8,10 @@ export interface ImageTab {
   id: string;
   // The route the tab links to: the page's own address for the Overview, a child of it for
   // every other tab.
-  to: "/env/$envId/images/$imageId";
+  to:
+    | "/env/$envId/images/$imageId"
+    | "/env/$envId/images/$imageId/layers"
+    | "/env/$envId/images/$imageId/inspect";
   // The i18n key of the tab's label.
   labelKey: string;
   // True when only the tab's own path is the tab, as for the Overview, whose path is the
@@ -22,5 +25,17 @@ export const IMAGE_TABS = [
     to: "/env/$envId/images/$imageId",
     labelKey: "images.detail.tabs.overview",
     exact: true,
+  },
+  {
+    id: "layers",
+    to: "/env/$envId/images/$imageId/layers",
+    labelKey: "images.detail.tabs.layers",
+    exact: false,
+  },
+  {
+    id: "inspect",
+    to: "/env/$envId/images/$imageId/inspect",
+    labelKey: "images.detail.tabs.inspect",
+    exact: false,
   },
 ] as const satisfies readonly ImageTab[];

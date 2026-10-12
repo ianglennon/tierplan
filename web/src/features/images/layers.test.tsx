@@ -97,7 +97,10 @@ describe("image Layers", () => {
   it("lists Layer, Created by, Size and Created, with the 12-character ID and a caption", async () => {
     answer = () =>
       Response.json({
-        layers: [layer({ size: 2048 }), layer({ id: "<missing>", createdBy: "ADD rootfs", size: 1024 })],
+        layers: [
+          layer({ size: 2048 }),
+          layer({ id: "<missing>", createdBy: "ADD rootfs", size: 1024 }),
+        ],
       });
     mount();
     const table = await screen.findByRole("table", { name: "Layers" });
@@ -118,7 +121,7 @@ describe("image Layers", () => {
   });
 
   it("shows a zero-size layer as a muted 0 B", async () => {
-    answer = () => Response.json({ layers: [layer({ size: 0, createdBy: "CMD [\"sh\"]" })] });
+    answer = () => Response.json({ layers: [layer({ size: 0, createdBy: 'CMD ["sh"]' })] });
     mount();
     const zero = await screen.findByText("0 B");
     expect(zero.className).toContain("text-muted-foreground");
@@ -142,7 +145,8 @@ describe("image Layers", () => {
     ) {
       return this.getAttribute("data-slot") === "layer-command" ? 60 : 0;
     });
-    answer = () => Response.json({ layers: [layer({ createdBy: "RUN ".concat("x".repeat(600)) })] });
+    answer = () =>
+      Response.json({ layers: [layer({ createdBy: "RUN ".concat("x".repeat(600)) })] });
     mount();
     const command = await screen.findByText(/^RUN x+$/);
     expect(command.className).toContain("line-clamp-3");

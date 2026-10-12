@@ -52,6 +52,8 @@ import { Route as AppEnvEnvIdContainersContainerIdInspectRouteImport } from './r
 import { Route as AppEnvEnvIdContainersContainerIdLogsRouteImport } from './routes/_app/env/$envId/containers_.$containerId.logs'
 import { Route as AppEnvEnvIdContainersContainerIdShellRouteImport } from './routes/_app/env/$envId/containers_.$containerId.shell'
 import { Route as AppEnvEnvIdImagesImageIdIndexRouteImport } from './routes/_app/env/$envId/images_.$imageId.index'
+import { Route as AppEnvEnvIdImagesImageIdInspectRouteImport } from './routes/_app/env/$envId/images_.$imageId.inspect'
+import { Route as AppEnvEnvIdImagesImageIdLayersRouteImport } from './routes/_app/env/$envId/images_.$imageId.layers'
 import { Route as AppEnvEnvIdNetworksNetworkIdIndexRouteImport } from './routes/_app/env/$envId/networks_.$networkId.index'
 import { Route as AppEnvEnvIdNetworksNetworkIdAttachmentsRouteImport } from './routes/_app/env/$envId/networks_.$networkId.attachments'
 import { Route as AppEnvEnvIdNetworksNetworkIdInspectRouteImport } from './routes/_app/env/$envId/networks_.$networkId.inspect'
@@ -289,6 +291,18 @@ const AppEnvEnvIdImagesImageIdIndexRoute =
     path: '/',
     getParentRoute: () => AppEnvEnvIdImagesImageIdRoute,
   } as any)
+const AppEnvEnvIdImagesImageIdInspectRoute =
+  AppEnvEnvIdImagesImageIdInspectRouteImport.update({
+    id: '/inspect',
+    path: '/inspect',
+    getParentRoute: () => AppEnvEnvIdImagesImageIdRoute,
+  } as any)
+const AppEnvEnvIdImagesImageIdLayersRoute =
+  AppEnvEnvIdImagesImageIdLayersRouteImport.update({
+    id: '/layers',
+    path: '/layers',
+    getParentRoute: () => AppEnvEnvIdImagesImageIdRoute,
+  } as any)
 const AppEnvEnvIdNetworksNetworkIdIndexRoute =
   AppEnvEnvIdNetworksNetworkIdIndexRouteImport.update({
     id: '/',
@@ -361,6 +375,8 @@ export interface FileRoutesByFullPath {
   '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/containers/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
   '/env/$envId/containers/$containerId/shell': typeof AppEnvEnvIdContainersContainerIdShellRoute
+  '/env/$envId/images/$imageId/inspect': typeof AppEnvEnvIdImagesImageIdInspectRoute
+  '/env/$envId/images/$imageId/layers': typeof AppEnvEnvIdImagesImageIdLayersRoute
   '/env/$envId/networks/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/env/$envId/networks/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
@@ -402,6 +418,8 @@ export interface FileRoutesByTo {
   '/env/$envId/containers/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/env/$envId/containers/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
   '/env/$envId/containers/$containerId/shell': typeof AppEnvEnvIdContainersContainerIdShellRoute
+  '/env/$envId/images/$imageId/inspect': typeof AppEnvEnvIdImagesImageIdInspectRoute
+  '/env/$envId/images/$imageId/layers': typeof AppEnvEnvIdImagesImageIdLayersRoute
   '/env/$envId/networks/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/env/$envId/networks/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
@@ -453,6 +471,8 @@ export interface FileRoutesById {
   '/_app/env/$envId/containers_/$containerId/inspect': typeof AppEnvEnvIdContainersContainerIdInspectRoute
   '/_app/env/$envId/containers_/$containerId/logs': typeof AppEnvEnvIdContainersContainerIdLogsRoute
   '/_app/env/$envId/containers_/$containerId/shell': typeof AppEnvEnvIdContainersContainerIdShellRoute
+  '/_app/env/$envId/images_/$imageId/inspect': typeof AppEnvEnvIdImagesImageIdInspectRoute
+  '/_app/env/$envId/images_/$imageId/layers': typeof AppEnvEnvIdImagesImageIdLayersRoute
   '/_app/env/$envId/networks_/$networkId/attachments': typeof AppEnvEnvIdNetworksNetworkIdAttachmentsRoute
   '/_app/env/$envId/networks_/$networkId/inspect': typeof AppEnvEnvIdNetworksNetworkIdInspectRoute
   '/_app/env/$envId/volumes_/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
@@ -504,6 +524,8 @@ export interface FileRouteTypes {
     | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/containers/$containerId/logs'
     | '/env/$envId/containers/$containerId/shell'
+    | '/env/$envId/images/$imageId/inspect'
+    | '/env/$envId/images/$imageId/layers'
     | '/env/$envId/networks/$networkId/attachments'
     | '/env/$envId/networks/$networkId/inspect'
     | '/env/$envId/volumes/$volumeName/inspect'
@@ -545,6 +567,8 @@ export interface FileRouteTypes {
     | '/env/$envId/containers/$containerId/inspect'
     | '/env/$envId/containers/$containerId/logs'
     | '/env/$envId/containers/$containerId/shell'
+    | '/env/$envId/images/$imageId/inspect'
+    | '/env/$envId/images/$imageId/layers'
     | '/env/$envId/networks/$networkId/attachments'
     | '/env/$envId/networks/$networkId/inspect'
     | '/env/$envId/volumes/$volumeName/inspect'
@@ -595,6 +619,8 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/containers_/$containerId/inspect'
     | '/_app/env/$envId/containers_/$containerId/logs'
     | '/_app/env/$envId/containers_/$containerId/shell'
+    | '/_app/env/$envId/images_/$imageId/inspect'
+    | '/_app/env/$envId/images_/$imageId/layers'
     | '/_app/env/$envId/networks_/$networkId/attachments'
     | '/_app/env/$envId/networks_/$networkId/inspect'
     | '/_app/env/$envId/volumes_/$volumeName/inspect'
@@ -917,6 +943,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdImagesImageIdIndexRouteImport
       parentRoute: typeof AppEnvEnvIdImagesImageIdRoute
     }
+    '/_app/env/$envId/images_/$imageId/inspect': {
+      id: '/_app/env/$envId/images_/$imageId/inspect'
+      path: '/inspect'
+      fullPath: '/env/$envId/images/$imageId/inspect'
+      preLoaderRoute: typeof AppEnvEnvIdImagesImageIdInspectRouteImport
+      parentRoute: typeof AppEnvEnvIdImagesImageIdRoute
+    }
+    '/_app/env/$envId/images_/$imageId/layers': {
+      id: '/_app/env/$envId/images_/$imageId/layers'
+      path: '/layers'
+      fullPath: '/env/$envId/images/$imageId/layers'
+      preLoaderRoute: typeof AppEnvEnvIdImagesImageIdLayersRouteImport
+      parentRoute: typeof AppEnvEnvIdImagesImageIdRoute
+    }
     '/_app/env/$envId/networks_/$networkId/': {
       id: '/_app/env/$envId/networks_/$networkId/'
       path: '/'
@@ -1045,11 +1085,15 @@ const AppEnvEnvIdContainersContainerIdRouteWithChildren =
   )
 
 interface AppEnvEnvIdImagesImageIdRouteChildren {
+  AppEnvEnvIdImagesImageIdInspectRoute: typeof AppEnvEnvIdImagesImageIdInspectRoute
+  AppEnvEnvIdImagesImageIdLayersRoute: typeof AppEnvEnvIdImagesImageIdLayersRoute
   AppEnvEnvIdImagesImageIdIndexRoute: typeof AppEnvEnvIdImagesImageIdIndexRoute
 }
 
 const AppEnvEnvIdImagesImageIdRouteChildren: AppEnvEnvIdImagesImageIdRouteChildren =
   {
+    AppEnvEnvIdImagesImageIdInspectRoute: AppEnvEnvIdImagesImageIdInspectRoute,
+    AppEnvEnvIdImagesImageIdLayersRoute: AppEnvEnvIdImagesImageIdLayersRoute,
     AppEnvEnvIdImagesImageIdIndexRoute: AppEnvEnvIdImagesImageIdIndexRoute,
   }
 
