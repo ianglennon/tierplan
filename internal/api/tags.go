@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -41,6 +43,55 @@ type TagsDeps struct {
 	Audit *audit.Writer
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+
+	// limiter is the per-user limit on tag requests, made by RegisterTags.
+	limiter *browseLimiter
+}
+
+const (
+	// browsePerMinute and browseBurst are how many tag requests (lists and details, which may
+	// each make the server connect to a registry host the caller named) one user may make: a
+	// page of tags is a list and a few details, so ordinary use is far under it, while a scan of
+	// hosts and ports through the registry codes is held to a crawl (WR-B01).
+	browsePerMinute = 60
+	browseBurst     = 30
+	// browseIdle is how long a user's limiter is kept after their last request.
+	browseIdle = 5 * time.Minute
+)
+
+// browseLimiter is the per-user limit on tag requests. It forgets a user who has been idle.
+type browseLimiter struct {
+	mu    sync.Mutex
+	by    map[string]*browseEntry
+	swept time.Time
+}
+
+type browseEntry struct {
+	lim  *rate.Limiter
+	seen time.Time
+}
+
+func (l *browseLimiter) allow(user string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.by == nil {
+		l.by = map[string]*browseEntry{}
+	}
+	if now.Sub(l.swept) > time.Minute {
+		for id, e := range l.by {
+			if now.Sub(e.seen) > browseIdle {
+				delete(l.by, id)
+			}
+		}
+		l.swept = now
+	}
+	e, ok := l.by[user]
+	if !ok {
+		e = &browseEntry{lim: rate.NewLimiter(rate.Every(time.Minute/browsePerMinute), browseBurst)}
+		l.by[user] = e
+	}
+	e.seen = now
+	return e.lim.AllowN(now, 1)
 }
 
 // PlatformBody is one image of a multi-platform tag.
@@ -172,6 +223,9 @@ func RegisterTags(r *httpx.Router, d TagsDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
+	if d.limiter == nil {
+		d.limiter = &browseLimiter{}
+	}
 	httpx.Register(r, huma.Operation{
 		OperationID: "browseTags",
 		Method:      http.MethodGet,
@@ -179,7 +233,7 @@ func RegisterTags(r *httpx.Router, d TagsDeps) {
 		Summary:     "List the tags of a repository",
 		Description: "Lists a repository's tag names through the server, with the stored credential pulls would use for it among the ones the caller may see: the instance credentials and, with envId, " +
 			"that environment's own. The tags come newest version first and then by name, descending, 100 to a page (page, from 0), filtered by the text q and without signature, attestation and cache tags unless hide is false. The answer names the credential, never holds it, and is cached for a minute per credential, so a caller never gets a list fetched with a credential they cannot use. " +
-			"Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. When the registry cannot list the tags the answer is 404 " +
+			"Needs images.read on at least one environment, and on envId when it is given (403). An unparsable reference is 422 ref_invalid. At most 60 tag requests a minute per user (a burst of 30), lists and details together: 429 rate_limited. When the registry cannot list the tags the answer is 404 " +
 			"repository_not_found, or 502 with the problem type needs_login (the registry wants a login and no stored credential matches), login_refused (it refused the matching credential), " +
 			"registry_unreachable or registry_tls; errors names the registry as registry.host and registry.repo and the credential used, if any, as credential.id, credential.name, credential.scopeKind and credential.scopeName. Not audited.",
 		Tags: []string{"registries"},
@@ -197,7 +251,7 @@ func RegisterTags(r *httpx.Router, d TagsDeps) {
 		Path:        "/api/registries/tags/details",
 		Summary:     "Read the digest, date and platforms of tags",
 		Description: "Reads the digest, the created date and the platforms of up to 25 tags of a repository, for the rows the person can see. The server asks the registry with the same credential and the same authorisation as the tag list: " +
-			"images.read on at least one environment, and on envId when it is given (403, audited), an unparsable reference is 422 ref_invalid, 26 tags are 422 and so is a tag that is not 1 to 128 letters, digits, underscores, dots or dashes (tag_invalid). Docker Hub is read through its tags API, which costs no pulls; any other registry through a manifest HEAD and, per digest, the manifest and the config of one platform " +
+			"images.read on at least one environment, and on envId when it is given (403, audited), an unparsable reference is 422 ref_invalid, the limit of the tag list applies (429 rate_limited), 26 tags are 422 and so is a tag that is not 1 to 128 letters, digits, underscores, dots or dashes (tag_invalid). Docker Hub is read through its tags API, which costs no pulls; any other registry through a manifest HEAD and, per digest, the manifest and the config of one platform " +
 			"(linux/amd64, else the environment's node architecture, else the first). Results are cached per credential, repository and digest. A tag that could not be read carries a code, never a failure of the request. Not audited.",
 		Tags: []string{"registries"},
 	}, rbac.SelfService, func(ctx context.Context, in *TagDetailsInput) (*TagDetailsOutput, error) {
@@ -467,6 +521,9 @@ func (d TagsDeps) open(ctx context.Context, p *rbac.Principal, envID, refText, u
 	if !viewer.anyImages || (envID != "" && !viewer.holds(envID, rbac.PermImagesRead)) {
 		return credentialViewer{}, registry.Ref{}, nil, d.refuse(ctx, p, envID, userAgent, target)
 	}
+	if d.limiter != nil && !d.limiter.allow(p.ID, time.Now()) {
+		return credentialViewer{}, registry.Ref{}, nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tag requests. Wait a moment and try again.")
+	}
 	ref, err := registry.ParseRef(refText)
 	if err != nil {
 		return credentialViewer{}, registry.Ref{}, nil, httpx.Problem(http.StatusUnprocessableEntity, problemRefInvalid, "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.")
@@ -658,7 +715,7 @@ func registerEnvTags(r *httpx.Router, d TagsDeps) {
 		Path:        "/api/env/{envId}/images/tags",
 		Summary:     "List the tags of a repository, as an environment's reader",
 		Description: "The same listing as /api/registries/tags with this environment chosen: the credential is the most specific match among the instance's credentials and this environment's own, never another environment's. " +
-			"Needs images.read (Viewer) on the environment. Not audited.",
+			"Needs images.read (Viewer) on the environment. Shares the per-user limit of /api/registries/tags (429 rate_limited). Not audited.",
 		Tags: []string{"environments"},
 	}, reads, func(ctx context.Context, in *EnvBrowseTagsInput) (*TagListOutput, error) {
 		p := httpx.PrincipalFrom(ctx)

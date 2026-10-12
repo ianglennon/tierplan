@@ -807,3 +807,44 @@ func TestEnvTagDetailsMissingPlatformsNameTheNodeArchitecturesTheTagLacksOnlyInA
 		t.Errorf("missing on the Registries page = %v, want none", got)
 	}
 }
+
+// Every tag request can make the server connect to a host the caller named, so a user is held to a
+// limit that makes scanning hosts and ports through the registry codes slow (WR-B01).
+func TestBrowseTagsLimitsEachUserAndTheLimitIsNotSharedWithAnotherUser(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	f.addEnvironmentRow(t, "env-a")
+	viewer := f.asRoleOn(t, "scanner", "env-a", "viewer")
+	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
+
+	limited := -1
+	for i := 0; i < browseBurstForTest+10; i++ {
+		rec := f.browse(t, viewer, reg, "acme/app", "")
+		if rec.Code == http.StatusTooManyRequests {
+			if problemType(t, rec) != "rate_limited" {
+				t.Errorf("limited with %s, want rate_limited", rec.Body)
+			}
+			limited = i
+			break
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	if limited < browseBurstForTest-1 || limited > browseBurstForTest+2 {
+		t.Errorf("limited at request %d, want about %d", limited, browseBurstForTest)
+	}
+	// Details draw on the same budget.
+	if rec := f.details(t, viewer, reg, "acme/app", "", "1.0"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("details after the list limit: %d %s, want 429", rec.Code, rec.Body)
+	}
+	// Another user has their own.
+	if rec := f.browse(t, admin, reg, "acme/app", ""); rec.Code != http.StatusOK {
+		t.Errorf("another user: %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+// browseBurstForTest is the burst of the tag request limit (browseBurst in package api).
+const browseBurstForTest = 30
