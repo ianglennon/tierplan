@@ -11,6 +11,7 @@ import { NoPermission } from "@/components/full-page-state";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { NodesBanner } from "@/features/environments/nodes-banner";
+import { usedWhat } from "@/features/images/used-by";
 import { PullImageButton } from "@/features/pulls/pull-dialog";
 import { type Column, ResourceTable, TruncatedText } from "@/features/resources/resource-table";
 import {
@@ -84,6 +85,16 @@ function Images() {
         const short = i.shortId || i.id.replace(/^sha256:/, "").slice(0, 12);
         return short ? <span className="font-mono text-xs">{short}</span> : missing;
       },
+    },
+    {
+      id: "usedBy",
+      header: t("images.list.columns.usedBy"),
+      cell: (i) =>
+        i.usedByContainers + i.usedByServices > 0 ? (
+          usedWhat(t, i.usedByContainers, i.usedByServices, swarm)
+        ) : (
+          <span className="text-muted-foreground">{t("images.notInUse")}</span>
+        ),
     },
     {
       id: "size",

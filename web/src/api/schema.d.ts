@@ -681,7 +681,7 @@ export interface paths {
         };
         /**
          * List the images of an environment
-         * @description Newest first. An untagged image is listed as <none>. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Newest first, ties by image ID. An untagged image is listed as <none> and marked dangling. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. Needs images.read (Viewer) on the environment. Reads are not audited.
          */
         get: operations["listImages"];
         put?: never;
@@ -784,6 +784,26 @@ export interface paths {
          * @description The engine's inspect document of the image as it is, for the Inspect tab, read from the first node that has the image or from the node named. The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found, 503 node_unavailable). The environment variables of the image's configuration can hold a secret a build baked in: for a caller without secrets.reveal on the environment each value is replaced by the placeholder <hidden> on the server, and masked says something was. Needs images.read (Viewer) on the environment. Reads are not audited.
          */
         get: operations["inspectImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/{imageId}/used-by": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What uses one image
+         * @description The containers, running or stopped, on the nodes that hold the image, matched by image ID on their own node, then the swarm services whose spec names it: matched by pinned digest against the image's repo digests, else by normalised repository and tag, and counted even with no tasks (state no_tasks). Each item says how it was matched (image_id, tag or digest). The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found when no reporting node holds it, 503 node_unavailable when node is not a node of the environment). Needs images.read (Viewer) on the environment. Reads are not audited.
+         */
+        get: operations["imageUsedBy"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3915,10 +3935,16 @@ export interface components {
         ImageItem: {
             /** Format: date-time */
             created?: string;
+            /** @description True when the image has no tag */
+            dangling: boolean;
             /** @description The full image ID */
             id: string;
             /** @description The node that holds the image */
             node: string;
+            /** @description The ID of that node */
+            nodeId: string;
+            /** @description True when the host of this node is read-only, so no change to its images will be accepted */
+            readOnly: boolean;
             /** @description repository:tag for each tag, or ["<none>"] for an untagged image */
             repoTags: string[] | null;
             /** @description The first 12 characters of the ID, without the sha256: prefix */
@@ -3928,6 +3954,16 @@ export interface components {
              * @description Size in bytes
              */
             size: number;
+            /**
+             * Format: int64
+             * @description Containers on this node, running or not, created from this image ID. Counted from the containers Bayplan reads, never from the engine's own per-image count, which a list does not compute
+             */
+            usedByContainers: number;
+            /**
+             * Format: int64
+             * @description Swarm services whose spec names this image, by pinned digest else by repository and tag, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts for the image on every node. Always 0 off a swarm
+             */
+            usedByServices: number;
         };
         ImageLayerBody: {
             /** @description The layer's comment, usually empty */
@@ -3947,7 +3983,7 @@ export interface components {
         ImageListBody: {
             /** @description At most 500 rows */
             items: components["schemas"]["ImageItem"][] | null;
-            /** @description The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown */
+            /** @description The nodes that answered, for the node filter */
             nodes: string[] | null;
             /** @description Nodes that should have answered and did not, so these rows are not the whole cluster */
             notReporting: string[] | null;
@@ -3977,6 +4013,44 @@ export interface components {
             nodeId: string;
             /** @description True when the node has the image */
             present: boolean;
+        };
+        ImageUsedByBody: {
+            /** @description Containers, running or stopped, on the nodes that hold the image, then swarm services whose spec names it, even with no task */
+            items: components["schemas"]["ImageUsedByItem"][] | null;
+            /** @description Nodes that should have answered and did not, so the containers may be incomplete */
+            notReporting: string[] | null;
+            /**
+             * Format: int64
+             * @description How many of the items are containers
+             */
+            usedByContainers: number;
+            /**
+             * Format: int64
+             * @description How many of the items are services
+             */
+            usedByServices: number;
+        };
+        ImageUsedByItem: {
+            /** @description The container's or the service's ID */
+            id: string;
+            /**
+             * @description container for a container on a node, service for a swarm service
+             * @enum {string}
+             */
+            kind: "container" | "service";
+            /**
+             * @description image_id for a container, which is matched by the image ID on its own node; digest for a service pinned to a digest the image has; tag for a service matched by its repository and tag
+             * @enum {string}
+             */
+            matchedBy: "image_id" | "tag" | "digest";
+            /** @description The container name or the service name */
+            name: string;
+            /** @description The display name of that node; empty for a service */
+            node: string;
+            /** @description The ID of the node a container runs on; empty for a service, which can run on any node */
+            nodeId: string;
+            /** @description A container's state; for a service running, starting or no_tasks (its spec names the image but no task runs it); empty when the cluster read did not have it */
+            state: string;
         };
         ImpactBody: {
             /** @description Who loses which environment access, sorted by username then environment. Empty when no one does */
@@ -7144,6 +7218,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageInspectBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    imageUsedBy: {
+        parameters: {
+            query?: {
+                /** @description Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them) */
+                node?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The image ID: sha256: and 64 hexadecimal characters */
+                imageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUsedByBody"];
                 };
             };
             /** @description Error */

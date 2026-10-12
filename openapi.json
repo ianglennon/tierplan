@@ -3739,6 +3739,10 @@
             "format": "date-time",
             "type": "string"
           },
+          "dangling": {
+            "description": "True when the image has no tag",
+            "type": "boolean"
+          },
           "id": {
             "description": "The full image ID",
             "type": "string"
@@ -3746,6 +3750,14 @@
           "node": {
             "description": "The node that holds the image",
             "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of that node",
+            "type": "string"
+          },
+          "readOnly": {
+            "description": "True when the host of this node is read-only, so no change to its images will be accepted",
+            "type": "boolean"
           },
           "repoTags": {
             "description": "repository:tag for each tag, or [\"\u003cnone\u003e\"] for an untagged image",
@@ -3765,14 +3777,29 @@
             "description": "Size in bytes",
             "format": "int64",
             "type": "integer"
+          },
+          "usedByContainers": {
+            "description": "Containers on this node, running or not, created from this image ID. Counted from the containers Bayplan reads, never from the engine's own per-image count, which a list does not compute",
+            "format": "int64",
+            "type": "integer"
+          },
+          "usedByServices": {
+            "description": "Swarm services whose spec names this image, by pinned digest else by repository and tag, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts for the image on every node. Always 0 off a swarm",
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
           "node",
+          "nodeId",
           "id",
           "shortId",
           "repoTags",
-          "size"
+          "dangling",
+          "size",
+          "usedByContainers",
+          "usedByServices",
+          "readOnly"
         ],
         "type": "object"
       },
@@ -3823,7 +3850,7 @@
             ]
           },
           "nodes": {
-            "description": "The nodes that answered, for the node filter; Cluster is listed too when swarm-wide networks are shown",
+            "description": "The nodes that answered, for the node filter",
             "items": {
               "type": "string"
             },
@@ -3914,6 +3941,100 @@
           "name",
           "present",
           "names"
+        ],
+        "type": "object"
+      },
+      "ImageUsedByBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Containers, running or stopped, on the nodes that hold the image, then swarm services whose spec names it, even with no task",
+            "items": {
+              "$ref": "#/components/schemas/ImageUsedByItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notReporting": {
+            "description": "Nodes that should have answered and did not, so the containers may be incomplete",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "usedByContainers": {
+            "description": "How many of the items are containers",
+            "format": "int64",
+            "type": "integer"
+          },
+          "usedByServices": {
+            "description": "How many of the items are services",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "usedByContainers",
+          "usedByServices",
+          "notReporting"
+        ],
+        "type": "object"
+      },
+      "ImageUsedByItem": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The container's or the service's ID",
+            "type": "string"
+          },
+          "kind": {
+            "description": "container for a container on a node, service for a swarm service",
+            "enum": [
+              "container",
+              "service"
+            ],
+            "type": "string"
+          },
+          "matchedBy": {
+            "description": "image_id for a container, which is matched by the image ID on its own node; digest for a service pinned to a digest the image has; tag for a service matched by its repository and tag",
+            "enum": [
+              "image_id",
+              "tag",
+              "digest"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The container name or the service name",
+            "type": "string"
+          },
+          "node": {
+            "description": "The display name of that node; empty for a service",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of the node a container runs on; empty for a service, which can run on any node",
+            "type": "string"
+          },
+          "state": {
+            "description": "A container's state; for a service running, starting or no_tasks (its spec names the image but no task runs it); empty when the cluster read did not have it",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "nodeId",
+          "node",
+          "state",
+          "matchedBy"
         ],
         "type": "object"
       },
@@ -10239,7 +10360,7 @@
     },
     "/api/env/{envId}/images": {
       "get": {
-        "description": "Newest first. An untagged image is listed as \u003cnone\u003e. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
+        "description": "Newest first, ties by image ID. An untagged image is listed as \u003cnone\u003e and marked dangling. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. Needs images.read (Viewer) on the environment. Reads are not audited.",
         "operationId": "listImages",
         "parameters": [
           {
@@ -10648,6 +10769,80 @@
           }
         },
         "summary": "One image's raw inspect document",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/images/{imageId}/used-by": {
+      "get": {
+        "description": "The containers, running or stopped, on the nodes that hold the image, matched by image ID on their own node, then the swarm services whose spec names it: matched by pinned digest against the image's repo digests, else by normalised repository and tag, and counted even with no tasks (state no_tasks). Each item says how it was matched (image_id, tag or digest). The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found when no reporting node holds it, 503 node_unavailable when node is not a node of the environment). Needs images.read (Viewer) on the environment. Reads are not audited.",
+        "operationId": "imageUsedBy",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The image ID: sha256: and 64 hexadecimal characters",
+            "in": "path",
+            "name": "imageId",
+            "required": true,
+            "schema": {
+              "description": "The image ID: sha256: and 64 hexadecimal characters",
+              "maxLength": 71,
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them)",
+            "explode": false,
+            "in": "query",
+            "name": "node",
+            "schema": {
+              "description": "Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them)",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageUsedByBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What uses one image",
         "tags": [
           "environments"
         ]

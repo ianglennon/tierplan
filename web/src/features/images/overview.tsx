@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { type ImageDetail, imageQuery } from "@/api/images";
+import { type ImageDetail, imageQuery, imageUsedByQuery } from "@/api/images";
 import { CopyableCode, copyText } from "@/components/copyable-code";
 import { KeyValueTable } from "@/components/key-value-table";
 import { RelativeTime } from "@/components/relative-time";
@@ -119,14 +119,22 @@ function DetailsCard({ detail }: { detail: ImageDetail }) {
 }
 
 // NodesCard says, on a swarm, which nodes have the image and under which names.
-function NodesCard({ detail }: { detail: ImageDetail }) {
+function NodesCard({ envId, detail, node }: { envId: string; detail: ImageDetail; node?: string }) {
   const t = useT();
+  // How many containers each node has made from the image, running or not. They come from the
+  // Used by read, which the page shares; until it answers, or when it fails, the cell is a dash.
+  const usage = useQuery(imageUsedByQuery(envId, detail.id, node)).data;
+  const containers = new Map<string, number>();
+  for (const u of usage?.items ?? []) {
+    if (u.kind === "container") containers.set(u.nodeId, (containers.get(u.nodeId) ?? 0) + 1);
+  }
   return (
     <SettingsCard title={t(`${key}.nodes.title`)}>
       <Table aria-label={t(`${key}.nodes.title`)}>
         <TableHeader>
           <TableRow>
             <TableHead>{t(`${key}.nodes.columns.node`)}</TableHead>
+            <TableHead className="text-right">{t(`${key}.nodes.columns.containers`)}</TableHead>
             <TableHead>{t(`${key}.nodes.columns.names`)}</TableHead>
           </TableRow>
         </TableHeader>
@@ -134,6 +142,13 @@ function NodesCard({ detail }: { detail: ImageDetail }) {
           {(detail.nodes ?? []).map((n) => (
             <TableRow key={n.nodeId}>
               <TableCell className="align-top break-words whitespace-normal">{n.name}</TableCell>
+              <TableCell className="text-right align-top tabular-nums">
+                {!n.present || !usage ? (
+                  <span className="text-muted-foreground">{t("dashboard.time.missing")}</span>
+                ) : (
+                  (containers.get(n.nodeId) ?? 0)
+                )}
+              </TableCell>
               <TableCell className={CELL}>
                 {!n.present ? (
                   <span className="font-sans text-muted-foreground">
@@ -206,7 +221,7 @@ export function ImageOverview({ envId, imageId, node }: ImageOverviewProps) {
         <DetailsCard detail={data} />
       </div>
       <div className="flex min-w-0 flex-col gap-6">
-        {swarm ? <NodesCard detail={data} /> : null}
+        {swarm ? <NodesCard envId={envId} detail={data} node={node} /> : null}
         <LabelsCard detail={data} />
       </div>
     </div>

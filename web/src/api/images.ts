@@ -113,3 +113,27 @@ export function imageHistoryQuery(envId: string, imageId: string, node?: string)
     refetchInterval: DETAIL_REFETCH_MS,
   });
 }
+
+export type ImageUsedBy = components["schemas"]["ImageUsedByBody"];
+export type ImageUsedByItem = components["schemas"]["ImageUsedByItem"];
+
+// What uses one image: its containers on the nodes that have it and the swarm services whose
+// spec names it, under the key of its detail, so the events feed and every write refresh an
+// open Used by tab with the page.
+export function imageUsedByQuery(envId: string, imageId: string, node?: string) {
+  return queryOptions({
+    queryKey: [...imageDetailKey(envId, imageId, node), "used-by"] as const,
+    queryFn: async () => {
+      const res = await api.GET("/api/env/{envId}/images/{imageId}/used-by", {
+        params: { path: { envId, imageId }, query: node ? { node } : undefined },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new ImageLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isImageGone(error) && count < detailRetry.attempts,
+    refetchInterval: DETAIL_REFETCH_MS,
+  });
+}

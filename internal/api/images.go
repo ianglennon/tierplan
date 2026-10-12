@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -47,6 +48,42 @@ type ImageDetailInput struct {
 	EnvironmentPathInput
 	ImageID string `path:"imageId" pattern:"^sha256:[a-f0-9]{64}$" maxLength:"71" doc:"The image ID: sha256: and 64 hexadecimal characters"`
 	Node    string `query:"node" maxLength:"128" doc:"Read only this node: its nodeId, as the nodes of the detail answer name it. Left out, every reporting node that has the image is read (inspect and history read the first of them)"`
+}
+
+// ImageItem is one row of the images list. It carries no labels, variables or mounts.
+type ImageItem struct {
+	Node             string   `json:"node" doc:"The node that holds the image"`
+	NodeID           string   `json:"nodeId" doc:"The ID of that node"`
+	ID               string   `json:"id" doc:"The full image ID"`
+	ShortID          string   `json:"shortId" doc:"The first 12 characters of the ID, without the sha256: prefix"`
+	RepoTags         []string `json:"repoTags" doc:"repository:tag for each tag, or [\"<none>\"] for an untagged image"`
+	Dangling         bool     `json:"dangling" doc:"True when the image has no tag"`
+	Size             int64    `json:"size" doc:"Size in bytes"`
+	Created          string   `json:"created,omitempty" format:"date-time"`
+	UsedByContainers int      `json:"usedByContainers" doc:"Containers on this node, running or not, created from this image ID. Counted from the containers Bayplan reads, never from the engine's own per-image count, which a list does not compute"`
+	UsedByServices   int      `json:"usedByServices" doc:"Swarm services whose spec names this image, by pinned digest else by repository and tag, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts for the image on every node. Always 0 off a swarm"`
+	ReadOnly         bool     `json:"readOnly" doc:"True when the host of this node is read-only, so no change to its images will be accepted"`
+}
+
+// ImageListBody is a capped list of images.
+type ImageListBody struct {
+	Items        []ImageItem `json:"items" doc:"At most 500 rows"`
+	Total        int         `json:"total" doc:"How many there are, whatever the cap"`
+	Truncated    bool        `json:"truncated" doc:"True when total is more than the rows returned"`
+	Nodes        []string    `json:"nodes" doc:"The nodes that answered, for the node filter"`
+	NotReporting []string    `json:"notReporting" doc:"Nodes that should have answered and did not, so these rows are not the whole cluster"`
+}
+
+// ImageListOutput wraps ImageListBody for huma.
+type ImageListOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ImageListBody
+}
+
+// ImageUsedByOutput wraps ImageUsedByBody for huma.
+type ImageUsedByOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         ImageUsedByBody
 }
 
 // ImageNameBody is one name of an image.
@@ -123,6 +160,61 @@ func RegisterImages(r *httpx.Router, d ImagesDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
+	problems := problemResponses(r)
+	httpx.Register(r, huma.Operation{
+		OperationID: "listImages", Method: http.MethodGet, Path: "/api/env/{envId}/images",
+		Summary: "List the images of an environment",
+		Description: "Newest first, ties by image ID. An untagged image is listed as <none> and marked dangling. On a swarm every node's images, each with its node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. " +
+			"Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). " +
+			"503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. " +
+			"Needs images.read (Viewer) on the environment. Reads are not audited.",
+		Tags: []string{"environments"}, Responses: maps.Clone(problems),
+	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *NodeFilterInput) (*ImageListOutput, error) {
+			agg, _, err := d.Aggregator.Snapshot(ctx, in.EnvID)
+			if err != nil {
+				return nil, snapshotProblem(d.Log, in.EnvID, err)
+			}
+			readOnly := map[string]bool{}
+			for _, n := range agg.Nodes {
+				readOnly[n.ID] = n.ReadOnly
+			}
+			use := imageUsageOf(ctx, d.Clusters, in.EnvID, agg)
+			rows := filterNode(agg.Images, in.Node, func(i envs.ImageRow) string { return i.Node })
+			items, total, truncated := capRows(rows, func(i envs.ImageRow) ImageItem {
+				return ImageItem{
+					Node: i.Node, NodeID: i.NodeID, ID: i.ID, ShortID: shortImageID(i.ID), RepoTags: i.RepoTags,
+					Dangling: isDangling(i.RepoTags), Size: i.Size, Created: rfc3339(i.Created),
+					UsedByContainers: len(use.containersOf(i.NodeID, i.ID)), UsedByServices: len(use.servicesOf(i.ImageRow)),
+					ReadOnly: readOnly[i.NodeID],
+				}
+			})
+			return &ImageListOutput{CacheControl: "no-store", Body: ImageListBody{
+				Items: items, Total: total, Truncated: truncated, Nodes: reportingNodes(agg), NotReporting: agg.NotReporting,
+			}}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "imageUsedBy", Method: http.MethodGet, Path: "/api/env/{envId}/images/{imageId}/used-by",
+		Summary: "What uses one image",
+		Description: "The containers, running or stopped, on the nodes that hold the image, matched by image ID on their own node, then the swarm services whose spec names it: " +
+			"matched by pinned digest against the image's repo digests, else by normalised repository and tag, and counted even with no tasks (state no_tasks). " +
+			"Each item says how it was matched (image_id, tag or digest). The image is named as the detail route names it, with the same rules and problems (422 for an ID of the wrong shape, 404 image_not_found when no reporting node holds it, 503 node_unavailable when node is not a node of the environment). " +
+			"Needs images.read (Viewer) on the environment. Reads are not audited.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *ImageDetailInput) (*ImageUsedByOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := imageUsedBy(ctx, d, env.ID, in)
+			if err != nil {
+				return nil, err
+			}
+			return &ImageUsedByOutput{CacheControl: "no-store", Body: body}, nil
+		})
+
 	httpx.Register(r, huma.Operation{
 		OperationID: "getImage", Method: http.MethodGet, Path: "/api/env/{envId}/images/{imageId}",
 		Summary: "One image: its names, details, labels and the nodes that have it",
@@ -196,6 +288,39 @@ func RegisterImages(r *httpx.Router, d ImagesDeps) {
 			}
 			return &ImageHistoryOutput{CacheControl: "no-store", Body: body}, nil
 		})
+}
+
+// isDangling says whether an image's tags are only the placeholder of an untagged image.
+func isDangling(tags []string) bool {
+	return !slices.ContainsFunc(tags, func(t string) bool { return t != "" && t != "<none>" && t != "<none>:<none>" })
+}
+
+// imageUsedBy lists what uses the image, from the snapshot the list is built from, so the
+// tab and the list's counts agree.
+func imageUsedBy(ctx context.Context, d ImagesDeps, envID string, in *ImageDetailInput) (ImageUsedByBody, error) {
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return ImageUsedByBody{}, snapshotProblem(d.Log, envID, err)
+	}
+	var rows []envs.ImageRow
+	known := in.Node == ""
+	for _, n := range agg.Nodes {
+		known = known || n.ID == in.Node
+	}
+	if !known {
+		return ImageUsedByBody{}, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+	}
+	for _, row := range agg.Images {
+		if row.ID == in.ImageID && (in.Node == "" || row.NodeID == in.Node) {
+			rows = append(rows, row)
+		}
+	}
+	if len(rows) == 0 {
+		return ImageUsedByBody{}, httpx.Problem(http.StatusNotFound, problemImageNotFound, "No node has this image. It may have been removed, or its tag may have moved to another image.")
+	}
+	body := imageUsageOf(ctx, d.Clusters, envID, agg).usedBy(rows)
+	body.NotReporting = agg.NotReporting
+	return body, nil
 }
 
 // imageLayers reads the history of the image from the first node that has it, or the node named.

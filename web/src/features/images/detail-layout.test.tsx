@@ -56,6 +56,7 @@ let me: ReturnType<typeof makeMe>;
 let answer: () => Response | Promise<Response>;
 let inspectAnswer: () => Response | Promise<Response>;
 let historyAnswer: () => Response | Promise<Response>;
+let usedByAnswer: () => Response | Promise<Response>;
 let envType: "standalone" | "swarm";
 const defaults = queryClient.getDefaultOptions();
 
@@ -68,6 +69,13 @@ beforeEach(() => {
     Response.json({
       masked: true,
       inspect: { Id: ID, Config: { Env: ["API_KEY=<hidden>"] } },
+    });
+  usedByAnswer = () =>
+    Response.json({
+      items: [],
+      usedByContainers: 0,
+      usedByServices: 0,
+      notReporting: [],
     });
   historyAnswer = () =>
     Response.json({
@@ -144,6 +152,8 @@ beforeEach(() => {
           return inspectAnswer();
         case `/api/env/${ENV}/images/${ID}/history`:
           return historyAnswer();
+        case `/api/env/${ENV}/images/${ID}/used-by`:
+          return usedByAnswer();
         case `/api/env/${ENV}/images/pull-targets`:
           return Response.json({ nodes: [] });
         case `/api/env/${ENV}/images`:
@@ -361,11 +371,104 @@ describe("image Inspect tab", () => {
   });
 });
 
+describe("image usage line", () => {
+  it("says Not in use under the title when nothing uses the image", async () => {
+    renderAt();
+    expect(await screen.findByText("Not in use")).toBeTruthy();
+  });
+
+  it("says what uses it: containers alone off a swarm, both on one", async () => {
+    usedByAnswer = () =>
+      Response.json({ items: [], usedByContainers: 2, usedByServices: 1, notReporting: [] });
+    renderAt();
+    expect(await screen.findByText("Used by 2 containers")).toBeTruthy();
+    cleanup();
+    queryClient.clear();
+    envType = "swarm";
+    renderAt();
+    expect(await screen.findByText("Used by 2 containers, 1 service")).toBeTruthy();
+  });
+
+  it("counts a node's containers in the On nodes card, and a dash where the node lacks the image", async () => {
+    envType = "swarm";
+    answer = () =>
+      Response.json(
+        detail({
+          nodes: [
+            { nodeId: "n1", name: "node-1", present: true, names: ["nginx:1.27"] },
+            { nodeId: "n2", name: "node-2", present: false, names: [] },
+          ],
+        }),
+      );
+    const item = (id: string, name: string) => ({
+      kind: "container",
+      id,
+      name,
+      nodeId: "n1",
+      node: "node-1",
+      state: "running",
+      matchedBy: "image_id",
+    });
+    usedByAnswer = () =>
+      Response.json({
+        items: [item("c1", "web"), item("c2", "old")],
+        usedByContainers: 2,
+        usedByServices: 0,
+        notReporting: [],
+      });
+    renderAt();
+    const card = await screen.findByRole("region", { name: "On nodes" });
+    await waitFor(() => {
+      const rows = within(card).getAllByRole("row").slice(1);
+      expect(within(rows[0] as HTMLElement).getByText("2")).toBeTruthy();
+    });
+    const rows = within(card).getAllByRole("row").slice(1);
+    expect(within(rows[1] as HTMLElement).getByText("—")).toBeTruthy();
+  });
+
+  it("leaves the line out when the read fails, and still shows the page", async () => {
+    usedByAnswer = () => Response.json({ title: "x", status: 502 }, { status: 502 });
+    renderAt();
+    expect(await screen.findByRole("heading", { level: 2, name: "nginx:1.27" })).toBeTruthy();
+    expect(screen.queryByText("Not in use")).toBeNull();
+  });
+});
+
+describe("image Used by tab", () => {
+  it("is the second tab and shows what uses the image", async () => {
+    usedByAnswer = () =>
+      Response.json({
+        items: [
+          {
+            kind: "container",
+            id: "c1",
+            name: "web",
+            nodeId: "n1",
+            node: "node-1",
+            state: "exited",
+            matchedBy: "image_id",
+          },
+        ],
+        usedByContainers: 1,
+        usedByServices: 0,
+        notReporting: [],
+      });
+    const router = renderAt(PAGE);
+    fireEvent.click(await screen.findByRole("tab", { name: "Used by" }));
+    await waitFor(() =>
+      expect(decodeURIComponent(router.state.location.pathname)).toBe(
+        `/env/${ENV}/images/${ID}/used-by`,
+      ),
+    );
+    expect(await screen.findByRole("link", { name: "Open container web" })).toBeTruthy();
+  });
+});
+
 describe("image Layers tab", () => {
-  it("is a tab between Overview and Inspect and shows the layers", async () => {
+  it("is a tab between Used by and Inspect and shows the layers", async () => {
     const router = renderAt(PAGE);
     const tabs = (await screen.findAllByRole("tab")).map((tab) => tab.textContent);
-    expect(tabs).toEqual(["Overview", "Layers", "Inspect"]);
+    expect(tabs).toEqual(["Overview", "Used by", "Layers", "Inspect"]);
     fireEvent.click(screen.getByRole("tab", { name: "Layers" }));
     await waitFor(() =>
       expect(decodeURIComponent(router.state.location.pathname)).toBe(

@@ -553,6 +553,8 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 func TestEachListDocumentsItsOwn200Schema(t *testing.T) {
 	r := httpx.New(httpx.Options{})
 	api.RegisterDashboard(r, api.DashboardDeps{})
+	// The images list lives with the image routes (plan 05-15) and keeps its path.
+	api.RegisterImages(r, api.ImagesDeps{})
 	doc := r.API().OpenAPI()
 	for path, want := range map[string]string{
 		"summary":    "EnvironmentSummaryBody",
@@ -843,8 +845,15 @@ type swarmFix struct {
 	m1, m2, w *agentConn
 }
 
-func newSwarmFix(t *testing.T) *swarmFix {
+func newSwarmFix(t *testing.T) *swarmFix { return newSwarmFixWith(t, nil) }
+
+// newSwarmFixWith builds the same swarm and lets tune change each node's engine, by the
+// node's hostname, before it connects.
+func newSwarmFixWith(t *testing.T, tune func(host string, cfg *dockertest.FakeConfig)) *swarmFix {
 	t.Helper()
+	if tune == nil {
+		tune = func(string, *dockertest.FakeConfig) {}
+	}
 	f := newAgentFix(t)
 	// The cluster reader of a real server: the networks routes read the services a
 	// network is mentioned by from it. The router is built again to hear of it.
@@ -854,7 +863,7 @@ func newSwarmFix(t *testing.T) *swarmFix {
 	env := f.srv.NewEnvironment(t, "Swarm")
 	mgr := func(i int) (dockertest.FakeConfig, *wire.Facts) {
 		name := fmt.Sprintf("mgr-%d", i)
-		return dockertest.FakeConfig{
+		cfg := dockertest.FakeConfig{
 			Hostname: name, SwarmState: "active", SwarmControl: true, Nodes: 3, Services: 2,
 			Containers: []dockertest.FakeContainer{{ID: fmt.Sprintf("m%d", i), Names: []string{"/web"}, State: "running"}},
 			// Two services mention the overlay; one of them is scaled to zero.
@@ -870,7 +879,9 @@ func newSwarmFix(t *testing.T) *swarmFix {
 				{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"},
 				{ID: fmt.Sprintf("br%d", i), Name: "bridge", Driver: "bridge", Scope: "local"},
 			},
-		}, &wire.Facts{
+		}
+		tune(name, &cfg)
+		return cfg, &wire.Facts{
 			EngineID: "ENG:" + name, Hostname: name, EngineReachable: true,
 			Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-" + name, ClusterID: "cluster-1", Control: true},
 		}
@@ -884,10 +895,12 @@ func newSwarmFix(t *testing.T) *swarmFix {
 	for i := range 501 {
 		many = append(many, dockertest.FakeContainer{ID: fmt.Sprintf("w%03d", i), Names: []string{fmt.Sprintf("/job-%03d", i)}, State: "running"})
 	}
-	s.w = f.connect(t, env, dockertest.FakeConfig{
+	wcfg := dockertest.FakeConfig{
 		Hostname: "wrk-1", SwarmState: "active", Containers: many,
 		Networks: []dockertest.FakeNetwork{{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"}, {ID: "brw", Name: "bridge", Driver: "bridge", Scope: "local"}},
-	}, &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
+	}
+	tune("wrk-1", &wcfg)
+	s.w = f.connect(t, env, wcfg, &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
 	f.whenState(t, env.ID, "online")
 	return s
 }

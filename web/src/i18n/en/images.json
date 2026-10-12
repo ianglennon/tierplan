@@ -8,12 +8,15 @@
       "tabs": {
         "label": "Image sections",
         "overview": "Overview",
+        "usedBy": "Used by",
         "layers": "Layers",
         "inspect": "Inspect"
       },
       "header": {
         "dangling": "Dangling",
-        "onNodes": "on {{present}}/{{total}} nodes"
+        "onNodes": "on {{present}}/{{total}} nodes",
+        "usedBy": "Used by {{what}}",
+        "notInUse": "Not in use"
       },
       "actions": {
         "pull": "Pull…",
@@ -65,6 +68,7 @@
           "title": "On nodes",
           "columns": {
             "node": "Node",
+            "containers": "Containers",
             "names": "Names on this node"
           },
           "absent": "Not on this node",
@@ -74,6 +78,32 @@
           "title": "Labels",
           "label": "Labels",
           "empty": "No labels."
+        }
+      },
+      "usedBy": {
+        "loading": "Loading what uses the image",
+        "loadFailed": "Couldn't load what uses this image. Docker may be unreachable. Try again.",
+        "retry": "Retry",
+        "label": "Containers and services that use the image",
+        "region": "What uses the image",
+        "empty": "Nothing uses this image.",
+        "openContainer": "Open container {{name}}",
+        "noTasks": "Service spec, no tasks",
+        "columns": {
+          "name": "Name",
+          "type": "Type",
+          "node": "Node",
+          "state": "State",
+          "matchedBy": "Matched by"
+        },
+        "type": {
+          "container": "Container",
+          "service": "Service"
+        },
+        "matched": {
+          "image_id": "Image ID",
+          "tag": "Tag",
+          "digest": "Digest"
         }
       },
       "inspect": {
@@ -99,6 +129,19 @@
         },
         "showMore": "Show more",
         "showLess": "Show less"
+      }
+    },
+    "used": {
+      "containers_one": "{{count, number}} container",
+      "containers_other": "{{count, number}} containers",
+      "services_one": "{{count, number}} service",
+      "services_other": "{{count, number}} services",
+      "both": "{{containers}}, {{services}}"
+    },
+    "notInUse": "Not in use",
+    "list": {
+      "columns": {
+        "usedBy": "Used by"
       }
     }
   }

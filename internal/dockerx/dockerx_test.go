@@ -1482,3 +1482,43 @@ func TestClusterDoesNotReportAnotherServicesTasksAsTheAgents(t *testing.T) {
 		t.Errorf("agent tasks = %+v, want only n1's", got.AgentTasks)
 	}
 }
+
+// Image usage inputs (plan 05-15, RES-09, D-28): a container row names its image by ID, an
+// image row carries its repo digests, and a service ref the image its spec names.
+
+func TestSnapshotRowsCarryTheImageIDOfAContainerAndTheRepoDigestsOfAnImage(t *testing.T) {
+	cfg := dockertest.FakeConfig{
+		Containers: []dockertest.FakeContainer{{ID: "c1", Names: []string{"/web"}, Image: "nginx:1.27", ImageID: "sha256:aaaa", State: "exited"}},
+		Images: []dockertest.FakeImage{
+			{ID: "sha256:aaaa", RepoTags: []string{"nginx:1.27"}, RepoDigests: []string{"nginx@sha256:cc", "<none>@<none>"}, Created: 5},
+			{ID: "sha256:bbbb", Created: 4},
+		},
+	}
+	snap, _ := snapshot(t, cfg, false)
+	if got := snap.Containers[0].ImageID; got != "sha256:aaaa" {
+		t.Errorf("container ImageID = %q, want sha256:aaaa (a stopped container too)", got)
+	}
+	if got := snap.Images[0].RepoDigests; !slices.Equal(got, []string{"nginx@sha256:cc"}) {
+		t.Errorf("repo digests = %q, want the one real digest", got)
+	}
+	if got := snap.Images[1].RepoDigests; got == nil || len(got) != 0 {
+		t.Errorf("an image with no digest has %#v, want an empty list and not nil", got)
+	}
+}
+
+func TestServiceRefsNameTheImageOfTheSpec(t *testing.T) {
+	cfg := dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		ServiceRows: []dockertest.FakeService{
+			{ID: "s1", Name: "web", Image: "nginx:1.27@sha256:cc", Mounts: []dockertest.FakeServiceMount{{Type: "volume", Source: "data", Target: "/d"}}},
+			{ID: "s2", Name: "bare"},
+		},
+	}
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).ServiceRefs(context.Background())
+	if err != nil {
+		t.Fatalf("ServiceRefs: %v", err)
+	}
+	if len(got) != 2 || got[1].Image != "nginx:1.27@sha256:cc" || got[0].Image != "" {
+		t.Fatalf("ServiceRefs = %+v, want the image of web and none for bare", got)
+	}
+}

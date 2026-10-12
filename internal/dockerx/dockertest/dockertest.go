@@ -213,6 +213,8 @@ type FakeService struct {
 	// name as the spec wrote it, and Mounts the mounts of its container spec.
 	Networks []string
 	Mounts   []FakeServiceMount
+	// Image is the image the spec names; empty leaves the container spec without one.
+	Image string
 }
 
 // FakeServiceMount is one mount of a service's container spec. Type is "volume",
@@ -264,9 +266,11 @@ type eventSub struct {
 // FakeContainer is one entry of /containers/json. Labels and Mounts exist so a
 // test can prove they never reach a Bayplan response.
 type FakeContainer struct {
-	ID      string
-	Names   []string
-	Image   string
+	ID    string
+	Names []string
+	Image string
+	// ImageID is the ID of the image the container was created from.
+	ImageID string
 	State   string
 	Status  string
 	Created int64
@@ -765,7 +769,7 @@ func (c FakeConfig) containerList(all bool) []container.Summary {
 			continue
 		}
 		s := container.Summary{
-			ID: fc.ID, Names: fc.Names, Image: fc.Image, Created: fc.Created,
+			ID: fc.ID, Names: fc.Names, Image: fc.Image, ImageID: fc.ImageID, Created: fc.Created,
 			State: container.ContainerState(fc.State), Status: fc.Status, Labels: fc.Labels,
 		}
 		for _, p := range fc.Ports {
@@ -813,7 +817,7 @@ func (c FakeConfig) containerList(all bool) []container.Summary {
 func (c FakeConfig) imageList() []image.Summary {
 	out := make([]image.Summary, 0, len(c.Images))
 	for _, fi := range c.Images {
-		out = append(out, image.Summary{ID: fi.ID, RepoTags: fi.RepoTags, Size: fi.Size, Created: fi.Created, Labels: fi.Labels})
+		out = append(out, image.Summary{ID: fi.ID, RepoTags: fi.RepoTags, RepoDigests: fi.RepoDigests, Size: fi.Size, Created: fi.Created, Labels: fi.Labels})
 	}
 	return out
 }
@@ -1165,8 +1169,8 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 		for _, target := range fs.Networks {
 			s.Spec.TaskTemplate.Networks = append(s.Spec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{Target: target})
 		}
-		if len(fs.Mounts) > 0 {
-			s.Spec.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{}
+		if len(fs.Mounts) > 0 || fs.Image != "" {
+			s.Spec.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{Image: fs.Image}
 			for _, m := range fs.Mounts {
 				s.Spec.TaskTemplate.ContainerSpec.Mounts = append(s.Spec.TaskTemplate.ContainerSpec.Mounts, mount.Mount{Type: mount.Type(m.Type), Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
 			}

@@ -6,7 +6,7 @@ import { Link, Outlet } from "@tanstack/react-router";
 import { ChevronDown, Download, Layers } from "lucide-react";
 import { useState } from "react";
 
-import { type ImageDetail, imageQuery, isImageGone } from "@/api/images";
+import { type ImageDetail, imageQuery, imageUsedByQuery, isImageGone } from "@/api/images";
 import { allReadOnly, pullTargetsQuery } from "@/api/pulls";
 import { copyText } from "@/components/copyable-code";
 import { NeedsTooltip } from "@/components/needs-tooltip";
@@ -31,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { IMAGE_TABS } from "@/features/images/tabs";
+import { usedWhat } from "@/features/images/used-by";
 import { PullDialog } from "@/features/pulls/pull-dialog";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
@@ -193,6 +194,9 @@ export function ImageDetailLayout({ envId, imageId, node }: ImageDetailLayoutPro
   const swarm = useEnvIsSwarm(envId);
   const query = useQuery(imageQuery(envId, imageId, node));
   const { data } = query;
+  // What uses the image, for the muted line under the title. It is read with the page and
+  // shares its key, so the events feed refreshes both; a failed read just leaves the line out.
+  const usage = useQuery(imageUsedByQuery(envId, imageId, node)).data;
   const gone = isImageGone(query.error);
   const title = data ? displayTitle(data) : undefined;
   useDocumentTitle(gone ? t("images.detail.gone.heading") : title);
@@ -259,6 +263,15 @@ export function ImageDetailLayout({ envId, imageId, node }: ImageDetailLayoutPro
         ) : (
           <Skeleton className="h-8 w-64" />
         )}
+        {usage ? (
+          <p className="text-sm text-muted-foreground">
+            {usage.usedByContainers + usage.usedByServices > 0
+              ? t("images.detail.header.usedBy", {
+                  what: usedWhat(t, usage.usedByContainers, usage.usedByServices, swarm),
+                })
+              : t("images.detail.header.notInUse")}
+          </p>
+        ) : null}
       </header>
       <Tabs value="" className="gap-4">
         <TabsList

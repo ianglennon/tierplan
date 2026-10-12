@@ -86,6 +86,9 @@ type ServiceRef struct {
 	Volumes []string
 	// VolumeMounts are those volume mounts with where and how each is mounted. Never nil.
 	VolumeMounts []ServiceVolumeMount
+	// Image is the image the service's spec names, as written: a tag, and a digest too once
+	// the swarm has pinned it. Empty for a spec with no container spec.
+	Image string
 }
 
 // ServiceVolumeMount is one volume mount of a service's container spec.
@@ -287,6 +290,7 @@ func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services
 			}
 		}
 		if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {
+			ref.Image = cs.Image
 			for _, m := range cs.Mounts {
 				if m.Type != mount.TypeVolume || m.Source == "" {
 					continue
