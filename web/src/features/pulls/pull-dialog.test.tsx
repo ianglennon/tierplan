@@ -30,6 +30,7 @@ let sent: Sent[];
 let answer: (req: Sent) => Response | Promise<Response>;
 let targetsAnswer: () => Response | Promise<Response>;
 let cancelAnswer: () => Response | Promise<Response>;
+let resolveAnswer: (req: Sent) => Response | Promise<Response>;
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 
@@ -102,6 +103,7 @@ beforeEach(() => {
   targetsAnswer = () => Response.json({}, { status: 404 });
   cancelAnswer = () =>
     Response.json(job([item({ state: "cancelled", code: "cancelled" })], "cancelled"));
+  resolveAnswer = () => Response.json({}, { status: 404 });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   FakeEventSource.reset();
@@ -126,6 +128,8 @@ beforeEach(() => {
         return answer(entry);
       if (entry.path === `/api/env/${ENV}/images/pull-targets`) return targetsAnswer();
       if (entry.path === "/api/pulls/j1/cancel" && req.method === "POST") return cancelAnswer();
+      if (entry.path === `/api/env/${ENV}/registries/resolve` && req.method === "POST")
+        return resolveAnswer(entry);
       return Response.json({}, { status: 404 });
     }),
   );
@@ -139,7 +143,10 @@ afterEach(() => {
   client.clear();
 });
 
-const posts = () => sent.filter((s) => s.method === "POST");
+// The pulls started; the credential preview's checks are POSTs too, and not what is counted.
+const posts = () =>
+  sent.filter((s) => s.method === "POST" && !s.path.endsWith("/registries/resolve"));
+const resolves = () => sent.filter((s) => s.path.endsWith("/registries/resolve"));
 
 function mount(props: Partial<Parameters<typeof PullDialog>[0]> = {}) {
   const onOpenChange = vi.fn();
@@ -652,5 +659,123 @@ describe("PullImageButton", () => {
       fireEvent.click(pullButton());
       expect(screen.getByRole("dialog", { name: "Pull an image" })).toBeTruthy();
     });
+  });
+});
+
+// What the pull will use, before it starts (plan 05-08, IMG-02, D-10): the same resolver
+// the Registries page tester asks, 400 ms after the last keystroke.
+describe("PullDialog (the credential preview)", () => {
+  const resolved = (over: Record<string, unknown> = {}) =>
+    Response.json({
+      input: "nginx",
+      normalized: "docker.io/library/nginx:latest",
+      credential: null,
+      matchedOn: "",
+      considered: [],
+      ...over,
+    });
+  const hub = {
+    id: "h",
+    name: "hub-all",
+    scope: { kind: "instance", envId: null, envName: null },
+    host: "docker.io",
+    prefix: "",
+  };
+  const type = async (ref: string) => {
+    const dialog = await screen.findByRole("dialog", { name: "Pull an image" });
+    fireEvent.change(within(dialog).getByLabelText("Image"), { target: { value: ref } });
+    return dialog;
+  };
+  const patiently = { timeout: 3000 };
+
+  it("shows the reference as it will be pulled and says the pull is anonymous", async () => {
+    resolveAnswer = () => resolved();
+    mount();
+    const dialog = await type("nginx");
+    expect(resolves()).toHaveLength(0); // not before the 400 ms are up
+    await waitFor(
+      () => expect(dialog.textContent).toContain("Pulls docker.io/library/nginx:latest"),
+      patiently,
+    );
+    expect(dialog.textContent).toContain("Credential: anonymous. No stored credential matches.");
+    expect(resolves()).toEqual([
+      { method: "POST", path: `/api/env/${ENV}/registries/resolve`, body: { ref: "nginx" } },
+    ]);
+    expect(posts()).toEqual([]);
+  });
+
+  it("names the credential the pull will use and where it applies", async () => {
+    resolveAnswer = () => resolved({ credential: hub, matchedOn: "hub_fallback" });
+    mount();
+    const dialog = await type("nginx");
+    await waitFor(
+      () => expect(dialog.textContent).toContain("Credential: “hub-all” (Instance)"),
+      patiently,
+    );
+    resolveAnswer = () =>
+      resolved({
+        credential: {
+          ...hub,
+          name: "team",
+          scope: { kind: "environment", envId: ENV, envName: "Lab" },
+        },
+        matchedOn: "prefix",
+      });
+    await type("nginx2");
+    await waitFor(
+      () => expect(dialog.textContent).toContain("Credential: “team” (Lab)"),
+      patiently,
+    );
+  });
+
+  it("asks once, for what was typed last, after the typing stops", async () => {
+    resolveAnswer = () => resolved();
+    mount();
+    await type("n");
+    await type("ng");
+    const dialog = await type("nginx:1.27");
+    await waitFor(() => expect(resolves()).toHaveLength(1), patiently);
+    expect(resolves()[0]?.body).toEqual({ ref: "nginx:1.27" });
+    // Nothing more comes after it.
+    await new Promise((r) => setTimeout(r, 600));
+    expect(resolves()).toHaveLength(1);
+    expect(dialog).toBeTruthy();
+  });
+
+  it("checks a prefilled reference without waiting for a keystroke", async () => {
+    resolveAnswer = () => resolved({ input: "redis:8", normalized: "docker.io/library/redis:8" });
+    mount({ initialRef: "redis:8" });
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(
+      () => expect(dialog.textContent).toContain("Pulls docker.io/library/redis:8"),
+      patiently,
+    );
+  });
+
+  it("shows neither line for a reference the server does not understand, nor for an empty field", async () => {
+    resolveAnswer = () =>
+      Response.json({ type: "ref_invalid", title: "x", status: 422, detail: "d" }, { status: 422 });
+    mount();
+    const dialog = await type("Bad Ref!");
+    await waitFor(() => expect(resolves()).toHaveLength(1), patiently);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(dialog.textContent).not.toContain("Credential:");
+    expect(dialog.textContent).not.toContain("Pulls docker.io");
+    // Clearing the field asks nothing.
+    await type("");
+    await new Promise((r) => setTimeout(r, 600));
+    expect(resolves()).toHaveLength(1);
+  });
+
+  it("shows nothing when the check fails, and the pull can still be started", async () => {
+    resolveAnswer = () => Response.json({ title: "boom", status: 500 }, { status: 500 });
+    mount();
+    const dialog = await type("nginx");
+    await waitFor(() => expect(resolves()).toHaveLength(1), patiently);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(dialog.textContent).not.toContain("Credential:");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
+    await within(dialog).findByRole("heading", { name: /Pulling/ });
+    expect(posts()).toHaveLength(1);
   });
 });
