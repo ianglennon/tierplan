@@ -1,0 +1,171 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+package registry_test
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/store/storetest"
+	"github.com/ianglennon/bayplan/internal/vault"
+)
+
+const longSecret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+
+func newStore(t *testing.T) (*registry.Store, *store.Store, *vault.Vault) {
+	t.Helper()
+	st := storetest.New(t)
+	v, err := vault.New(bytes.Repeat([]byte{9}, 32), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry.NewStore(st, v, func() time.Time { return now }), st, v
+}
+
+func create(t *testing.T, s *registry.Store, mutate func(*registry.CreateInput)) registry.Credential {
+	t.Helper()
+	in := valid()
+	if mutate != nil {
+		mutate(&in)
+	}
+	c, err := s.Create(context.Background(), in, "admin-1", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return c
+}
+
+func sealedOf(t *testing.T, st *store.Store, id string) string {
+	t.Helper()
+	var sealed string
+	if err := st.Read.QueryRow(`SELECT secret_sealed FROM registry_credentials WHERE id = ?`, id).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	return sealed
+}
+
+func TestCreateSealsTheSecretUnderTheCredentialsOwnID(t *testing.T) {
+	s, st, v := newStore(t)
+	c := create(t, s, nil)
+
+	if c.ID == "" || c.Name != "ghcr-acme" || c.Host != "ghcr.io" || c.Prefix != "acme" || c.Username != "bot" || c.Layer() != registry.LayerInstance {
+		t.Errorf("credential = %+v", c)
+	}
+	if c.Last4 != "wxyz" {
+		t.Errorf("Last4 = %q, want wxyz", c.Last4)
+	}
+	if !c.CreatedAt.Equal(now) || !c.UpdatedAt.Equal(now) {
+		t.Errorf("created/updated = %v/%v, want %v", c.CreatedAt, c.UpdatedAt, now)
+	}
+
+	sealed := sealedOf(t, st, c.ID)
+	if strings.Contains(sealed, longSecret) || sealed == "" {
+		t.Fatalf("the stored value is not sealed: %q", sealed)
+	}
+	plain, err := v.Open(vault.ContextRegistryCred+c.ID, sealed)
+	if err != nil || string(plain) != longSecret {
+		t.Fatalf("Open under its own ID = %q, %v", plain, err)
+	}
+	if _, err := v.Open(vault.ContextRegistryCred+"another-credential", sealed); !errors.Is(err, vault.ErrDecrypt) {
+		t.Errorf("Open under another credential's ID: %v, want ErrDecrypt", err)
+	}
+}
+
+func TestCreateKeepsNoLastCharactersOfAShortSecret(t *testing.T) {
+	s, st, _ := newStore(t)
+	short := create(t, s, func(in *registry.CreateInput) { in.Secret = "hunter2hunt" }) // 11 characters
+	long := create(t, s, func(in *registry.CreateInput) { in.Name = "second"; in.Prefix = "other"; in.Secret = "hunter2hunt2" })
+	if short.Last4 != "" || long.Last4 != "unt2" {
+		t.Errorf("Last4 = %q and %q, want an empty one and unt2", short.Last4, long.Last4)
+	}
+	var stored string
+	if err := st.Read.QueryRow(`SELECT secret_last4 FROM registry_credentials WHERE id = ?`, short.ID).Scan(&stored); err != nil || stored != "" {
+		t.Errorf("secret_last4 of a short secret = %q, %v", stored, err)
+	}
+}
+
+func TestGetAndListReturnTheCredentialWithoutAnySecret(t *testing.T) {
+	s, _, _ := newStore(t)
+	a := create(t, s, nil)
+	b := create(t, s, func(in *registry.CreateInput) {
+		in.Name, in.Type, in.Prefix, in.HubFallback, in.Expires = "hub", registry.TypeDockerHub, "", true, "2027-01-31"
+	})
+
+	got, err := s.Get(context.Background(), a.ID)
+	if err != nil || got.ID != a.ID || got.Last4 != "wxyz" {
+		t.Fatalf("Get = %+v, %v", got, err)
+	}
+	if _, err := s.Get(context.Background(), "no-such-id"); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("Get of an unknown ID: %v, want ErrNotFound", err)
+	}
+	list, err := s.List(context.Background())
+	if err != nil || len(list) != 2 {
+		t.Fatalf("List = %+v, %v", list, err)
+	}
+	// By host: docker.io before ghcr.io.
+	if list[0].ID != b.ID || list[1].ID != a.ID {
+		t.Errorf("order = %s, %s", list[0].Name, list[1].Name)
+	}
+	if !list[0].HubFallback || list[0].ExpiresAt == nil || !list[0].ExpiresAt.Equal(time.Date(2027, 1, 31, 23, 59, 59, 0, time.UTC)) {
+		t.Errorf("hub credential = %+v", list[0])
+	}
+}
+
+func TestCreateRefusesADuplicateInTheSameLayer(t *testing.T) {
+	s, _, _ := newStore(t)
+	create(t, s, func(in *registry.CreateInput) { in.Type, in.Prefix, in.HubFallback = registry.TypeDockerHub, "acme", true })
+
+	for _, c := range []struct {
+		name   string
+		mutate func(*registry.CreateInput)
+		want   error
+	}{
+		{"same name", func(in *registry.CreateInput) { in.Type, in.Prefix = registry.TypeGHCR, "elsewhere" }, registry.ErrNameTaken},
+		{"same host and prefix", func(in *registry.CreateInput) { in.Name, in.Type, in.Prefix = "other", registry.TypeDockerHub, "acme" }, registry.ErrHostPrefixTaken},
+		{"a second Hub fallback", func(in *registry.CreateInput) {
+			in.Name, in.Type, in.Prefix, in.HubFallback = "other", registry.TypeDockerHub, "", true
+		}, registry.ErrHubFallbackTaken},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := valid()
+			c.mutate(&in)
+			if _, err := s.Create(context.Background(), in, "admin-1", nil); !errors.Is(err, c.want) {
+				t.Errorf("Create: %v, want %v", err, c.want)
+			}
+		})
+	}
+}
+
+func TestCreateRefusesInvalidInputWithEveryFieldAtFault(t *testing.T) {
+	s, st, _ := newStore(t)
+	_, err := s.Create(context.Background(), registry.CreateInput{Type: registry.TypeGeneric}, "admin-1", nil)
+	var ve *registry.ValidationError
+	if !errors.As(err, &ve) || len(ve.Fields) != 4 {
+		t.Fatalf("Create: %v, want a ValidationError of 4 fields", err)
+	}
+	var n int
+	if err := st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("rows = %d, %v; a refused credential stores nothing", n, err)
+	}
+}
+
+func TestCreateRollsBackWhenTheHookFails(t *testing.T) {
+	s, st, _ := newStore(t)
+	boom := errors.New("audit write failed")
+	_, err := s.Create(context.Background(), valid(), "admin-1", func(context.Context, *sql.Tx, registry.Credential) error { return boom })
+	if !errors.Is(err, boom) {
+		t.Fatalf("Create: %v, want the hook's error", err)
+	}
+	var n int
+	if err := st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("rows = %d, %v; a credential must not exist without its audit row", n, err)
+	}
+}
