@@ -4651,6 +4651,17 @@
       "PullStartRequest": {
         "additionalProperties": false,
         "properties": {
+          "nodeIds": {
+            "description": "The nodes to pull on, by the nodeId that pull-targets lists. Leave it out to pull on every node. An empty list is 422 nodes_required and an ID that is not a node of this environment is 422 nodes_unknown",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ref": {
             "description": "The image to pull, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image",
             "maxLength": 512,
@@ -4660,6 +4671,68 @@
         },
         "required": [
           "ref"
+        ],
+        "type": "object"
+      },
+      "PullTargetBody": {
+        "additionalProperties": false,
+        "properties": {
+          "arch": {
+            "description": "The node's CPU architecture by the registry's name: amd64, arm64, arm/v7. Empty when the node has not said",
+            "type": "string"
+          },
+          "name": {
+            "description": "The node's name",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node's ID: what nodeIds in a pull names, and the nodeId of its rows in the lists",
+            "type": "string"
+          },
+          "reachable": {
+            "description": "False when the node's agent is not connected to Bayplan now",
+            "type": "boolean"
+          },
+          "readOnly": {
+            "description": "True when the host's owner made it read-only: a pull there fails with host_read_only",
+            "type": "boolean"
+          },
+          "role": {
+            "description": "manager or worker on a swarm, standalone on a single host",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "name",
+          "role",
+          "arch",
+          "readOnly",
+          "reachable"
+        ],
+        "type": "object"
+      },
+      "PullTargetsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "nodes": {
+            "description": "Every node, by name",
+            "items": {
+              "$ref": "#/components/schemas/PullTargetBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "swarm": {
+            "description": "True when the environment is a swarm and a pull may name nodes",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "swarm",
+          "nodes"
         ],
         "type": "object"
       },
@@ -9191,7 +9264,7 @@
     },
     "/api/env/{envId}/images/pull": {
       "post": {
-        "description": "Starts a pull of the image on every node of the environment and answers 202 with the job ID at once; the pull goes on if the browser closes. The reference is normalised first: nginx:1.27 becomes docker.io/library/nginx:1.27 and no tag means latest. An unparsable reference is 422 ref_invalid and starts nothing. At most 5 pulls of one user run at once (429 too_many_pulls). Each node pulls once, is never retried, and writes one image.pulled audit row. Needs images.pull (Operator) on the environment.",
+        "description": "Starts a pull of the image on every node of the environment, or on the nodes named in nodeIds, and answers 202 with the job ID at once; the pull goes on if the browser closes. A node that is not connected to Bayplan gets an item of its own that fails with node_unreachable, and a node whose host is read-only fails with host_read_only without a call to its engine: neither stops the others. The reference is normalised first: nginx:1.27 becomes docker.io/library/nginx:1.27 and no tag means latest. An unparsable reference is 422 ref_invalid and starts nothing. At most 5 pulls of one user run at once (429 too_many_pulls). Each node pulls once, is never retried, and writes one image.pulled audit row. Needs images.pull (Operator) on the environment.",
         "operationId": "startPull",
         "parameters": [
           {
@@ -9244,7 +9317,58 @@
             "description": "Error"
           }
         },
-        "summary": "Pull an image on every node of an environment",
+        "summary": "Pull an image on the nodes of an environment",
+        "tags": [
+          "images"
+        ]
+      }
+    },
+    "/api/env/{envId}/images/pull-targets": {
+      "get": {
+        "description": "Every node of the environment by name, with its role, its architecture by the registry's names (amd64, arm64), whether its host is read-only and whether it is connected to Bayplan now. A node whose agent is not connected is listed with reachable false. swarm is true when the environment is a swarm. Needs images.read.",
+        "operationId": "listPullTargets",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullTargetsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The nodes a pull can run on",
         "tags": [
           "images"
         ]

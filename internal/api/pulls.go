@@ -42,10 +42,15 @@ const (
 	credentialAnonymous = "anonymous"
 
 	problemRefInvalid     = "ref_invalid"
+	problemNodesUnknown   = "nodes_unknown"
+	problemNodesRequired  = "nodes_required"
 	problemTooManyPulls   = "too_many_pulls"
 	problemPullNotFound   = "pull_not_found"
 	problemJobsUnavail    = "jobs_unavailable"
 	problemTooManyStreams = "too_many_streams"
+
+	// maxPullNodes bounds the nodes one pull may name.
+	maxPullNodes = 128
 
 	// maxPullLayers bounds the layers one item lists; an image has a few dozen.
 	maxPullLayers = 256
@@ -97,7 +102,8 @@ type PullsDeps struct {
 
 // PullStartRequest is the body of POST /api/env/{envId}/images/pull.
 type PullStartRequest struct {
-	Ref string `json:"ref" minLength:"1" maxLength:"512" doc:"The image to pull, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image"`
+	Ref     string   `json:"ref" minLength:"1" maxLength:"512" doc:"The image to pull, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image"`
+	NodeIDs []string `json:"nodeIds,omitempty" maxItems:"128" doc:"The nodes to pull on, by the nodeId that pull-targets lists. Leave it out to pull on every node. An empty list is 422 nodes_required and an ID that is not a node of this environment is 422 nodes_unknown"`
 }
 
 // PullStartInput is the path and body of the start route.
@@ -172,6 +178,28 @@ type PullJobBody struct {
 	Items      []PullItemBody               `json:"items" doc:"One entry per node, in the order the nodes were named"`
 }
 
+// PullTargetBody is a node a pull can run on.
+type PullTargetBody struct {
+	NodeID    string `json:"nodeId" doc:"The node's ID: what nodeIds in a pull names, and the nodeId of its rows in the lists"`
+	Name      string `json:"name" doc:"The node's name"`
+	Role      string `json:"role" doc:"manager or worker on a swarm, standalone on a single host"`
+	Arch      string `json:"arch" doc:"The node's CPU architecture by the registry's name: amd64, arm64, arm/v7. Empty when the node has not said"`
+	ReadOnly  bool   `json:"readOnly" doc:"True when the host's owner made it read-only: a pull there fails with host_read_only"`
+	Reachable bool   `json:"reachable" doc:"False when the node's agent is not connected to Bayplan now"`
+}
+
+// PullTargetsBody is the answer to the targets route.
+type PullTargetsBody struct {
+	Swarm bool             `json:"swarm" doc:"True when the environment is a swarm and a pull may name nodes"`
+	Nodes []PullTargetBody `json:"nodes" doc:"Every node, by name"`
+}
+
+// PullTargetsOutput wraps PullTargetsBody for huma.
+type PullTargetsOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         PullTargetsBody
+}
+
 // PullJobInput is the path of the read route.
 type PullJobInput struct {
 	JobID string `path:"jobId" doc:"The pull job ID"`
@@ -205,8 +233,9 @@ func RegisterPulls(r *httpx.Router, d PullsDeps) {
 
 	httpx.Register(r, huma.Operation{
 		OperationID: "startPull", Method: http.MethodPost, Path: "/api/env/{envId}/images/pull",
-		Summary: "Pull an image on every node of an environment",
-		Description: "Starts a pull of the image on every node of the environment and answers 202 with the job ID at once; the pull goes on if the browser closes. " +
+		Summary: "Pull an image on the nodes of an environment",
+		Description: "Starts a pull of the image on every node of the environment, or on the nodes named in nodeIds, and answers 202 with the job ID at once; the pull goes on if the browser closes. " +
+			"A node that is not connected to Bayplan gets an item of its own that fails with node_unreachable, and a node whose host is read-only fails with host_read_only without a call to its engine: neither stops the others. " +
 			"The reference is normalised first: nginx:1.27 becomes docker.io/library/nginx:1.27 and no tag means latest. " +
 			"An unparsable reference is 422 ref_invalid and starts nothing. At most 5 pulls of one user run at once (429 too_many_pulls). " +
 			"Each node pulls once, is never retried, and writes one image.pulled audit row. Needs images.pull (Operator) on the environment.",
@@ -214,6 +243,17 @@ func RegisterPulls(r *httpx.Router, d PullsDeps) {
 	}, rbac.Requirement{Perm: rbac.PermImagesPull, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *PullStartInput) (*PullStartOutput, error) {
 			return startPull(ctx, d, in)
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listPullTargets", Method: http.MethodGet, Path: "/api/env/{envId}/images/pull-targets",
+		Summary: "The nodes a pull can run on",
+		Description: "Every node of the environment by name, with its role, its architecture by the registry's names (amd64, arm64), whether its host is read-only and whether it is connected to Bayplan now. " +
+			"A node whose agent is not connected is listed with reachable false. swarm is true when the environment is a swarm. Needs images.read.",
+		Tags: []string{"images"},
+	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *EnvironmentPathInput) (*PullTargetsOutput, error) {
+			return listPullTargets(ctx, d, in)
 		})
 
 	httpx.Register(r, huma.Operation{
@@ -273,17 +313,35 @@ func startPull(ctx context.Context, d PullsDeps, in *PullStartInput) (*PullStart
 	if err != nil {
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRefInvalid, "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.")
 	}
+	if in.Body.NodeIDs != nil && len(in.Body.NodeIDs) == 0 {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemNodesRequired, "Choose at least one node.")
+	}
 	agg, _, err := d.Aggregator.Snapshot(ctx, env.ID)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, env.ID, err)
 	}
-	nodes := slices.Clone(agg.Nodes)
+	nodes := pullCandidates(agg)
 	if len(nodes) == 0 {
 		return nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "No node of this environment is connected to Bayplan.")
 	}
-	slices.SortFunc(nodes, func(a, b envs.NodeRef) int {
-		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
-	})
+	if in.Body.NodeIDs != nil {
+		// Only this environment's own nodes may be named, and only by ID (T-05-13).
+		chosen := make(map[string]bool, len(in.Body.NodeIDs))
+		for _, id := range in.Body.NodeIDs {
+			chosen[id] = true
+		}
+		var picked []envs.NodeRef
+		for _, n := range nodes {
+			if chosen[n.ID] {
+				picked = append(picked, n)
+				delete(chosen, n.ID)
+			}
+		}
+		if len(chosen) > 0 {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemNodesUnknown, "One of the chosen nodes is not a node of this environment. Reload the page and choose again.")
+		}
+		nodes = picked
+	}
 
 	spec := jobs.Spec{
 		Kind: pullJobKind, EnvID: env.ID, Owner: pullOwner(p),
@@ -314,6 +372,43 @@ func startPull(ctx context.Context, d PullsDeps, in *PullStartInput) (*PullStart
 	return &PullStartOutput{CacheControl: "no-store", Body: body}, nil
 }
 
+// pullCandidates are the nodes a pull may run on, by name: those that answered and those
+// that did not, so a node that is down gets an item of its own that fails honestly and a
+// pull that names every node leaves none out.
+func pullCandidates(agg envs.Aggregate) []envs.NodeRef {
+	nodes := slices.Clone(agg.Nodes)
+	for _, u := range agg.Unreachable {
+		if !slices.ContainsFunc(nodes, func(n envs.NodeRef) bool { return n.ID == u.ID }) {
+			nodes = append(nodes, u)
+		}
+	}
+	slices.SortFunc(nodes, func(a, b envs.NodeRef) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
+	})
+	return nodes
+}
+
+// listPullTargets lists the nodes of the environment with what the node chooser shows.
+func listPullTargets(ctx context.Context, d PullsDeps, in *EnvironmentPathInput) (*PullTargetsOutput, error) {
+	agg, _, err := d.Aggregator.Snapshot(ctx, in.EnvID)
+	if err != nil {
+		return nil, snapshotProblem(d.Log, in.EnvID, err)
+	}
+	reachable := make(map[string]bool, len(agg.Nodes))
+	for _, n := range agg.Nodes {
+		reachable[n.ID] = true
+	}
+	nodes := pullCandidates(agg)
+	body := PullTargetsBody{Nodes: make([]PullTargetBody, 0, len(nodes))}
+	for _, n := range nodes {
+		body.Swarm = body.Swarm || n.Role == "manager" || n.Role == "worker" || strings.HasPrefix(n.Role, "swarm")
+		body.Nodes = append(body.Nodes, PullTargetBody{
+			NodeID: n.ID, Name: n.Name, Role: n.Role, Arch: n.Arch, ReadOnly: n.ReadOnly, Reachable: reachable[n.ID],
+		})
+	}
+	return &PullTargetsOutput{CacheControl: "no-store", Body: body}, nil
+}
+
 // pullRun is one pull job: the same reference on each of the nodes.
 type pullRun struct {
 	d         PullsDeps
@@ -335,6 +430,12 @@ func (pr *pullRun) run(ctx context.Context, r *jobs.Reporter) {
 	g.SetLimit(bulkParallel)
 	for _, n := range pr.nodes {
 		g.Go(func() error {
+			if n.ReadOnly {
+				// Named at once and never called: WriteOnNode would refuse it too, as the
+				// backstop (D-30).
+				pr.finish(r, n, dockerx.PullResult{}, codeHostReadOnly)
+				return nil
+			}
 			release, err := lim.acquire(ctx, n.ID)
 			if err != nil {
 				pr.finish(r, n, dockerx.PullResult{}, dockerx.PullCodeCancelled)

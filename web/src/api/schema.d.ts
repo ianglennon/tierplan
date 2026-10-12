@@ -702,10 +702,30 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Pull an image on every node of an environment
-         * @description Starts a pull of the image on every node of the environment and answers 202 with the job ID at once; the pull goes on if the browser closes. The reference is normalised first: nginx:1.27 becomes docker.io/library/nginx:1.27 and no tag means latest. An unparsable reference is 422 ref_invalid and starts nothing. At most 5 pulls of one user run at once (429 too_many_pulls). Each node pulls once, is never retried, and writes one image.pulled audit row. Needs images.pull (Operator) on the environment.
+         * Pull an image on the nodes of an environment
+         * @description Starts a pull of the image on every node of the environment, or on the nodes named in nodeIds, and answers 202 with the job ID at once; the pull goes on if the browser closes. A node that is not connected to Bayplan gets an item of its own that fails with node_unreachable, and a node whose host is read-only fails with host_read_only without a call to its engine: neither stops the others. The reference is normalised first: nginx:1.27 becomes docker.io/library/nginx:1.27 and no tag means latest. An unparsable reference is 422 ref_invalid and starts nothing. At most 5 pulls of one user run at once (429 too_many_pulls). Each node pulls once, is never retried, and writes one image.pulled audit row. Needs images.pull (Operator) on the environment.
          */
         post: operations["startPull"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/pull-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The nodes a pull can run on
+         * @description Every node of the environment by name, with its role, its architecture by the registry's names (amd64, arm64), whether its host is read-only and whether it is connected to Bayplan now. A node whose agent is not connected is listed with reachable false. swarm is true when the environment is a swarm. Needs images.read.
+         */
+        get: operations["listPullTargets"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3935,8 +3955,30 @@ export interface components {
             ref: string;
         };
         PullStartRequest: {
+            /** @description The nodes to pull on, by the nodeId that pull-targets lists. Leave it out to pull on every node. An empty list is 422 nodes_required and an ID that is not a node of this environment is 422 nodes_unknown */
+            nodeIds?: string[] | null;
             /** @description The image to pull, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image */
             ref: string;
+        };
+        PullTargetBody: {
+            /** @description The node's CPU architecture by the registry's name: amd64, arm64, arm/v7. Empty when the node has not said */
+            arch: string;
+            /** @description The node's name */
+            name: string;
+            /** @description The node's ID: what nodeIds in a pull names, and the nodeId of its rows in the lists */
+            nodeId: string;
+            /** @description False when the node's agent is not connected to Bayplan now */
+            reachable: boolean;
+            /** @description True when the host's owner made it read-only: a pull there fails with host_read_only */
+            readOnly: boolean;
+            /** @description manager or worker on a swarm, standalone on a single host */
+            role: string;
+        };
+        PullTargetsBody: {
+            /** @description Every node, by name */
+            nodes: components["schemas"]["PullTargetBody"][] | null;
+            /** @description True when the environment is a swarm and a pull may name nodes */
+            swarm: boolean;
         };
         PutBackupScheduleInputBody: {
             /** @description Turn scheduled backups on or off */
@@ -6254,6 +6296,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PullStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listPullTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullTargetsBody"];
                 };
             };
             /** @description Error */
