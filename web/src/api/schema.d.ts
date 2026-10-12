@@ -1534,6 +1534,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/registries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the registry credentials the signed-in user may see
+         * @description An instance admin sees every credential. Anyone who holds images.read on at least one environment sees the instance credentials, and an environment's own credentials when they can read that environment; canManage says whether they may change a credential. A caller with no images.read anywhere gets an empty list. No secret is ever included.
+         */
+        get: operations["listCredentials"];
+        put?: never;
+        /**
+         * Add an instance registry credential
+         * @description Stores a sign-in for a registry host and an optional namespace, used for pulls and tag browsing on every environment. The secret is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes. Audited as registry.credential_created without the secret.
+         */
+        post: operations["createInstanceCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/registries/{credentialId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one registry credential
+         * @description The credential as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 credential_not_found.
+         */
+        get: operations["getCredential"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -2836,6 +2880,103 @@ export interface components {
             email?: string;
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
+        };
+        CredentialBody: {
+            /** @description Whether the caller may change or delete it */
+            canManage: boolean;
+            /**
+             * Format: date-time
+             * @description When it was added
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description The end of the last day it is valid; null when it does not expire
+             */
+            expiresAt: string | null;
+            /** @description The registry host, lower case, with a port if it has one */
+            host: string;
+            /** @description Whether it is used for every Docker Hub pull no more specific credential matches */
+            hubFallback: boolean;
+            /** @description The credential's ID */
+            id: string;
+            /** @description The last 4 characters of the secret, or empty when the secret is shorter than 12 characters. The page shows •••• before it */
+            last4: string;
+            /** @description The last sign-in failure with it; null when there was none */
+            lastFailure: components["schemas"]["CredentialFailureBody"] | null;
+            /** @description The last test of the credential; null when it was never tested */
+            lastTest: components["schemas"]["CredentialTestBody"] | null;
+            /** @description Its name, unique within its scope */
+            name: string;
+            /** @description The namespace it covers; empty for the whole registry */
+            prefix: string;
+            /** @description Where it applies */
+            scope: components["schemas"]["CredentialScopeBody"];
+            /**
+             * @description The registry preset
+             * @enum {string}
+             */
+            type: "dockerhub" | "ghcr" | "gitlab" | "generic";
+            /**
+             * Format: date-time
+             * @description When it was last changed
+             */
+            updatedAt: string;
+            /** @description The registry user name */
+            username: string;
+        };
+        CredentialFailureBody: {
+            /**
+             * Format: date-time
+             * @description When it failed
+             */
+            at: string;
+            /** @description A stable code, like unauthorized or denied */
+            code: string;
+        };
+        CredentialListBody: {
+            /** @description Instance credentials first, then each environment's, by host and prefix */
+            items: components["schemas"]["CredentialBody"][] | null;
+        };
+        CredentialRequest: {
+            /** @description An optional day, YYYY-MM-DD. It lasts to the end of that day, UTC. 422 expiry_invalid, and expiry_past for a day that has gone */
+            expires?: string;
+            /** @description The registry host, with a port if it has one, like registry.example.org:5000. Ignored for dockerhub and ghcr, registry.gitlab.com when left out for gitlab, required for generic: 422 host_required or host_invalid. No scheme and no path */
+            host?: string;
+            /** @description Use this credential for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken) */
+            hubFallback?: boolean;
+            /** @description What the credential is called, unique among the instance credentials. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
+            name?: string;
+            /** @description The namespace the credential covers, like acme or acme/team: lower-case path segments with no slash at either end. Empty covers the whole registry. 422 prefix_invalid, and hub_prefix_required for docker.io with neither a prefix nor hubFallback */
+            prefix?: string;
+            /** @description The password or token. It is sealed with the vault and never returned by any route; only its last 4 characters can be shown, and only when it has 12 or more. 422 secret_required */
+            secret?: string;
+            /** @description dockerhub, ghcr, gitlab or generic. The first three fill in the host; 422 type_invalid for anything else */
+            type?: string;
+            /** @description The registry user name; 422 username_required */
+            username?: string;
+        };
+        CredentialScopeBody: {
+            /** @description The environment of an environment credential; null for an instance credential */
+            envId: string | null;
+            /** @description The name of that environment; null for an instance credential */
+            envName: string | null;
+            /**
+             * @description instance: every environment. environment: one environment only
+             * @enum {string}
+             */
+            kind: "instance" | "environment";
+        };
+        CredentialTestBody: {
+            /**
+             * Format: date-time
+             * @description When it was tested
+             */
+            at: string;
+            /** @description A short sentence about the outcome. Never the secret */
+            detail: string;
+            /** @description Whether the registry accepted it */
+            ok: boolean;
         };
         DeleteUserInputBody: {
             /** @description Automations the user owns and who takes each over. Whatever is not listed is paused as owner deleted */
@@ -8007,6 +8148,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PullJobBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createInstanceCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialBody"];
                 };
             };
             /** @description Error */

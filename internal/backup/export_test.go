@@ -36,6 +36,8 @@ type exportFixture struct {
 	dir  string // the work directory
 	// caSealed is the CA key's ciphertext under the live key, as stored.
 	caSealed string
+	// credSealed is a registry credential's secret under the live key, as stored.
+	credSealed string
 }
 
 func newExportFixture(t *testing.T) *exportFixture {
@@ -59,6 +61,12 @@ func newExportFixture(t *testing.T) *exportFixture {
 	}
 	f.caSealed = sealed
 	f.exec(t, `INSERT INTO env_cas (env_id, cert_pem, key_sealed, created_at) VALUES ('env-1', 'pem', ?, 1)`, sealed)
+	f.credSealed, err = live.Seal(vault.ContextRegistryCred+"cred-1", []byte("registry token value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.exec(t, `INSERT INTO registry_credentials (id, env_id, name, type, host, prefix, username, secret_sealed, secret_last4, hub_fallback, created_at, updated_at, created_by)
+		VALUES ('cred-1', NULL, 'ghcr-acme', 'ghcr', 'ghcr.io', 'acme', 'bot', ?, '', 0, 1, 1, 'u1')`, f.credSealed)
 	for range 3 {
 		f.record(t)
 	}
@@ -326,6 +334,9 @@ func TestExportSecureDeleteLeavesNoResidueOfExcludedRows(t *testing.T) {
 	if bytes.Contains(o.dbBytes, []byte(f.caSealed)) {
 		t.Error("the live-key ciphertext of the CA key is in the backup's database bytes")
 	}
+	if bytes.Contains(o.dbBytes, []byte(f.credSealed)) {
+		t.Error("the live-key ciphertext of a registry credential's secret is in the backup's database bytes")
+	}
 }
 
 func TestExportKeyOpensEverySealedValueAndTheLiveKeyOpensNone(t *testing.T) {
@@ -345,8 +356,11 @@ func TestExportKeyOpensEverySealedValueAndTheLiveKeyOpensNone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ca, sched string
+	var ca, sched, cred string
 	if err := o.db.QueryRow(`SELECT key_sealed FROM env_cas WHERE env_id = 'env-1'`).Scan(&ca); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.db.QueryRow(`SELECT secret_sealed FROM registry_credentials WHERE id = 'cred-1'`).Scan(&cred); err != nil {
 		t.Fatal(err)
 	}
 	if err := o.db.QueryRow(`SELECT passphrase_sealed FROM backup_schedule WHERE id = 1`).Scan(&sched); err != nil {
@@ -357,6 +371,12 @@ func TestExportKeyOpensEverySealedValueAndTheLiveKeyOpensNone(t *testing.T) {
 	}
 	if plain, err := export.Open(vault.ContextBackupSchedule, sched); err != nil || string(plain) != "scheduled passphrase" {
 		t.Fatalf("schedule passphrase under the export key = %q, %v", plain, err)
+	}
+	if plain, err := export.Open(vault.ContextRegistryCred+"cred-1", cred); err != nil || string(plain) != "registry token value" {
+		t.Fatalf("registry credential secret under the export key = %q, %v", plain, err)
+	}
+	if _, err := f.live.Open(vault.ContextRegistryCred+"cred-1", cred); !errors.Is(err, vault.ErrUnknownKey) {
+		t.Fatalf("the live key opens the backup's registry credential secret: %v", err)
 	}
 	if _, err := f.live.Open(vault.ContextAgentCA+"env-1", ca); !errors.Is(err, vault.ErrUnknownKey) {
 		t.Fatalf("the live key opens the backup's CA key: %v", err)

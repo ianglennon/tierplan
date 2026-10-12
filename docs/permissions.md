@@ -41,6 +41,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `networks.connect` | environment | no | yes | yes | yes | no | Connect and disconnect containers and networks |
 | `networks.manage` | environment | no | no | yes | yes | no | Create and delete networks |
 | `networks.read` | environment | yes | yes | yes | yes | no | View networks |
+| `registries.instance` | global | no | no | no | yes | yes | Manage registry credentials that apply to every environment |
 | `secrets.reveal` | environment | no | extra | yes | yes | yes | Reveal secret values |
 | `settings.read` | global | no | no | no | yes | no | View settings |
 | `settings.write` | global | no | no | no | yes | no | Change settings |

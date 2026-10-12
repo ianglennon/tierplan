@@ -146,6 +146,9 @@ const (
 	ActionVolumeCreated              = "volume.created"
 	ActionVolumeRemoved              = "volume.removed"
 	ActionImagePulled                = "image.pulled"
+	ActionRegistryCredentialCreated  = "registry.credential_created" //nolint:gosec // G101: an action name, not a credential
+	ActionRegistryCredentialUpdated  = "registry.credential_updated" //nolint:gosec // G101: an action name, not a credential
+	ActionRegistryCredentialDeleted  = "registry.credential_deleted" //nolint:gosec // G101: an action name, not a credential
 	ActionLogsViewed                 = "logs.viewed"
 	ActionLogsDownloaded             = "logs.downloaded"
 	ActionShellOpened                = "shell.opened"

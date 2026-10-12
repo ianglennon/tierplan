@@ -1659,6 +1659,255 @@
         ],
         "type": "object"
       },
+      "CredentialBody": {
+        "additionalProperties": false,
+        "properties": {
+          "canManage": {
+            "description": "Whether the caller may change or delete it",
+            "type": "boolean"
+          },
+          "createdAt": {
+            "description": "When it was added",
+            "format": "date-time",
+            "type": "string"
+          },
+          "expiresAt": {
+            "description": "The end of the last day it is valid; null when it does not expire",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "description": "The registry host, lower case, with a port if it has one",
+            "type": "string"
+          },
+          "hubFallback": {
+            "description": "Whether it is used for every Docker Hub pull no more specific credential matches",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The credential's ID",
+            "type": "string"
+          },
+          "last4": {
+            "description": "The last 4 characters of the secret, or empty when the secret is shorter than 12 characters. The page shows •••• before it",
+            "type": "string"
+          },
+          "lastFailure": {
+            "description": "The last sign-in failure with it; null when there was none",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CredentialFailureBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastTest": {
+            "description": "The last test of the credential; null when it was never tested",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CredentialTestBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "description": "Its name, unique within its scope",
+            "type": "string"
+          },
+          "prefix": {
+            "description": "The namespace it covers; empty for the whole registry",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/CredentialScopeBody",
+            "description": "Where it applies"
+          },
+          "type": {
+            "description": "The registry preset",
+            "enum": [
+              "dockerhub",
+              "ghcr",
+              "gitlab",
+              "generic"
+            ],
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "When it was last changed",
+            "format": "date-time",
+            "type": "string"
+          },
+          "username": {
+            "description": "The registry user name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "name",
+          "type",
+          "host",
+          "prefix",
+          "username",
+          "last4",
+          "hubFallback",
+          "expiresAt",
+          "lastTest",
+          "lastFailure",
+          "canManage",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "CredentialFailureBody": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "When it failed",
+            "format": "date-time",
+            "type": "string"
+          },
+          "code": {
+            "description": "A stable code, like unauthorized or denied",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "code"
+        ],
+        "type": "object"
+      },
+      "CredentialListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Instance credentials first, then each environment's, by host and prefix",
+            "items": {
+              "$ref": "#/components/schemas/CredentialBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "CredentialRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expires": {
+            "description": "An optional day, YYYY-MM-DD. It lasts to the end of that day, UTC. 422 expiry_invalid, and expiry_past for a day that has gone",
+            "maxLength": 32,
+            "type": "string"
+          },
+          "host": {
+            "description": "The registry host, with a port if it has one, like registry.example.org:5000. Ignored for dockerhub and ghcr, registry.gitlab.com when left out for gitlab, required for generic: 422 host_required or host_invalid. No scheme and no path",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "hubFallback": {
+            "description": "Use this credential for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken)",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "What the credential is called, unique among the instance credentials. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "prefix": {
+            "description": "The namespace the credential covers, like acme or acme/team: lower-case path segments with no slash at either end. Empty covers the whole registry. 422 prefix_invalid, and hub_prefix_required for docker.io with neither a prefix nor hubFallback",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "secret": {
+            "description": "The password or token. It is sealed with the vault and never returned by any route; only its last 4 characters can be shown, and only when it has 12 or more. 422 secret_required",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "type": {
+            "description": "dockerhub, ghcr, gitlab or generic. The first three fill in the host; 422 type_invalid for anything else",
+            "maxLength": 32,
+            "type": "string"
+          },
+          "username": {
+            "description": "The registry user name; 422 username_required",
+            "maxLength": 512,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CredentialScopeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment of an environment credential; null for an instance credential",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "envName": {
+            "description": "The name of that environment; null for an instance credential",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "instance: every environment. environment: one environment only",
+            "enum": [
+              "instance",
+              "environment"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "envId",
+          "envName"
+        ],
+        "type": "object"
+      },
+      "CredentialTestBody": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "When it was tested",
+            "format": "date-time",
+            "type": "string"
+          },
+          "detail": {
+            "description": "A short sentence about the outcome. Never the secret",
+            "type": "string"
+          },
+          "ok": {
+            "description": "Whether the registry accepted it",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "at",
+          "ok",
+          "detail"
+        ],
+        "type": "object"
+      },
       "DeleteUserInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -11928,6 +12177,144 @@
         "summary": "Cancel a pull that is running",
         "tags": [
           "images"
+        ]
+      }
+    },
+    "/api/registries": {
+      "get": {
+        "description": "An instance admin sees every credential. Anyone who holds images.read on at least one environment sees the instance credentials, and an environment's own credentials when they can read that environment; canManage says whether they may change a credential. A caller with no images.read anywhere gets an empty list. No secret is ever included.",
+        "operationId": "listCredentials",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the registry credentials the signed-in user may see",
+        "tags": [
+          "registries"
+        ]
+      },
+      "post": {
+        "description": "Stores a sign-in for a registry host and an optional namespace, used for pulls and tag browsing on every environment. The secret is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes. Audited as registry.credential_created without the secret.",
+        "operationId": "createInstanceCredential",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Add an instance registry credential",
+        "tags": [
+          "registries"
+        ]
+      }
+    },
+    "/api/registries/{credentialId}": {
+      "get": {
+        "description": "The credential as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 credential_not_found.",
+        "operationId": "getCredential",
+        "parameters": [
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read one registry credential",
+        "tags": [
+          "registries"
         ]
       }
     },

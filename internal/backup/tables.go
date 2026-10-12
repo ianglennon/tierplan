@@ -59,6 +59,10 @@ var Tables = map[string]Class{
 	"audit_log":       Included, // re-signed under the restoring instance's key
 	"backup_schedule": Included, // the passphrase is sealed; RewrapAll moves it
 
+	// Registry credentials (Phase 5): the secret column is sealed under the credential's ID and
+	// registered in vault.SealedColumns, so RewrapAll moves it with the rest.
+	"registry_credentials": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.

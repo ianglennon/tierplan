@@ -141,6 +141,30 @@ type OwnedResource struct {
 	UpdatedAt     int64
 }
 
+type RegistryCredential struct {
+	ID              string
+	EnvID           sql.NullString
+	Name            string
+	Type            string
+	Host            string
+	Prefix          string
+	Username        string
+	SecretSealed    string
+	SecretLast4     string
+	HubFallback     int64
+	CaPem           string
+	Insecure        int64
+	ExpiresAt       sql.NullInt64
+	LastTestAt      sql.NullInt64
+	LastTestOk      sql.NullInt64
+	LastTestDetail  string
+	LastFailureAt   sql.NullInt64
+	LastFailureCode string
+	CreatedAt       int64
+	UpdatedAt       int64
+	CreatedBy       string
+}
+
 type Role struct {
 	ID      string
 	Name    string

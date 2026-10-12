@@ -135,6 +135,12 @@ var phase4DetailKeys = map[string][]string{
 // stopped on and the job ID as bulk (plan 05-01, D-31).
 var phase5DetailKeys = map[string][]string{
 	audit.ActionImagePulled: {"ref", "digest", "node", "credential", "layer", "code", "bulk"},
+	// A credential row names what was stored and never the secret or any part of it: the
+	// name, the layer, the host and prefix, the type, the username, whether it is the Docker
+	// Hub fallback and the expiry day (plan 05-05, D-31).
+	audit.ActionRegistryCredentialCreated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
+	audit.ActionRegistryCredentialUpdated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
+	audit.ActionRegistryCredentialDeleted: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
 }
 
 func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -157,7 +163,12 @@ func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase5DetailKeys) {
 		t.Fatalf("verify = %+v", got)
 	}
-	for key, constant := range map[string]string{"image.pulled": audit.ActionImagePulled} {
+	for key, constant := range map[string]string{
+		"image.pulled":                audit.ActionImagePulled,
+		"registry.credential_created": audit.ActionRegistryCredentialCreated,
+		"registry.credential_updated": audit.ActionRegistryCredentialUpdated,
+		"registry.credential_deleted": audit.ActionRegistryCredentialDeleted,
+	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)
 		}

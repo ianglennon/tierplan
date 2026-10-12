@@ -36,10 +36,17 @@ func TestRewrapAllMovesEverySealedValueToTheTargetVault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	credCtx := vault.ContextRegistryCred + "cred-1"
+	credSealed, err := a.Seal(credCtx, []byte("registry token"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, q := range []struct {
 		sql  string
 		args []any
 	}{
+		{`INSERT INTO registry_credentials (id, env_id, name, type, host, prefix, username, secret_sealed, created_at, updated_at, created_by)
+			VALUES ('cred-1', NULL, 'ghcr-acme', 'ghcr', 'ghcr.io', 'acme', 'bot', ?, 1, 1, 'u')`, []any{credSealed}},
 		{`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at)
 			VALUES ('env-1', 'local', 'This host', '/var/run/docker.sock', 1, 1, 1)`, nil},
 		{`INSERT INTO env_cas (env_id, cert_pem, key_sealed, created_at) VALUES ('env-1', 'pem', ?, 1)`, []any{caSealed}},
@@ -58,14 +65,17 @@ func TestRewrapAllMovesEverySealedValueToTheTargetVault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RewrapAll: %v", err)
 	}
-	if n != 2 {
-		t.Fatalf("RewrapAll = %d, want 2", n)
+	if n != 3 {
+		t.Fatalf("RewrapAll = %d, want 3", n)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 
-	var gotCA, gotPass string
+	var gotCA, gotPass, gotCred string
+	if err := s.Read.QueryRow(`SELECT secret_sealed FROM registry_credentials WHERE id = 'cred-1'`).Scan(&gotCred); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Read.QueryRow(`SELECT key_sealed FROM env_cas WHERE env_id = 'env-1'`).Scan(&gotCA); err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +87,13 @@ func TestRewrapAllMovesEverySealedValueToTheTargetVault(t *testing.T) {
 	}
 	if plain, err := b.Open(vault.ContextBackupSchedule, gotPass); err != nil || string(plain) != "backup passphrase" {
 		t.Fatalf("passphrase under B = %q, %v", plain, err)
+	}
+	if plain, err := b.Open(credCtx, gotCred); err != nil || string(plain) != "registry token" {
+		t.Fatalf("registry secret under B = %q, %v", plain, err)
+	}
+	// A value moved into another credential's row does not open: the ID is in the context.
+	if _, err := b.Open(vault.ContextRegistryCred+"cred-2", gotCred); !errors.Is(err, vault.ErrDecrypt) {
+		t.Fatalf("a registry secret opens under another credential's ID: %v", err)
 	}
 	if _, err := a.Open(caCtx, gotCA); !errors.Is(err, vault.ErrUnknownKey) {
 		t.Fatalf("the old vault still opens the re-wrapped CA key: %v", err)

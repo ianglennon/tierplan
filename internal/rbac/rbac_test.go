@@ -73,6 +73,7 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 		"volumes.delete":         x,
 		"janitor.policy":         x,
 		"shells.manage":          e(rbac.RoleAdmin),
+		"registries.instance":    g(true),
 	}
 	for name, w := range want {
 		p, ok := m[name]
@@ -123,7 +124,7 @@ func TestExactlyTheDangerousPermissionsAreFlagged(t *testing.T) {
 		}
 	}
 	slices.Sort(got)
-	want := []string{"backup.manage", "containers.exec", "environments.delete", "environments.token", "janitor.policy", "secrets.reveal", "volumes.delete"}
+	want := []string{"backup.manage", "containers.exec", "environments.delete", "environments.token", "janitor.policy", "registries.instance", "secrets.reveal", "volumes.delete"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("dangerous = %v, want %v", got, want)
 	}

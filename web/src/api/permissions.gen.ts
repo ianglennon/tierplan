@@ -9,6 +9,7 @@ export const GLOBAL_PERMISSIONS = [
   "environments.delete",
   "environments.manage",
   "environments.token",
+  "registries.instance",
   "settings.read",
   "settings.write",
   "teams.manage",
@@ -54,6 +55,7 @@ export const DANGEROUS_PERMISSIONS = [
   "environments.delete",
   "environments.token",
   "janitor.policy",
+  "registries.instance",
   "secrets.reveal",
   "volumes.delete",
 ] as const;
@@ -90,6 +92,7 @@ export const PERMISSION_REQUIREMENTS: Record<PermissionName, PermissionRequireme
   "networks.connect": { kind: "role", role: "operator" },
   "networks.manage": { kind: "role", role: "admin" },
   "networks.read": { kind: "role", role: "viewer" },
+  "registries.instance": { kind: "instance" },
   "secrets.reveal": { kind: "extra", role: "operator" },
   "settings.read": { kind: "instance" },
   "settings.write": { kind: "instance" },

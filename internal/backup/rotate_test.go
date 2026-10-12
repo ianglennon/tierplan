@@ -20,8 +20,8 @@ import (
 )
 
 // rotateFixture is a data directory on a file-sourced key: a migrated database
-// with an agent CA and a backup-schedule passphrase sealed under that key, and
-// twenty audit entries.
+// with an agent CA, a backup-schedule passphrase and a registry credential's secret
+// sealed under that key, and twenty audit entries.
 type rotateFixture struct {
 	dir string
 	st  *store.Store
@@ -57,6 +57,12 @@ func newRotateFixture(t *testing.T) *rotateFixture {
 	f.exec(t, `INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-1', 'local', 'This host', '/var/run/docker.sock', 1, 1, 1)`)
 	f.exec(t, `INSERT INTO env_cas (env_id, cert_pem, key_sealed, created_at) VALUES ('env-1', 'pem', ?, 1)`, ca)
 	f.exec(t, `INSERT INTO backup_schedule (id, passphrase_sealed) VALUES (1, ?)`, pass)
+	cred, err := old.Seal(vault.ContextRegistryCred+"cred-1", []byte("registry token value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.exec(t, `INSERT INTO registry_credentials (id, env_id, name, type, host, prefix, username, secret_sealed, secret_last4, hub_fallback, created_at, updated_at, created_by)
+		VALUES ('cred-1', NULL, 'ghcr-acme', 'ghcr', 'ghcr.io', 'acme', 'bot', ?, '', 0, 1, 1, 'u')`, cred)
 	w := audit.NewWriter(st, old, slog.New(slog.DiscardHandler), time.Now)
 	for range 20 {
 		if err := w.Record(ctx, audit.Entry{
@@ -97,8 +103,8 @@ func TestRotateKeyMovesEverySecretAndTheWholeChainToTheNewKey(t *testing.T) {
 	if res.OldKID != f.old.KeyID() || res.NewKID == "" || res.NewKID == res.OldKID {
 		t.Fatalf("result = %+v, want the old ID and a different new one", res)
 	}
-	if res.Rewrapped != 2 || res.Entries != 20 {
-		t.Fatalf("rewrapped %d values and %d entries, want 2 and 20", res.Rewrapped, res.Entries)
+	if res.Rewrapped != 3 || res.Entries != 20 {
+		t.Fatalf("rewrapped %d values and %d entries, want 3 and 20", res.Rewrapped, res.Entries)
 	}
 	if res.KeyFileSwapped != true {
 		t.Fatalf("a file-sourced key must be swapped into place: %+v", res)
@@ -129,6 +135,7 @@ func TestRotateKeyMovesEverySecretAndTheWholeChainToTheNewKey(t *testing.T) {
 	for _, c := range []struct{ q, ctx, want string }{
 		{`SELECT key_sealed FROM env_cas WHERE env_id = 'env-1'`, vault.ContextAgentCA + "env-1", "ca private key"},
 		{`SELECT passphrase_sealed FROM backup_schedule WHERE id = 1`, vault.ContextBackupSchedule, "schedule passphrase"},
+		{`SELECT secret_sealed FROM registry_credentials WHERE id = 'cred-1'`, vault.ContextRegistryCred + "cred-1", "registry token value"},
 	} {
 		plain, err := cur.Open(c.ctx, f.scalar(t, c.q))
 		if err != nil || string(plain) != c.want {

@@ -96,6 +96,7 @@ func TestValidateRefusesWhatCannotBeStored(t *testing.T) {
 		{"docker hub with neither a namespace nor the fallback", hub, "prefix", "hub_prefix_required"},
 		{"the fallback on another registry", func(in *registry.CreateInput) { in.HubFallback = true }, "hubFallback", "hub_fallback_not_hub"},
 		{"an expiry in the past", func(in *registry.CreateInput) { in.Expires = "2026-10-11" }, "expires", "expiry_past"},
+		{"an expiry too far ahead to store", func(in *registry.CreateInput) { in.Expires = "9999-12-31" }, "expires", "expiry_invalid"},
 		{"an expiry that is not a date", func(in *registry.CreateInput) { in.Expires = "next week" }, "expires", "expiry_invalid"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

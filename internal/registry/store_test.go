@@ -121,7 +121,9 @@ func TestGetAndListReturnTheCredentialWithoutAnySecret(t *testing.T) {
 
 func TestCreateRefusesADuplicateInTheSameLayer(t *testing.T) {
 	s, _, _ := newStore(t)
-	create(t, s, func(in *registry.CreateInput) { in.Type, in.Prefix, in.HubFallback = registry.TypeDockerHub, "acme", true })
+	create(t, s, func(in *registry.CreateInput) {
+		in.Type, in.Prefix, in.HubFallback = registry.TypeDockerHub, "acme", true
+	})
 
 	for _, c := range []struct {
 		name   string
