@@ -4,6 +4,7 @@
 package registry
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -18,6 +20,16 @@ import (
 // ErrEgressBlocked is what a dial to an address the egress policy refuses fails with. The
 // connection is never made.
 var ErrEgressBlocked = errors.New("registry: the address is not allowed for registry calls")
+
+// ErrResponseTooLarge is what a read of a registry's answer fails with when the answer is longer
+// than the server reads (WR-A01): a tag list is read whole into memory by the registry client, so
+// the bound is on the connection.
+var ErrResponseTooLarge = errors.New("registry: the registry's answer is larger than the server reads")
+
+// responseBytesMax is the most bytes read from a registry connection after one request was
+// written: 32 MiB, well over a manifest (8 MiB at most) or a tag list of the server's own
+// 10,000-name cap, and far under what a hostile host could stream in the 30 second call timeout.
+const responseBytesMax = 32 << 20
 
 const (
 	dialTimeout           = 10 * time.Second
@@ -105,16 +117,53 @@ func (p EgressPolicy) control(_, address string, _ syscall.RawConn) error {
 // dial and TLS handshake and 30 seconds to the first response byte. It never uses a proxy
 // from the environment: a proxy would be dialled instead of the registry and the check
 // would see only the proxy's address.
+//
+// What it reads is bounded (WR-A01): connections are HTTP/1.1, where one request is answered at a
+// time, and a connection fails with ErrResponseTooLarge once more than responseBytesMax bytes have
+// come since the last request was written. Compression is off, so that wire bytes are the bytes
+// the client reads and a small compressed answer cannot expand without limit.
 func (p EgressPolicy) Transport() *http.Transport {
 	d := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second, Control: p.control}
 	return &http.Transport{
-		Proxy:                 nil,
-		DialContext:           d.DialContext,
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := d.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &boundedConn{Conn: c}, nil
+		},
 		TLSHandshakeTimeout:   tlsHandshakeTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,
-		ForceAttemptHTTP2:     true,
+		DisableCompression:    true,
 		MaxIdleConns:          32,
 		IdleConnTimeout:       90 * time.Second,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: p.roots},
 	}
+}
+
+// boundedConn counts what is read from a connection since the last write and fails the read that
+// would pass responseBytesMax. HTTP/1.1 writes a request before it reads the answer, so the count
+// is the size of one answer (and the TLS framing around it).
+type boundedConn struct {
+	net.Conn
+	read atomic.Int64
+}
+
+func (c *boundedConn) Read(p []byte) (int, error) {
+	left := responseBytesMax - c.read.Load()
+	if left <= 0 {
+		return 0, ErrResponseTooLarge
+	}
+	if int64(len(p)) > left {
+		p = p[:left]
+	}
+	n, err := c.Conn.Read(p)
+	c.read.Add(int64(n))
+	return n, err
+}
+
+func (c *boundedConn) Write(p []byte) (int, error) {
+	c.read.Store(0)
+	return c.Conn.Write(p)
 }

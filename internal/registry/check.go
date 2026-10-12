@@ -166,7 +166,7 @@ func classify(err error) string {
 		return CodeRepositoryNotFound
 	case errors.As(err, &unknownAuthority), errors.As(err, &hostname), errors.As(err, &invalid), errors.As(err, &verify):
 		return CodeRegistryTLS
-	case errors.Is(err, errs.ErrHTTPRedirectRefused), errors.Is(err, ErrNotARegistry), isPlainHTTPAnswer(err):
+	case errors.Is(err, errs.ErrHTTPRedirectRefused), errors.Is(err, ErrNotARegistry), errors.Is(err, ErrResponseTooLarge), isPlainHTTPAnswer(err):
 		return CodeRegistryHTTP
 	case errors.Is(err, ErrEgressBlocked), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		return CodeRegistryUnreachable

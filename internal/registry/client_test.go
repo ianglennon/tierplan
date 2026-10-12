@@ -9,11 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -248,5 +250,43 @@ func TestClientPlainHTTPFallbackExpiresSoTLSIsTriedAgain(t *testing.T) {
 func TestClientWithoutTheSwitchHasNoPlainHTTPFallback(t *testing.T) {
 	if c := NewClient(HostOptions{Host: "registry.example.org"}, NewEgressPolicy(nil), "test", quietLog()); c.fallback != nil {
 		t.Error("a client without the switch can fall back to plain HTTP")
+	}
+}
+
+// A registry that streams a tag list without end is stopped at the connection, not by the 30
+// second call timeout after gigabytes are in memory (WR-A01).
+func TestTagListOfAnEndlessAnswerFailsAtTheSizeBound(t *testing.T) {
+	var sent atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/tags/list") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		_, _ = w.Write([]byte(`{"name":"acme/app","tags":["`))
+		chunk := []byte(strings.Repeat("a", 64<<10))
+		for {
+			n, err := w.Write(chunk)
+			sent.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(HostOptions{Host: strings.TrimPrefix(srv.URL, "http://"), Insecure: true}, NewEgressPolicy(nil), "test", quietLog())
+	start := time.Now()
+	_, err := c.TagList(context.Background(), "acme/app", 100)
+	if err == nil {
+		t.Fatal("an endless tag list was read")
+	}
+	if !errors.Is(err, ErrResponseTooLarge) || classify(err) != CodeRegistryHTTP {
+		t.Errorf("err = %v (code %s), want ErrResponseTooLarge", err, classify(err))
+	}
+	if took := time.Since(start); took > 15*time.Second {
+		t.Errorf("took %v; the bound should stop it long before the call timeout", took)
+	}
+	if n := sent.Load(); n > 4*responseBytesMax {
+		t.Errorf("server wrote %d bytes before the client stopped, want about %d", n, responseBytesMax)
 	}
 }
