@@ -1,0 +1,180 @@
+{
+  "registries": {
+    "title": "Registries",
+    "caption": "Credentials Bayplan uses to pull images and browse tags. Pulls pick the most specific match automatically.",
+    "add": "Add credential",
+    "needsInstance": "Needs an instance administrator",
+    "table": {
+      "title": "Registries",
+      "count_one": "{{count, number}} credential",
+      "count_other": "{{count, number}} credentials",
+      "countOf": "{{count, number}} of {{total, number}} credentials",
+      "error": "Couldn't load credentials.",
+      "errorBody": "The server may be busy. Try again.",
+      "columns": {
+        "name": "Name",
+        "scope": "Scope",
+        "type": "Type",
+        "registry": "Registry",
+        "username": "Username",
+        "secret": "Secret",
+        "expires": "Expires",
+        "lastTest": "Last test",
+        "lastUse": "Last use",
+        "actions": "Actions"
+      },
+      "actionsFor": "Actions for {{name}}",
+      "viewDetails": "View details",
+      "hubFallback": "All Hub pulls",
+      "notTested": "Not tested",
+      "testPassed": "Passed",
+      "testFailed": "Failed",
+      "signInFailed": "Sign-in failed",
+      "expiresIn_one": "Expires in {{count}} day",
+      "expiresIn_other": "Expires in {{count}} days",
+      "expired": "Expired"
+    },
+    "toolbar": {
+      "search": {
+        "label": "Search credentials",
+        "placeholder": "Search by name, registry or username",
+        "clear": "Clear search"
+      },
+      "scope": {
+        "label": "Scope",
+        "all": "All scopes",
+        "instance": "Instance"
+      },
+      "clear": "Clear filters"
+    },
+    "empty": {
+      "manage": {
+        "title": "No registry credentials",
+        "body": "Add one so private images pull on every node without a docker login. Public images work without one."
+      },
+      "view": {
+        "title": "No registry credentials apply here",
+        "body": "Public images pull without one. Ask an administrator to add a credential if you need a private registry."
+      },
+      "filtered": {
+        "title": "No credentials match these filters.",
+        "action": "Clear filters"
+      }
+    },
+    "badge": {
+      "instance": "Instance"
+    },
+    "type": {
+      "dockerhub": "Docker Hub",
+      "ghcr": "GHCR",
+      "gitlab": "GitLab",
+      "generic": "Generic",
+      "genericLong": "Generic v2"
+    },
+    "sheet": {
+      "add": {
+        "title": "Add a registry credential",
+        "description": "Stored encrypted. The secret can't be shown again after you save."
+      },
+      "close": "Close",
+      "cancel": "Cancel",
+      "submit": "Save credential",
+      "pending": "Saving…",
+      "success": "Added credential {{name}}.",
+      "loadError": {
+        "title": "Couldn't load this credential.",
+        "body": "Check the connection and try again.",
+        "notFound": "This credential doesn't exist, or you can't see it.",
+        "retry": "Retry"
+      },
+      "type": {
+        "label": "Registry type"
+      },
+      "helper": {
+        "dockerhub": "Use a Docker Hub access token, not your password. Create one under Account settings → Personal access tokens.",
+        "ghcr": "Use a personal access token (classic) with the read:packages scope.",
+        "gitlab": "Use a deploy token with read_registry, or a personal access token with read_registry.",
+        "generic": "Use a static token or password. Amazon ECR tokens expire after 12 hours, so they need replacing often."
+      },
+      "name": {
+        "label": "Name",
+        "placeholder": "ghcr-acme",
+        "helper": "Shown in the table, in pull progress and in error messages."
+      },
+      "scope": {
+        "label": "Scope",
+        "instance": "All environments (instance)",
+        "helper": "Instance credentials apply to every environment. Pick an environment to limit it to one."
+      },
+      "host": {
+        "label": "Registry",
+        "helper": "To browse a registry mirror, add it here as a generic registry. Bayplan never uses the mirrors set on your nodes.",
+        "readOnly": "This host is read-only (set on the host)"
+      },
+      "prefix": {
+        "label": "Namespace (optional)",
+        "placeholder": "acme or acme/team",
+        "helper": "Only images under this path use this credential. Leave empty to cover the whole registry."
+      },
+      "username": {
+        "label": "Username"
+      },
+      "secret": {
+        "label": "Secret",
+        "show": "Show secret",
+        "hide": "Hide secret"
+      },
+      "hubFallback": {
+        "label": "Use for all Docker Hub pulls",
+        "helper": "Raises the anonymous pull limit for every Docker Hub image that has no more specific credential. One per scope."
+      },
+      "expires": {
+        "label": "Expires (optional)",
+        "helper": "Bayplan warns 7 days before. It doesn't renew anything."
+      },
+      "view": {
+        "description": "You can see this credential but not change it.",
+        "label": "Credential details",
+        "empty": "Nothing to show.",
+        "name": "Name",
+        "scope": "Scope",
+        "type": "Type",
+        "registry": "Registry",
+        "username": "Username",
+        "secret": "Secret",
+        "hubFallback": "All Docker Hub pulls",
+        "hubFallbackYes": "Used when no more specific credential matches",
+        "expires": "Expires",
+        "lastTest": "Last test",
+        "missing": "—"
+      },
+      "errors": {
+        "name_required": "Enter a name.",
+        "name_invalid": "Use 1 to 64 letters, digits, spaces and . _ ( ) -.",
+        "host_required": "Enter the registry address.",
+        "host_invalid": "Use a host like ghcr.io or registry.example.com:5000.",
+        "prefix_invalid": "Use a path like acme or acme/team.",
+        "username_required": "Enter a username.",
+        "secret_required": "Enter a secret.",
+        "hub_prefix_required": "Docker Hub needs a namespace like acme, or tick “Use for all Docker Hub pulls”.",
+        "hub_fallback_not_hub": "Only a Docker Hub credential can be used for all Docker Hub pulls.",
+        "expiry_invalid": "Pick a date in the future.",
+        "expiry_past": "Pick a date in the future.",
+        "type_invalid": "Choose a registry type.",
+        "nameTaken": "A credential named {{name}} already exists in {{scope}}.",
+        "hostPrefixTaken": "{{scope}} already has a credential for {{target}}. Edit that one instead.",
+        "hubFallbackTaken": "“{{name}}” already uses all Docker Hub pulls for {{scope}}. Untick it there first.",
+        "hubFallbackTakenUnnamed": "Another credential already uses all Docker Hub pulls for {{scope}}. Untick it there first.",
+        "scopeInstance": "all environments",
+        "permission": "You no longer have permission to do that. Your access may have changed.",
+        "generic": "Couldn't save the credential. Try again."
+      },
+      "discard": {
+        "title": "Discard changes?",
+        "body": "The credential hasn't been saved.",
+        "keep": "Keep editing",
+        "discard": "Discard changes"
+      }
+    }
+  }
+}

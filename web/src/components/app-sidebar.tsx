@@ -6,6 +6,7 @@ import {
   Activity,
   Container,
   HardDrive,
+  KeyRound,
   Layers,
   LayoutDashboard,
   LayoutGrid,
@@ -92,6 +93,9 @@ export function AppSidebar() {
   // The overview is global. environments.read is held per environment, so it
   // shows for anyone who may read at least one; the server limits its rows.
   const canOverview = useAnyEnvironmentPermission("environments.read");
+  // Registries is global too (D-09): the stored credentials, shown to anyone who may
+  // read images on at least one environment. The server limits the rows it lists.
+  const canRegistries = useAnyEnvironmentPermission("images.read");
 
   return (
     <Sidebar
@@ -103,26 +107,45 @@ export function AppSidebar() {
         <EnvSwitcher />
       </SidebarHeader>
       <SidebarContent>
-        {canOverview ? (
+        {canOverview || canRegistries ? (
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    tooltip={t("shell.nav.environments")}
-                    className="max-md:h-11"
-                  >
-                    <Link
-                      to="/environments"
-                      activeOptions={{ exact: true }}
-                      activeProps={{ "aria-current": "page", "data-active": true }}
+                {canOverview ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      tooltip={t("shell.nav.environments")}
+                      className="max-md:h-11"
                     >
-                      <LayoutGrid aria-hidden="true" />
-                      <span>{t("shell.nav.environments")}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+                      <Link
+                        to="/environments"
+                        activeOptions={{ exact: true }}
+                        activeProps={{ "aria-current": "page", "data-active": true }}
+                      >
+                        <LayoutGrid aria-hidden="true" />
+                        <span>{t("shell.nav.environments")}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+                {canRegistries ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      tooltip={t("shell.nav.registries")}
+                      className="max-md:h-11"
+                    >
+                      <Link
+                        to="/registries"
+                        activeProps={{ "aria-current": "page", "data-active": true }}
+                      >
+                        <KeyRound aria-hidden="true" />
+                        <span>{t("shell.nav.registries")}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

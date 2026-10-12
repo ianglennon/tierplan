@@ -12,6 +12,7 @@
     },
     "nav": {
       "environments": "Environments",
+      "registries": "Registries",
       "dashboard": "Dashboard",
       "resources": "Resources",
       "containers": "Containers",
