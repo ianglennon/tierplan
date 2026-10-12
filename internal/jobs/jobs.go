@@ -24,7 +24,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"time"
@@ -303,7 +305,16 @@ func (h *Hub) Start(spec Spec, run func(ctx context.Context, r *Reporter)) (Job,
 	go func() {
 		defer h.wg.Done()
 		defer cancel()
-		run(ctx, r)
+		// A run that panics must not take the server down with it: the job ends with its
+		// unfinished items interrupted, as a job always finishes (WR-A06).
+		func() {
+			defer func() {
+				if v := recover(); v != nil {
+					slog.Error("a job panicked", "job", e.job.ID, "kind", e.job.Kind, "panic", fmt.Sprint(v), "stack", string(debug.Stack()))
+				}
+			}()
+			run(ctx, r)
+		}()
 		h.settle(e, ctx.Err() != nil)
 	}()
 	return snap, nil

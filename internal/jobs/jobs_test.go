@@ -299,6 +299,35 @@ func TestARunThatReturnsEarlyLeavesNoItemRunning(t *testing.T) {
 	}
 }
 
+// A run that panics ends its job with the unfinished items interrupted and leaves the process,
+// and the hub, working (WR-A06).
+func TestARunThatPanicsEndsItsJobInterruptedAndTheHubKeepsWorking(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	job, err := h.Start(twoItems("u"), func(ctx context.Context, r *jobs.Reporter) {
+		r.Finish("n1", jobs.ItemDone, "", "", nil)
+		var m map[string]int
+		m["boom"] = 1 // a nil map write panics
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitFinished(t, h, job.ID)
+	if got.State != jobs.JobPartial || got.Items[0].State != jobs.ItemDone || got.Items[1].State != jobs.ItemFailed || got.Items[1].Code != jobs.CodeInterrupted {
+		t.Fatalf("job = %+v, want the finished item kept and the other interrupted", got)
+	}
+	again, err := h.Start(twoItems("u"), func(ctx context.Context, r *jobs.Reporter) {
+		r.Finish("n1", jobs.ItemDone, "", "", nil)
+		r.Finish("n2", jobs.ItemDone, "", "", nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitFinished(t, h, again.ID); got.State != jobs.JobDone {
+		t.Errorf("a job after the panic = %+v, want done", got)
+	}
+}
+
 func TestCloseCancelsRunningJobsAndClosesSubscriptions(t *testing.T) {
 	h := jobs.New(jobs.Options{})
 	job, _ := h.Start(twoItems("u"), hold(make(chan struct{})))
