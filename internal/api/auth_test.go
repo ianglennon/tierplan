@@ -330,7 +330,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	regStore := registry.NewStore(f.st, f.v, f.clk.now)
 	api.RegisterTags(r, api.TagsDeps{
 		Resolver: registry.NewResolver(regStore), Tags: registry.NewTagService(nil, f.registryEgress, "test", log),
-		Checker: checker, Aggregator: f.agg, Audit: f.aud, Log: log,
+		Checker: checker, Aggregator: f.agg, Envs: f.envSvc, Audit: f.aud, Log: log,
 	})
 	api.RegisterUnknownAgents(r, api.UnknownAgentsDeps{Unknown: f.unknown, Store: f.st, Now: f.clk.now, Log: log})
 	api.RegisterRecent(r, api.RecentDeps{Store: f.st, Envs: f.envSvc, Checker: checker, Refusals: f.aud, Now: f.clk.now, Log: log})

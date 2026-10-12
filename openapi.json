@@ -6546,6 +6546,24 @@
         ],
         "type": "object"
       },
+      "RunningInBody": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment's ID",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The environment's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "envName"
+        ],
+        "type": "object"
+      },
       "ScheduleRunBody": {
         "additionalProperties": false,
         "properties": {
@@ -7246,6 +7264,16 @@
               "null"
             ]
           },
+          "runningIn": {
+            "description": "The environments the caller can read whose running containers run this tag's digest, matched by digest and not by tag text, from each environment's last snapshot; environments that are offline are skipped. Only filled on the Registries page: left empty when envId is given",
+            "items": {
+              "$ref": "#/components/schemas/RunningInBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "tag": {
             "description": "The tag asked about",
             "type": "string"
@@ -7255,6 +7283,7 @@
           "tag",
           "digest",
           "platforms",
+          "runningIn",
           "code"
         ],
         "type": "object"

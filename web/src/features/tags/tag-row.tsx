@@ -11,6 +11,7 @@ import { TableCell, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { PlatformChips, shortDigest } from "@/features/tags/platform-chips";
+import { RunningIn } from "@/features/tags/running-here";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,9 @@ interface TagRowProps {
   // Picker only: whether this is the tag chosen, and what choosing one does.
   selected?: boolean;
   onSelect?: (tag: string) => void;
+  // Full only: draw the Running in cell, which the Registries page has and an environment
+  // does not.
+  showRunning?: boolean;
   // Full only: the platform table under the row, and what opens and closes it.
   expanded?: boolean;
   panelId?: string;
@@ -57,6 +61,7 @@ export function TagRow({
   variant,
   selected,
   onSelect,
+  showRunning,
   expanded,
   panelId,
   onToggle,
@@ -160,6 +165,11 @@ export function TagRow({
       <TableCell className="min-w-48" aria-busy={k.platformsLoading}>
         {k.platformsLoading ? dash : platforms}
       </TableCell>
+      {showRunning && !picker ? (
+        <TableCell className="min-w-40" aria-busy={!detail}>
+          {detail ? <RunningIn environments={detail.runningIn ?? []} /> : loading}
+        </TableCell>
+      ) : null}
     </TableRow>
   );
 }

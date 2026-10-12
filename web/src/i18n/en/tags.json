@@ -22,7 +22,8 @@
       "tag": "Tag",
       "digest": "Digest",
       "created": "Created",
-      "platforms": "Platforms"
+      "platforms": "Platforms",
+      "runningIn": "Running in"
     },
     "filter": {
       "label": "Filter tags",
@@ -107,6 +108,10 @@
         "size": "Size"
       },
       "unknown": "—"
+    },
+    "running": {
+      "more_one": "Show {{count}} more environment",
+      "more_other": "Show {{count}} more environments"
     }
   }
 }

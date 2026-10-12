@@ -94,6 +94,9 @@ export function TagBrowser({
 
   const query = useInfiniteQuery(tagsInfiniteQuery({ repo, envId, q, hide }));
   const picker = variant === "picker";
+  // The Registries page, which has no environment, says where each tag runs; inside an
+  // environment 05-20 marks what runs there.
+  const showRunning = !picker && envId === undefined;
 
   const pages = query.data?.pages ?? [];
   const first = pages[0];
@@ -145,6 +148,9 @@ export function TagBrowser({
               )}
               <TableHead className="min-w-28">{t("tags.columns.created")}</TableHead>
               <TableHead className="min-w-48">{t("tags.columns.platforms")}</TableHead>
+              {showRunning ? (
+                <TableHead className="min-w-40">{t("tags.columns.runningIn")}</TableHead>
+              ) : null}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -163,6 +169,7 @@ export function TagBrowser({
                     variant={variant}
                     selected={picker && selected === tag.name}
                     onSelect={onSelect}
+                    showRunning={showRunning}
                     expanded={open}
                     panelId={panelId}
                     onToggle={toggle}
@@ -170,7 +177,11 @@ export function TagBrowser({
                   />
                   {open && platforms.length > 1 ? (
                     <TableRow className="hover:bg-transparent">
-                      <TableCell id={panelId} colSpan={5} className="bg-muted/30 pl-12">
+                      <TableCell
+                        id={panelId}
+                        colSpan={showRunning ? 6 : 5}
+                        className="bg-muted/30 pl-12"
+                      >
                         <PlatformTable
                           tag={tag.name}
                           digest={detail?.digest || tag.digest || ""}

@@ -5088,6 +5088,12 @@ export interface components {
             /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
             install: components["schemas"]["InstallBody"];
         };
+        RunningInBody: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The environment's name */
+            envName: string;
+        };
         ScheduleRunBody: {
             /**
              * Format: date-time
@@ -5408,6 +5414,8 @@ export interface components {
             digest: string;
             /** @description The runnable platforms of the tag, without attestation and unknown/unknown entries; one for a single-platform image, none when the registry could not be read */
             platforms: components["schemas"]["PlatformBody"][] | null;
+            /** @description The environments the caller can read whose running containers run this tag's digest, matched by digest and not by tag text, from each environment's last snapshot; environments that are offline are skipped. Only filled on the Registries page: left empty when envId is given */
+            runningIn: components["schemas"]["RunningInBody"][] | null;
             /** @description The tag asked about */
             tag: string;
         };

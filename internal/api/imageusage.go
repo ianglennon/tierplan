@@ -210,3 +210,73 @@ func (u imageUsage) usedBy(rows []envs.ImageRow) ImageUsedByBody {
 	body.Items = append(body.Items, services...)
 	return body
 }
+
+// RunningRef is a container that runs an image, for the Running in marker of a tag.
+type RunningRef struct {
+	Kind   string
+	ID     string
+	Name   string
+	NodeID string
+	Node   string
+}
+
+// digestKey names a digest of one repository, the way a reference to it is normalised:
+// docker.io/library/nginx@sha256:...
+func digestKey(repo, digest string) string { return repo + "@" + digest }
+
+// runnable says whether a container's state is one where its image is in use as a running
+// one. A created, exited, dead or removing container is not.
+func runnable(state string) bool {
+	return state == "running" || state == "restarting" || state == "paused"
+}
+
+// runningDigests lists, by repository and digest, the running containers of an aggregate
+// (D-22, Pitfall 5). A container counts for every repository digest of the image it was
+// created from on its own node, and for the digest its image name pins: swarm tasks run
+// repo:tag@sha256:... Every reference is normalised with registry.ParseRef, so the short form
+// docker@sha256:... and docker.io/library/docker@sha256:... are one key. A tag's text is never
+// used, so a tag that has moved still shows where its old image runs.
+func runningDigests(agg envs.Aggregate) map[string][]RunningRef {
+	repoDigests := map[[2]string][]string{}
+	for _, im := range agg.Images {
+		repoDigests[[2]string{im.NodeID, im.ID}] = im.RepoDigests
+	}
+	out := map[string][]RunningRef{}
+	for _, c := range agg.Containers {
+		if !runnable(c.State) {
+			continue
+		}
+		ref := RunningRef{Kind: "container", ID: c.ID, Name: c.Name, NodeID: c.NodeID, Node: c.Node}
+		seen := map[string]bool{}
+		add := func(s string) {
+			r, err := registry.ParseRef(s)
+			if err != nil || r.Digest == "" {
+				return
+			}
+			key := digestKey(r.Repo(), r.Digest)
+			if !seen[key] {
+				seen[key] = true
+				out[key] = append(out[key], ref)
+			}
+		}
+		for _, d := range repoDigests[[2]string{c.NodeID, c.ImageID}] {
+			add(d)
+		}
+		add(c.Image)
+	}
+	for _, refs := range out {
+		slices.SortFunc(refs, func(a, b RunningRef) int {
+			return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.Node, b.Node), strings.Compare(a.ID, b.ID))
+		})
+	}
+	return out
+}
+
+// isRunning reports whether a tag runs somewhere: its index digest, or the digest of any of
+// its platforms, is one a running container holds, in the same repository.
+func isRunning(running map[string][]RunningRef, repo, digest string, platformDigests []string) bool {
+	if digest != "" && len(running[digestKey(repo, digest)]) > 0 {
+		return true
+	}
+	return slices.ContainsFunc(platformDigests, func(d string) bool { return d != "" && len(running[digestKey(repo, d)]) > 0 })
+}

@@ -545,6 +545,7 @@ func TestBrowseTagDetailsSayWhichReadableEnvironmentsRunTheDigestAndNoOthers(t *
 		},
 	})
 	f.trusting(t, reg)
+	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
 	a := f.add(t)
 	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
 	f.inst.Apply("Bayplan", "https://example.com/bayplan")
@@ -601,6 +602,7 @@ func TestBrowseTagDetailsMatchByDigestSoAMovedTagStillShowsWhereItsImageRuns(t *
 		},
 	})
 	f.trusting(t, reg)
+	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
 	a := f.add(t)
 	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
 	rec := f.details(t, credentialUser{f.cookie, f.csrf}, reg, "acme/app", "", "1.0")
