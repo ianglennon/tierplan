@@ -386,3 +386,34 @@ func TestChoosePlatformPrefersLinuxAmd64ThenTheNodeArchitectureThenTheFirst(t *t
 		t.Errorf("no platforms = %d, want -1", got)
 	}
 }
+
+// A tag becomes the last segment of a registry URL sent with the credential, so a name that is
+// not a tag is never sent anywhere and reads as a tag the registry does not have (WR-A02).
+func TestDetailsOfAnInvalidTagNameSendsNothingAndKeepsTheOrderOfTheRest(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	fi := newFakeImages(f)
+	index, _, _ := multiArch(fi, "acme/app", "1.0")
+
+	bad := []string{"../../other/blobs/uploads/", "a/b", "x?y=1", "x#z", "a%2fb", "-lead", ".dot", strings.Repeat("a", 129), ""}
+	tags := append([]string{"1.0"}, bad...)
+	got := tagServiceFor(f).Details(context.Background(), f.cred("c1", f.pass), f.ref(t, "acme/app"), tags, "amd64")
+	if len(got) != len(tags) {
+		t.Fatalf("details = %d items, want %d", len(got), len(tags))
+	}
+	if got[0].Tag != "1.0" || got[0].Digest != index || got[0].Code != "" {
+		t.Errorf("the valid tag = %+v, want it read", got[0])
+	}
+	for i, tag := range bad {
+		if d := got[i+1]; d.Tag != tag || d.Code != CodeTagNotFound || d.Digest != "" {
+			t.Errorf("tag %q = %+v, want tag_not_found and no read", tag, d)
+		}
+	}
+	for _, r := range fi.requests {
+		if strings.Contains(r, "..") || strings.Contains(r, "?") || strings.Contains(r, "uploads") || strings.Contains(r, "%") {
+			t.Errorf("the registry was sent %q for an invalid tag", r)
+		}
+	}
+	if !ValidTag("1.27.0-rc_1") || ValidTag("") {
+		t.Error("ValidTag is wrong for an ordinary tag or an empty one")
+	}
+}

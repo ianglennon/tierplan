@@ -93,9 +93,33 @@ type detailEntry struct {
 // authorised, and cred must be one the caller may use, before this is called: the caches are
 // keyed by credential, not by caller.
 func (s *TagService) Details(ctx context.Context, cred *ResolvedCredential, r Ref, tags []string, preferArch string) []TagDetail {
-	if strings.EqualFold(r.Domain, hubDomain) {
-		return s.hubDetails(ctx, cred, r, tags)
+	// A tag is the last segment of a registry URL, sent with the credential, so a name that is
+	// not a tag (a path, a query, an escape) is never put in one: it reads as a tag the registry
+	// does not have (WR-A02).
+	out := make([]TagDetail, len(tags))
+	var valid []string
+	var at []int
+	for i, tag := range tags {
+		if ValidTag(tag) {
+			valid, at = append(valid, tag), append(at, i)
+		} else {
+			out[i] = TagDetail{Tag: tag, Code: CodeTagNotFound}
+		}
 	}
+	var got []TagDetail
+	if strings.EqualFold(r.Domain, hubDomain) {
+		got = s.hubDetails(ctx, cred, r, valid)
+	} else {
+		got = s.registryDetails(ctx, cred, r, valid, preferArch)
+	}
+	for j, d := range got {
+		out[at[j]] = d
+	}
+	return out
+}
+
+// registryDetails is Details for a registry other than Docker Hub, for tags already checked.
+func (s *TagService) registryDetails(ctx context.Context, cred *ResolvedCredential, r Ref, tags []string, preferArch string) []TagDetail {
 	out := make([]TagDetail, len(tags))
 	c := s.clientFor(cred, r.Domain)
 	id := credIdentity(cred)

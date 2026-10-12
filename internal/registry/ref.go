@@ -10,6 +10,7 @@ import (
 	_ "crypto/sha256"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/distribution/reference"
@@ -18,6 +19,13 @@ import (
 // maxRefLen caps a reference: a name is at most 255 characters, a tag 128 and a digest
 // 71, so nothing longer is a reference.
 const maxRefLen = 512
+
+// tagGrammar is what an image tag may be: the reference grammar's, 1 to 128 characters.
+var tagGrammar = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+
+// ValidTag reports whether tag is a tag as the reference grammar writes one. A name that is
+// not (a path, a query, an escape) must never be put in a registry URL (WR-A02).
+func ValidTag(tag string) bool { return tagGrammar.MatchString(tag) }
 
 // Ref is an image reference as the engine will pull it: the domain, repository path,
 // tag and digest written out, with docker.io and library/ filled in and latest added

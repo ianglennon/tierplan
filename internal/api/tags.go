@@ -197,7 +197,7 @@ func RegisterTags(r *httpx.Router, d TagsDeps) {
 		Path:        "/api/registries/tags/details",
 		Summary:     "Read the digest, date and platforms of tags",
 		Description: "Reads the digest, the created date and the platforms of up to 25 tags of a repository, for the rows the person can see. The server asks the registry with the same credential and the same authorisation as the tag list: " +
-			"images.read on at least one environment, and on envId when it is given (403, audited), an unparsable reference is 422 ref_invalid, and 26 tags are 422. Docker Hub is read through its tags API, which costs no pulls; any other registry through a manifest HEAD and, per digest, the manifest and the config of one platform " +
+			"images.read on at least one environment, and on envId when it is given (403, audited), an unparsable reference is 422 ref_invalid, 26 tags are 422 and so is a tag that is not 1 to 128 letters, digits, underscores, dots or dashes (tag_invalid). Docker Hub is read through its tags API, which costs no pulls; any other registry through a manifest HEAD and, per digest, the manifest and the config of one platform " +
 			"(linux/amd64, else the environment's node architecture, else the first). Results are cached per credential, repository and digest. A tag that could not be read carries a code, never a failure of the request. Not audited.",
 		Tags: []string{"registries"},
 	}, rbac.SelfService, func(ctx context.Context, in *TagDetailsInput) (*TagDetailsOutput, error) {
@@ -248,8 +248,10 @@ func (d TagsDeps) details(ctx context.Context, p *rbac.Principal, envID, refText
 		return nil, err
 	}
 	for _, tag := range tags {
-		if tag == "" || len(tag) > 128 {
-			return nil, httpx.Problem(http.StatusUnprocessableEntity, "", "A tag is between 1 and 128 characters.")
+		// A tag becomes the last segment of a registry URL, sent with the matched credential: only
+		// the reference grammar's characters may reach it (WR-B05, WR-A02).
+		if !tagPattern.MatchString(tag) {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemTagInvalid, "A tag is 1 to 128 letters, digits, underscores, dots or dashes, and does not start with a dot or dash.")
 		}
 	}
 	here := d.hereOf(ctx, envID)

@@ -464,6 +464,27 @@ func TestBrowseTagDetailsRefusesZeroTagsMoreThan25AndAnUnparsableReference(t *te
 	}
 }
 
+// A tag becomes the last segment of a registry URL sent with the credential, so one that is not
+// in the reference grammar is refused before the registry is asked (WR-B05, WR-A02).
+func TestBrowseTagDetailsRefusesATagThatIsNotInTheReferenceGrammarWithoutAskingTheRegistry(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	serveImage(reg, time.Now())
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
+	before := reg.hits.Load()
+	for _, tag := range []string{"../../other/blobs/uploads/", "a/b", "x?y=1", "x#z", "a%2fb", " 1.0", "-x", strings.Repeat("a", 129), ""} {
+		rec := f.details(t, admin, reg, "acme/app", "", "1.0", tag)
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "tag_invalid" {
+			t.Errorf("tag %q: %d %s, want 422 tag_invalid", tag, rec.Code, rec.Body)
+		}
+	}
+	if n := reg.hits.Load(); n != before {
+		t.Errorf("the registry was sent %d requests for refused tags", n-before)
+	}
+}
+
 func TestBrowseTagDetailsAuthoriseExactlyAsBrowseTagsBeforeAnythingIsRead(t *testing.T) {
 	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
 	a, b := f.twoEnvironments(t)

@@ -43,6 +43,7 @@ const (
 	credentialAnonymous = "anonymous"
 
 	problemRefInvalid     = "ref_invalid"
+	problemTagInvalid     = "tag_invalid"
 	problemNodesUnknown   = "nodes_unknown"
 	problemNodesRequired  = "nodes_required"
 	problemTooManyPulls   = "too_many_pulls"
