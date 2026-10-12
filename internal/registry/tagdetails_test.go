@@ -387,6 +387,21 @@ func TestChoosePlatformPrefersLinuxAmd64ThenTheNodeArchitectureThenTheFirst(t *t
 	}
 }
 
+// A node's 32-bit ARM architecture is spelled arm/v7 and a platform's is Arch arm with a variant
+// (WR-A05), so the two must be compared as the same thing.
+func TestChoosePlatformMatchesA32BitArmNodeToTheArmPlatformOfThatVariant(t *testing.T) {
+	ps := []Platform{{OS: "linux", Arch: "arm64"}, {OS: "linux", Arch: "arm", Variant: "v6"}, {OS: "linux", Arch: "arm", Variant: "v7"}}
+	if got := choosePlatform(ps, "arm/v7"); got != 2 {
+		t.Errorf("node arm/v7 = %d, want 2", got)
+	}
+	if got := choosePlatform(ps, "arm/v6"); got != 1 {
+		t.Errorf("node arm/v6 = %d, want 1", got)
+	}
+	if got := choosePlatform([]Platform{{OS: "linux", Arch: "arm64"}, {OS: "linux", Arch: "arm"}}, "arm/v7"); got != 1 {
+		t.Errorf("an arm platform with no variant = %d, want 1 (read as v7)", got)
+	}
+}
+
 // A tag becomes the last segment of a registry URL sent with the credential, so a name that is
 // not a tag is never sent anywhere and reads as a tag the registry does not have (WR-A02).
 func TestDetailsOfAnInvalidTagNameSendsNothingAndKeepsTheOrderOfTheRest(t *testing.T) {

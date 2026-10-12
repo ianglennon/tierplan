@@ -200,7 +200,7 @@ func choosePlatform(ps []Platform, preferArch string) int {
 	}
 	if preferArch != "" {
 		for i, p := range ps {
-			if p.OS == "linux" && p.Arch == preferArch {
+			if p.OS == "linux" && (p.Arch == preferArch || ociArchKey(p) == preferArch) {
 				return i
 			}
 		}
@@ -209,6 +209,22 @@ func choosePlatform(ps []Platform, preferArch string) int {
 		return 0
 	}
 	return -1
+}
+
+// ociArchKey is the architecture of a platform as the nodes spell it (dockerx.OCIArch): the
+// architecture alone, except for 32-bit ARM, which is arm/v7 or arm/v6. A node's "arm/v7" never
+// equals a platform's Arch "arm" (WR-A05); a platform with no variant is read as v7, as the API's
+// platform comparison does.
+func ociArchKey(p Platform) string {
+	arch := strings.ToLower(p.Arch)
+	if arch != "arm" {
+		return arch
+	}
+	v := strings.ToLower(p.Variant)
+	if v == "" {
+		v = "v7"
+	}
+	return "arm/" + v
 }
 
 // isRealPlatform is false for the entries of an index that are not a runnable image: the
