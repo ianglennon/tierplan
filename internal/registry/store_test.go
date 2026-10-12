@@ -302,6 +302,33 @@ func TestUpdateWithNoSecretRefusesAChangeOfWhereTheSecretGoes(t *testing.T) {
 	}
 }
 
+// The last test and the last sign-in failure were seen against the old destination, so a change
+// of where the secret goes forgets them; a change that leaves it alone keeps them (WR-B06).
+func TestUpdateForgetsTheLastOutcomeWhenTheDestinationChanges(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := newStore(t)
+	c := create(t, s, nil)
+	if err := s.RecordTest(ctx, c.ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordFailure(ctx, c.ID, "login_refused"); err != nil {
+		t.Fatal(err)
+	}
+
+	in := updateOf(c)
+	in.Name = "renamed"
+	got, _, err := s.Update(ctx, c.ID, in, nil)
+	if err != nil || got.LastTest == nil || got.LastFailure == nil {
+		t.Fatalf("after a rename = %+v, %v; the outcome must be kept", got, err)
+	}
+
+	in.Type, in.Host, in.Secret = registry.TypeGeneric, "other.example.org", "a-freshly-typed-secret-0001"
+	got, _, err = s.Update(ctx, c.ID, in, nil)
+	if err != nil || got.LastTest != nil || got.LastFailure != nil {
+		t.Errorf("after a new host = %+v, %v; want the last test and failure forgotten", got, err)
+	}
+}
+
 func TestUpdateOfAnUnchangedFormWritesNothingAndRunsNoHook(t *testing.T) {
 	s, _, _ := newStore(t)
 	c := create(t, s, nil)

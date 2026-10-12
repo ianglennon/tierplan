@@ -24,6 +24,23 @@ func (q *Queries) ClearRegistryCredentialFailure(ctx context.Context, id string)
 	return result.RowsAffected()
 }
 
+const clearRegistryCredentialOutcome = `-- name: ClearRegistryCredentialOutcome :execrows
+UPDATE registry_credentials
+SET last_test_at = NULL, last_test_ok = NULL, last_test_detail = '',
+    last_failure_at = NULL, last_failure_code = ''
+WHERE id = ?
+`
+
+// Forgets the last test and the last sign-in failure of a credential whose destination or secret
+// was just changed: they were seen against something that no longer applies (WR-B06).
+func (q *Queries) ClearRegistryCredentialOutcome(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearRegistryCredentialOutcome, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteRegistryCredential = `-- name: DeleteRegistryCredential :one
 DELETE FROM registry_credentials WHERE id = ? RETURNING id
 `

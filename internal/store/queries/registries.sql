@@ -92,3 +92,11 @@ SET last_test_at = sqlc.arg(at), last_test_ok = sqlc.arg(ok), last_test_detail =
     last_failure_at = CASE WHEN sqlc.arg(ok) = 1 THEN NULL ELSE last_failure_at END,
     last_failure_code = CASE WHEN sqlc.arg(ok) = 1 THEN '' ELSE last_failure_code END
 WHERE id = sqlc.arg(id);
+
+-- name: ClearRegistryCredentialOutcome :execrows
+-- Forgets the last test and the last sign-in failure of a credential whose destination or secret
+-- was just changed: they were seen against something that no longer applies (WR-B06).
+UPDATE registry_credentials
+SET last_test_at = NULL, last_test_ok = NULL, last_test_detail = '',
+    last_failure_at = NULL, last_failure_code = ''
+WHERE id = ?;

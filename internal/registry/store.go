@@ -310,6 +310,16 @@ func (s *Store) update(ctx context.Context, env *string, id string, in UpdateInp
 			return Credential{}, nil, fmt.Errorf("registry: store the secret: %w", err)
 		}
 	}
+	// A test or a refusal seen against the old host, type, username, CA, switch or secret says
+	// nothing about the new one, and would keep showing as passed (or keep alerting) for it.
+	for _, f := range []string{"ca_pem", "host", "insecure", "secret", "type", "username"} {
+		if slices.Contains(changed, f) {
+			if _, err := q.ClearRegistryCredentialOutcome(ctx, id); err != nil {
+				return Credential{}, nil, fmt.Errorf("registry: clear the last outcome: %w", err)
+			}
+			break
+		}
+	}
 	row, err = q.GetRegistryCredential(ctx, id)
 	if err != nil {
 		return Credential{}, nil, fmt.Errorf("registry: read back: %w", err)
