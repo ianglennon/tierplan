@@ -175,3 +175,44 @@ func TestRouteMatchTreatsHeadAsGetAndNothingElseAsAnything(t *testing.T) {
 		t.Error("GET matched a POST route")
 	}
 }
+
+func TestRouteImagePullQueryCases(t *testing.T) {
+	digest := "sha256%3A" + strings.Repeat("0", 64)
+	for _, tc := range []struct {
+		name, query string
+		want        bool
+	}{
+		{"a repository and a tag", "fromImage=docker.io%2Flibrary%2Fbusybox&tag=1.36.1", true},
+		{"a registry with a port", "fromImage=reg.example.org%3A5000%2Fa%2Fb&tag=v1", true},
+		{"a digest in the tag key", "fromImage=ghcr.io%2Facme%2Fapp&tag=" + digest, true},
+		{"a platform with a variant", "fromImage=a&tag=b&platform=linux%2Farm%2Fv7", true},
+		{"no query at all", "", true},
+		{"fromSrc", "fromSrc=http%3A%2F%2Fx", false},
+		{"repo", "fromImage=a&tag=b&repo=x", false},
+		{"message", "fromImage=a&tag=b&message=x", false},
+		{"changes", "fromImage=a&tag=b&changes=x", false},
+		{"a tag with a slash", "fromImage=a&tag=x%2Fy", false},
+		{"a sha1 digest", "fromImage=a&tag=sha1%3A" + strings.Repeat("0", 40), false},
+		{"a short sha256 digest", "fromImage=a&tag=sha256%3A" + strings.Repeat("0", 63), false},
+		{"a platform without an architecture", "fromImage=a&tag=b&platform=linux", false},
+		{"an upper-case operating system", "fromImage=a&tag=b&platform=Linux%2Famd64", false},
+		{"an image of 256 characters", "fromImage=" + strings.Repeat("a", 256) + "&tag=b", false},
+		{"an image of 255 characters", "fromImage=" + strings.Repeat("a", 255) + "&tag=b", true},
+		{"an image with a space", "fromImage=a%20b&tag=b", false},
+		{"a second fromImage that is not allowed", "fromImage=a&fromImage=-b&tag=b", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, _ := Allowed("POST", "/images/create", tc.query, false, false, Policy{})
+			if ok != tc.want {
+				t.Fatalf("Allowed(POST /images/create?%s) = %v, want %v", tc.query, ok, tc.want)
+			}
+		})
+	}
+	rt, ok := Match("POST", "/v1.56/images/create")
+	if !ok || rt.name != "image pull" || !rt.registryAuth || rt.body != BodyNone || rt.upgrade {
+		t.Errorf("POST images/create matched %+v, %v", rt, ok)
+	}
+	if rt, ok := Match("GET", "/containers/json"); !ok || rt.registryAuth {
+		t.Errorf("a route other than a pull or a distribution check may carry a registry credential: %+v", rt)
+	}
+}
