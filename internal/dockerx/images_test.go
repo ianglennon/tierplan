@@ -142,3 +142,56 @@ func TestImagePullErrorNamesTheRefAndNodeButNeverTheAuth(t *testing.T) {
 		t.Errorf("error = %v", err)
 	}
 }
+
+func TestDistributionInspectAnswersTheDigestAndOnlyRealPlatforms(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	c := newClient(t, fake)
+	const ref = "localhost:5000/private/app:1"
+	res, err := c.DistributionInspect(context.Background(), ref, "e30=")
+	if err != nil {
+		t.Fatalf("DistributionInspect: %v", err)
+	}
+	if !strings.HasPrefix(res.Digest, "sha256:") {
+		t.Errorf("digest = %q, want a sha256 digest", res.Digest)
+	}
+	if want := []string{"linux/amd64", "linux/arm64/v8"}; !slices.Equal(res.Platforms, want) {
+		t.Errorf("platforms = %q, want %q with no unknown/unknown", res.Platforms, want)
+	}
+	if got := fake.DistributionAuth(); !slices.Equal(got, []string{"e30="}) {
+		t.Errorf("auth headers = %q, want the one that was sent", got)
+	}
+	if got := fake.DistributionRefs(); !slices.Equal(got, []string{ref}) {
+		t.Errorf("refs = %q, want %q", got, ref)
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Errorf("a distribution check wrote %v, want nothing", w)
+	}
+}
+
+func TestDistributionInspectFailuresAreClassifiedAsAPullIs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status dockertest.FakePullStatus
+		want   string
+	}{
+		{"403", dockertest.FakePullStatus{Code: 403, Message: "Head \"https://ghcr.io/v2/acme/app/manifests/x\": denied"}, dockerx.PullCodeDenied},
+		{"401", dockertest.FakePullStatus{Code: 401, Message: "unauthorized: authentication required"}, dockerx.PullCodeUnauthorized},
+		{"404", dockertest.FakePullStatus{Code: 404, Message: "manifest unknown"}, dockerx.PullCodeNotFound},
+		{"500 no such host", dockertest.FakePullStatus{Code: 500, Message: "lookup reg.example: no such host"}, dockerx.PullCodeRegistryUnreachable},
+		{"500 certificate", dockertest.FakePullStatus{Code: 500, Message: "x509: certificate signed by unknown authority"}, dockerx.PullCodeRegistryTLS},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newClient(t, dockertest.NewFake(t, dockertest.FakeConfig{PullStatus: tc.status}))
+			_, err := c.DistributionInspect(context.Background(), "ghcr.io/acme/app:1", "c2VjcmV0LXRva2Vu")
+			if err == nil {
+				t.Fatal("DistributionInspect succeeded")
+			}
+			if got := dockerx.PullFailure(err); got != tc.want {
+				t.Errorf("PullFailure(%v) = %q, want %q", err, got, tc.want)
+			}
+			if strings.Contains(err.Error(), "c2VjcmV0LXRva2Vu") {
+				t.Errorf("error %q carries the credential", err)
+			}
+		})
+	}
+}

@@ -6,6 +6,7 @@ package api_test
 import (
 	"context"
 	"crypto/x509"
+	"database/sql"
 	"encoding/json"
 	"encoding/pem"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/bayplan/proto/wire"
 )
 
 // Registry credentials (plan 05-05, IMG-01, D-01, D-05, D-09, D-30, D-31). The router, policy,
@@ -1745,5 +1747,285 @@ func TestATestOfAStoredCredentialLendsItsCAAndSwitchUnlessTheTestSendsOthers(t *
 	}
 	if last := f.storedTest(t, admin, c.ID); last == nil || !last.OK {
 		t.Errorf("lastTest = %+v, want the earlier pass kept: the changed test was not saved values", last)
+	}
+}
+
+// Test from an environment (plan 05-13, IMG-01, D-13): a node's engine reads the manifest.
+
+type fromEnvResult struct {
+	NodeID     string   `json:"nodeId"`
+	Node       string   `json:"node"`
+	State      string   `json:"state"`
+	Code       string   `json:"code"`
+	Digest     string   `json:"digest"`
+	Platforms  []string `json:"platforms"`
+	Repository string   `json:"repository"`
+}
+
+func fromEnvBody(envID, repo, tag string) string {
+	m := map[string]string{"type": "generic", "host": "localhost:5000", "username": "bot", "secret": pullCredSecret, "repository": repo}
+	if envID != "" {
+		m["envId"] = envID
+	}
+	if tag != "" {
+		m["tag"] = tag
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+func decodeFromEnv(t *testing.T, rec *httptest.ResponseRecorder) fromEnvResult {
+	t.Helper()
+	var r fromEnvResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &r); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body, err)
+	}
+	return r
+}
+
+func TestATestFromAnEnvironmentRunsOnOneManagerNamesItAndSendsTheCredentialOnlyThere(t *testing.T) {
+	f, env, alpha, bravo := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	admin := credentialUser{f.cookie, f.csrf}
+
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBody(env.ID, "private/app", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test-from-env: %d %s", rec.Code, rec.Body)
+	}
+	res := decodeFromEnv(t, rec)
+	if res.State != "passed" || res.Code != "" || res.Node != "alpha" || res.NodeID != alpha.id ||
+		!strings.HasPrefix(res.Digest, "sha256:") || res.Repository != "localhost:5000/private/app" ||
+		!slices.Equal(res.Platforms, []string{"linux/amd64", "linux/arm64/v8"}) {
+		t.Errorf("result = %+v, want passed on alpha with the digest and the real platforms", res)
+	}
+	// One node was asked, once, for the tag that defaults to latest, with the credential.
+	if got := bravo.fake.DistributionAuth(); len(got) != 0 {
+		t.Errorf("bravo was asked too: %q", got)
+	}
+	refs, auths := alpha.fake.DistributionRefs(), alpha.fake.DistributionAuth()
+	if !slices.Equal(refs, []string{"localhost:5000/private/app:latest"}) || len(auths) != 1 {
+		t.Fatalf("alpha saw %q with %d headers, want one check of private/app:latest", refs, len(auths))
+	}
+	if user, pw, server := decodedPullAuth(t, auths[0]); user != "bot" || pw != pullCredSecret || server != "localhost:5000" {
+		t.Errorf("header = %q %q %q, want the credential for localhost:5000", user, pw, server)
+	}
+	if w := alpha.fake.Writes(); len(w) != 0 {
+		t.Errorf("the check wrote %v", w)
+	}
+	if strings.Contains(rec.Body.String(), pullCredSecret) {
+		t.Errorf("the response carries the secret: %s", rec.Body)
+	}
+
+	// Audited with the environment, the node and via env, never the secret.
+	var envID, via, node, repo, result string
+	if err := f.st.Read.QueryRow(`SELECT COALESCE(env_id, ''), details->>'via', details->>'node', details->>'repository', result
+		FROM audit_log WHERE action = 'registry.credential_tested'`).Scan(&envID, &via, &node, &repo, &result); err != nil {
+		t.Fatal(err)
+	}
+	if envID != env.ID || via != "env" || node != alpha.id || repo != "localhost:5000/private/app" || result != "success" {
+		t.Errorf("audit = %q %q %q %q %q, want the environment, via env, the node, the repository and success", envID, via, node, repo, result)
+	}
+	var raw string
+	if err := f.st.Read.QueryRow(`SELECT COALESCE(details, '') FROM audit_log WHERE action = 'registry.credential_tested'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, pullCredSecret) {
+		t.Errorf("the audit row carries the secret: %s", raw)
+	}
+}
+
+func TestATestFromAnEnvironmentOfASwarmPrefersAManagerOverAnEarlierWorker(t *testing.T) {
+	worker := &wire.Facts{EngineID: "ENG:alpha", Hostname: "alpha", EngineReachable: true,
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-alpha", ClusterID: "cluster-1"}}
+	f, env, w, m := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active"},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		worker, pairFacts("bravo", false))
+	admin := credentialUser{f.cookie, f.csrf}
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBody(env.ID, "private/app", "2"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test-from-env: %d %s", rec.Code, rec.Body)
+	}
+	if res := decodeFromEnv(t, rec); res.Node != "bravo" || res.NodeID != m.id || res.State != "passed" {
+		t.Errorf("result = %+v, want it run on the manager bravo", res)
+	}
+	if len(w.fake.DistributionAuth()) != 0 || !slices.Equal(m.fake.DistributionRefs(), []string{"localhost:5000/private/app:2"}) {
+		t.Errorf("worker saw %q, manager saw %q", w.fake.DistributionRefs(), m.fake.DistributionRefs())
+	}
+}
+
+func TestATestFromAnEnvironmentNamesTheNodeAndTheCodeWhenItCannotPull(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status dockertest.FakePullStatus
+		want   string
+	}{
+		{"denied", dockertest.FakePullStatus{Code: 403, Message: "Head \"https://localhost:5000/v2/private/app/manifests/latest\": denied"}, "pull_denied"},
+		{"unauthorized", dockertest.FakePullStatus{Code: 401, Message: "unauthorized: authentication required"}, "pull_unauthorized"},
+		{"missing", dockertest.FakePullStatus{Code: 404, Message: "manifest unknown"}, "image_not_found"},
+		{"unreachable", dockertest.FakePullStatus{Code: 500, Message: "lookup localhost: no such host"}, "registry_unreachable"},
+		{"certificate", dockertest.FakePullStatus{Code: 500, Message: "x509: certificate signed by unknown authority"}, "registry_tls"},
+		{"an agent too old for the route", dockertest.FakePullStatus{Code: 403, Message: "agent_policy_denied: GET /distribution/localhost:5000/private/app:latest/json"}, "agent_policy_denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, env, node, _ := twoNodes(t,
+				dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true, PullStatus: tc.status},
+				dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+				pairFacts("alpha", false), pairFacts("bravo", false))
+			admin := credentialUser{f.cookie, f.csrf}
+			rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBody(env.ID, "private/app", ""))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("test-from-env: %d %s", rec.Code, rec.Body)
+			}
+			res := decodeFromEnv(t, rec)
+			if res.State != "failed" || res.Code != tc.want || res.Node != "alpha" || res.NodeID != node.id || res.Digest != "" {
+				t.Errorf("result = %+v, want failed %s on alpha", res, tc.want)
+			}
+			if strings.Contains(rec.Body.String(), "manifests/latest") || strings.Contains(rec.Body.String(), "x509") {
+				t.Errorf("the answer carries text from the engine: %s", rec.Body)
+			}
+			var reason, result string
+			if err := f.st.Read.QueryRow(`SELECT COALESCE(reason, ''), result FROM audit_log WHERE action = 'registry.credential_tested'`).Scan(&reason, &result); err != nil {
+				t.Fatal(err)
+			}
+			if reason != tc.want || result != "failure" {
+				t.Errorf("audit = %q %q, want failure %s", result, reason, tc.want)
+			}
+		})
+	}
+}
+
+func TestATestFromAnEnvironmentNeedsARepositoryAndAUsableTag(t *testing.T) {
+	f, env, node, _ := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	admin := credentialUser{f.cookie, f.csrf}
+	if rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBody(env.ID, "", "")); rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "repository_required" {
+		t.Errorf("no repository: %d %s, want 422 repository_required", rec.Code, rec.Body)
+	}
+	for _, tag := range []string{"bad tag", "1@sha256:" + strings.Repeat("a", 64), "-x"} {
+		rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBody(env.ID, "private/app", tag))
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "validation_failed" || !strings.Contains(rec.Body.String(), "tag_invalid") {
+			t.Errorf("tag %q: %d %s, want 422 tag_invalid", tag, rec.Code, rec.Body)
+		}
+	}
+	if rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBody(env.ID, "Private/App", "")); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "test_repository_invalid") {
+		t.Errorf("upper-case repository: %d %s, want 422 test_repository_invalid", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBody("no-such-env", "private/app", "")); rec.Code != http.StatusNotFound || problemType(t, rec) != "environment_not_found" {
+		t.Errorf("unknown environment: %d %s, want 404 environment_not_found", rec.Code, rec.Body)
+	}
+	if got := node.fake.DistributionAuth(); len(got) != 0 {
+		t.Errorf("a refused request reached the node: %q", got)
+	}
+}
+
+func TestATestFromAnEnvironmentOfAStoredCredentialUsesItsSecretAndOnlyThatLayers(t *testing.T) {
+	f, env, node, _ := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	admin := credentialUser{f.cookie, f.csrf}
+	inst := f.addPullCredential(t, "inst", "")
+	envCred := f.addPullCredential(t, "own", env.ID)
+
+	body := func(id string) string {
+		return `{"credentialId":"` + id + `","repository":"private/app"}`
+	}
+	// The instance family tests an instance credential with its stored secret ...
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env",
+		`{"envId":"`+env.ID+`","credentialId":"`+inst.ID+`","repository":"private/app"}`)
+	if rec.Code != http.StatusOK || decodeFromEnv(t, rec).State != "passed" {
+		t.Fatalf("instance credential: %d %s", rec.Code, rec.Body)
+	}
+	if got := node.fake.DistributionAuth(); len(got) != 1 {
+		t.Fatalf("headers = %q, want one", got)
+	} else if user, pw, _ := decodedPullAuth(t, got[0]); user != "bot" || pw != pullCredSecret {
+		t.Errorf("header = %q %q, want the stored credential", user, pw)
+	}
+	// ... but not an environment's.
+	rec = f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env",
+		`{"envId":"`+env.ID+`","credentialId":"`+envCred.ID+`","repository":"private/app"}`)
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "credential_not_found" {
+		t.Errorf("environment credential through the instance family: %d %s, want 404 credential_not_found", rec.Code, rec.Body)
+	}
+	// The environment family tests the environment's own, and not the instance's.
+	rec = f.credCall(t, admin, http.MethodPost, "/api/env/"+env.ID+"/registries/test-from-env", body(envCred.ID))
+	if rec.Code != http.StatusOK || decodeFromEnv(t, rec).Node != "alpha" {
+		t.Errorf("own credential: %d %s, want it tested on alpha", rec.Code, rec.Body)
+	}
+	rec = f.credCall(t, admin, http.MethodPost, "/api/env/"+env.ID+"/registries/test-from-env", body(inst.ID))
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "credential_not_found" {
+		t.Errorf("instance credential through the environment family: %d %s, want 404 credential_not_found", rec.Code, rec.Body)
+	}
+	// Nothing is remembered on the credential by a check from a node.
+	if c := decodeCred(t, f.credCall(t, admin, http.MethodGet, "/api/registries/"+inst.ID, "")); c.ID == "" {
+		t.Errorf("credential read back empty")
+	}
+	var tested sql.NullInt64
+	if err := f.st.Read.QueryRow(`SELECT last_test_at FROM registry_credentials WHERE id = ?`, inst.ID).Scan(&tested); err != nil || tested.Valid {
+		t.Errorf("last_test_at = %v, %v, want none: only the server's test on the saved values is remembered", tested, err)
+	}
+}
+
+func TestATestFromAnEnvironmentNeedsTheCredentialsPermissionOfItsFamily(t *testing.T) {
+	f, env, node, _ := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	other := f.srv.NewEnvironment(t, "Other")
+	envAdmin := f.asRoleOn(t, "envadmin", env.ID, "admin")
+	operator := f.asRoleOn(t, "operator", env.ID, "operator")
+
+	path := "/api/env/" + env.ID + "/registries/test-from-env"
+	if rec := f.credCall(t, envAdmin, http.MethodPost, path, fromEnvBody("", "private/app", "")); rec.Code != http.StatusOK || decodeFromEnv(t, rec).State != "passed" {
+		t.Errorf("Env Admin on their environment: %d %s, want 200 passed", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, operator, http.MethodPost, path, fromEnvBody("", "private/app", "")); rec.Code != http.StatusForbidden {
+		t.Errorf("Operator: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, envAdmin, http.MethodPost, "/api/env/"+other.ID+"/registries/test-from-env", fromEnvBody("", "private/app", "")); rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+		t.Errorf("Env Admin on another environment: %d %s, want 403 or 404", rec.Code, rec.Body)
+	}
+	// The instance family is for instance admins: an Env Admin cannot aim it at any environment.
+	if rec := f.credCall(t, envAdmin, http.MethodPost, "/api/registries/test-from-env", fromEnvBody(env.ID, "private/app", "")); rec.Code != http.StatusForbidden {
+		t.Errorf("Env Admin through the instance family: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if got := node.fake.DistributionAuth(); len(got) != 1 {
+		t.Errorf("headers = %q, want only the Env Admin's one check", got)
+	}
+}
+
+func TestATestFromAnEnvironmentSharesTheTestLimitAndAnEnvironmentWithNoNodeIs503(t *testing.T) {
+	f, env, _, _ := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	admin := credentialUser{f.cookie, f.csrf}
+	empty := f.srv.NewEnvironment(t, "Empty")
+	if rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBody(empty.ID, "private/app", "")); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("environment with no agent: %d %s, want 503", rec.Code, rec.Body)
+	}
+	serverTest := `{"type":"generic","host":"169.254.169.254","username":"bot","secret":"does-not-matter-1234"}`
+	// The request above counted as the first, so eight server tests and one check make ten.
+	for i := range 8 {
+		if rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test", serverTest); rec.Code != http.StatusOK {
+			t.Fatalf("server test %d: %d %s", i+1, rec.Code, rec.Body)
+		}
+	}
+	if rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", fromEnvBody(env.ID, "private/app", "")); rec.Code != http.StatusOK {
+		t.Fatalf("tenth test: %d %s", rec.Code, rec.Body)
+	}
+	for _, path := range []string{"/api/registries/test-from-env", "/api/env/" + env.ID + "/registries/test-from-env"} {
+		body := fromEnvBody(env.ID, "private/app", "")
+		if strings.Contains(path, "/env/") {
+			body = fromEnvBody("", "private/app", "")
+		}
+		if rec := f.credCall(t, admin, http.MethodPost, path, body); rec.Code != http.StatusTooManyRequests || problemType(t, rec) != "rate_limited" {
+			t.Errorf("%s: %d %s, want 429 rate_limited", path, rec.Code, rec.Body)
+		}
 	}
 }

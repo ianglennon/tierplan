@@ -13,6 +13,7 @@ import {
   type CredentialPatch,
   type CredentialRequest,
   CredentialRequestError,
+  type CredentialTestRequest,
   type CredentialTestResult,
   credentialQuery,
   credentialsQuery,
@@ -73,6 +74,7 @@ import {
   useManageReason,
 } from "@/features/registries/credential-table";
 import { hostAfterTypeChange, PRESETS, presetFor } from "@/features/registries/presets";
+import { TestFromEnv } from "@/features/registries/test-from-env";
 import { TestResult } from "@/features/registries/test-result";
 import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -563,34 +565,44 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
     );
   }
 
-  // runTest tries the sign-in as it stands in the form, saved or not. The server makes the
-  // calls, so it also tells a registry that is down from a secret that is wrong.
-  async function runTest() {
-    if (tester.isPending) return;
-    setTestError(null);
+  // testRequest checks the fields a test uses and the test repository, and answers the values of
+  // the form as a test sends them, saved or not; null when something is wrong, which is then
+  // shown on its field. The repository to read is left to the caller.
+  async function testRequest(): Promise<CredentialTestRequest | null> {
     const repo = testRepository.trim();
     const repoOk = repo === "" || PREFIX.test(repo.replace(/^[^/]*[.:][^/]*\//, "").toLowerCase());
     setTestRepositoryInvalid(!repoOk);
     const valid = await form.trigger(["host", "username", "secret", "caPem"]);
     if (form.getFieldState("caPem").invalid) setAdvanced(true);
-    if (!valid || !repoOk) return;
+    if (!valid || !repoOk) return null;
+    const values = form.getValues();
+    return {
+      ...(credential ? { credentialId: credential.id } : {}),
+      type: values.type,
+      username: values.username.trim(),
+      ...(values.secret ? { secret: values.secret } : {}),
+      ...(preset.hostEditable ? { host: values.host.trim() } : {}),
+      ...(values.prefix.trim() ? { prefix: values.prefix.trim() } : {}),
+      // The test uses the CA and the switch as they stand in the form, saved or not.
+      caPem: values.caPem.trim(),
+      insecure: values.insecure,
+    };
+  }
+
+  // runTest tries the sign-in as it stands in the form, saved or not. The server makes the
+  // calls, so it also tells a registry that is down from a secret that is wrong.
+  async function runTest() {
+    if (tester.isPending) return;
+    setTestError(null);
+    const base = await testRequest();
+    if (!base) return;
+    const repo = testRepository.trim();
     const values = form.getValues();
     const key = testKey;
     tester.mutate(
       {
         envId: credential ? (credential.scope.envId ?? undefined) : envOfScope(values.scope),
-        body: {
-          ...(credential ? { credentialId: credential.id } : {}),
-          type: values.type,
-          username: values.username.trim(),
-          ...(values.secret ? { secret: values.secret } : {}),
-          ...(preset.hostEditable ? { host: values.host.trim() } : {}),
-          ...(values.prefix.trim() ? { prefix: values.prefix.trim() } : {}),
-          ...(repo ? { testRepository: repo } : {}),
-          // The test uses the CA and the switch as they stand in the form, saved or not.
-          caPem: values.caPem.trim(),
-          insecure: values.insecure,
-        },
+        body: { ...base, ...(repo ? { testRepository: repo } : {}) },
       },
       {
         onSuccess: (result) => {
@@ -987,6 +999,14 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                       {t("registries.test.needSecret")}
                     </span>
                   ) : null}
+                  <TestFromEnv
+                    prepare={testRequest}
+                    repository={testRepository}
+                    needsSecret={nothingToTest}
+                    credentialEnvId={
+                      credential ? (credential.scope.envId ?? undefined) : envOfScope(scope)
+                    }
+                  />
                 </div>
                 {testError ? (
                   <Alert variant="destructive" role="alert">

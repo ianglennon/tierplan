@@ -17,6 +17,8 @@ export type ConsideredCredential = components["schemas"]["ConsideredCredentialBo
 export type CredentialTestRequest = components["schemas"]["CredentialTestRequest"];
 export type CredentialTestResult = components["schemas"]["CredentialTestResultBody"];
 export type TestStep = components["schemas"]["TestStepBody"];
+export type CredentialTestFromEnvRequest = components["schemas"]["CredentialTestFromEnvRequest"];
+export type CredentialTestFromEnvResult = components["schemas"]["CredentialTestFromEnvBody"];
 
 // How often the Last test and Last use cells are read again while the page is open.
 // There is no stream for credentials (UI-SPEC "Live updates").
@@ -316,5 +318,54 @@ export function useTestCredential() {
     onSuccess: (_result, { body }) => {
       if (body.credentialId) void queryClient.invalidateQueries({ queryKey: REGISTRIES_KEY });
     },
+  });
+}
+
+// What the test-from-environment mutation is given: the values of the sheet and the
+// repository to read, the environment whose node makes the check, and the environment the
+// credential belongs to (absent for an instance credential), which picks the route family.
+export interface TestFromEnvVariables {
+  body: CredentialTestFromEnvRequest;
+  // The environment whose node runs the check.
+  runEnvId: string;
+  credentialEnvId?: string;
+}
+
+// postTestFromEnv asks one node of an environment to read a manifest with the credential,
+// through the route of the credential's layer. It never retries (each check is a sign-in
+// attempt the server limits), and the body, which holds the secret, is never copied into the
+// error. The answer is 200 whether the node could pull or not; a failure is in its state.
+export async function postTestFromEnv({
+  body,
+  runEnvId,
+  credentialEnvId,
+}: TestFromEnvVariables): Promise<CredentialTestFromEnvResult> {
+  try {
+    const res = credentialEnvId
+      ? await api.POST("/api/env/{envId}/registries/test-from-env", {
+          params: { path: { envId: credentialEnvId } },
+          body,
+        })
+      : await api.POST("/api/registries/test-from-env", { body: { ...body, envId: runEnvId } });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new CredentialRequestError(problem.status, problem.type, problem.fields, "POST");
+    }
+    return res.data;
+  } catch (e) {
+    throw e instanceof CredentialRequestError
+      ? e
+      : new CredentialRequestError(0, undefined, [], "POST");
+  }
+}
+
+// useTestCredentialFromEnv is the mutation behind the sheet's Test from an environment. The
+// variables hold the secret that was typed, so the cache lets go of them at once. Nothing is
+// stored by a check from a node, so no list is read again.
+export function useTestCredentialFromEnv() {
+  return useMutation<CredentialTestFromEnvResult, CredentialRequestError, TestFromEnvVariables>({
+    mutationFn: postTestFromEnv,
+    retry: false,
+    gcTime: 0,
   });
 }

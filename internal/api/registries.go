@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,10 +21,12 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 )
 
 const (
@@ -32,6 +35,7 @@ const (
 	problemHostPrefixTaken       = "host_prefix_taken"
 	problemHubFallbackTaken      = "hub_fallback_taken"
 	problemCredentialNotFound    = "credential_not_found" //nolint:gosec // G101: a problem or target type, not a credential
+	problemRepositoryRequired    = "repository_required"
 
 	credentialTargetType = "registry_credential" //nolint:gosec // G101: a problem or target type, not a credential
 
@@ -49,8 +53,11 @@ type RegistriesDeps struct {
 	// are always registered.
 	Store *registry.Store
 	// Envs names the environment of an environment credential.
-	Envs  *envs.Service
-	Audit *audit.Writer
+	Envs *envs.Service
+	// Aggregator reaches a node's engine for a check from an environment. Nil answers 503
+	// registries_unavailable on those routes.
+	Aggregator *envs.Aggregator
+	Audit      *audit.Writer
 	// Checker decides who may see and manage which credentials.
 	Checker *rbac.Checker
 	// Egress is the policy every registry connection of the server dials through. Its zero
@@ -301,6 +308,95 @@ type CredentialTestOutput struct {
 	Body         CredentialTestResultBody
 }
 
+// CredentialTestFromEnvRequest is the body of POST /api/env/{envId}/registries/test-from-env: the
+// values of a credential test, as the sheet has them, and the image to try to read.
+type CredentialTestFromEnvRequest struct {
+	CredentialTestRequest
+	Repository string `json:"repository,omitempty" maxLength:"512" doc:"The repository to read through the environment's node, like acme/app. Required: the engine needs a concrete image, so 422 repository_required without one (testRepository is taken in its place). 422 test_repository_invalid"`
+	Tag        string `json:"tag,omitempty" maxLength:"128" doc:"The tag to read; latest when left out. 422 tag_invalid"`
+}
+
+// InstanceCredentialTestFromEnvRequest is the body of POST /api/registries/test-from-env.
+type InstanceCredentialTestFromEnvRequest struct {
+	CredentialTestFromEnvRequest
+	EnvID string `json:"envId" minLength:"1" maxLength:"64" doc:"The environment whose node makes the check. 404 environment_not_found when there is none"`
+}
+
+// TestInstanceCredentialFromEnvInput is the request of the instance test-from-environment route.
+type TestInstanceCredentialFromEnvInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      InstanceCredentialTestFromEnvRequest
+}
+
+// TestEnvCredentialFromEnvInput is the request of the environment test-from-environment route.
+type TestEnvCredentialFromEnvInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      CredentialTestFromEnvRequest
+}
+
+// CredentialTestFromEnvBody is what one node made of a credential.
+type CredentialTestFromEnvBody struct {
+	NodeID     string    `json:"nodeId" doc:"The node that made the check, by the ID the node lists use"`
+	Node       string    `json:"node" doc:"The node's name, for the sentence that names it"`
+	State      string    `json:"state" enum:"passed,failed" doc:"passed: the node read the manifest with the credential. failed: it could not; code says why"`
+	Code       string    `json:"code" doc:"Why it failed, as a stable code: pull_denied, pull_unauthorized, image_not_found, invalid_reference, rate_limited, registry_unreachable, registry_tls, registry_http, cancelled, pull_failed, agent_policy_denied (the node's agent is too old for this check) or node_unavailable (the node did not answer). Empty when it passed. No text from the registry or the engine is ever returned"`
+	Digest     string    `json:"digest" doc:"The digest of the manifest the node read; empty when it failed"`
+	Platforms  []string  `json:"platforms" doc:"The platforms of the image, like linux/amd64; empty when it failed"`
+	Repository string    `json:"repository" doc:"The repository that was tried, with its registry host, like ghcr.io/acme/app"`
+	TestedAt   time.Time `json:"testedAt" format:"date-time" doc:"When the check ran"`
+}
+
+// CredentialTestFromEnvOutput wraps CredentialTestFromEnvBody for huma.
+type CredentialTestFromEnvOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         CredentialTestFromEnvBody
+}
+
+// tagPattern is what an image tag may be (the reference grammar's).
+var tagPattern = regexp.MustCompile(`^[\w][\w.-]{0,127}$`)
+
+// nonNil is s, or an empty slice for nil, so a list is [] in JSON and never null.
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
+// checkNode is the node of an environment that makes a credential check: a connected manager
+// on a swarm, else the first connected node by name (a standalone host has one).
+func checkNode(agg envs.Aggregate) (envs.NodeRef, bool) {
+	nodes := slices.Clone(agg.Nodes)
+	slices.SortFunc(nodes, func(a, b envs.NodeRef) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
+	})
+	for _, n := range nodes {
+		if n.Role == "manager" {
+			return n, true
+		}
+	}
+	if len(nodes) > 0 {
+		return nodes[0], true
+	}
+	return envs.NodeRef{}, false
+}
+
+// checkErrorCode maps the error of a node's distribution check to the code the SPA words.
+func checkErrorCode(err error) string {
+	var denied *envs.AgentPolicyDeniedError
+	switch {
+	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound), errors.Is(err, envs.ErrOffline),
+		errors.Is(err, envs.ErrUnsupported), errors.Is(err, tunnel.ErrAgentGone):
+		return problemNodeUnavailable
+	case errors.As(envs.ClassifyDockerError(err), &denied):
+		return problemAgentPolicyDenied
+	}
+	return dockerx.PullFailure(err)
+}
+
 // testLimiter is the per-user limit on credential tests, shared by both route families.
 type testLimiter struct {
 	mu sync.Mutex
@@ -490,12 +586,19 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 	if clients == nil {
 		clients = registry.NewClientCache(d.Egress, d.Version, d.Log)
 	}
-	// runTest tries the sign-in of a submission against its registry, from this server, and
-	// audits it. The submission names a stored credential of this layer (credentialId), or it
-	// does not. A stored credential fills in what was left blank and, with no secret typed,
-	// lends its stored secret, which goes to the registry client and nowhere else. The outcome
-	// is stored only when the test ran on the saved values.
-	runTest := func(ctx context.Context, p *rbac.Principal, envID, userAgent string, req CredentialTestRequest) (*CredentialTestOutput, error) {
+	// preparedTest is a submission once its stored credential has lent what was left blank.
+	type preparedTest struct {
+		stored *registry.Credential
+		in     registry.CreateInput
+		repo   string
+		// secret is what the registry is shown: the typed one, else the stored one opened.
+		secret string
+	}
+	// prepare reads the stored credential a submission names, if any, validates the values as
+	// adding a credential would and opens the secret to try. The credential must belong to the
+	// layer of envID (the instance's when it is empty). The secret goes to the caller and
+	// nowhere else.
+	prepare := func(ctx context.Context, envID string, req CredentialTestRequest) (*preparedTest, error) {
 		var stored *registry.Credential
 		if req.CredentialID != "" {
 			c, err := lookup(ctx, envID, req.CredentialID)
@@ -527,6 +630,19 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 				return nil, failIn(envID != "", "open the stored secret to test", err)
 			}
 		}
+		return &preparedTest{stored: stored, in: in, repo: repo, secret: secret}, nil
+	}
+	// runTest tries the sign-in of a submission against its registry, from this server, and
+	// audits it. The submission names a stored credential of this layer (credentialId), or it
+	// does not. A stored credential fills in what was left blank and, with no secret typed,
+	// lends its stored secret, which goes to the registry client and nowhere else. The outcome
+	// is stored only when the test ran on the saved values.
+	runTest := func(ctx context.Context, p *rbac.Principal, envID, userAgent string, req CredentialTestRequest) (*CredentialTestOutput, error) {
+		pt, err := prepare(ctx, envID, req)
+		if err != nil {
+			return nil, err
+		}
+		stored, in, repo, secret := pt.stored, pt.in, pt.repo, pt.secret
 		if !limiter.allow(p.ID) {
 			return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tests. Wait a minute and try again.")
 		}
@@ -575,6 +691,90 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		}
 		return &CredentialTestOutput{CacheControl: "no-store", Body: CredentialTestResultBody{
 			Reachable: stepBody(res.Reachable), SignedIn: stepBody(res.SignedIn), CanPull: stepBody(res.CanPull), TestedAt: time.Now().UTC(),
+		}}, nil
+	}
+	// runFromEnv tries to read an image's manifest through one node of the environment runEnvID
+	// with the submitted credential, which belongs to the layer of credEnvID, and audits it. The
+	// node's engine makes the registry call, so a firewall, a DNS name or a certificate authority
+	// only the node has is what gets tested (D-13). The answer names the node; the credential
+	// travels as the engine's registry header on this one call and is neither kept nor returned.
+	runFromEnv := func(ctx context.Context, p *rbac.Principal, credEnvID, runEnvID, userAgent string, req CredentialTestFromEnvRequest) (*CredentialTestFromEnvOutput, error) {
+		if d.Aggregator == nil {
+			return nil, unavailable()
+		}
+		req.TestRepository = cmp.Or(strings.TrimSpace(req.Repository), req.TestRepository)
+		if strings.TrimSpace(req.TestRepository) == "" {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRepositoryRequired, "Enter a test repository.")
+		}
+		pt, err := prepare(ctx, credEnvID, req.CredentialTestRequest)
+		if err != nil {
+			return nil, err
+		}
+		tag := cmp.Or(strings.TrimSpace(req.Tag), "latest")
+		if !tagPattern.MatchString(tag) {
+			return nil, credentialFieldProblems(&registry.ValidationError{Fields: []registry.FieldError{{Field: "tag", Code: "tag_invalid"}}})
+		}
+		ref, perr := registry.ParseRef(pt.in.Host + "/" + pt.repo + ":" + tag)
+		if perr != nil || ref.Domain != pt.in.Host || ref.Tag != tag || ref.Digest != "" {
+			return nil, credentialFieldProblems(&registry.ValidationError{Fields: []registry.FieldError{{Field: "testRepository", Code: "test_repository_invalid"}}})
+		}
+		if !limiter.allow(p.ID) {
+			return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tests. Wait a minute and try again.")
+		}
+		agg, _, err := d.Aggregator.Snapshot(ctx, runEnvID)
+		if err != nil {
+			return nil, snapshotProblem(d.Log, runEnvID, err)
+		}
+		node, ok := checkNode(agg)
+		if !ok {
+			return nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "No node of this environment is connected to Bayplan.")
+		}
+		header := registry.EncodeAuth(pt.in.Username, pt.secret, pt.in.Host)
+		nctx, cancel := context.WithTimeout(ctx, testBudget)
+		defer cancel()
+		var res dockerx.DistributionResult
+		err = d.Aggregator.OnNode(nctx, runEnvID, node.ID, func(c *dockerx.Client) error {
+			var e error
+			res, e = c.DistributionInspect(nctx, ref.String(), header)
+			return e
+		})
+		code := ""
+		if err != nil {
+			code = checkErrorCode(err)
+			if code == dockerx.PullCodeFailed || code == problemNodeUnavailable {
+				// The text stays in the server log; the answer carries the code only.
+				d.Log.Warn("a credential check from an environment failed", "environment", runEnvID, "node", node.ID, "repository", ref.Repo(), "code", code, "error", err)
+			}
+		}
+		layer := registry.LayerInstance
+		if credEnvID != "" {
+			layer = registry.LayerEnvironment
+		}
+		details := map[string]string{
+			"layer": layer, "host": pt.in.Host, "prefix": pt.in.Prefix, "type": pt.in.Type, "via": "env",
+			"node": node.ID, "node_name": node.Name, "repository": ref.Repo(), "tag": tag,
+		}
+		entry := audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialTested, TargetType: credentialTargetType,
+			EnvID: runEnvID, Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
+		}
+		if pt.stored != nil {
+			entry.TargetID = pt.stored.ID
+			details["name"] = pt.stored.Name
+		}
+		state := "passed"
+		if code != "" {
+			state = "failed"
+			entry.Result, entry.Reason = audit.ResultFailure, code
+			details["code"] = code
+		}
+		if err := d.Audit.Record(ctx, entry); err != nil {
+			d.Log.Error("could not audit a credential check from an environment", "host", pt.in.Host, "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		return &CredentialTestFromEnvOutput{CacheControl: "no-store", Body: CredentialTestFromEnvBody{
+			NodeID: node.ID, Node: node.Name, State: state, Code: code, Digest: res.Digest, Platforms: nonNil(res.Platforms),
+			Repository: ref.Repo(), TestedAt: time.Now().UTC(),
 		}}, nil
 	}
 	// update changes a credential of one layer and audits it, carrying the environment.
@@ -716,6 +916,59 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			return nil, unavailable()
 		}
 		return runTest(ctx, p, in.EnvID, in.UserAgent, in.Body)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "testInstanceCredentialFromEnv",
+		Method:      http.MethodPost,
+		Path:        "/api/registries/test-from-env",
+		Summary:     "Test a registry sign-in from an environment's node",
+		Description: "Asks one node of the environment envId to read the manifest of repository:tag (latest when left out) from the credential's registry with the credential, through its agent and its " +
+			"own engine. A firewall, an internal DNS name or a certificate authority that only the node has shows up here and cannot show up in the server's own test. The engine reads the manifest " +
+			"with a HEAD, which Docker Hub does not count as a pull. On a swarm the check runs on one connected manager, else on the one node; the answer names the node. Works on values that are not saved, " +
+			"or on a stored instance credential (credentialId). The answer is 200 whether the node could pull or not: state is passed or failed, and a failed one carries a code (pull_denied, pull_unauthorized, " +
+			"image_not_found, registry_unreachable, registry_tls, registry_http, rate_limited, pull_failed, agent_policy_denied when the node's agent is older than this server, node_unavailable when the node " +
+			"did not answer), never any text from the registry. Needs registries.instance. 422 repository_required without a repository; 422 validation_failed names the other fields at fault (tag_invalid, " +
+			"test_repository_invalid and those of adding a credential); 404 environment_not_found; 503 node_unavailable when no node of the environment is connected; 502 agent_policy_denied when the " +
+			"environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. Audited as registry.credential_tested with the environment, the node and via env, never the secret.",
+		Tags: []string{"registries"},
+	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *TestInstanceCredentialFromEnvInput) (*CredentialTestFromEnvOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil || d.Envs == nil {
+			return nil, unavailable()
+		}
+		if _, err := d.Envs.Get(ctx, in.Body.EnvID); err != nil {
+			if errors.Is(err, envs.ErrNotFound) {
+				return nil, httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
+			}
+			d.Log.Error("could not read the environment of a credential check", "environment", in.Body.EnvID, "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		return runFromEnv(ctx, p, "", in.Body.EnvID, in.UserAgent, in.Body.CredentialTestFromEnvRequest)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "testEnvCredentialFromEnv",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/registries/test-from-env",
+		Summary:     "Test an environment registry sign-in from its own node",
+		Description: "As testing an instance sign-in from an environment, for the credentials of one environment and run on that environment's own node: a connected manager on a swarm, else its one node. " +
+			"A stored credential (credentialId) must be this environment's own: 404 credential_not_found for the instance's or another environment's. Needs registries.manage on the environment " +
+			"(its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the other test routes: 429 rate_limited. Audited as " +
+			"registry.credential_tested with the environment, the node and via env, never the secret.",
+		Tags: []string{"registries"},
+	}, rbac.Require(rbac.PermRegistriesManage), func(ctx context.Context, in *TestEnvCredentialFromEnvInput) (*CredentialTestFromEnvOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		return runFromEnv(ctx, p, in.EnvID, in.EnvID, in.UserAgent, in.Body)
 	})
 
 	httpx.Register(r, huma.Operation{

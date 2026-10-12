@@ -14,6 +14,65 @@ import (
 )
 
 var _ = registerFakeHandler((*Fake).serveImageCreate)
+var _ = registerFakeHandler((*Fake).serveDistribution)
+
+// serveDistribution answers GET /distribution/{name}/json, the check of whether the daemon
+// can read a manifest. It records the X-Registry-Auth header, then answers as the
+// configuration says: PolicyDeny as an agent too old to know the route does, PullStatus as
+// a registry's refusal, otherwise a descriptor whose digest is the same for the same
+// reference and the platforms of a multi-platform image with the unknown/unknown entries
+// BuildKit attestations appear as.
+func (f *Fake) serveDistribution(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	name, ok := strings.CutPrefix(p, "/distribution/")
+	if !ok || r.Method != http.MethodGet {
+		return false
+	}
+	name, ok = strings.CutSuffix(name, "/json")
+	if !ok {
+		return false
+	}
+	f.mu.Lock()
+	f.distAuth = append(f.distAuth, r.Header.Get("X-Registry-Auth"))
+	f.distRefs = append(f.distRefs, name)
+	f.mu.Unlock()
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	if cfg.PullStatus.Code != 0 {
+		writeJSON(w, cfg.PullStatus.Code, map[string]string{"message": cfg.PullStatus.Message})
+		return true
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"Descriptor": map[string]any{
+			"mediaType": "application/vnd.oci.image.index.v1+json",
+			"digest":    fakeDigest(name),
+			"size":      1024,
+		},
+		"Platforms": []map[string]any{
+			{"architecture": "amd64", "os": "linux"},
+			{"architecture": "unknown", "os": "unknown"},
+			{"architecture": "arm64", "os": "linux", "variant": "v8"},
+			{"architecture": "unknown", "os": "unknown"},
+		},
+	})
+	return true
+}
+
+// DistributionAuth returns the X-Registry-Auth header of every distribution check the
+// daemon served, in order; an anonymous check sends none and is recorded as "".
+func (f *Fake) DistributionAuth() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.distAuth)
+}
+
+// DistributionRefs returns the reference of every distribution check the daemon served.
+func (f *Fake) DistributionRefs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.distRefs)
+}
 
 // serveImageCreate answers POST /images/create, the pull. It records the write and the
 // X-Registry-Auth header, then answers as the configuration says: PolicyDeny and

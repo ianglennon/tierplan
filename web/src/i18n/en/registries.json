@@ -312,6 +312,22 @@
         "permission": "You no longer have permission to do that. Your access may have changed.",
         "generic": "Couldn't run the test. Try again."
       },
+      "fromEnv": {
+        "button": "Test from an environment…",
+        "needRepository": "Enter a test repository",
+        "environment": "Environment",
+        "noEnvironment": "There is no environment to run the test from.",
+        "caption": "Runs on {{where}} through its agent, so it also catches firewall, DNS and CA problems that Bayplan's own server can't see.",
+        "whereBefore": "a node of {{environment}}",
+        "run": "Run test from {{environment}}",
+        "pending": "Testing…",
+        "passed": "{{node}} can pull {{repo}} with this credential.",
+        "failed": "{{node}} couldn't pull {{repo}} with this credential: {{reason}}",
+        "reasons": {
+          "pull_denied": "{{host}} refused this credential for that repository. Check its scopes.",
+          "pull_unauthorized": "{{host}} refused this username and secret."
+        }
+      },
       "lastTest": "Last test",
       "short": {
         "registry_unreachable": "Couldn't reach the registry. Check the address, DNS and firewall.",

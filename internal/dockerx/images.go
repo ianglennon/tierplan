@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -119,6 +120,41 @@ func (c *Client) ImagePull(ctx context.Context, ref string, o PullOptions, on fu
 		return res, &pullError{ref: ref, where: c.t.Describe(), err: err}
 	}
 	return res, nil
+}
+
+// DistributionResult is what the engine learned from a registry about a reference.
+type DistributionResult struct {
+	// Digest is the digest of the manifest, or of the index of a multi-platform image.
+	Digest string
+	// Platforms are os/arch[/variant] for each platform the image is built for. The
+	// unknown/unknown entries BuildKit attestations appear as are dropped.
+	Platforms []string
+}
+
+// DistributionInspect asks the engine to read the manifest of ref from its registry, with
+// the credential in encodedAuth (empty is anonymous), and so says whether this node can
+// pull it. The engine answers with a HEAD of the manifest, which Docker Hub does not count
+// as a pull. Like ImagePull it never retries, and an error is classified by PullFailure.
+// encodedAuth is a credential: it goes to the engine and nowhere else.
+func (c *Client) DistributionInspect(ctx context.Context, ref, encodedAuth string) (DistributionResult, error) {
+	res, err := c.cur().DistributionInspect(ctx, ref, client.DistributionInspectOptions{EncodedRegistryAuth: encodedAuth})
+	if err != nil {
+		return DistributionResult{}, &pullError{ref: ref, where: c.t.Describe(), err: err}
+	}
+	out := DistributionResult{Digest: res.Descriptor.Digest.String()}
+	for _, p := range res.Platforms {
+		if p.OS == "" || p.Architecture == "" || p.OS == "unknown" || p.Architecture == "unknown" {
+			continue
+		}
+		s := p.OS + "/" + p.Architecture
+		if p.Variant != "" {
+			s += "/" + p.Variant
+		}
+		if !slices.Contains(out.Platforms, s) {
+			out.Platforms = append(out.Platforms, s)
+		}
+	}
+	return out, nil
 }
 
 // parsePlatform reads os/arch[/variant].

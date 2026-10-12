@@ -920,6 +920,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/registries/test-from-env": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test an environment registry sign-in from its own node
+         * @description As testing an instance sign-in from an environment, for the credentials of one environment and run on that environment's own node: a connected manager on a swarm, else its one node. A stored credential (credentialId) must be this environment's own: 404 credential_not_found for the instance's or another environment's. Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the other test routes: 429 rate_limited. Audited as registry.credential_tested with the environment, the node and via env, never the secret.
+         */
+        post: operations["testEnvCredentialFromEnv"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/registries/{credentialId}": {
         parameters: {
             query?: never;
@@ -1656,6 +1676,26 @@ export interface paths {
          * @description Runs the registry's own flow from the Bayplan server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, and, when a test repository is given, whether the sign-in can read it. Works on values that are not saved. A 401 to the unauthenticated ping counts as reachable; a refused sign-in is reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, ca_invalid and test_repository_invalid. caPem and insecure apply the credential's own CA and switch to this test only; the operator's BAYPLAN_REGISTRY_BLOCK_CIDRS ranges stay refused even with the switch on. Audited as registry.credential_tested with each step's result, never the secret.
          */
         post: operations["testInstanceCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/registries/test-from-env": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a registry sign-in from an environment's node
+         * @description Asks one node of the environment envId to read the manifest of repository:tag (latest when left out) from the credential's registry with the credential, through its agent and its own engine. A firewall, an internal DNS name or a certificate authority that only the node has shows up here and cannot show up in the server's own test. The engine reads the manifest with a HEAD, which Docker Hub does not count as a pull. On a swarm the check runs on one connected manager, else on the one node; the answer names the node. Works on values that are not saved, or on a stored instance credential (credentialId). The answer is 200 whether the node could pull or not: state is passed or failed, and a failed one carries a code (pull_denied, pull_unauthorized, image_not_found, registry_unreachable, registry_tls, registry_http, rate_limited, pull_failed, agent_policy_denied when the node's agent is older than this server, node_unavailable when the node did not answer), never any text from the registry. Needs registries.instance. 422 repository_required without a repository; 422 validation_failed names the other fields at fault (tag_invalid, test_repository_invalid and those of adding a credential); 404 environment_not_found; 503 node_unavailable when no node of the environment is connected; 502 agent_policy_denied when the environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. Audited as registry.credential_tested with the environment, the node and via env, never the secret.
+         */
+        post: operations["testInstanceCredentialFromEnv"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3137,6 +3177,54 @@ export interface components {
             /** @description Whether the registry accepted it */
             ok: boolean;
         };
+        CredentialTestFromEnvBody: {
+            /** @description Why it failed, as a stable code: pull_denied, pull_unauthorized, image_not_found, invalid_reference, rate_limited, registry_unreachable, registry_tls, registry_http, cancelled, pull_failed, agent_policy_denied (the node's agent is too old for this check) or node_unavailable (the node did not answer). Empty when it passed. No text from the registry or the engine is ever returned */
+            code: string;
+            /** @description The digest of the manifest the node read; empty when it failed */
+            digest: string;
+            /** @description The node's name, for the sentence that names it */
+            node: string;
+            /** @description The node that made the check, by the ID the node lists use */
+            nodeId: string;
+            /** @description The platforms of the image, like linux/amd64; empty when it failed */
+            platforms: string[] | null;
+            /** @description The repository that was tried, with its registry host, like ghcr.io/acme/app */
+            repository: string;
+            /**
+             * @description passed: the node read the manifest with the credential. failed: it could not; code says why
+             * @enum {string}
+             */
+            state: "passed" | "failed";
+            /**
+             * Format: date-time
+             * @description When the check ran
+             */
+            testedAt: string;
+        };
+        CredentialTestFromEnvRequest: {
+            /** @description The custom certificate authority to trust for this test, in PEM. Left out, a stored credential's own is used; an empty string means none. 422 ca_invalid */
+            caPem?: string;
+            /** @description A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment */
+            credentialId?: string;
+            /** @description The registry host, as when adding; 422 host_required or host_invalid */
+            host?: string;
+            /** @description Whether to skip certificate verification and allow plain HTTP for this test. Left out, a stored credential's own switch is used */
+            insecure?: boolean;
+            /** @description The namespace the credential covers. Recorded with the test; it does not change what is tried */
+            prefix?: string;
+            /** @description The repository to read through the environment's node, like acme/app. Required: the engine needs a concrete image, so 422 repository_required without one (testRepository is taken in its place). 422 test_repository_invalid */
+            repository?: string;
+            /** @description The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try */
+            secret?: string;
+            /** @description The tag to read; latest when left out. 422 tag_invalid */
+            tag?: string;
+            /** @description A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid */
+            testRepository?: string;
+            /** @description dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid */
+            type?: string;
+            /** @description The registry user name; 422 username_required */
+            username?: string;
+        };
         CredentialTestRequest: {
             /** @description The custom certificate authority to trust for this test, in PEM. Left out, a stored credential's own is used; an empty string means none. 422 ca_invalid */
             caPem?: string;
@@ -3830,6 +3918,32 @@ export interface components {
              * @description Days a 'keep me signed in' session lasts
              */
             rememberDays: number;
+        };
+        InstanceCredentialTestFromEnvRequest: {
+            /** @description The custom certificate authority to trust for this test, in PEM. Left out, a stored credential's own is used; an empty string means none. 422 ca_invalid */
+            caPem?: string;
+            /** @description A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment */
+            credentialId?: string;
+            /** @description The environment whose node makes the check. 404 environment_not_found when there is none */
+            envId: string;
+            /** @description The registry host, as when adding; 422 host_required or host_invalid */
+            host?: string;
+            /** @description Whether to skip certificate verification and allow plain HTTP for this test. Left out, a stored credential's own switch is used */
+            insecure?: boolean;
+            /** @description The namespace the credential covers. Recorded with the test; it does not change what is tried */
+            prefix?: string;
+            /** @description The repository to read through the environment's node, like acme/app. Required: the engine needs a concrete image, so 422 repository_required without one (testRepository is taken in its place). 422 test_repository_invalid */
+            repository?: string;
+            /** @description The password or token to try. It is used for this one test, never stored by it, and never returned or recorded. 422 secret_required when there is none to try */
+            secret?: string;
+            /** @description The tag to read; latest when left out. 422 tag_invalid */
+            tag?: string;
+            /** @description A repository to try to read with the sign-in, like acme/app. Without one, the last step is not checked. 422 test_repository_invalid */
+            testRepository?: string;
+            /** @description dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid */
+            type?: string;
+            /** @description The registry user name; 422 username_required */
+            username?: string;
         };
         LinkBody: {
             /**
@@ -7212,6 +7326,43 @@ export interface operations {
             };
         };
     };
+    testEnvCredentialFromEnv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialTestFromEnvRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialTestFromEnvBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     deleteEnvCredential: {
         parameters: {
             query?: never;
@@ -8657,6 +8808,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testInstanceCredentialFromEnv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstanceCredentialTestFromEnvRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialTestFromEnvBody"];
                 };
             };
             /** @description Error */

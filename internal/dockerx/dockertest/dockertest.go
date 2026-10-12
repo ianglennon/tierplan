@@ -413,6 +413,8 @@ type Fake struct {
 	// pullAuth the X-Registry-Auth header of every pull, in order (fake_images.go).
 	pulled   []FakeImage
 	pullAuth []string
+	// distAuth and distRefs are the header and reference of each distribution check.
+	distAuth, distRefs []string
 
 	// evMu guards the events history, the open streams and the queries seen.
 	evMu      sync.Mutex
