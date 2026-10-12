@@ -326,7 +326,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			MaxStreamsPerUser: f.envStreamMaxStreams, MaxLifetime: f.envStreamMaxLifetime, Log: log,
 		})
 	}
-	api.RegisterRegistries(r, api.RegistriesDeps{Store: registry.NewStore(f.st, f.v, f.clk.now), Envs: f.envSvc, Aggregator: f.agg, Audit: f.aud, Checker: checker, Egress: f.registryEgress, Version: "test", Log: log})
+	api.RegisterRegistries(r, api.RegistriesDeps{Store: registry.NewStore(f.st, f.v, f.clk.now), Now: f.clk.now, Envs: f.envSvc, Aggregator: f.agg, Audit: f.aud, Checker: checker, Egress: f.registryEgress, Version: "test", Log: log})
 	regStore := registry.NewStore(f.st, f.v, f.clk.now)
 	api.RegisterTags(r, api.TagsDeps{
 		Resolver: registry.NewResolver(regStore), Tags: registry.NewTagService(nil, f.registryEgress, "test", log),

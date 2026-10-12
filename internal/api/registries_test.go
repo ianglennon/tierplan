@@ -2043,3 +2043,147 @@ func TestATestFromAnEnvironmentSharesTheTestLimitAndAnEnvironmentWithNoNodeIs503
 		}
 	}
 }
+
+// Credential alerts (plan 05-21, D-07, T-05-69). The bell shows a credential that expires within
+// 7 days, has expired or was last refused by its registry, and only to the people who manage it.
+
+type alertResp struct {
+	Kind         string `json:"kind"`
+	CredentialID string `json:"credentialId"`
+	Name         string `json:"name"`
+	Host         string `json:"host"`
+	Scope        struct {
+		Kind    string  `json:"kind"`
+		EnvID   *string `json:"envId"`
+		EnvName *string `json:"envName"`
+	} `json:"scope"`
+	Days int    `json:"days"`
+	At   string `json:"at"`
+}
+
+func (f *authFixture) alertsFor(t *testing.T, u credentialUser) []alertResp {
+	t.Helper()
+	rec := f.credCall(t, u, http.MethodGet, "/api/registries/alerts", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("alerts: %d %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		Items []alertResp `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body, err)
+	}
+	if out.Items == nil {
+		t.Errorf("items is null in %s, want an empty list", rec.Body)
+	}
+	return out.Items
+}
+
+func alertNames(items []alertResp) []string {
+	names := make([]string, len(items))
+	for i, a := range items {
+		names[i] = a.Kind + ":" + a.Name
+	}
+	return names
+}
+
+func credWithExpiry(name, host, expires string) string {
+	return `{"name":"` + name + `","type":"generic","host":"` + host + `","username":"bot","secret":"` + pullCredSecret + `","expires":"` + expires + `"}`
+}
+
+func TestACredentialExpiringInThreeDaysIsInTheInstanceAdminsAlerts(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	// The fixture clock stands at 2026-01-01 00:00 UTC, so the end of the 3rd is 2 days 23:59:59 away.
+	c := f.storeCredential(t, admin, credWithExpiry("ghcr-acme", "ghcr.example.org", "2026-01-03"))
+	f.storeCredential(t, admin, credWithExpiry("far-away", "far.example.org", "2027-01-03"))
+
+	got := f.alertsFor(t, admin)
+	if len(got) != 1 {
+		t.Fatalf("alerts = %v, want only the credential that expires soon", alertNames(got))
+	}
+	a := got[0]
+	if a.Kind != "expiring" || a.Days != 3 || a.CredentialID != c.ID || a.Name != "ghcr-acme" || a.Host != "ghcr.example.org" ||
+		a.Scope.Kind != "instance" || a.Scope.EnvID != nil || a.At != "2026-01-03T23:59:59Z" {
+		t.Errorf("alert = %+v, want expiring in 3 days for the instance credential, at the end of the day", a)
+	}
+}
+
+func TestExpiredAndRefusedCredentialsAreAlertsToo(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	old := f.storeCredential(t, admin, credWithExpiry("old", "old.example.org", "2026-01-03"))
+	refused := f.storeCredential(t, admin, credWithExpiry("refused", "refused.example.org", "2027-01-03"))
+	both := f.storeCredential(t, admin, credWithExpiry("both", "both.example.org", "2026-01-03"))
+	store := registry.NewStore(f.st, f.v, f.clk.now)
+	for _, id := range []string{refused.ID, both.ID} {
+		if err := store.RecordFailure(context.Background(), id, "unauthorized"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A create refuses a day that has gone, and moving the clock would end the admin's session, so
+	// the two early expiries are moved back to the end of 2025-12-31 in the table.
+	gone, _ := registry.ExpiryEnd("2025-12-31")
+	for _, id := range []string{old.ID, both.ID} {
+		if _, err := f.st.Write.Exec(`UPDATE registry_credentials SET expires_at = ? WHERE id = ?`, gone.UnixNano(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := f.alertsFor(t, admin)
+	want := []string{"expired:both", "expired:old", "auth_failed:refused"}
+	if !slices.Equal(alertNames(got), want) {
+		t.Errorf("alerts = %v, want %v (most severe first, one item per credential)", alertNames(got), want)
+	}
+
+	// The refusal clears when a later pull works, and the alert with it.
+	if err := store.ClearFailure(context.Background(), refused.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := alertNames(f.alertsFor(t, admin)); !slices.Equal(got, []string{"expired:both", "expired:old"}) {
+		t.Errorf("after a later success alerts = %v, want only the expired ones", got)
+	}
+}
+
+func TestAnEnvAdminHearsOnlyAboutTheCredentialsOfTheirEnvironments(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, b := f.twoEnvironments(t)
+	admin := f.asAdmin(t)
+	f.storeCredential(t, admin, credWithExpiry("instance-cred", "inst.example.org", "2026-01-03"))
+	for envID, name := range map[string]string{a.ID: "cred-a", b.ID: "cred-b"} {
+		rec := f.credCall(t, admin, http.MethodPost, "/api/env/"+envID+"/registries", credWithExpiry(name, name+".example.org", "2026-01-05"))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create %s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+
+	// The same kind sorts by name.
+	if got := alertNames(f.alertsFor(t, admin)); !slices.Equal(got, []string{"expiring:cred-a", "expiring:cred-b", "expiring:instance-cred"}) {
+		t.Errorf("instance admin alerts = %v, want all three", got)
+	}
+
+	envAdmin := f.asRoleOn(t, "envadmin", a.ID, "admin")
+	got := f.alertsFor(t, envAdmin)
+	if len(got) != 1 || got[0].Name != "cred-a" || got[0].Scope.Kind != "environment" || got[0].Scope.EnvID == nil || *got[0].Scope.EnvID != a.ID ||
+		got[0].Scope.EnvName == nil || *got[0].Scope.EnvName != a.Name {
+		t.Errorf("env admin of A alerts = %+v, want only cred-a, with its environment", got)
+	}
+
+	for name, u := range map[string]credentialUser{
+		"operator":      f.asRoleOn(t, "operator", a.ID, "operator"),
+		"viewer":        f.asRoleOn(t, "viewer", a.ID, "viewer"),
+		"viewer of all": f.asRoleOn(t, "viewall", "", "viewer"),
+	} {
+		if got := f.alertsFor(t, u); len(got) != 0 {
+			t.Errorf("%s alerts = %v, want none: they cannot fix a credential", name, alertNames(got))
+		}
+	}
+}
+
+func TestCredentialAlertsNeedSignIn(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/registries/alerts"})
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d %s, want 401", rec.Code, rec.Body)
+	}
+}

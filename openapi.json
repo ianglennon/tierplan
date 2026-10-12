@@ -1699,6 +1699,79 @@
         ],
         "type": "object"
       },
+      "CredentialAlertBody": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "For expiring and expired: the end of the last day it is valid. For auth_failed: when the registry refused it",
+            "format": "date-time",
+            "type": "string"
+          },
+          "credentialId": {
+            "description": "The credential's ID",
+            "type": "string"
+          },
+          "days": {
+            "description": "For expiring: the whole days left, rounded up, at least 1",
+            "format": "int64",
+            "type": "integer"
+          },
+          "host": {
+            "description": "The registry host",
+            "type": "string"
+          },
+          "kind": {
+            "description": "expiring: it stops working within 7 days. expired: its expiry day has passed. auth_failed: its registry refused it on the last use and it has not worked since",
+            "enum": [
+              "expiring",
+              "expired",
+              "auth_failed"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "Its name",
+            "type": "string"
+          },
+          "prefix": {
+            "description": "The namespace it covers; empty for the whole registry",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/CredentialScopeBody",
+            "description": "Where it applies"
+          }
+        },
+        "required": [
+          "kind",
+          "credentialId",
+          "name",
+          "host",
+          "prefix",
+          "scope",
+          "at"
+        ],
+        "type": "object"
+      },
+      "CredentialAlertsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Only the credentials that need attention, one item each, the most severe first; empty when there are none",
+            "items": {
+              "$ref": "#/components/schemas/CredentialAlertBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "CredentialBody": {
         "additionalProperties": false,
         "properties": {
@@ -14770,6 +14843,45 @@
           }
         },
         "summary": "Add an instance registry credential",
+        "tags": [
+          "registries"
+        ]
+      }
+    },
+    "/api/registries/alerts": {
+      "get": {
+        "description": "Derived from live state, never stored, so an item is there exactly while its cause is: a credential that expires within 7 days (expiring), whose expiry day has passed (expired) or that its registry refused on the last use and that has not worked since (auth_failed). An expiry day counts as the end of that day in UTC, and the 7-day warning and expired use that same instant. Only credentials the caller may manage are listed: an instance admin gets instance and environment credentials, an Env Admin the credentials of the environments they administer, and everyone else an empty list. A credential with several problems has one item, the most severe. Nothing is renewed automatically.",
+        "operationId": "listCredentialAlerts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialAlertsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the registry credentials that need attention",
         "tags": [
           "registries"
         ]

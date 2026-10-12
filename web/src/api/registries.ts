@@ -19,6 +19,7 @@ export type CredentialTestResult = components["schemas"]["CredentialTestResultBo
 export type TestStep = components["schemas"]["TestStepBody"];
 export type CredentialTestFromEnvRequest = components["schemas"]["CredentialTestFromEnvRequest"];
 export type CredentialTestFromEnvResult = components["schemas"]["CredentialTestFromEnvBody"];
+export type CredentialAlert = components["schemas"]["CredentialAlertBody"];
 
 // How often the Last test and Last use cells are read again while the page is open.
 // There is no stream for credentials (UI-SPEC "Live updates").
@@ -39,6 +40,23 @@ export const credentialsQuery = queryOptions({
   },
   refetchInterval: CREDENTIALS_REFETCH_MS,
   refetchOnWindowFocus: true,
+});
+
+// How often the bell reads the credential alerts again, as it does the other warnings
+// (D-37): the page's own 60 s poll would leave a refused credential unreported for a minute.
+export const CREDENTIAL_ALERTS_REFETCH_MS = 30_000;
+
+// The ["registries", "alerts"] query: the credentials that expire within 7 days, have
+// expired or were last refused by their registry, for the people who manage them (D-07).
+// It sits under REGISTRIES_KEY, so editing, testing or deleting a credential refreshes it.
+export const credentialAlertsQuery = queryOptions({
+  queryKey: [...REGISTRIES_KEY, "alerts"],
+  queryFn: async () => {
+    const { data } = await api.GET("/api/registries/alerts");
+    if (!data) throw new Error("GET /api/registries/alerts failed");
+    return data.items ?? [];
+  },
+  refetchInterval: CREDENTIAL_ALERTS_REFETCH_MS,
 });
 
 // CredentialRequestError is a request the server refused or that got no answer.

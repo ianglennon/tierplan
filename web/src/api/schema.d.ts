@@ -1822,6 +1822,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/registries/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the registry credentials that need attention
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is: a credential that expires within 7 days (expiring), whose expiry day has passed (expired) or that its registry refused on the last use and that has not worked since (auth_failed). An expiry day counts as the end of that day in UTC, and the 7-day warning and expired use that same instant. Only credentials the caller may manage are listed: an instance admin gets instance and environment credentials, an Env Admin the credentials of the environments they administer, and everyone else an empty list. A credential with several problems has one item, the most severe. Nothing is renewed automatically.
+         */
+        get: operations["listCredentialAlerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/registries/tags": {
         parameters: {
             query?: never;
@@ -3247,6 +3267,37 @@ export interface components {
             email?: string;
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
+        };
+        CredentialAlertBody: {
+            /**
+             * Format: date-time
+             * @description For expiring and expired: the end of the last day it is valid. For auth_failed: when the registry refused it
+             */
+            at: string;
+            /** @description The credential's ID */
+            credentialId: string;
+            /**
+             * Format: int64
+             * @description For expiring: the whole days left, rounded up, at least 1
+             */
+            days?: number;
+            /** @description The registry host */
+            host: string;
+            /**
+             * @description expiring: it stops working within 7 days. expired: its expiry day has passed. auth_failed: its registry refused it on the last use and it has not worked since
+             * @enum {string}
+             */
+            kind: "expiring" | "expired" | "auth_failed";
+            /** @description Its name */
+            name: string;
+            /** @description The namespace it covers; empty for the whole registry */
+            prefix: string;
+            /** @description Where it applies */
+            scope: components["schemas"]["CredentialScopeBody"];
+        };
+        CredentialAlertsBody: {
+            /** @description Only the credentials that need attention, one item each, the most severe first; empty when there are none */
+            items: components["schemas"]["CredentialAlertBody"][] | null;
         };
         CredentialBody: {
             /** @description The custom certificate authority in PEM, public material, for people who may manage the credential; empty for everyone else and when there is none */
@@ -9660,6 +9711,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listCredentialAlerts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialAlertsBody"];
                 };
             };
             /** @description Error */

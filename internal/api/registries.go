@@ -68,6 +68,8 @@ type RegistriesDeps struct {
 	Clients *registry.ClientCache
 	// Version is the build version, sent as the user agent bayplan/<version>.
 	Version string
+	// Now is the clock the credential alerts count their days by. Nil means time.Now.
+	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -207,6 +209,29 @@ type CredentialListBody struct {
 type CredentialListOutput struct {
 	CacheControl string `header:"Cache-Control"`
 	Body         CredentialListBody
+}
+
+// CredentialAlertBody is one credential that needs its managers' attention, in the header bell.
+type CredentialAlertBody struct {
+	Kind         string              `json:"kind" enum:"expiring,expired,auth_failed" doc:"expiring: it stops working within 7 days. expired: its expiry day has passed. auth_failed: its registry refused it on the last use and it has not worked since"`
+	CredentialID string              `json:"credentialId" doc:"The credential's ID"`
+	Name         string              `json:"name" doc:"Its name"`
+	Host         string              `json:"host" doc:"The registry host"`
+	Prefix       string              `json:"prefix" doc:"The namespace it covers; empty for the whole registry"`
+	Scope        CredentialScopeBody `json:"scope" doc:"Where it applies"`
+	Days         int                 `json:"days,omitempty" doc:"For expiring: the whole days left, rounded up, at least 1"`
+	At           time.Time           `json:"at" format:"date-time" doc:"For expiring and expired: the end of the last day it is valid. For auth_failed: when the registry refused it"`
+}
+
+// CredentialAlertsBody lists the credentials that need attention now.
+type CredentialAlertsBody struct {
+	Items []CredentialAlertBody `json:"items" doc:"Only the credentials that need attention, one item each, the most severe first; empty when there are none"`
+}
+
+// CredentialAlertsOutput wraps CredentialAlertsBody for huma.
+type CredentialAlertsOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         CredentialAlertsBody
 }
 
 // CredentialPathInput names one credential.
@@ -534,6 +559,10 @@ func viewerOf(ctx context.Context, checker *rbac.Checker, p *rbac.Principal) (cr
 func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
+	}
+	now := d.Now
+	if now == nil {
+		now = time.Now
 	}
 	// failIn words a refusal for the layer it happened in: the instance's or one environment's.
 	failIn := func(inEnv bool, what string, err error) error {
@@ -1117,6 +1146,32 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 	})
 
 	httpx.Register(r, huma.Operation{
+		OperationID: "listCredentialAlerts",
+		Method:      http.MethodGet,
+		Path:        "/api/registries/alerts",
+		Summary:     "List the registry credentials that need attention",
+		Description: "Derived from live state, never stored, so an item is there exactly while its cause is: a credential that expires within 7 days (expiring), " +
+			"whose expiry day has passed (expired) or that its registry refused on the last use and that has not worked since (auth_failed). An expiry day counts " +
+			"as the end of that day in UTC, and the 7-day warning and expired use that same instant. Only credentials the caller may manage are listed: an " +
+			"instance admin gets instance and environment credentials, an Env Admin the credentials of the environments they administer, and everyone else an " +
+			"empty list. A credential with several problems has one item, the most severe. Nothing is renewed automatically.",
+		Tags: []string{"registries"},
+	}, rbac.SelfService, func(ctx context.Context, _ *struct{}) (*CredentialAlertsOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		items, err := credentialAlerts(ctx, d, p, now())
+		if err != nil {
+			return nil, fail("credential alerts", err)
+		}
+		return &CredentialAlertsOutput{CacheControl: "no-store", Body: CredentialAlertsBody{Items: items}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
 		OperationID: "resolveCredential",
 		Method:      http.MethodPost,
 		Path:        "/api/env/{envId}/registries/resolve",
@@ -1169,6 +1224,38 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		}
 		return &CredentialOutput{CacheControl: "no-store", Body: body(ctx, vis, c)}, nil
 	})
+}
+
+// credentialAlerts is the bell's registry items for one caller: the alerts of the credentials
+// they can manage (D-07, D-30), so nobody hears about a credential they cannot fix (T-05-69).
+func credentialAlerts(ctx context.Context, d RegistriesDeps, p *rbac.Principal, now time.Time) ([]CredentialAlertBody, error) {
+	vis, err := credentialVisibility(ctx, d, p)
+	if err != nil {
+		return nil, err
+	}
+	all, err := d.Store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	manageable := make([]registry.Credential, 0, len(all))
+	for _, c := range all {
+		if visible, canManage := vis(c); visible && canManage {
+			manageable = append(manageable, c)
+		}
+	}
+	items := make([]CredentialAlertBody, 0)
+	for _, a := range registry.Alerts(now, manageable) {
+		scope := CredentialScopeBody{Kind: a.Layer}
+		if a.EnvID != "" {
+			id := a.EnvID
+			scope.EnvID, scope.EnvName = &id, d.envName(ctx, a.EnvID)
+		}
+		items = append(items, CredentialAlertBody{
+			Kind: string(a.Kind), CredentialID: a.CredentialID, Name: a.Name, Host: a.Host, Prefix: a.Prefix,
+			Scope: scope, Days: a.Days, At: a.At.UTC(),
+		})
+	}
+	return items, nil
 }
 
 // resolveBody maps the resolver's answer to the body of the resolve route.

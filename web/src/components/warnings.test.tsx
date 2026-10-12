@@ -65,6 +65,8 @@ let ackStatus = 204;
 let envItems: Array<Record<string, unknown>> = [];
 let envStatus = 200;
 let envGate: Promise<void> | null = null;
+// What GET /api/registries/alerts answers.
+let registryItems: Array<Record<string, unknown>> = [];
 
 beforeEach(() => {
   sent = [];
@@ -74,6 +76,7 @@ beforeEach(() => {
   envItems = [];
   envStatus = 200;
   envGate = null;
+  registryItems = [];
   plainHttp = false;
   setCsrfToken("csrf-1");
   FakeEventSource.reset();
@@ -90,6 +93,7 @@ beforeEach(() => {
         if (envStatus !== 200) return Response.json({}, { status: envStatus });
         return Response.json({ items: envItems });
       }
+      if (path === "/api/registries/alerts") return Response.json({ items: registryItems });
       if (path === "/api/warnings/key-backup/ack") {
         if (ackStatus === 204) {
           items = items.filter((w) => w.id !== "key_backup");
@@ -134,6 +138,7 @@ function makeRouter() {
       page("/"),
       page("/environments"),
       page("/audit"),
+      page("/registries"),
       page("/settings/backup"),
       page("/env/$envId"),
       page("/settings/environments"),
@@ -156,6 +161,7 @@ function renderWarnings() {
 }
 
 const warningsCalls = () => sent.filter((s) => s.path === "/api/warnings");
+const registryAlertCalls = () => sent.filter((s) => s.path === "/api/registries/alerts");
 const envWarningsCalls = () => sent.filter((s) => s.path === "/api/environments/warnings");
 
 async function openBell(name: string | RegExp = "Warnings") {
@@ -917,5 +923,102 @@ describe("HealthBell agents not known after a restore", () => {
     await openBell();
     expect(await screen.findByText("No warnings")).toBeTruthy();
     expect(screen.queryByText(/aren't known to this Bayplan/)).toBeNull();
+  });
+});
+
+// The credential items of the bell (plan 05-21, IMG-01, D-07).
+
+// An instance administrator, and an Admin of one environment, who can fix credentials; and
+// Operators and Viewers, who cannot.
+const REGISTRY_ADMIN = makeMe({ instanceAdmin: true });
+const ENV_ADMIN = makeMe({ envs: { "env-a": "admin" } });
+const ENV_OPERATOR = makeMe({ envs: { "env-a": "operator" } });
+const ENV_VIEWER = makeMe({ envs: { "env-a": "viewer" } });
+
+const expiring = (id: string, name: string, days: number, extra: Record<string, unknown> = {}) => ({
+  kind: "expiring",
+  credentialId: id,
+  name,
+  host: "ghcr.io",
+  prefix: "",
+  scope: { kind: "instance", envId: null, envName: null },
+  days,
+  at: "2026-10-15T23:59:59Z",
+  ...extra,
+});
+
+describe("HealthBell registry credential items", () => {
+  it("lists an instance credential that expires in 3 days and opens its sheet", async () => {
+    me = REGISTRY_ADMIN;
+    registryItems = [expiring("cred-1", "ghcr-acme", 3)];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+
+    expect(await screen.findByText("“ghcr-acme” expires in 3 days")).toBeTruthy();
+    expect(
+      screen.getByText("Instance credential for ghcr.io. Pulls that use it fail after that."),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open registries" });
+    expect(link.getAttribute("href")).toBe("/registries?credential=cred-1");
+    fireEvent.click(link);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/registries"));
+    expect(router.state.location.search).toEqual({ credential: "cred-1" });
+  });
+
+  it("says one day in the singular and names the environment of an environment credential", async () => {
+    me = ENV_ADMIN;
+    registryItems = [
+      expiring("cred-2", "team", 1, {
+        scope: { kind: "environment", envId: "env-a", envName: "Production" },
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("“team” expires in 1 day")).toBeTruthy();
+    expect(
+      screen.getByText("Production credential for ghcr.io. Pulls that use it fail after that."),
+    ).toBeTruthy();
+  });
+
+  it("asks only an instance administrator or an Admin of an environment", async () => {
+    // Both read their environment, so the bell does ask about those problems; the credential
+    // alerts are the part they are not for.
+    for (const who of [ENV_OPERATOR, ENV_VIEWER]) {
+      sent = [];
+      queryClient.clear();
+      me = who;
+      registryItems = [expiring("cred-1", "ghcr-acme", 3)];
+      renderWarnings();
+      await waitFor(() => expect(envWarningsCalls()).toHaveLength(1));
+      await openBell();
+      expect(await screen.findByText("No warnings")).toBeTruthy();
+      expect(registryAlertCalls()).toHaveLength(0);
+      cleanup();
+    }
+    sent = [];
+    me = ENV_ADMIN;
+    renderWarnings();
+    await waitFor(() => expect(registryAlertCalls()).toHaveLength(1));
+  });
+
+  it("adds no item and no count when no credential needs attention", async () => {
+    me = REGISTRY_ADMIN;
+    renderWarnings();
+    await waitFor(() => expect(registryAlertCalls()).toHaveLength(1));
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+    expect(badge()).toBeNull();
+  });
+
+  it("drops the item once the server stops listing it", async () => {
+    me = REGISTRY_ADMIN;
+    registryItems = [expiring("cred-1", "ghcr-acme", 3)];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("“ghcr-acme” expires in 3 days")).toBeTruthy();
+    registryItems = [];
+    await queryClient.invalidateQueries({ queryKey: ["registries"] });
+    await waitFor(() => expect(screen.queryByText("“ghcr-acme” expires in 3 days")).toBeNull());
+    expect(await screen.findByText("No warnings")).toBeTruthy();
   });
 });
