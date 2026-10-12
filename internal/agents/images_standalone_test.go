@@ -6,6 +6,8 @@ package agents_test
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -144,5 +146,89 @@ func TestStandaloneAgentPrivatePull(t *testing.T) {
 	rows = srv.AuditRows("image.pulled")
 	if len(rows) != 2 || rows[1].Result != "success" || rows[1].Details["credential"] != "private-bot" {
 		t.Fatalf("audit rows = %+v, want the success naming the credential", rows)
+	}
+}
+
+// TestStandaloneAgentTestFromEnvironment checks a credential from a standalone host through a real
+// agent against a registry that requires a sign-in (plan 05-13, IMG-01, D-13): the host's engine
+// reads the manifest with the credential over the tunnel, the answer names the host, a wrong
+// password is pull_unauthorized and a repository the registry does not have is image_not_found,
+// and the host holds no Docker client configuration afterwards.
+func TestStandaloneAgentTestFromEnvironment(t *testing.T) {
+	const user, password = "bot", "registry-pass-0123456789"
+	host := dockertest.StartHost(t, "")
+	dockertest.LoadAgentImage(t, host)
+	dumpOnFailure(t, host)
+	srv := servertest.Start(t, servertest.Options{Host: host.Gateway})
+
+	addr := dockertest.StartRegistry(t, host, dockertest.RegistryOptions{Htpasswd: dockertest.HtpasswdFor(user, password)})
+	ref := addr + "/private/busybox:1"
+	pushed := dockertest.PushImage(t, host, "busybox:1.36.1", ref, &dockertest.Login{User: user, Password: password})
+	dockertest.Logout(t, host)
+
+	env := srv.CreateAgentEnvironment("")
+	sh(t, host, env.Install.Standalone.Command)
+	srv.WaitOnline(env.ID, 60*time.Second)
+	agents := srv.Agents(env.ID)
+	if len(agents) != 1 {
+		t.Fatalf("agents = %+v, want the one that enrolled", agents)
+	}
+
+	cred, err := registry.NewStore(srv.Core().Store(), srv.Core().Vault(), nil).Create(context.Background(), registry.CreateInput{
+		Name: "private-bot", Type: registry.TypeGeneric, Host: addr, Prefix: "private", Username: user, Secret: password,
+	}, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		Node       string `json:"node"`
+		NodeID     string `json:"nodeId"`
+		State      string `json:"state"`
+		Code       string `json:"code"`
+		Digest     string `json:"digest"`
+		Repository string `json:"repository"`
+	}
+	check := func(body map[string]any) answer {
+		t.Helper()
+		body["envId"] = env.ID
+		body["credentialId"] = cred.ID
+		status, raw := srv.Do(http.MethodPost, "/api/registries/test-from-env", body)
+		if status != http.StatusOK {
+			t.Fatalf("POST test-from-env %v = %d %s", body, status, raw)
+		}
+		if strings.Contains(string(raw), password) {
+			t.Fatalf("the answer carries the secret: %s", raw)
+		}
+		var a answer
+		if err := json.Unmarshal(raw, &a); err != nil {
+			t.Fatalf("answer %s: %v", raw, err)
+		}
+		return a
+	}
+
+	// The stored password: the host's engine reads the manifest and the answer names the host.
+	got := check(map[string]any{"repository": "private/busybox", "tag": "1"})
+	if got.State != "passed" || got.Code != "" || got.Digest != pushed || got.Node != agents[0].Node || got.NodeID != agents[0].ID ||
+		got.Repository != addr+"/private/busybox" {
+		t.Fatalf("with the right password: %+v, want passed on %s with the digest %s", got, agents[0].Node, pushed)
+	}
+	// A wrong password typed into the test is refused by the registry, and nothing is stored.
+	got = check(map[string]any{"repository": "private/busybox", "tag": "1", "secret": "wrong-" + password})
+	if got.State != "failed" || got.Code != "pull_unauthorized" || got.Node != agents[0].Node || got.Digest != "" {
+		t.Fatalf("with a wrong password: %+v, want failed with pull_unauthorized on %s", got, agents[0].Node)
+	}
+	// A repository the registry does not have.
+	got = check(map[string]any{"repository": "private/missing", "tag": "1"})
+	if got.State != "failed" || got.Code != "image_not_found" {
+		t.Fatalf("with a missing repository: %+v, want failed with image_not_found", got)
+	}
+
+	rows := srv.AuditRows("registry.credential_tested")
+	if len(rows) != 3 || rows[0].Result != "success" || rows[0].Details["via"] != "env" || rows[0].Details["node"] != agents[0].ID ||
+		rows[1].Result != "failure" || rows[1].Reason != "pull_unauthorized" || rows[2].Reason != "image_not_found" {
+		t.Fatalf("audit rows = %+v, want three rows via env on the node: success, pull_unauthorized, image_not_found", rows)
+	}
+	if dockertest.HasClientConfig(t, host) {
+		t.Errorf("the host has a Docker client configuration after the checks: Bayplan must not log in")
 	}
 }
