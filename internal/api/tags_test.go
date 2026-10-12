@@ -737,3 +737,31 @@ func TestEnvBrowseTagsRunningHereRoutesNeedImagesReadOnThatEnvironmentAndUseOnly
 		t.Errorf("viewer of B reading A's details: %d, want 404 or 403", code)
 	}
 }
+
+func TestEnvTagDetailsMissingPlatformsNameTheNodeArchitecturesTheTagLacksOnlyInAnEnvironment(t *testing.T) {
+	reg := newFakeRegistry(t)
+	// The tag is an arm64 image; the fake node reports amd64.
+	serveImage(reg, time.Now())
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	f.trusting(t, reg)
+	admin := credentialUser{f.cookie, f.csrf}
+	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
+	a := f.add(t)
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+
+	rec := f.envDetails(t, admin, reg, "acme/app", a.ID, "1.0")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("details: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeRec[envDetailsResp](t, rec).Items[0].Missing; !slices.Equal(got, []string{"amd64"}) {
+		t.Errorf("missing = %v, want amd64: the node runs it and the tag has only arm64", got)
+	}
+	// The Registries page has no environment to compare with (UI-SPEC default 14).
+	rec = f.details(t, admin, reg, "acme/app", "", "1.0")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("registries details: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeRec[envDetailsResp](t, rec).Items[0].Missing; len(got) != 0 {
+		t.Errorf("missing on the Registries page = %v, want none", got)
+	}
+}

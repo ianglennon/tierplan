@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BrowsePage } from "@/features/tags/browse-page";
 import { TagBrowser } from "@/features/tags/tag-browser";
@@ -140,6 +141,14 @@ beforeEach(() => {
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
       if (url.pathname === "/api/me") return Response.json(me);
+      if (url.pathname === "/api/environments")
+        return Response.json({
+          items: [
+            { id: "e1", name: "Lab host", envType: "swarm", enabled: true },
+            { id: "e2", name: "Edge", envType: "standalone", enabled: true },
+          ],
+          total: 2,
+        });
       const envPath = /^\/api\/env\/([^/]+)\/images\/tags(\/details)?$/.exec(url.pathname);
       if (envPath?.[2]) {
         const body = (await req.json()) as DetailsBody;
@@ -172,7 +181,10 @@ function mount(node: React.ReactNode) {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
-        <TooltipProvider>{node}</TooltipProvider>
+        <TooltipProvider>
+          {node}
+          <Toaster />
+        </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
   );
@@ -980,5 +992,231 @@ describe("TagBrowser Running here", () => {
     fireEvent.click(within(cell).getByRole("button", { name: "Running here" }));
     const popover = await screen.findByRole("dialog");
     expect(within(popover).getByText("1 container, 0 services")).toBeTruthy();
+  });
+});
+
+// The missing-platform flag, the row actions and the picker (plan 05-20, IMG-03, D-19,
+// D-23, D-24).
+
+describe("TagBrowser missing platforms", () => {
+  async function open(props: { envId?: string }, missing: string[]) {
+    detailsAnswer = (body) =>
+      Response.json({ items: body.tags.map((tag) => detail(tag, { missing })) });
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" {...props} />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    scrollTo(["v1.10.0"]);
+    await waitFor(() =>
+      expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"),
+    );
+    return cellsOf(rowOf("v1.10.0"))[4] as HTMLElement;
+  }
+
+  it("flags a tag that lacks an architecture the environment's nodes run, beside its chips", async () => {
+    const cell = await open({ envId: "e1" }, ["arm64"]);
+    expect(within(cell).getByText("amd64")).toBeTruthy();
+    const flag = within(cell).getByText("No arm64");
+    expect(flag.closest("[data-slot='missing-platform']")?.querySelector("svg")).toBeTruthy();
+  });
+
+  it("explains the flag in a tooltip that names the environment", async () => {
+    const cell = await open({ envId: "e1" }, ["arm64"]);
+    const flag = within(cell).getByText("No arm64");
+    fireEvent.focus(flag.closest("[data-slot='missing-platform']") as HTMLElement);
+    expect(
+      await screen.findByRole("tooltip", {
+        name: "Nodes in Lab host run arm64, and this tag doesn't include it.",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("flags every missing architecture", async () => {
+    const cell = await open({ envId: "e1" }, ["arm/v7", "arm64"]);
+    expect(within(cell).getByText("No arm/v7")).toBeTruthy();
+    expect(within(cell).getByText("No arm64")).toBeTruthy();
+  });
+
+  it("shows no flag when the tag covers every architecture", async () => {
+    const cell = await open({ envId: "e1" }, []);
+    expect(within(cell).queryByText(/^No /)).toBeNull();
+  });
+
+  it("never flags on the Registries page, which has no single environment to compare with", async () => {
+    const cell = await open({}, ["arm64"]);
+    expect(within(cell).queryByText(/^No /)).toBeNull();
+  });
+});
+
+describe("TagBrowser row actions", () => {
+  const REF = "ghcr.io/acme/app";
+
+  async function menu(props: { envId?: string; onPull?: (ref: string) => void } = {}) {
+    mount(<TagBrowser repo={REF} variant="full" {...props} />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    scrollTo(["v1.10.0"]);
+    await waitFor(() =>
+      expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"),
+    );
+    const trigger = within(rowOf("v1.10.0")).getByRole("button", { name: "Actions for v1.10.0" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+    return screen.findByRole("menu");
+  }
+
+  it("offers Pull to this environment, Copy repo:tag and Copy repo@sha256:… in an environment", async () => {
+    me = makeMe({ envs: { e1: "operator" } });
+    const m = await menu({ envId: "e1", onPull: vi.fn() });
+    expect(
+      within(m)
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent),
+    ).toEqual(["Pull to this environment", "Copy repo:tag", "Copy repo@sha256:…"]);
+  });
+
+  it("offers Pull to an environment… in place of the first on the Registries page", async () => {
+    me = makeMe({ envs: { e1: "operator" } });
+    const m = await menu({ onPull: vi.fn() });
+    expect(within(m).getAllByRole("menuitem")[0]?.textContent).toBe("Pull to an environment…");
+  });
+
+  it("asks the host to pull the full reference", async () => {
+    me = makeMe({ envs: { e1: "operator" } });
+    const onPull = vi.fn();
+    const m = await menu({ envId: "e1", onPull });
+    fireEvent.click(within(m).getByRole("menuitem", { name: "Pull to this environment" }));
+    expect(onPull).toHaveBeenCalledWith(`${REF}:v1.10.0`);
+  });
+
+  it("is unavailable with Needs Operator for a Viewer, and pulls nothing", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    const onPull = vi.fn();
+    const m = await menu({ envId: "e1", onPull });
+    const item = within(m).getByRole("menuitem", { name: "Pull to this environment" });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.getAttribute("aria-describedby")).toBeTruthy();
+    fireEvent.click(item);
+    expect(onPull).not.toHaveBeenCalled();
+    expect(await screen.findAllByText("Needs Operator")).not.toHaveLength(0);
+  });
+
+  it("copies repo:tag and says so", async () => {
+    const write = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: write } });
+    const m = await menu({ envId: "e1", onPull: vi.fn() });
+    fireEvent.click(within(m).getByRole("menuitem", { name: "Copy repo:tag" }));
+    await waitFor(() => expect(write).toHaveBeenCalledWith(`${REF}:v1.10.0`));
+    expect(await screen.findByText(`Copied ${REF}:v1.10.0.`)).toBeTruthy();
+  });
+
+  it("copies repo@sha256:… with the whole digest", async () => {
+    const write = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: write } });
+    const m = await menu({ envId: "e1", onPull: vi.fn() });
+    fireEvent.click(within(m).getByRole("menuitem", { name: "Copy repo@sha256:…" }));
+    await waitFor(() => expect(write).toHaveBeenCalledWith(`${REF}@${D1}`));
+    expect(await screen.findByText(`Copied ${REF}@${D1}.`)).toBeTruthy();
+  });
+
+  it("says to copy by hand when the copy fails everywhere", async () => {
+    const write = vi.fn(async () => {
+      throw new Error("denied");
+    });
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: write } });
+    const m = await menu({ envId: "e1", onPull: vi.fn() });
+    fireEvent.click(within(m).getByRole("menuitem", { name: "Copy repo:tag" }));
+    expect(
+      await screen.findByText("Copy failed. Select the text and copy it manually."),
+    ).toBeTruthy();
+  });
+
+  it("has no Pull item when the host gives no way to pull", async () => {
+    const m = await menu({ envId: "e1" });
+    expect(
+      within(m)
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent),
+    ).toEqual(["Copy repo:tag", "Copy repo@sha256:…"]);
+  });
+});
+
+describe("TagBrowser picker", () => {
+  async function pick(props: { envId?: string; selected?: string } = {}) {
+    const onSelect = vi.fn();
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="picker" onSelect={onSelect} {...props} />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    scrollTo(["v1.10.0", "v1.9.2", "latest"]);
+    return onSelect;
+  }
+  const pickerRows = () => screen.getAllByRole("row").slice(1);
+
+  it("lists Tag, Created and Platforms only, with no actions", async () => {
+    await pick();
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "Tag",
+      "Created",
+      "Platforms",
+    ]);
+    expect(screen.queryByRole("button", { name: /Actions for/ })).toBeNull();
+  });
+
+  it("marks the chosen row aria-selected, with a check", async () => {
+    await pick({ selected: "v1.9.2" });
+    expect(pickerRows().map((r) => r.getAttribute("aria-selected"))).toEqual([
+      "false",
+      "true",
+      "false",
+    ]);
+    expect(within(rowOf("v1.9.2")).getByText("Selected")).toBeTruthy();
+  });
+
+  it("selects a tag by a click and by Enter", async () => {
+    const onSelect = await pick();
+    fireEvent.click(rowOf("v1.9.2"));
+    expect(onSelect).toHaveBeenLastCalledWith("v1.9.2");
+    fireEvent.keyDown(rowOf("latest"), { key: "Enter" });
+    expect(onSelect).toHaveBeenLastCalledWith("latest");
+  });
+
+  it("moves between rows with ArrowDown, ArrowUp, Home and End", async () => {
+    await pick();
+    const rows = pickerRows();
+    rows[0]?.focus();
+    fireEvent.keyDown(rows[0] as HTMLElement, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(rows[1]);
+    fireEvent.keyDown(rows[1] as HTMLElement, { key: "End" });
+    expect(document.activeElement).toBe(rows[2]);
+    fireEvent.keyDown(rows[2] as HTMLElement, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(rows[1]);
+    fireEvent.keyDown(rows[1] as HTMLElement, { key: "Home" });
+    expect(document.activeElement).toBe(rows[0]);
+    fireEvent.keyDown(rows[0] as HTMLElement, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(rows[0]);
+  });
+
+  it("shows Running here as a small dot with the words and no popover", async () => {
+    detailsAnswer = (body) =>
+      Response.json({
+        items: body.tags.map((tag) =>
+          detail(
+            tag,
+            tag === "v1.9.2"
+              ? {
+                  runningHere: {
+                    containers: [{ id: "c", name: "web", nodeId: "n", node: "pi" }],
+                    services: [],
+                  },
+                }
+              : {},
+          ),
+        ),
+      });
+    await pick({ envId: "e1" });
+    await waitFor(() => expect(within(rowOf("v1.9.2")).getByText("Running here")).toBeTruthy());
+    expect(within(rowOf("v1.9.2")).queryByRole("button")).toBeNull();
+    expect(within(rowOf("v1.10.0")).queryByText("Running here")).toBeNull();
+  });
+
+  it("is at most 320px tall with its own scroll", async () => {
+    await pick();
+    expect(screen.getByRole("table").closest(".max-h-80")).toBeTruthy();
   });
 });

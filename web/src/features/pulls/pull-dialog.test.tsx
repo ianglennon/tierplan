@@ -31,6 +31,8 @@ let answer: (req: Sent) => Response | Promise<Response>;
 let targetsAnswer: () => Response | Promise<Response>;
 let cancelAnswer: () => Response | Promise<Response>;
 let resolveAnswer: (req: Sent) => Response | Promise<Response>;
+// The tag picker's reads: the tag list of an environment's route, and the details of its rows.
+let tagsAnswer: (req: Sent) => Response | Promise<Response>;
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 
@@ -104,6 +106,19 @@ beforeEach(() => {
   cancelAnswer = () =>
     Response.json(job([item({ state: "cancelled", code: "cancelled" })], "cancelled"));
   resolveAnswer = () => Response.json({}, { status: 404 });
+  tagsAnswer = () =>
+    Response.json({
+      repo: "library/nginx",
+      host: "docker.io",
+      credential: null,
+      tags: [{ name: "1.27" }, { name: "1.26" }, { name: "latest" }],
+      hidden: 0,
+      total: 3,
+      more: false,
+      page: 0,
+      capped: false,
+      limit: 10000,
+    });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   FakeEventSource.reset();
@@ -128,8 +143,30 @@ beforeEach(() => {
         return answer(entry);
       if (entry.path === `/api/env/${ENV}/images/pull-targets`) return targetsAnswer();
       if (entry.path === "/api/pulls/j1/cancel" && req.method === "POST") return cancelAnswer();
-      if (entry.path === `/api/env/${ENV}/registries/resolve` && req.method === "POST")
+      if (/^\/api\/env\/[^/]+\/registries\/resolve$/.test(entry.path) && req.method === "POST")
         return resolveAnswer(entry);
+      if (entry.path === "/api/environments")
+        return Response.json({
+          items: [
+            { id: "e1", name: "Lab host", envType: "standalone", enabled: true },
+            { id: "e2", name: "Edge swarm", envType: "swarm", enabled: true },
+            { id: "e3", name: "Read only", envType: "standalone", enabled: true },
+          ],
+          total: 3,
+        });
+      if (entry.path === "/api/env/e1/images/tags") return tagsAnswer(entry);
+      if (entry.path === "/api/env/e1/images/tags/details")
+        return Response.json({
+          items: ((entry.body?.tags as string[]) ?? []).map((tag) => ({
+            tag,
+            digest: DIGEST,
+            created: new Date(Date.now() - 3_600_000).toISOString(),
+            platforms: [{ os: "linux", arch: "amd64", variant: "", digest: DIGEST, size: 1024 }],
+            code: "",
+            runningIn: [],
+            missing: [],
+          })),
+        });
       return Response.json({}, { status: 404 });
     }),
   );
@@ -147,6 +184,7 @@ afterEach(() => {
 const posts = () =>
   sent.filter((s) => s.method === "POST" && !s.path.endsWith("/registries/resolve"));
 const resolves = () => sent.filter((s) => s.path.endsWith("/registries/resolve"));
+const pullPosts = () => sent.filter((s) => s.method === "POST" && s.path.endsWith("/images/pull"));
 
 function mount(props: Partial<Parameters<typeof PullDialog>[0]> = {}) {
   const onOpenChange = vi.fn();
@@ -777,5 +815,125 @@ describe("PullDialog (the credential preview)", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
     await within(dialog).findByRole("heading", { name: /Pulling/ });
     expect(posts()).toHaveLength(1);
+  });
+});
+
+// Browse tags: the picker inside the form (plan 05-20, IMG-03, D-19).
+describe("PullDialog (Browse tags)", () => {
+  const field = async () => {
+    const dialog = await screen.findByRole("dialog", { name: "Pull an image" });
+    return { dialog, input: within(dialog).getByLabelText("Image") as HTMLInputElement };
+  };
+
+  it("offers Browse tags only once the field holds a repository", async () => {
+    mount();
+    const { dialog, input } = await field();
+    expect(within(dialog).queryByRole("button", { name: "Browse tags" })).toBeNull();
+    fireEvent.change(input, { target: { value: "nginx" } });
+    expect(within(dialog).getByRole("button", { name: "Browse tags" })).toBeTruthy();
+    fireEvent.change(input, { target: { value: "  " } });
+    expect(within(dialog).queryByRole("button", { name: "Browse tags" })).toBeNull();
+  });
+
+  it("opens the picker for the repository in the field, whatever tag it carries", async () => {
+    mount();
+    const { dialog, input } = await field();
+    fireEvent.change(input, { target: { value: "nginx:1.27" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Browse tags" }));
+    expect(await within(dialog).findByText("1.26")).toBeTruthy();
+    expect(sent.some((s) => s.path === "/api/env/e1/images/tags" && s.method === "GET")).toBe(true);
+    expect(
+      within(dialog)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Tag", "Created", "Platforms"]);
+    expect(within(dialog).getByRole("table").closest(".max-h-80")).toBeTruthy();
+  });
+
+  it("writes the chosen tag into the field and updates the credential preview", async () => {
+    resolveAnswer = (req) =>
+      Response.json({
+        input: String(req.body?.ref),
+        normalized: `docker.io/library/${String(req.body?.ref)}`,
+        credential: null,
+        matchedOn: "",
+        considered: [],
+      });
+    mount();
+    const { dialog, input } = await field();
+    fireEvent.change(input, { target: { value: "nginx" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Browse tags" }));
+    fireEvent.click(await within(dialog).findByText("1.26"));
+    expect(input.value).toBe("nginx:1.26");
+    await waitFor(
+      () => expect(dialog.textContent).toContain("Pulls docker.io/library/nginx:1.26"),
+      { timeout: 3000 },
+    );
+    expect(resolves().at(-1)?.body?.ref).toBe("nginx:1.26");
+  });
+
+  it("chooses with the keyboard: arrows move, Enter writes the tag", async () => {
+    mount();
+    const { dialog, input } = await field();
+    fireEvent.change(input, { target: { value: "nginx" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Browse tags" }));
+    await within(dialog).findByText("latest");
+    const rows = within(dialog).getAllByRole("row").slice(1);
+    rows[0]?.focus();
+    fireEvent.keyDown(rows[0] as HTMLElement, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(rows[1]);
+    fireEvent.keyDown(rows[1] as HTMLElement, { key: "Enter" });
+    expect(input.value).toBe("nginx:1.26");
+    expect(rows[1]?.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("starts the pull with the tag that was chosen", async () => {
+    mount();
+    const { dialog, input } = await field();
+    fireEvent.change(input, { target: { value: "nginx" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Browse tags" }));
+    fireEvent.click(await within(dialog).findByText("latest"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
+    await waitFor(() => expect(pullPosts()).toHaveLength(1));
+    expect(pullPosts()[0]?.body).toEqual({ ref: "nginx:latest" });
+  });
+});
+
+// Opened from the Registries page there is no environment yet (plan 05-20, D-24).
+describe("PullDialog (Registries context)", () => {
+  const environments = [
+    { id: "e1", name: "Lab host", swarm: false },
+    { id: "e2", name: "Edge swarm", swarm: true },
+  ];
+  const open = async () => {
+    mount({ envId: undefined, environments, initialRef: "ghcr.io/acme/app:1.0" });
+    const dialog = await screen.findByRole("dialog", { name: "Pull an image" });
+    return dialog;
+  };
+
+  it("has an Environment select above the image, with the reference prefilled", async () => {
+    const dialog = await open();
+    expect(within(dialog).getByRole("combobox", { name: "Environment" })).toBeTruthy();
+    expect((within(dialog).getByLabelText("Image") as HTMLInputElement).value).toBe(
+      "ghcr.io/acme/app:1.0",
+    );
+  });
+
+  it("asks to choose an environment and sends nothing when none is chosen", async () => {
+    const dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
+    expect(await within(dialog).findByText("Choose an environment.")).toBeTruthy();
+    expect(pullPosts()).toHaveLength(0);
+  });
+
+  it("pulls on the environment that was chosen", async () => {
+    const dialog = await open();
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Environment" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Lab host" }));
+    expect(await within(dialog).findByText("Pulls on Lab host.")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pull image" }));
+    await waitFor(() => expect(pullPosts()).toHaveLength(1));
+    expect(pullPosts()[0]?.path).toBe("/api/env/e1/images/pull");
+    expect(pullPosts()[0]?.body).toEqual({ ref: "ghcr.io/acme/app:1.0" });
   });
 });

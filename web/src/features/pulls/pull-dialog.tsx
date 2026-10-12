@@ -59,8 +59,17 @@ type Values = z.infer<typeof schema>;
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
+// An environment the Registries page's Pull to an environment… can pull on.
+export interface PullEnvironment {
+  id: string;
+  name: string;
+  swarm: boolean;
+}
+
 interface PullDialogProps {
   envId: string;
+  // Opened from the Registries page there is no environment yet: the form then asks which.
+  environments?: PullEnvironment[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   // The reference the field starts with, for a pull again.

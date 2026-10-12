@@ -53,6 +53,8 @@ export interface TagBrowserProps {
   // Registries context only: an environment whose own credentials count as well as the
   // instance's, without the list becoming that environment's.
   credentialEnvId?: string;
+  // Full: what Pull does with a reference (repo:tag). Without it the rows offer no Pull.
+  onPull?: (ref: string) => void;
   // Picker: what choosing a tag does, and the tag chosen.
   onSelect?: (tag: string) => void;
   selected?: string;
