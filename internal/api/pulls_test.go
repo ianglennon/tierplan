@@ -917,9 +917,12 @@ func TestCancelPullKeepsTheNodesThatFinishedDoneAndTheJobIsPartial(t *testing.T)
 		t.Fatalf("start: %d %s", rec.code, rec.body)
 	}
 	started := decode[pullStarted](t, rec)
-	waitFor(t, "alpha to finish and bravo to be held", func() bool {
+	// A node's item turns running when its pull is dispatched, before the request reaches
+	// the node's engine, so "running" alone does not mean the node was asked. Wait for the
+	// held node to have recorded its request too; only then is it known to be held on the gate.
+	waitFor(t, "alpha to finish and bravo to be asked and held", func() bool {
 		job := decode[pullJob](t, f.getPull(t, started.JobID))
-		return len(job.Items) == 2 && job.Items[0].State == "done" && job.Items[1].State == "running"
+		return len(job.Items) == 2 && job.Items[0].State == "done" && job.Items[1].State == "running" && creates(held) >= 1
 	})
 	if creates(held) != 1 {
 		t.Fatalf("the held node was asked %d times", creates(held))
