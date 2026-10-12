@@ -64,6 +64,11 @@ interface PullDialogProps {
   hostName: string;
   // Whether the environment is a swarm: a pull then goes to every node.
   swarm: boolean;
+  // A pull that is already running or ended: the dialog opens on its progress panel, which
+  // follows the job's stream and shows where it stands at once (re-attach, D-26). jobRef is
+  // the normalised reference the list named.
+  jobId?: string;
+  jobRef?: string;
 }
 
 // What a refusal of the whole request comes to: the sentence for the alert, and whether it
@@ -84,15 +89,20 @@ export function PullDialog({
   initialRef,
   hostName,
   swarm,
+  jobId,
+  jobRef,
 }: PullDialogProps) {
   const t = useT();
   const queryClient = useQueryClient();
-  const [view, setView] = useState<"form" | "progress">("form");
-  const [tracked, setTracked] = useState<PullStarted | null>(null);
+  const [view, setView] = useState<"form" | "progress">(jobId ? "progress" : "form");
+  const [tracked, setTracked] = useState<PullStarted | null>(
+    jobId ? { jobId, ref: jobRef ?? "", credential: null, nodes: [] } : null,
+  );
   const [typed, setTyped] = useState(initialRef ?? "");
   const stream = usePullJob(tracked?.jobId ?? null);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const toasted = useRef<string | null>(null);
+  // A pull the dialog was opened on has been announced by whoever started it.
+  const toasted = useRef<string | null>(jobId ?? null);
   // Set by the Details action of the finishing toast, so reopening shows the panel.
   const keepProgress = useRef(false);
   const wasOpen = useRef(open);

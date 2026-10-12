@@ -760,3 +760,94 @@ func TestPullOnAnUnreachableNodeFailsItAloneWithNodeUnreachable(t *testing.T) {
 		t.Errorf("managers = %+v %+v, want both done", job.Items[0], job.Items[1])
 	}
 }
+
+// The list of pulls: a user sees their own, an instance admin and an Env Admin also see
+// those other people started on the environments they administer, and nobody else does
+// (plan 05-04, D-26, T-05-16).
+
+type pullListed struct {
+	ID         string `json:"id"`
+	EnvID      string `json:"envId"`
+	EnvName    string `json:"envName"`
+	Ref        string `json:"ref"`
+	State      string `json:"state"`
+	Done       int    `json:"done"`
+	Failed     int    `json:"failed"`
+	Total      int    `json:"total"`
+	CreatedAt  string `json:"createdAt"`
+	FinishedAt string `json:"finishedAt"`
+	OwnerName  string `json:"ownerName"`
+}
+
+func (f *authFixture) listedPulls(t *testing.T, cookie string) []pullListed {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/pulls", cookie: cookie})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/pulls: %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Pulls []pullListed `json:"pulls"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	return body.Pulls
+}
+
+func TestListPullsShowsTheStartersAndTheAdministratorsOfTheEnvironmentOnly(t *testing.T) {
+	gate, _ := holdPulls(t)
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
+	for _, u := range []struct{ name, role string }{{"op1", "operator"}, {"op2", "operator"}, {"envadmin", "admin"}, {"viewer", "viewer"}} {
+		f.addUser(t, u.name, false)
+		f.addEnvRole(t, u.name, e.ID, u.role)
+	}
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	op1, x1 := f.signIn(t, "op1", false)
+	op2, _ := f.signIn(t, "op2", false)
+	envAdmin, _ := f.signIn(t, "envadmin", false)
+	viewer, _ := f.signIn(t, "viewer", false)
+
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/images/pull", body: `{"ref":"busybox:1"}`, cookie: op1, csrf: x1})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("start: %d %s", rec.Code, rec.Body)
+	}
+	var started pullStarted
+	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+
+	own := f.listedPulls(t, op1)
+	if len(own) != 1 {
+		t.Fatalf("the starter's list = %+v, want the one pull", own)
+	}
+	row := own[0]
+	if row.ID != started.JobID || row.EnvID != e.ID || row.EnvName != e.Name || row.Ref != "docker.io/library/busybox:1" ||
+		row.State != "running" || row.Total != 1 || row.Done != 0 || row.Failed != 0 || row.CreatedAt == "" || row.FinishedAt != "" {
+		t.Errorf("the starter's row = %+v", row)
+	}
+	if row.OwnerName != "" {
+		t.Errorf("the starter's own row names an owner: %q", row.OwnerName)
+	}
+
+	for name, cookie := range map[string]string{"an Env Admin": envAdmin, "an instance admin": f.cookie} {
+		rows := f.listedPulls(t, cookie)
+		if len(rows) != 1 || rows[0].ID != started.JobID || rows[0].OwnerName != "op1" {
+			t.Errorf("%s sees %+v, want the pull with ownerName op1", name, rows)
+		}
+		if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/pulls/" + started.JobID, cookie: cookie}); rec.Code != http.StatusOK {
+			t.Errorf("%s reading the job: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	for name, cookie := range map[string]string{"another Operator": op2, "a Viewer": viewer} {
+		if rows := f.listedPulls(t, cookie); len(rows) != 0 {
+			t.Errorf("%s sees %+v, want nothing", name, rows)
+		}
+		rec := f.call(t, authReq{method: http.MethodGet, path: "/api/pulls/" + started.JobID, cookie: cookie})
+		if rec.Code != http.StatusNotFound || problemType(t, rec) != "pull_not_found" {
+			t.Errorf("%s reading the job: %d %s, want 404 pull_not_found", name, rec.Code, rec.Body)
+		}
+	}
+	if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/pulls"}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("signed out: %d, want 401", rec.Code)
+	}
+}

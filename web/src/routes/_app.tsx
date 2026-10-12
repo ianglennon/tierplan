@@ -12,6 +12,7 @@ import { VersionFooter } from "@/components/version-footer";
 import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
 import { EnvPalette } from "@/features/environments/env-palette";
 import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
+import { PullsIndicator } from "@/features/pulls/pulls-indicator";
 import { useAccessRefetch } from "@/hooks/use-access-refetch";
 import { useAnyEnvironmentPermission, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -41,6 +42,7 @@ function ShellBody() {
         <SidebarTrigger aria-label={t("shell.toggleSidebar")} className="max-md:size-11" />
         {/* The page title goes here: breadcrumbs or a heading, set by each page. */}
         <div id="header-title" className="min-w-0 flex-1 truncate text-sm font-medium" />
+        {me ? <PullsIndicator /> : null}
         {canSeeBell ? <HealthBell /> : null}
         {me ? <UserMenu username={me.user.username} instanceAdmin={me.user.instanceAdmin} /> : null}
       </header>

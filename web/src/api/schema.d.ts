@@ -1474,6 +1474,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/pulls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The pulls you can follow
+         * @description The pulls running or ended in the last 10 minutes, newest first: your own, and for an instance admin or an Env Admin (environments.configure) also those other people started on the environments they administer, with the starter's username. Nobody else sees another person's pull.
+         */
+        get: operations["listPulls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/pulls/{jobId}": {
         parameters: {
             query?: never;
@@ -3938,6 +3958,10 @@ export interface components {
              */
             total: number;
         };
+        PullListBody: {
+            /** @description The caller's pulls, and for an instance admin or an Env Admin the pulls of other people on the environments they administer, newest first */
+            pulls: components["schemas"]["PullSummaryBody"][] | null;
+        };
         PullNodeBody: {
             /** @description The node's name */
             name: string;
@@ -3959,6 +3983,42 @@ export interface components {
             nodeIds?: string[] | null;
             /** @description The image to pull, like nginx:1.27 or ghcr.io/acme/app:latest. No tag means latest; a bare name is a Docker Hub library image */
             ref: string;
+        };
+        PullSummaryBody: {
+            /** @description When the job started, RFC 3339 UTC */
+            createdAt: string;
+            /**
+             * Format: int64
+             * @description Nodes the pull finished on
+             */
+            done: number;
+            /** @description The environment the pull runs on */
+            envId: string;
+            /** @description The environment's name when the pull started */
+            envName: string;
+            /**
+             * Format: int64
+             * @description Nodes the pull failed on
+             */
+            failed: number;
+            /** @description When the job ended, RFC 3339 UTC. Left out while it runs */
+            finishedAt?: string;
+            /** @description The job ID */
+            id: string;
+            /** @description The username of the person who started the pull. Only on pulls of other people, which only an instance admin or an Env Admin of the environment sees */
+            ownerName?: string;
+            /** @description The normalised reference */
+            ref: string;
+            /**
+             * @description Where the pull as a whole is
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
+            /**
+             * Format: int64
+             * @description Nodes the pull was started on
+             */
+            total: number;
         };
         PullTargetBody: {
             /** @description The node's CPU architecture by the registry's name: amd64, arm64, arm/v7. Empty when the node has not said */
@@ -7831,6 +7891,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OwnedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listPulls: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullListBody"];
                 };
             };
             /** @description Error */

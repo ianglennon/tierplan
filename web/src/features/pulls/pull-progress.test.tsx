@@ -258,7 +258,7 @@ describe("PullProgress", () => {
 
   it("says when the pull is gone or access was lost", () => {
     mount(job([item()]), { status: "closed", gone: true });
-    expect(screen.getByText(/This pull is no longer here/)).toBeTruthy();
+    expect(screen.getByText(/This pull is no longer listed/)).toBeTruthy();
     cleanup();
     mount(job([item()]), { status: "closed", accessLost: true });
     expect(screen.getByText("You can no longer follow this pull.")).toBeTruthy();

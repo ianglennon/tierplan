@@ -4589,6 +4589,25 @@
         ],
         "type": "object"
       },
+      "PullListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "pulls": {
+            "description": "The caller's pulls, and for an instance admin or an Env Admin the pulls of other people on the environments they administer, newest first",
+            "items": {
+              "$ref": "#/components/schemas/PullSummaryBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "pulls"
+        ],
+        "type": "object"
+      },
       "PullNodeBody": {
         "additionalProperties": false,
         "properties": {
@@ -4671,6 +4690,77 @@
         },
         "required": [
           "ref"
+        ],
+        "type": "object"
+      },
+      "PullSummaryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the job started, RFC 3339 UTC",
+            "type": "string"
+          },
+          "done": {
+            "description": "Nodes the pull finished on",
+            "format": "int64",
+            "type": "integer"
+          },
+          "envId": {
+            "description": "The environment the pull runs on",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The environment's name when the pull started",
+            "type": "string"
+          },
+          "failed": {
+            "description": "Nodes the pull failed on",
+            "format": "int64",
+            "type": "integer"
+          },
+          "finishedAt": {
+            "description": "When the job ended, RFC 3339 UTC. Left out while it runs",
+            "type": "string"
+          },
+          "id": {
+            "description": "The job ID",
+            "type": "string"
+          },
+          "ownerName": {
+            "description": "The username of the person who started the pull. Only on pulls of other people, which only an instance admin or an Env Admin of the environment sees",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The normalised reference",
+            "type": "string"
+          },
+          "state": {
+            "description": "Where the pull as a whole is",
+            "enum": [
+              "running",
+              "done",
+              "partial",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "total": {
+            "description": "Nodes the pull was started on",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "envId",
+          "envName",
+          "ref",
+          "state",
+          "done",
+          "failed",
+          "total",
+          "createdAt"
         ],
         "type": "object"
       },
@@ -11697,6 +11787,45 @@
         "summary": "Hand an automation to another user",
         "tags": [
           "users"
+        ]
+      }
+    },
+    "/api/pulls": {
+      "get": {
+        "description": "The pulls running or ended in the last 10 minutes, newest first: your own, and for an instance admin or an Env Admin (environments.configure) also those other people started on the environments they administer, with the starter's username. Nobody else sees another person's pull.",
+        "operationId": "listPulls",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The pulls you can follow",
+        "tags": [
+          "images"
         ]
       }
     },

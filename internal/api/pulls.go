@@ -48,6 +48,12 @@ const (
 	problemPullNotFound   = "pull_not_found"
 	problemJobsUnavail    = "jobs_unavailable"
 	problemTooManyStreams = "too_many_streams"
+	problemPullFinished   = "pull_finished"
+
+	// metaOwnerName and metaEnvName are what a job keeps of who started it and where, so the
+	// list can name them without reading a user or an environment again.
+	metaOwnerName = "ownerName"
+	metaEnvName   = "envName"
 
 	// maxPullLayers bounds the layers one item lists; an image has a few dozen.
 	maxPullLayers = 256
@@ -175,6 +181,32 @@ type PullJobBody struct {
 	Items      []PullItemBody               `json:"items" doc:"One entry per node, in the order the nodes were named"`
 }
 
+// PullSummaryBody is one row of the list of pulls.
+type PullSummaryBody struct {
+	ID         string `json:"id" doc:"The job ID"`
+	EnvID      string `json:"envId" doc:"The environment the pull runs on"`
+	EnvName    string `json:"envName" doc:"The environment's name when the pull started"`
+	Ref        string `json:"ref" doc:"The normalised reference"`
+	State      string `json:"state" enum:"running,done,partial,failed,cancelled" doc:"Where the pull as a whole is"`
+	Done       int    `json:"done" doc:"Nodes the pull finished on"`
+	Failed     int    `json:"failed" doc:"Nodes the pull failed on"`
+	Total      int    `json:"total" doc:"Nodes the pull was started on"`
+	CreatedAt  string `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
+	FinishedAt string `json:"finishedAt,omitempty" doc:"When the job ended, RFC 3339 UTC. Left out while it runs"`
+	OwnerName  string `json:"ownerName,omitempty" doc:"The username of the person who started the pull. Only on pulls of other people, which only an instance admin or an Env Admin of the environment sees"`
+}
+
+// PullListBody is the answer to the list route.
+type PullListBody struct {
+	Pulls []PullSummaryBody `json:"pulls" doc:"The caller's pulls, and for an instance admin or an Env Admin the pulls of other people on the environments they administer, newest first"`
+}
+
+// PullListOutput wraps PullListBody for huma.
+type PullListOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         PullListBody
+}
+
 // PullTargetBody is a node a pull can run on.
 type PullTargetBody struct {
 	NodeID    string `json:"nodeId" doc:"The node's ID: what nodeIds in a pull names, and the nodeId of its rows in the lists"`
@@ -254,6 +286,16 @@ func RegisterPulls(r *httpx.Router, d PullsDeps) {
 		})
 
 	httpx.Register(r, huma.Operation{
+		OperationID: "listPulls", Method: http.MethodGet, Path: "/api/pulls",
+		Summary:     "The pulls you can follow",
+		Description: "The pulls running or ended in the last 10 minutes, newest first: your own, and for an instance admin or an Env Admin (environments.configure) also those other people started on the environments they administer, with the starter's username. Nobody else sees another person's pull.",
+		Tags:        []string{"images"},
+	}, rbac.SelfService,
+		func(ctx context.Context, _ *struct{}) (*PullListOutput, error) {
+			return listPulls(ctx, d)
+		})
+
+	httpx.Register(r, huma.Operation{
 		OperationID: "getPull", Method: http.MethodGet, Path: "/api/pulls/{jobId}",
 		Summary: "One pull job and its progress on every node",
 		Description: "The pull as it stands now, for a browser that returns to a pull it started. A pull is kept for 10 minutes after it ends. " +
@@ -278,11 +320,57 @@ func RegisterPulls(r *httpx.Router, d PullsDeps) {
 	}))
 }
 
+// listPulls lists the pulls the caller may see, newest first.
+func listPulls(ctx context.Context, d PullsDeps) (*PullListOutput, error) {
+	p := httpx.PrincipalFrom(ctx)
+	if p == nil || d.Jobs == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Pulls are not available right now.")
+	}
+	me := pullOwner(p)
+	admins := map[string]bool{}
+	administers := func(envID string) bool {
+		v, ok := admins[envID]
+		if !ok {
+			v = d.pullAdministers(ctx, p, envID)
+			admins[envID] = v
+		}
+		return v
+	}
+	list := d.Jobs.List(func(j jobs.Job) bool {
+		return j.Kind == pullJobKind && (j.Owner == me || administers(j.EnvID))
+	})
+	body := PullListBody{Pulls: make([]PullSummaryBody, 0, len(list))}
+	for _, j := range list {
+		row := PullSummaryBody{
+			ID: j.ID, EnvID: j.EnvID, EnvName: j.Meta[metaEnvName], Ref: j.Meta["ref"], State: j.State,
+			Total: len(j.Items), CreatedAt: rfc3339(j.CreatedAt),
+		}
+		if j.Finished() {
+			row.FinishedAt = rfc3339(j.FinishedAt)
+		}
+		for _, it := range j.Items {
+			switch it.State {
+			case jobs.ItemDone:
+				row.Done++
+			case jobs.ItemFailed:
+				row.Failed++
+			}
+		}
+		if j.Owner != me {
+			row.OwnerName = j.Meta[metaOwnerName]
+		}
+		body.Pulls = append(body.Pulls, row)
+	}
+	return &PullListOutput{CacheControl: "no-store", Body: body}, nil
+}
+
 // pullOwner is how a job records who started it.
 func pullOwner(p *rbac.Principal) string { return string(p.Type) + ":" + p.ID }
 
-// pullVisible reports whether the caller may read the job: the user who started it, or an
-// instance admin.
+// pullVisible reports whether the caller may read the job: the user who started it, an
+// instance admin, or a holder of environments.configure on the job's environment (an Env
+// Admin). Everyone else, including another Operator of the same environment, gets nothing
+// (T-05-16).
 func (d PullsDeps) pullVisible(ctx context.Context, p *rbac.Principal, job jobs.Job) bool {
 	if job.Kind != pullJobKind {
 		return false
@@ -290,11 +378,23 @@ func (d PullsDeps) pullVisible(ctx context.Context, p *rbac.Principal, job jobs.
 	if job.Owner == pullOwner(p) {
 		return true
 	}
+	return d.pullAdministers(ctx, p, job.EnvID)
+}
+
+// pullAdministers reports whether the caller runs the environment: an instance admin, or
+// a holder of environments.configure on it.
+func (d PullsDeps) pullAdministers(ctx context.Context, p *rbac.Principal, envID string) bool {
 	if d.Checker == nil {
 		return false
 	}
-	a, err := d.Checker.Access(ctx, p)
-	return err == nil && a.Active && a.InstanceAdmin
+	if a, err := d.Checker.Access(ctx, p); err == nil && a.Active && a.InstanceAdmin {
+		return true
+	}
+	if envID == "" {
+		return false
+	}
+	dec := d.Checker.Check(ctx, p, rbac.Requirement{Perm: rbac.PermEnvironmentsConfigure, Scope: rbac.ScopeEnvironment}, envID)
+	return dec.Err == nil && dec.Allowed
 }
 
 // startPull checks the reference, reads the environment's nodes and starts the job.
@@ -342,7 +442,10 @@ func startPull(ctx context.Context, d PullsDeps, in *PullStartInput) (*PullStart
 
 	spec := jobs.Spec{
 		Kind: pullJobKind, EnvID: env.ID, Owner: pullOwner(p),
-		Meta: map[string]string{"ref": ref.String(), "credential": credentialAnonymous},
+		Meta: map[string]string{
+			"ref": ref.String(), "credential": credentialAnonymous,
+			metaOwnerName: p.Name, metaEnvName: env.Name,
+		},
 	}
 	body := PullStartBody{Ref: ref.String(), Nodes: make([]PullNodeBody, 0, len(nodes))}
 	for _, n := range nodes {

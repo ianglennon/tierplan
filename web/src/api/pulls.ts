@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
@@ -14,6 +14,7 @@ export type PullItem = components["schemas"]["PullItemBody"];
 export type PullLayer = components["schemas"]["PullLayerBody"];
 export type PullTargets = components["schemas"]["PullTargetsBody"];
 export type PullTarget = components["schemas"]["PullTargetBody"];
+export type PullSummary = components["schemas"]["PullSummaryBody"];
 export type PullState = PullJob["state"];
 export type PullItemState = PullItem["state"];
 
@@ -52,11 +53,40 @@ export async function postPull(envId: string, body: PullStartRequest): Promise<P
 
 // useStartPull is the mutation behind the pull form. It does not retry.
 export function useStartPull(envId: string) {
+  const queryClient = useQueryClient();
   return useMutation<PullStarted, PullRequestError, PullStartRequest>({
     mutationFn: (body) => postPull(envId, body),
     retry: false,
+    // The Pulls indicator learns of the new job at once, not on its next poll.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: pullsListKey }),
   });
 }
+
+export const pullsListKey = ["pulls"] as const;
+
+// Polled every 3 seconds while a pull runs and every 30 otherwise (UI-SPEC "Pulls indicator").
+export const PULLS_POLL_RUNNING_MS = 3_000;
+export const PULLS_POLL_IDLE_MS = 30_000;
+
+// pullsListQuery lists the pulls the caller may follow: running ones and those that ended in
+// the last ten minutes. A poll that fails keeps the last list, so the indicator shows no
+// error chrome (the query keeps its data when a refetch fails).
+export const pullsListQuery = queryOptions({
+  queryKey: [...pullsListKey, "list"] as const,
+  queryFn: async (): Promise<PullSummary[]> => {
+    const res = await api.GET("/api/pulls");
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new PullRequestError(problem.status, problem.type);
+    }
+    return res.data.pulls ?? [];
+  },
+  refetchInterval: (query) =>
+    query.state.data?.some((p) => p.state === "running")
+      ? PULLS_POLL_RUNNING_MS
+      : PULLS_POLL_IDLE_MS,
+  retry: false,
+});
 
 export const pullKey = (jobId: string) => ["pulls", jobId] as const;
 
