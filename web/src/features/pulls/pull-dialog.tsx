@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download } from "lucide-react";
+import { Download, KeyRound } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -14,6 +14,7 @@ import {
   pullTargetsQuery,
   useStartPull,
 } from "@/api/pulls";
+import { type ResolveResult, useResolveCredential } from "@/api/registries";
 import { listKey } from "@/api/resources";
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
 import { NeedsTooltip } from "@/components/needs-tooltip";
@@ -44,6 +45,10 @@ import { z } from "@/lib/zod-config";
 
 // The server's own limit on a reference.
 const MAX_REF = 512;
+
+// How long the typing must stop before the credential preview asks the server (UI-SPEC
+// "Credential preview").
+const PREVIEW_DEBOUNCE_MS = 400;
 
 // Messages are i18n keys, never literals (D-65).
 const schema = z.object({
@@ -244,6 +249,34 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
   const error = typeof errorKey === "string" ? t(errorKey) : undefined;
   const pending = start.isPending;
 
+  // The credential preview: what the typed reference becomes and which stored credential the
+  // pull will use, asked of the same resolver the pull will use 400 ms after the typing stops.
+  // It hides while the reference does not parse or the check fails; the pull itself is never
+  // held up by it.
+  const typed = form.watch("ref") ?? "";
+  const [settled, setSettled] = useState(initialRef.trim());
+  const [preview, setPreview] = useState<ResolveResult | null>(null);
+  const resolve = useResolveCredential(envId);
+  const checkRef = resolve.mutate;
+  const resetCheck = resolve.reset;
+  useEffect(() => {
+    const next = typed.trim();
+    if (next === settled) return;
+    const timer = setTimeout(() => setSettled(next), PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [typed, settled]);
+  useEffect(() => {
+    if (settled === "" || settled.length > MAX_REF) {
+      resetCheck();
+      setPreview(null);
+      return;
+    }
+    checkRef(settled, {
+      onSuccess: (answer) => setPreview(answer),
+      onError: () => setPreview(null),
+    });
+  }, [settled, checkRef, resetCheck]);
+
   function refusalOf(err: PullRequestError): Refusal | null {
     switch (err.type) {
       case "ref_invalid":
@@ -317,6 +350,27 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
               {t("pulls.form.image.helper")}
             </FieldDescription>
             {error ? <FieldError id={`${ids}-ref-error`}>{error}</FieldError> : null}
+            {preview ? (
+              <div className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+                <p className="font-mono break-all">
+                  {t("pulls.form.resolved", { ref: preview.normalized })}
+                </p>
+                <p className="flex items-start gap-1.5">
+                  <KeyRound aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+                  <span className="min-w-0 break-words">
+                    {preview.credential
+                      ? t("pulls.form.credential", {
+                          name: preview.credential.name,
+                          scope:
+                            preview.credential.scope.kind === "instance"
+                              ? t("registries.tester.scope.instance")
+                              : (preview.credential.scope.envName ?? ""),
+                        })
+                      : t("pulls.form.credentialAnonymous")}
+                  </span>
+                </p>
+              </div>
+            ) : null}
           </Field>
           {chooseable ? (
             <fieldset className="flex flex-col gap-2">

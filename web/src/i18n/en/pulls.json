@@ -15,7 +15,10 @@
       "targetSwarm": "Pulls on every node of {{host}}.",
       "cancel": "Cancel",
       "submit": "Pull image",
-      "pending": "Starting…"
+      "pending": "Starting…",
+      "resolved": "Pulls {{ref}}",
+      "credential": "Credential: “{{name}}” ({{scope}})",
+      "credentialAnonymous": "Credential: anonymous. No stored credential matches."
     },
     "errors": {
       "refInvalid": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",

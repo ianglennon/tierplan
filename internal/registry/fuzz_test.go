@@ -49,7 +49,7 @@ func FuzzSelect(f *testing.F) {
 		}
 		switch m.On {
 		case OnPrefix:
-			if m.Cred.Prefix == "" || !(ref.Path == m.Cred.Prefix || strings.HasPrefix(ref.Path, m.Cred.Prefix+"/")) {
+			if m.Cred.Prefix == "" || (ref.Path != m.Cred.Prefix && !strings.HasPrefix(ref.Path, m.Cred.Prefix+"/")) {
 				t.Fatalf("matched on prefix %q for the path %q", m.Cred.Prefix, ref.Path)
 			}
 		case OnHost:
