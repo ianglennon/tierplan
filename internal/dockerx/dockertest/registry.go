@@ -266,3 +266,16 @@ func CreateServiceWithAuth(t testing.TB, manager *Node, name, image, encodedAuth
 	}
 	return res.ID
 }
+
+// InspectServiceRaw is the engine's JSON answer to inspecting a service, for a test that checks
+// what it does and does not hold.
+func InspectServiceRaw(t testing.TB, manager *Node, id string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	res, err := manager.Client(t).ServiceInspect(ctx, id, client.ServiceInspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect the service %s on %s: %v", id, manager.Hostname, err)
+	}
+	return string(res.Raw)
+}

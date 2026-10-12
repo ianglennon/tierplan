@@ -12,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/moby/moby/client"
-
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/registry"
 )
@@ -221,11 +219,7 @@ func TestSwarmPrivatePullEveryNode(t *testing.T) {
 	if got := strings.TrimSpace(sh(t, worker, "docker image inspect -f '{{.Id}}' "+ref)); !strings.HasPrefix(got, "sha256:") {
 		t.Errorf("the worker does not have %s after the service started: %q", ref, got)
 	}
-	insp, err := mgr.Client(t).ServiceInspect(ctx, id, client.ServiceInspectOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if raw := string(insp.Raw); strings.Contains(raw, password) || strings.Contains(raw, header) {
+	if raw := dockertest.InspectServiceRaw(t, mgr, id); strings.Contains(raw, password) || strings.Contains(raw, header) {
 		t.Errorf("service inspect holds the password or the encoded header")
 	}
 	for _, n := range f.sw.Nodes() {

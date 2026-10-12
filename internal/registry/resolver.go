@@ -59,7 +59,7 @@ func EncodeAuth(username, password, serverAddress string) string {
 	if strings.EqualFold(serverAddress, hubDomain) {
 		serverAddress = hubServerAddress
 	}
-	raw, _ := json.Marshal(struct {
+	raw, _ := json.Marshal(struct { //nolint:gosec // G117: this is the registry header, the one place a secret is encoded
 		Username      string `json:"username"`
 		Password      string `json:"password"`
 		ServerAddress string `json:"serveraddress"`

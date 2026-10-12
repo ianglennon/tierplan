@@ -62,8 +62,8 @@ const (
 
 	// metaCredID and metaCredLayer are the rest of what a job keeps of its credential, beside
 	// its name under "credential". Never the header (T-05-30).
-	metaCredID    = "credentialId"
-	metaCredLayer = "credentialLayer"
+	metaCredID    = "credentialId"    //nolint:gosec // G101: a job field name, not a credential
+	metaCredLayer = "credentialLayer" //nolint:gosec // G101: a job field name, not a credential
 
 	// maxPullLayers bounds the layers one item lists; an image has a few dozen.
 	maxPullLayers = 256
@@ -758,14 +758,14 @@ func (pr *pullRun) noteCredential(code string) {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 	var err error
-	switch {
-	case code == dockerx.PullCodeUnauthorized || code == dockerx.PullCodeDenied:
+	switch code {
+	case dockerx.PullCodeUnauthorized, dockerx.PullCodeDenied:
 		if pr.failed {
 			return
 		}
 		pr.failed = true
 		err = pr.d.Resolver.RecordFailure(ctx, pr.used.ID, code)
-	case code == "":
+	case "":
 		if pr.failed || pr.cleared {
 			return
 		}
