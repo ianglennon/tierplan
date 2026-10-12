@@ -371,3 +371,229 @@ func TestACreateIsAuditedWithoutTheSecretOrItsLastCharacters(t *testing.T) {
 		t.Errorf("registry audit rows = %d, %v; want exactly one", n, err)
 	}
 }
+
+// Editing a credential (plan 05-07, D-05, D-31).
+
+const newCredToken = "ghp_BRANDnewTOKEN9876543210abcdefQRST" //nolint:gosec // G101: a made-up token for the test
+
+func (f *authFixture) storeCredential(t *testing.T, u credentialUser, body string) credentialResp {
+	t.Helper()
+	rec := f.credCall(t, u, http.MethodPost, "/api/registries", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	return decodeCred(t, rec)
+}
+
+// registryAudit returns the details of every registry audit row, oldest first, with its action.
+func (f *authFixture) registryAudit(t *testing.T) (actions []string, details []map[string]string) {
+	t.Helper()
+	rows, err := f.st.Read.Query(`SELECT action, details FROM audit_log WHERE action LIKE 'registry.%' ORDER BY seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var action, raw string
+		if err := rows.Scan(&action, &raw); err != nil {
+			t.Fatal(err)
+		}
+		d := map[string]string{}
+		if err := json.Unmarshal([]byte(raw), &d); err != nil {
+			t.Fatal(err)
+		}
+		actions, details = append(actions, action), append(details, d)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return actions, details
+}
+
+func TestAnAdminEditsAUsernameAndTheSecretStaysWhereItWas(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	c := f.storeCredential(t, admin, ghcrAcme)
+	var before string
+	if err := f.st.Read.QueryRow(`SELECT secret_sealed FROM registry_credentials WHERE id = ?`, c.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"username":"bot2"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+	got := decodeCred(t, rec)
+	if got.Username != "bot2" || got.Name != "ghcr-acme" || got.Prefix != "acme" || got.Last4 != "WXYZ" || got.Scope.Kind != "instance" {
+		t.Errorf("credential = %+v", got)
+	}
+	if strings.Contains(rec.Body.String(), "SECRETtoken") {
+		t.Errorf("response carries the secret: %s", rec.Body)
+	}
+	var after string
+	if err := f.st.Read.QueryRow(`SELECT secret_sealed FROM registry_credentials WHERE id = ?`, c.ID).Scan(&after); err != nil || after != before {
+		t.Errorf("secret_sealed changed without a new secret: %q -> %q (%v)", before, after, err)
+	}
+}
+
+func TestANewSecretReplacesTheStoredOneAndNothingComesBack(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	c := f.storeCredential(t, admin, ghcrAcme)
+
+	rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"secret":"`+newCredToken+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeCred(t, rec); got.Last4 != "QRST" {
+		t.Errorf("last4 = %q, want QRST", got.Last4)
+	}
+	if strings.Contains(rec.Body.String(), newCredToken) || strings.Contains(rec.Body.String(), "BRANDnew") {
+		t.Errorf("response carries the new secret: %s", rec.Body)
+	}
+	var sealed string
+	if err := f.st.Read.QueryRow(`SELECT secret_sealed FROM registry_credentials WHERE id = ?`, c.ID).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := f.v.Open(vault.ContextRegistryCred+c.ID, sealed)
+	if err != nil || string(plain) != newCredToken {
+		t.Errorf("stored secret = %q, %v, want the new token", plain, err)
+	}
+}
+
+func TestAPatchCanClearTheNamespaceAndTheExpiry(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	c := f.storeCredential(t, admin,
+		`{"name":"harbor","type":"generic","host":"harbor.example.org","prefix":"team","username":"ci","expires":"2199-12-31","secret":"hunter2hunter2"}`)
+
+	rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"prefix":"","expires":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeCred(t, rec); got.Prefix != "" || got.ExpiresAt != nil || got.Host != "harbor.example.org" {
+		t.Errorf("credential = %+v, want no prefix and no expiry", got)
+	}
+}
+
+func TestAnUpdateWritesAuditRowsNamingTheChangedFieldsNeverTheirValues(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	c := f.storeCredential(t, admin, ghcrAcme)
+	if rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"username":"bot2"}`); rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"username":"bot3","secret":"`+newCredToken+`"}`); rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+
+	actions, details := f.registryAudit(t)
+	if !slices.Equal(actions, []string{"registry.credential_created", "registry.credential_updated", "registry.credential_updated"}) {
+		t.Fatalf("actions = %v", actions)
+	}
+	if details[1]["changed"] != "username" || details[2]["changed"] != "secret,username" {
+		t.Errorf("changed = %q and %q, want username and secret,username", details[1]["changed"], details[2]["changed"])
+	}
+	if details[2]["username"] != "bot3" || details[2]["name"] != "ghcr-acme" || details[2]["layer"] != "instance" {
+		t.Errorf("details = %v", details[2])
+	}
+	for _, d := range details {
+		for k, v := range d {
+			for _, leak := range []string{credToken, newCredToken, "SECRETtoken", "BRANDnew", "WXYZ", "QRST"} {
+				if strings.Contains(v, leak) {
+					t.Errorf("audit detail %s = %q carries %q", k, v, leak)
+				}
+			}
+		}
+	}
+}
+
+func TestOnlyAnInstanceAdminMayEditAnInstanceCredential(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addEnvironmentRow(t, "env-a")
+	c := f.storeCredential(t, f.asAdmin(t), ghcrAcme)
+	for name, u := range map[string]credentialUser{
+		"env admin": f.asRoleOn(t, "envadmin", "env-a", "admin"),
+		"operator":  f.asRoleOn(t, "operator", "env-a", "operator"),
+		"viewer":    f.asRoleOn(t, "viewer", "env-a", "viewer"),
+	} {
+		rec := f.credCall(t, u, http.MethodPatch, "/api/registries/"+c.ID, `{"username":"intruder"}`)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: %d %s, want 403", name, rec.Code, rec.Body)
+		}
+	}
+	var username string
+	if err := f.st.Read.QueryRow(`SELECT username FROM registry_credentials WHERE id = ?`, c.ID).Scan(&username); err != nil || username != "bot" {
+		t.Errorf("username = %q, %v; a refused edit changes nothing", username, err)
+	}
+}
+
+func TestAnEnvironmentLayerCredentialCannotBeReachedThroughTheInstanceFamily(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	f.addEnvironmentRow(t, "env-a")
+	if _, err := f.st.Write.Exec(`INSERT INTO registry_credentials (id, env_id, name, type, host, prefix, username, secret_sealed, created_at, updated_at, created_by)
+		VALUES ('env-cred', 'env-a', 'env-one', 'ghcr', 'ghcr.io', 'acme', 'bot', 'sealed', 1, 1, 'x')`); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.credCall(t, f.asAdmin(t), http.MethodPatch, "/api/registries/env-cred", `{"username":"bot2"}`)
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "credential_not_found" {
+		t.Errorf("%d %s, want 404 credential_not_found", rec.Code, rec.Body)
+	}
+	var username string
+	if err := f.st.Read.QueryRow(`SELECT username FROM registry_credentials WHERE id = 'env-cred'`).Scan(&username); err != nil || username != "bot" {
+		t.Errorf("username = %q, %v", username, err)
+	}
+	missing := f.credCall(t, f.asAdmin(t), http.MethodPatch, "/api/registries/no-such", `{"username":"bot2"}`)
+	if missing.Code != http.StatusNotFound || problemType(t, missing) != "credential_not_found" {
+		t.Errorf("missing: %d %s", missing.Code, missing.Body)
+	}
+}
+
+func TestAnEditIsRefusedWithACodePerFieldAtFault(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	c := f.storeCredential(t, admin, ghcrAcme)
+	for _, tc := range []struct{ name, body, location, code string }{
+		{"an empty name", `{"name":""}`, "body.name", "name_required"},
+		{"an upper-case prefix", `{"prefix":"Acme"}`, "body.prefix", "prefix_invalid"},
+		{"an empty username", `{"username":""}`, "body.username", "username_required"},
+		{"an expiry in the past", `{"expires":"2025-01-01"}`, "body.expires", "expiry_past"},
+		{"the fallback on another registry", `{"hubFallback":true}`, "body.hubFallback", "hub_fallback_not_hub"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, tc.body)
+			p := decodeProblem(t, rec)
+			if rec.Code != http.StatusUnprocessableEntity || p.Type != "validation_failed" || len(p.Errors) != 1 ||
+				p.Errors[0].Location != tc.location || p.Errors[0].Message != tc.code {
+				t.Errorf("%d %s, want 422 validation_failed %s %s", rec.Code, rec.Body, tc.location, tc.code)
+			}
+		})
+	}
+	_, details := f.registryAudit(t)
+	if len(details) != 1 {
+		t.Errorf("audit rows = %d; a refused edit records nothing", len(details))
+	}
+}
+
+func TestEditingOntoAnotherCredentialIsAConflictNamingIt(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	f.storeCredential(t, admin, ghcrAcme)
+	b := f.storeCredential(t, admin, `{"name":"second","type":"ghcr","prefix":"other","username":"u","secret":"`+credToken+`"}`)
+	f.storeCredential(t, admin, `{"name":"hub-all","type":"dockerhub","hubFallback":true,"username":"u","secret":"s3cret-token-value"}`)
+	hub2 := f.storeCredential(t, admin, `{"name":"hub-ns","type":"dockerhub","prefix":"ns","username":"u","secret":"s3cret-token-value"}`)
+
+	for _, tc := range []struct{ name, id, body, ptype, with string }{
+		{"same name", b.ID, `{"name":"ghcr-acme"}`, "credential_name_taken", "ghcr-acme"},
+		{"same host and prefix", b.ID, `{"prefix":"acme"}`, "host_prefix_taken", "ghcr-acme"},
+		{"a second Hub fallback", hub2.ID, `{"hubFallback":true}`, "hub_fallback_taken", "hub-all"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+tc.id, tc.body)
+			p := decodeProblem(t, rec)
+			if rec.Code != http.StatusConflict || p.Type != tc.ptype || len(p.Errors) != 1 || p.Errors[0].Message != tc.with {
+				t.Errorf("%d %s, want 409 %s naming %q", rec.Code, rec.Body, tc.ptype, tc.with)
+			}
+		})
+	}
+}

@@ -20,6 +20,9 @@ const SECRET = "ghp_0123456789abcdefWXYZ";
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 let posted: Record<string, unknown>[];
+let patched: Record<string, unknown>[];
+let patchStatus: number;
+let patchBody: unknown;
 let postStatus: number;
 let postBody: unknown;
 let stored: Record<string, unknown> | null;
@@ -47,6 +50,9 @@ const credential = (extra: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   me = makeMe({ instanceAdmin: true });
   posted = [];
+  patched = [];
+  patchStatus = 200;
+  patchBody = credential({ username: "deploy2", updatedAt: "2026-10-12T10:00:00Z" });
   postStatus = 201;
   postBody = credential();
   stored = credential();
@@ -63,6 +69,10 @@ beforeEach(() => {
         return Response.json(postBody, { status: postStatus });
       }
       if (url.pathname === "/api/registries") return Response.json({ items: [] });
+      if (url.pathname === "/api/registries/c1" && req.method === "PATCH") {
+        patched.push((await req.json()) as Record<string, unknown>);
+        return Response.json(patchBody, { status: patchStatus });
+      }
       if (url.pathname === "/api/registries/c1") {
         return stored
           ? Response.json(stored)
@@ -86,7 +96,7 @@ afterEach(() => {
 
 // Holds the open state the way the page does: the sheet is there while the search
 // parameter is.
-function Harness({ mode, credentialId }: { mode: "add" | "view"; credentialId?: string }) {
+function Harness({ mode, credentialId }: { mode: "add" | "edit" | "view"; credentialId?: string }) {
   const [open, setOpen] = useState(true);
   return (
     <>
@@ -107,7 +117,7 @@ function Harness({ mode, credentialId }: { mode: "add" | "view"; credentialId?: 
   );
 }
 
-function mount(mode: "add" | "view" = "add", credentialId?: string) {
+function mount(mode: "add" | "edit" | "view" = "add", credentialId?: string) {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
@@ -419,5 +429,121 @@ describe("CredentialSheet view mode", () => {
     mount("view", "c1");
     await screen.findAllByText("<img src=x onerror=alert(1)>");
     expect(document.querySelector("img")).toBeNull();
+  });
+});
+
+describe("CredentialSheet edit mode", () => {
+  const saveChanges = () => fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+  it("opens as Edit {name} with the scope fixed and the secret optional, never shown", async () => {
+    mount("edit", "c1");
+    expect(await screen.findByText("Edit ghcr-acme")).toBeTruthy();
+    expect(
+      screen.getByText("Stored encrypted. The secret can't be shown again after you save."),
+    ).toBeTruthy();
+    expect(field("Name").value).toBe("ghcr-acme");
+    expect(field("Username").value).toBe("deploy");
+    expect(field("Namespace (optional)").value).toBe("acme");
+    // The scope is read-only, and says why.
+    expect(screen.getByRole("combobox", { name: "Scope" }).hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByText("A credential's scope can't change. Create a new one instead."),
+    ).toBeTruthy();
+    // The secret field is empty, optional, and tells which one is kept.
+    const secret = field("New secret (optional)");
+    expect(secret.value).toBe("");
+    expect(secret.placeholder).toBe("Leave empty to keep the one ending WXYZ");
+    expect(document.body.textContent).not.toContain("ghp_");
+  });
+
+  it("says the stored secret is kept when no last characters were stored", async () => {
+    stored = credential({ last4: "" });
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    expect(field("New secret (optional)").placeholder).toBe(
+      "Leave empty to keep the stored secret",
+    );
+  });
+
+  it("shows skeleton fields and a disabled Save while the credential loads", () => {
+    stored = null;
+    mount("edit", "c1");
+    expect(screen.getByRole("button", { name: "Save changes" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
+  });
+
+  it("saves a changed username without sending the secret, toasts and closes", async () => {
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    type("Username", "deploy2");
+    saveChanges();
+    await waitFor(() => expect(closed).toBe(1));
+    expect(patched).toEqual([
+      {
+        name: "ghcr-acme",
+        type: "ghcr",
+        prefix: "acme",
+        username: "deploy2",
+        hubFallback: false,
+        expires: "",
+      },
+    ]);
+    expect(patched[0]).not.toHaveProperty("secret");
+    expect(await screen.findByText("Saved ghcr-acme.")).toBeTruthy();
+  });
+
+  it("sends a new secret once, and it is gone from the form, the caches and the page afterwards", async () => {
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    type("New secret (optional)", SECRET);
+    saveChanges();
+    await waitFor(() => expect(closed).toBe(1));
+    expect(patched[0]).toMatchObject({ secret: SECRET });
+    await waitFor(() => expect(client.getMutationCache().getAll()).toHaveLength(0));
+    expect(
+      JSON.stringify(
+        client
+          .getQueryCache()
+          .getAll()
+          .map((q) => q.state.data),
+      ),
+    ).not.toContain(SECRET);
+    expect(document.body.textContent).not.toContain(SECRET);
+    fireEvent.click(screen.getByRole("button", { name: "reopen" }));
+    expect(
+      ((await screen.findByLabelText("New secret (optional)")) as HTMLInputElement).value,
+    ).toBe("");
+  });
+
+  it("does not ask for a secret", async () => {
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    saveChanges();
+    await waitFor(() => expect(patched).toHaveLength(1));
+    expect(screen.queryByText("Enter a secret.")).toBeNull();
+  });
+
+  it("asks before discarding a change, from Cancel and from Escape", async () => {
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    type("Username", "changed");
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(await screen.findByText("Discard changes?")).toBeTruthy();
+    expect(closed).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(field("Username").value).toBe("changed");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(closed).toBe(1));
+    expect(patched).toHaveLength(0);
+  });
+
+  it("closes at once when nothing changed", async () => {
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(closed).toBe(1));
   });
 });

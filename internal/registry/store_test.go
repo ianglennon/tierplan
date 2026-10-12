@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -169,5 +170,209 @@ func TestCreateRollsBackWhenTheHookFails(t *testing.T) {
 	var n int
 	if err := st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 0 {
 		t.Errorf("rows = %d, %v; a credential must not exist without its audit row", n, err)
+	}
+}
+
+// updateOf is the unchanged form of the credential create() makes, for a test to change one
+// field of.
+func updateOf(c registry.Credential) registry.UpdateInput {
+	return registry.UpdateInput{Name: c.Name, Type: c.Type, Host: c.Host, Prefix: c.Prefix, Username: c.Username, HubFallback: c.HubFallback}
+}
+
+func TestUpdateWithNoSecretKeepsTheSealedSecretByteForByte(t *testing.T) {
+	s, st, _ := newStore(t)
+	c := create(t, s, nil)
+	before := sealedOf(t, st, c.ID)
+
+	in := updateOf(c)
+	in.Username = "bot2"
+	got, changed, err := s.Update(context.Background(), c.ID, in, nil)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.Username != "bot2" || got.Last4 != "wxyz" || !slices.Equal(changed, []string{"username"}) {
+		t.Errorf("credential = %+v, changed = %v", got, changed)
+	}
+	if after := sealedOf(t, st, c.ID); after != before {
+		t.Errorf("the stored envelope changed without a new secret: %q -> %q", before, after)
+	}
+}
+
+func TestUpdateWithANewSecretReSealsItUnderTheSameContextAndMovesLast4(t *testing.T) {
+	s, st, v := newStore(t)
+	c := create(t, s, nil)
+	before := sealedOf(t, st, c.ID)
+
+	in := updateOf(c)
+	in.Secret = "  glpat-a-brand-new-token-9876  "
+	got, changed, err := s.Update(context.Background(), c.ID, in, nil)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.Last4 != "9876" || !slices.Equal(changed, []string{"secret"}) {
+		t.Errorf("Last4 = %q, changed = %v", got.Last4, changed)
+	}
+	after := sealedOf(t, st, c.ID)
+	if after == before || strings.Contains(after, "brand-new") {
+		t.Fatalf("the stored value was not re-sealed: %q", after)
+	}
+	plain, err := v.Open(vault.ContextRegistryCred+c.ID, after)
+	if err != nil || string(plain) != "glpat-a-brand-new-token-9876" {
+		t.Fatalf("Open under its own ID = %q, %v", plain, err)
+	}
+}
+
+func TestUpdateListsTheChangedFieldsSortedAndMovesUpdatedAt(t *testing.T) {
+	s, _, _ := newStore(t)
+	c := create(t, s, nil)
+
+	in := updateOf(c)
+	in.Name, in.Prefix, in.Secret, in.Expires = "renamed", "acme/team", "another-long-token-0000", "2199-01-02"
+	got, changed, err := s.Update(context.Background(), c.ID, in, nil)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if want := []string{"expires", "name", "prefix", "secret"}; !slices.Equal(changed, want) {
+		t.Errorf("changed = %v, want %v", changed, want)
+	}
+	if got.Name != "renamed" || got.Prefix != "acme/team" || got.ExpiresAt == nil {
+		t.Errorf("credential = %+v", got)
+	}
+}
+
+func TestUpdateChangesUpdatedAtWhenSomethingChanges(t *testing.T) {
+	st := storetest.New(t)
+	v, err := vault.New(bytes.Repeat([]byte{9}, 32), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := now
+	s := registry.NewStore(st, v, func() time.Time { return clock })
+	c, err := s.Create(context.Background(), valid(), "admin-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = now.Add(2 * time.Hour)
+	in := updateOf(c)
+	in.Username = "bot2"
+	got, _, err := s.Update(context.Background(), c.ID, in, nil)
+	if err != nil || !got.UpdatedAt.Equal(clock) || !got.CreatedAt.Equal(now) {
+		t.Errorf("created/updated = %v/%v, %v; want %v/%v", got.CreatedAt, got.UpdatedAt, err, now, clock)
+	}
+}
+
+func TestUpdateOfAnUnchangedFormWritesNothingAndRunsNoHook(t *testing.T) {
+	s, _, _ := newStore(t)
+	c := create(t, s, nil)
+	called := false
+	got, changed, err := s.Update(context.Background(), c.ID, updateOf(c), func(context.Context, *sql.Tx, registry.Credential, []string) error {
+		called = true
+		return nil
+	})
+	if err != nil || len(changed) != 0 || called || !got.UpdatedAt.Equal(c.UpdatedAt) {
+		t.Errorf("changed = %v, hook called = %v, %v", changed, called, err)
+	}
+}
+
+func TestUpdateOfAnUnknownCredentialIsNotFound(t *testing.T) {
+	s, _, _ := newStore(t)
+	if _, _, err := s.Update(context.Background(), "no-such-id", registry.UpdateInput{Name: "x", Type: registry.TypeGHCR, Username: "u"}, nil); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("Update: %v, want ErrNotFound", err)
+	}
+}
+
+func TestUpdateRefusesAClashWithAnotherCredentialAndNamesIt(t *testing.T) {
+	s, _, _ := newStore(t)
+	a := create(t, s, nil)
+	b := create(t, s, func(in *registry.CreateInput) { in.Name, in.Prefix = "second", "other" })
+	hub := create(t, s, func(in *registry.CreateInput) {
+		in.Name, in.Type, in.Prefix, in.HubFallback = "hub-all", registry.TypeDockerHub, "", true
+	})
+	hub2 := create(t, s, func(in *registry.CreateInput) {
+		in.Name, in.Type, in.Prefix = "hub-ns", registry.TypeDockerHub, "ns"
+	})
+
+	for _, c := range []struct {
+		name   string
+		target registry.Credential
+		mutate func(*registry.UpdateInput)
+		want   error
+		with   string
+	}{
+		{"rename onto another name", b, func(in *registry.UpdateInput) { in.Name = a.Name }, registry.ErrNameTaken, a.Name},
+		{"move onto another host and prefix", b, func(in *registry.UpdateInput) { in.Prefix = a.Prefix }, registry.ErrHostPrefixTaken, a.Name},
+		{"take the Hub fallback a second time", hub2, func(in *registry.UpdateInput) { in.HubFallback = true }, registry.ErrHubFallbackTaken, hub.Name},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := updateOf(c.target)
+			c.mutate(&in)
+			_, _, err := s.Update(context.Background(), c.target.ID, in, nil)
+			var ce *registry.ConflictError
+			if !errors.Is(err, c.want) || !errors.As(err, &ce) || ce.With != c.with {
+				t.Errorf("Update: %v, want %v with %q", err, c.want, c.with)
+			}
+		})
+	}
+	// Nothing was stored by a refused update.
+	got, err := s.Get(context.Background(), b.ID)
+	if err != nil || got.Name != "second" || got.Prefix != "other" {
+		t.Errorf("after the refusals = %+v, %v", got, err)
+	}
+}
+
+func TestUpdateRefusesInvalidInputWithEveryFieldAtFaultAndAnEmptySecretIsNotOne(t *testing.T) {
+	s, _, _ := newStore(t)
+	c := create(t, s, nil)
+	in := updateOf(c)
+	in.Name, in.Username, in.Prefix = "", "", "Bad Prefix"
+	_, _, err := s.Update(context.Background(), c.ID, in, nil)
+	var ve *registry.ValidationError
+	if !errors.As(err, &ve) || len(ve.Fields) != 3 {
+		t.Fatalf("Update: %v, want a ValidationError of 3 fields (name, prefix, username; no secret)", err)
+	}
+	for _, f := range ve.Fields {
+		if f.Field == "secret" {
+			t.Errorf("an empty secret was refused: %+v", f)
+		}
+	}
+}
+
+func TestUpdateKeepsTheSameExpiryOfAnExpiredCredentialValid(t *testing.T) {
+	st := storetest.New(t)
+	v, _ := vault.New(bytes.Repeat([]byte{9}, 32), "test")
+	clock := now
+	s := registry.NewStore(st, v, func() time.Time { return clock })
+	in := valid()
+	in.Expires = "2026-10-20"
+	c, err := s.Create(context.Background(), in, "admin-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC) // the day has passed
+	up := updateOf(c)
+	up.Expires = "2026-10-20"
+	up.Username = "bot2"
+	if _, _, err := s.Update(context.Background(), c.ID, up, nil); err != nil {
+		t.Errorf("Update of an expired credential that keeps its day: %v", err)
+	}
+	up.Expires = "2026-10-25" // a new, past day is refused
+	var ve *registry.ValidationError
+	if _, _, err := s.Update(context.Background(), c.ID, up, nil); !errors.As(err, &ve) {
+		t.Errorf("Update to another past day: %v, want a ValidationError", err)
+	}
+}
+
+func TestUpdateRollsBackWhenTheHookFails(t *testing.T) {
+	s, _, _ := newStore(t)
+	c := create(t, s, nil)
+	boom := errors.New("audit write failed")
+	in := updateOf(c)
+	in.Username = "bot2"
+	if _, _, err := s.Update(context.Background(), c.ID, in, func(context.Context, *sql.Tx, registry.Credential, []string) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("Update: %v, want the hook's error", err)
+	}
+	got, err := s.Get(context.Background(), c.ID)
+	if err != nil || got.Username != "bot" {
+		t.Errorf("after the rollback = %+v, %v; a change must not exist without its audit row", got, err)
 	}
 }
