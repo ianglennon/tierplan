@@ -22,12 +22,18 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/registry"
@@ -125,10 +131,10 @@ func startRegistry(t *testing.T, certPEM, keyPEM []byte) string {
 	return "127.0.0.1:" + port.Port()
 }
 
-// push puts a one-layer image at repo:latest into the registry with the registry's own HTTP
-// API, signed in with the fixture's login. The layer is a few bytes: a registry stores blobs
-// without reading them, and nothing here pulls the image.
-func push(t *testing.T, hc *http.Client, base, repo string) {
+// push puts a one-layer image at repo:latest, or at each of tags, into the registry with the
+// registry's own HTTP API, signed in with the fixture's login. The layer is a few bytes: a
+// registry stores blobs without reading them, and nothing here pulls the image.
+func push(t *testing.T, hc *http.Client, base, repo string, tags ...string) {
 	t.Helper()
 	blob := func(content []byte) (digest string, size int) {
 		sum := sha256.Sum256(content)
@@ -166,26 +172,40 @@ func push(t *testing.T, hc *http.Client, base, repo string) {
 		}
 		return digest, len(content)
 	}
-	cfgDigest, cfgSize := blob([]byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`))
+	cfgDigest, cfgSize := blob([]byte(`{"architecture":"amd64","os":"linux","created":"2026-01-02T03:04:05Z","rootfs":{"type":"layers","diff_ids":[]}}`))
 	layerDigest, layerSize := blob([]byte("bayplan test layer"))
 	manifest := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json",`+
 		`"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":%q,"size":%d},`+
 		`"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":%q,"size":%d}]}`,
 		cfgDigest, cfgSize, layerDigest, layerSize)
-	req, err := http.NewRequest(http.MethodPut, base+"/v2/"+repo+"/manifests/latest", strings.NewReader(manifest))
-	if err != nil {
-		t.Fatal(err)
+	if len(tags) == 0 {
+		tags = []string{"latest"}
 	}
-	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
-	req.SetBasicAuth(itUser, itPass)
-	resp, err := hc.Do(req)
-	if err != nil {
+	put := func(tag string) error {
+		req, err := http.NewRequest(http.MethodPut, base+"/v2/"+repo+"/manifests/"+tag, strings.NewReader(manifest))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+		req.SetBasicAuth(itUser, itPass)
+		resp, err := hc.Do(req)
+		if err != nil {
+			return err
+		}
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			return fmt.Errorf("%d %s", resp.StatusCode, b)
+		}
+		return nil
+	}
+	var g errgroup.Group
+	g.SetLimit(8)
+	for _, tag := range tags {
+		g.Go(func() error { return put(tag) })
+	}
+	if err := g.Wait(); err != nil {
 		t.Fatalf("push the manifest: %v", err)
-	}
-	b, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("push the manifest: %d %s", resp.StatusCode, b)
 	}
 }
 
@@ -306,4 +326,126 @@ func TestCredentialTestAgainstRegistry(t *testing.T) {
 		// The switch alone reaches it too, without the CA.
 		expect(t, "the switch without the CA", checker{host: host, insecure: true}.check(itUser, itPass, itRepo), allPassed)
 	})
+}
+
+// countingProxy is a TLS front for the registry that counts what reaches it, so the test can
+// say how many requests the server had in flight at once.
+type countingProxy struct {
+	srv *httptest.Server
+
+	inflight, maxInflight atomic.Int32
+	requests              atomic.Int64
+	manifestGets          atomic.Int64
+}
+
+func newCountingProxy(t *testing.T, upstream string) *countingProxy {
+	t.Helper()
+	target, err := url.Parse("http://" + upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := httputil.NewSingleHostReverseProxy(target)
+	p := &countingProxy{}
+	p.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := p.inflight.Add(1)
+		defer p.inflight.Add(-1)
+		for {
+			m := p.maxInflight.Load()
+			if n <= m || p.maxInflight.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		p.requests.Add(1)
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/manifests/") {
+			p.manifestGets.Add(1)
+		}
+		rp.ServeHTTP(w, r)
+	}))
+	t.Cleanup(p.srv.Close)
+	return p
+}
+
+func (p *countingProxy) host() string { return strings.TrimPrefix(p.srv.URL, "https://") }
+
+func (p *countingProxy) egress() registry.EgressPolicy {
+	pool := x509.NewCertPool()
+	pool.AddCert(p.srv.Certificate())
+	return registry.NewEgressPolicy(nil).WithRootCAs(pool)
+}
+
+// TestTagsAgainstRegistry lists and reads the details of the tags of a registry:2 that holds
+// 2,000 of them (plan 05-19, IMG-03, D-20, D-21, T-05-75): the list comes in pages of 100 in the
+// right order, and a request for the 25 tags on screen never has more than three requests in
+// flight to the registry.
+func TestTagsAgainstRegistry(t *testing.T) {
+	const total = 2000
+	host := startRegistry(t, nil, nil)
+	waitUp(t, checker{host: host, insecure: true})
+	tags := make([]string, total)
+	for i := range tags {
+		tags[i] = fmt.Sprintf("1.%d.0", i)
+	}
+	push(t, &http.Client{Timeout: time.Minute}, "http://"+host, itRepo, tags...)
+
+	proxy := newCountingProxy(t, host)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := registry.NewTagService(nil, proxy.egress(), "integration", log)
+	cred := &registry.ResolvedCredential{
+		Candidate:   registry.Candidate{ID: "c1", Name: "integration"},
+		HostOptions: registry.HostOptions{Host: proxy.host(), Username: itUser, Password: itPass},
+		UpdatedAt:   time.Now(),
+	}
+	ref, err := registry.ParseRef(proxy.host() + "/" + itRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// Paging: 20 pages of 100, newest version first, each tag once.
+	var seen []string
+	for page := range 20 {
+		p, err := svc.List(ctx, cred, ref, "", true, page)
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		if len(p.Tags) != registry.TagPageSize || p.Total != total || p.More != (page < 19) || p.Capped {
+			t.Fatalf("page %d: %d tags, total %d, more %v, capped %v", page, len(p.Tags), p.Total, p.More, p.Capped)
+		}
+		for _, tg := range p.Tags {
+			seen = append(seen, tg.Name)
+		}
+	}
+	for i, name := range seen {
+		if want := fmt.Sprintf("1.%d.0", total-1-i); name != want {
+			t.Fatalf("tag %d = %q, want %q: newest version first", i, name, want)
+		}
+	}
+	if len(seen) != total {
+		t.Fatalf("listed %d tags, want %d", len(seen), total)
+	}
+
+	// Details of the 25 rows on screen: every one is read, and the registry never sees more
+	// than three requests at once.
+	visible := seen[:25]
+	before := proxy.requests.Load()
+	got := svc.Details(ctx, cred, ref, visible, "amd64")
+	if len(got) != 25 {
+		t.Fatalf("details = %d, want 25", len(got))
+	}
+	for i, d := range got {
+		if d.Tag != visible[i] || d.Code != "" || d.Digest == "" || len(d.Platforms) != 1 || d.Platforms[0].Arch != "amd64" ||
+			d.Created == nil || d.Created.Format(time.RFC3339) != "2026-01-02T03:04:05Z" {
+			t.Fatalf("detail %d = %+v", i, d)
+		}
+	}
+	if proxy.requests.Load() == before {
+		t.Fatal("details made no request to the registry")
+	}
+	if m := proxy.maxInflight.Load(); m > 3 {
+		t.Errorf("most requests in flight = %d, want at most 3", m)
+	}
+	if !slices.Contains(visible, "1.1999.0") {
+		t.Error("the newest tag is not among the rows on screen")
+	}
 }

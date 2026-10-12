@@ -20,6 +20,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/envs"
 )
 
 // Browsing a repository's tags (plan 05-18, IMG-03, D-19, D-24a, T-05-60). The router,
@@ -527,5 +528,86 @@ func TestBrowseTagDetailsNeverServeWhatACredentialSawToACallerWhoCannotUseIt(t *
 	item := decodeRec[tagDetailsResp](t, rec).Items[0]
 	if item.Code != "needs_login" || item.Digest != "" || item.Created != nil || len(item.Platforms) != 0 {
 		t.Errorf("viewer item = %+v, want needs_login and nothing the credential saw", item)
+	}
+}
+
+// Running in (plan 05-19 task 2, IMG-03, D-22, T-05-64).
+
+func TestBrowseTagDetailsSayWhichReadableEnvironmentsRunTheDigestAndNoOthers(t *testing.T) {
+	reg := newFakeRegistry(t)
+	img := serveImage(reg, time.Now())
+	image := reg.host() + "/acme/app"
+	f := newEnvFix(t, dockertest.FakeConfig{
+		Hostname: "node-1",
+		Images:   []dockertest.FakeImage{{ID: hexID("a"), RepoTags: []string{image + ":1.0"}, RepoDigests: []string{image + "@" + img.digest}}},
+		Containers: []dockertest.FakeContainer{
+			{ID: "c-web", Names: []string{"/web"}, Image: image + ":1.0", ImageID: hexID("a"), State: "running"},
+		},
+	})
+	f.trusting(t, reg)
+	a := f.add(t)
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	f.inst.Apply("Bayplan", "https://example.com/bayplan")
+	bEnv, rec := f.addAgent(t)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("add the agent environment: %d %s", rec.code, rec.body)
+	}
+	b := bEnv.ID
+	admin := credentialUser{f.cookie, f.csrf}
+	viewerA := f.asRoleOn(t, "viewera", a.ID, "viewer")
+	viewerB := f.asRoleOn(t, "viewerb", b, "viewer")
+
+	running := func(u credentialUser, envID string) []string {
+		t.Helper()
+		rec := f.details(t, u, reg, "acme/app", envID, "1.0")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("details: %d %s", rec.Code, rec.Body)
+		}
+		var names []string
+		for _, e := range decodeRec[tagDetailsResp](t, rec).Items[0].RunningIn {
+			if e.EnvID == "" {
+				t.Errorf("running in %+v has no environment ID", e)
+			}
+			names = append(names, e.EnvName)
+		}
+		return names
+	}
+	if got := running(admin, ""); !slices.Equal(got, []string{"node-1"}) {
+		t.Errorf("admin: running in %v, want node-1; the offline environment is skipped", got)
+	}
+	if got := running(viewerA, ""); !slices.Equal(got, []string{"node-1"}) {
+		t.Errorf("viewer of A: running in %v, want node-1", got)
+	}
+	if got := running(viewerB, ""); len(got) != 0 {
+		t.Errorf("viewer of B: running in %v, want none: A is not theirs to read", got)
+	}
+	// With an environment chosen the page is that environment's, not the registries page.
+	if got := running(admin, a.ID); len(got) != 0 {
+		t.Errorf("with envId: running in %v, want none", got)
+	}
+}
+
+func TestBrowseTagDetailsMatchByDigestSoAMovedTagStillShowsWhereItsImageRuns(t *testing.T) {
+	reg := newFakeRegistry(t)
+	img := serveImage(reg, time.Now())
+	image := reg.host() + "/acme/app"
+	f := newEnvFix(t, dockertest.FakeConfig{
+		Hostname: "node-1",
+		Images:   []dockertest.FakeImage{{ID: hexID("a"), RepoDigests: []string{image + "@" + img.digest}}},
+		// The container was created from 0.9, which has since been re-pushed as something else:
+		// only its digest still says what it runs.
+		Containers: []dockertest.FakeContainer{
+			{ID: "c-web", Names: []string{"/web"}, Image: image + ":0.9", ImageID: hexID("a"), State: "running"},
+		},
+	})
+	f.trusting(t, reg)
+	a := f.add(t)
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	rec := f.details(t, credentialUser{f.cookie, f.csrf}, reg, "acme/app", "", "1.0")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("details: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeRec[tagDetailsResp](t, rec).Items[0].RunningIn; len(got) != 1 || got[0].EnvID != a.ID {
+		t.Errorf("running in %+v, want environment A", got)
 	}
 }

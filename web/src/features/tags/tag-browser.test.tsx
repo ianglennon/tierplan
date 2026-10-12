@@ -816,7 +816,7 @@ describe("TagBrowser platforms", () => {
     expect(screen.queryByRole("button", { name: /Show platforms/ })).toBeNull();
   });
 
-  it("shows Tag, Digest, Created and Platforms in the full table, after an unlabelled expander column", async () => {
+  it("shows Tag, Digest, Created, Platforms and Running in on the Registries page, after an unlabelled expander column", async () => {
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
@@ -825,6 +825,79 @@ describe("TagBrowser platforms", () => {
       "Digest",
       "Created",
       "Platforms",
+      "Running in",
     ]);
+  });
+
+  it("leaves Running in out inside an environment, where the running markers are that environment's own", async () => {
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" envId="e1" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "",
+      "Tag",
+      "Digest",
+      "Created",
+      "Platforms",
+    ]);
+  });
+});
+
+describe("TagBrowser Running in", () => {
+  const running = (names: string[]) => names.map((n, i) => ({ envId: `e${i + 1}`, envName: n }));
+
+  async function openWith(runningIn: { envId: string; envName: string }[]) {
+    detailsAnswer = (body) =>
+      Response.json({ items: body.tags.map((tag) => detail(tag, { runningIn })) });
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    expect(cellsOf(rowOf("v1.10.0"))[5]?.textContent).toBe("Loading…");
+    expect(cellsOf(rowOf("v1.10.0"))[5]?.getAttribute("aria-busy")).toBe("true");
+    scrollTo(["v1.10.0"]);
+    await waitFor(() =>
+      expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"),
+    );
+    return cellsOf(rowOf("v1.10.0"))[5] as HTMLElement;
+  }
+
+  it("shows a dash when no environment runs the tag", async () => {
+    const cell = await openWith([]);
+    expect(cell.textContent).toBe("—");
+  });
+
+  it("shows up to two environment names as links to them", async () => {
+    const cell = await openWith(running(["Lab", "Edge"]));
+    const links = within(cell).getAllByRole("link");
+    expect(links.map((l) => l.textContent)).toEqual(["Lab", "Edge"]);
+    expect(links.map((l) => l.getAttribute("href"))).toEqual(["/env/e1", "/env/e2"]);
+    expect(within(cell).queryByRole("button")).toBeNull();
+  });
+
+  it("collapses the rest into +n, which opens a popover with the others as links", async () => {
+    const cell = await openWith(running(["Lab", "Edge", "Prod", "Dev"]));
+    expect(
+      within(cell)
+        .getAllByRole("link")
+        .map((l) => l.textContent),
+    ).toEqual(["Lab", "Edge"]);
+    const more = within(cell).getByRole("button", { name: "Show 2 more environments" });
+    expect(more.textContent).toBe("+2");
+    fireEvent.click(more);
+    const popover = await screen.findByRole("dialog");
+    expect(
+      within(popover)
+        .getAllByRole("link")
+        .map((l) => l.textContent),
+    ).toEqual(["Prod", "Dev"]);
+    expect(
+      within(popover)
+        .getAllByRole("link")
+        .map((l) => l.getAttribute("href")),
+    ).toEqual(["/env/e3", "/env/e4"]);
+  });
+
+  it("draws an environment name that looks like markup as text", async () => {
+    const cell = await openWith(running(["<b>lab</b>"]));
+    expect(within(cell).getByRole("link").textContent).toBe("<b>lab</b>");
+    expect(document.querySelector("b")).toBeNull();
   });
 });
