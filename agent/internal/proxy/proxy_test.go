@@ -213,7 +213,7 @@ func TestEverythingElseIsRefusedWithATypedAnswerAndNeverReachesTheEngine(t *test
 		{"a delete with the legacy link key", request("DELETE", "/containers/abc?link=1"), "agent_policy_denied: DELETE /containers/abc"},
 		{"attach to a container", request("POST", "/containers/abc/attach"), "agent_policy_denied: POST /containers/abc/attach"},
 		{"the file archive of a container", get("/containers/abc/archive"), "agent_policy_denied: GET /containers/abc/archive"},
-		{"a delete of an image", request("DELETE", "/images/abc"), "agent_policy_denied: DELETE /images/abc"},
+		{"a forced delete of an image", request("DELETE", "/images/abc?force=1"), "agent_policy_denied: DELETE /images/abc"},
 		{"a longer path under an allowed one", get("/containers/json/extra"), "agent_policy_denied: GET /containers/json/extra"},
 		{"a trailing slash", get("/info/"), "agent_policy_denied: GET /info/"},
 		{"an upper-case path", get("/INFO"), "agent_policy_denied: GET /INFO"},
@@ -529,7 +529,7 @@ func TestAllowedOpensOnlyTheInspectOfOneContainer(t *testing.T) {
 		{"an ID of 129 characters", "GET", "/containers/a" + strings.Repeat("b", 128) + "/json", false},
 		{"a second segment after json", "GET", "/containers/abc/json/extra", false},
 		{"the list itself still allowed", "GET", "/containers/json", true},
-		{"the images inspect is not opened", "GET", "/images/abc/json", false},
+		{"an image tag is not opened", "POST", "/images/abc/tag", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ok, _, _ := Allowed(tc.method, tc.path, "", false, false, Policy{})
@@ -748,5 +748,41 @@ func TestAMalformedRegistryHeaderOnAPullIsRefusedAndNeverReachesTheEngine(t *tes
 	}
 	if len(reasons) != 4 {
 		t.Errorf("onDenied ran %d times, want 4", len(reasons))
+	}
+}
+
+func TestDistributionKeepsTheRegistryHeaderWhileInspectAndHistoryDropIt(t *testing.T) {
+	sock := newFakeSocket(t)
+	h := Handler(sock.path, Policy{}, nil)
+	for _, tc := range []struct {
+		method, target string
+		wantAuth       bool
+	}{
+		{"GET", "/distribution/ghcr.io/acme/app:1/json", true},
+		{"GET", "/images/ghcr.io/acme/app:1/json", false},
+		{"GET", "/images/ghcr.io/acme/app:1/history", false},
+		{"DELETE", "/images/ghcr.io/acme/app:1", false},
+	} {
+		before := len(sock.requests())
+		resp := do(t, h, request(tc.method, tc.target,
+			"X-Registry-Auth: "+testRegistryAuth+"\r\n", "X-Registry-Config: e30=\r\n"))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %s: status %d, want 200", tc.method, tc.target, resp.StatusCode)
+		}
+		seen := sock.headersSeen()
+		if len(seen) != before+1 {
+			t.Fatalf("%s %s: the engine saw %d requests, want %d", tc.method, tc.target, len(seen), before+1)
+		}
+		got := seen[before].Values("X-Registry-Auth")
+		if tc.wantAuth && (len(got) != 1 || got[0] != testRegistryAuth) {
+			t.Errorf("%s %s: the engine received X-Registry-Auth %q, want the one value", tc.method, tc.target, got)
+		}
+		if !tc.wantAuth && len(got) != 0 {
+			t.Errorf("%s %s: the engine received X-Registry-Auth %q", tc.method, tc.target, got)
+		}
+		if v := seen[before].Values("X-Registry-Config"); len(v) != 0 {
+			t.Errorf("%s %s: the engine received X-Registry-Config %q", tc.method, tc.target, v)
+		}
 	}
 }
