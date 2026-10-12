@@ -340,20 +340,21 @@ var containerKeys = []string{
 func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {
 	cfg := richEngine()
 	cfg.Containers[1].Labels = map[string]string{
-		"app.note": "label-9f3", "com.docker.compose.project": "shop",
+		"app.note": "label-zq7", "com.docker.compose.project": "shop",
 		"com.docker.stack.namespace": "blog", "com.docker.swarm.service.name": "blog_web",
 	}
-	cfg.Containers[1].Mounts = []string{"/srv/mount-9f3"}
-	cfg.Containers[1].Networks = map[string]dockertest.FakeEndpoint{"net-9f3": {NetworkID: "n9f3", IPv4: "10.9.3.2"}}
-	cfg.Images[0].Labels = map[string]string{"app.build": "image-9f3"}
-	cfg.Volumes[0].Labels = map[string]string{"app.owner": "volume-9f3"}
+	cfg.Containers[1].Mounts = []string{"/srv/mount-zq7"}
+	cfg.Containers[1].Networks = map[string]dockertest.FakeEndpoint{"net-zq7": {NetworkID: "nzq7", IPv4: "10.9.3.2"}}
+	cfg.Images[0].Labels = map[string]string{"app.build": "image-zq7"}
+	cfg.Volumes[0].Labels = map[string]string{"app.owner": "volume-zq7"}
 	f, e := dashEnv(t, cfg)
 	for _, what := range dataPaths {
 		rec := f.get(t, e, what)
 		if rec.code != http.StatusOK {
 			t.Fatalf("%s: %d %s", what, rec.code, rec.body)
 		}
-		for _, leaked := range []string{"9f3", "app.note", "app.build", "app.owner"} {
+		// "zq7" is not hex, so it cannot match an ID or digest by chance.
+		for _, leaked := range []string{"zq7", "app.note", "app.build", "app.owner"} {
 			if strings.Contains(string(rec.body), leaked) {
 				t.Errorf("%s leaked %q, a label, mount, network or variable (T-01-77): %s", what, leaked, rec.body)
 			}
