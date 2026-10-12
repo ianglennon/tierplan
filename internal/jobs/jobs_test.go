@@ -313,3 +313,137 @@ func TestCloseCancelsRunningJobsAndClosesSubscriptions(t *testing.T) {
 		t.Error("a closed hub started a job")
 	}
 }
+
+// Cancel (plan 05-04, D-26): the items that have not finished end cancelled with a code, the
+// ones that have keep their result, and cancelling a job that has ended changes nothing.
+
+func threeItems(owner string) jobs.Spec {
+	s := twoItems(owner)
+	s.Items = append(s.Items, jobs.ItemSpec{ID: "n3", Label: "node three"})
+	return s
+}
+
+// runOneDone finishes n1 and leaves the others to the context.
+func runOneDone(started chan<- struct{}) func(context.Context, *jobs.Reporter) {
+	return func(ctx context.Context, r *jobs.Reporter) {
+		r.Finish("n1", jobs.ItemDone, "", "", map[string]string{"digest": "sha256:abc"})
+		r.Update("n2", func(it *jobs.Item) { it.State = jobs.ItemRunning })
+		r.Update("n3", func(it *jobs.Item) { it.State = jobs.ItemRunning })
+		close(started)
+		<-ctx.Done()
+	}
+}
+
+func TestCancelEndsTheUnfinishedItemsAsCancelledWithACodeAndTheJobAsPartial(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	started := make(chan struct{})
+	job, err := h.Start(threeItems("u"), runOneDone(started))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := h.Cancel(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := waitFinished(t, h, job.ID)
+	if got.State != jobs.JobPartial {
+		t.Fatalf("state = %q, want partial", got.State)
+	}
+	if got.Items[0].State != jobs.ItemDone || got.Items[0].Result["digest"] != "sha256:abc" {
+		t.Errorf("the finished item changed: %+v", got.Items[0])
+	}
+	for _, it := range got.Items[1:] {
+		if it.State != jobs.ItemCancelled || it.Code != jobs.CodeCancelled || it.Message == "" {
+			t.Errorf("item %s = %+v, want cancelled with code %q", it.ID, it, jobs.CodeCancelled)
+		}
+	}
+}
+
+func TestCancelOfAJobWhereNothingFinishedEndsItCancelledEvenIfOneItemFailed(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	started := make(chan struct{})
+	job, _ := h.Start(threeItems("u"), func(ctx context.Context, r *jobs.Reporter) {
+		r.Finish("n1", jobs.ItemFailed, "node_unreachable", "x", nil)
+		close(started)
+		<-ctx.Done()
+	})
+	<-started
+	if err := h.Cancel(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitFinished(t, h, job.ID); got.State != jobs.JobCancelled {
+		t.Fatalf("state = %q, want cancelled", got.State)
+	}
+}
+
+func TestCancelOfAFinishedJobIsErrFinishedAndChangesNothing(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	job, _ := h.Start(twoItems("u"), func(ctx context.Context, r *jobs.Reporter) {
+		r.Finish("n1", jobs.ItemDone, "", "", nil)
+		r.Finish("n2", jobs.ItemDone, "", "", nil)
+	})
+	before := waitFinished(t, h, job.ID)
+	if err := h.Cancel(job.ID); !errors.Is(err, jobs.ErrFinished) {
+		t.Fatalf("Cancel of a finished job = %v, want ErrFinished", err)
+	}
+	if err := h.Cancel(job.ID); !errors.Is(err, jobs.ErrFinished) {
+		t.Fatalf("second Cancel = %v, want ErrFinished", err)
+	}
+	after, _ := h.Get(job.ID)
+	if after.State != before.State || !after.FinishedAt.Equal(before.FinishedAt) || after.Items[0].State != jobs.ItemDone {
+		t.Fatalf("a cancel changed a finished job: before %+v after %+v", before, after)
+	}
+}
+
+func TestACancelledJobPublishesDoneOnce(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	started := make(chan struct{})
+	job, _ := h.Start(threeItems("u"), runOneDone(started))
+	<-started
+	_, ch, cancel, err := h.Subscribe(context.Background(), job.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	_ = h.Cancel(job.ID)
+	_ = h.Cancel(job.ID)
+	dones := 0
+	for _, ev := range drain(t, ch) {
+		if ev.Type == jobs.EventDone {
+			dones++
+		}
+	}
+	if dones != 1 {
+		t.Fatalf("done events = %d, want 1", dones)
+	}
+}
+
+func TestWaitReturnsTheJobOnceItHasEnded(t *testing.T) {
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	started := make(chan struct{})
+	job, _ := h.Start(threeItems("u"), runOneDone(started))
+	<-started
+	_ = h.Cancel(job.ID)
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	got, err := h.Wait(ctx, job.ID)
+	if err != nil || !got.Finished() {
+		t.Fatalf("Wait = %+v, %v, want the finished job", got, err)
+	}
+	if _, err := h.Wait(ctx, "nope"); !errors.Is(err, jobs.ErrNotFound) {
+		t.Fatalf("Wait of an unknown job = %v", err)
+	}
+	// A job that does not end: Wait gives up with the context and still returns the job.
+	hold2, _ := h.Start(twoItems("v"), hold(make(chan struct{})))
+	short, stop2 := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer stop2()
+	got, err = h.Wait(short, hold2.ID)
+	if !errors.Is(err, context.DeadlineExceeded) || got.ID != hold2.ID || got.Finished() {
+		t.Fatalf("Wait of a running job = %+v, %v", got, err)
+	}
+}

@@ -98,7 +98,9 @@ describe("PullProgress", () => {
     const title = screen.getByRole("heading", { name: `Pulling ${REF}` });
     expect(title.className).toContain("break-all");
     expect(screen.getByText("Credential: anonymous")).toBeTruthy();
-    expect(screen.getByText("You can close this. The pull keeps running.")).toBeTruthy();
+    expect(
+      screen.getByText("You can close this. The pull keeps running. Find it under Pulls."),
+    ).toBeTruthy();
   });
 
   it("shows a row per node before the first snapshot, all waiting", () => {
@@ -315,5 +317,49 @@ describe("PullProgress", () => {
     const alerts = screen.getAllByRole("alert");
     expect(alerts).toHaveLength(1);
     expect(alerts[0]?.textContent).toBe("This host is read-only (set on the host).");
+  });
+
+  it("offers Cancel pull next to a ghost Close while the pull runs, and nothing else", () => {
+    const onCancel = vi.fn();
+    const { onClose } = mount(job([item({ state: "running" })]), { onCancel });
+    const close = screen.getByRole("button", { name: "Close" });
+    const cancel = screen.getByRole("button", { name: "Cancel pull" });
+    expect(close.getAttribute("data-variant")).toBe("ghost");
+    expect(cancel.getAttribute("data-variant")).toBe("outline");
+    fireEvent.click(cancel);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("disables Cancel pull while the cancel is on its way, so it is sent once", () => {
+    const onCancel = vi.fn();
+    mount(job([item({ state: "running" })]), { onCancel, cancelling: true });
+    const cancel = screen.getByRole("button", { name: "Cancel pull" }) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
+    fireEvent.click(cancel);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("has no Cancel pull once the pull ended, was cancelled, or is gone", () => {
+    const onCancel = vi.fn();
+    mount(job([item({ state: "done", digest: DIGEST })], "done"), { onCancel });
+    expect(screen.queryByRole("button", { name: "Cancel pull" })).toBeNull();
+    cleanup();
+    mount(
+      job(
+        [
+          item({ state: "done", digest: DIGEST }),
+          item({ nodeId: "n2", name: "node-2", state: "cancelled" }),
+        ],
+        "partial",
+      ),
+      { onCancel },
+    );
+    expect(screen.queryByRole("button", { name: "Cancel pull" })).toBeNull();
+    expect(screen.getByText("Cancelled before it finished on node-2.")).toBeTruthy();
+    cleanup();
+    mount(job([item()]), { onCancel, status: "closed", gone: true });
+    expect(screen.queryByRole("button", { name: "Cancel pull" })).toBeNull();
+    expect(screen.queryByText(/The pull keeps running/)).toBeNull();
   });
 });

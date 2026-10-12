@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import type { PullSummary } from "@/api/pulls";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { PullsIndicator } from "@/features/pulls/pulls-indicator";
@@ -33,11 +34,13 @@ let pulls: PullSummary[];
 let listStatus: number;
 let client: QueryClient;
 let calls: string[];
+let cancelAnswer: (id: string) => Response;
 
 beforeEach(() => {
   pulls = [];
   listStatus = 200;
   calls = [];
+  cancelAnswer = (id) => Response.json({ id, state: "cancelled", items: [] });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   FakeEventSource.reset();
@@ -56,6 +59,8 @@ beforeEach(() => {
               { status: listStatus },
             );
       }
+      const cancel = path.match(/^\/api\/pulls\/([^/]+)\/cancel$/);
+      if (cancel && req.method === "POST") return cancelAnswer(cancel[1] as string);
       return Response.json({}, { status: 404 });
     }),
   );
@@ -73,6 +78,7 @@ function mount() {
       <TestRouter>
         <TooltipProvider>
           <PullsIndicator />
+          <Toaster />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
@@ -183,5 +189,68 @@ describe("PullsIndicator", () => {
     pulls = [summary({ state: "done", done: 3, finishedAt: "2026-10-11T10:01:00Z" })];
     mount();
     expect(await screen.findByRole("button", { name: "Pulls" })).toBeTruthy();
+  });
+
+  it("has a Cancel button on running rows only, named for the pull", async () => {
+    pulls = [
+      summary({ id: "j1" }),
+      summary({
+        id: "j2",
+        ref: "docker.io/library/busybox:1",
+        state: "done",
+        done: 3,
+        finishedAt: "2026-10-11T10:01:00Z",
+      }),
+    ];
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Pulls, 1 in progress" }));
+    expect(await screen.findByRole("button", { name: `Cancel pull of ${REF}` })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Cancel pull of docker.io\/library\/busybox/ }),
+    ).toBeNull();
+  });
+
+  it("cancels a pull from its row, once, tells how many nodes it stopped and does not open the panel", async () => {
+    pulls = [summary({ id: "j1" })];
+    cancelAnswer = (id) =>
+      Response.json({
+        id,
+        state: "cancelled",
+        items: [
+          { nodeId: "n1", state: "cancelled" },
+          { nodeId: "n2", state: "cancelled" },
+          { nodeId: "n3", state: "done" },
+        ],
+      });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Pulls, 1 in progress" }));
+    fireEvent.click(await screen.findByRole("button", { name: `Cancel pull of ${REF}` }));
+    expect(await screen.findByText("Cancelled the pull on 2 nodes.")).toBeTruthy();
+    expect(calls.filter((c) => c === "POST /api/pulls/j1/cancel")).toHaveLength(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("does not retry a cancel that failed, and says so", async () => {
+    pulls = [summary({ id: "j1" })];
+    cancelAnswer = () =>
+      Response.json({ type: "", title: "x", status: 500, detail: "d" }, { status: 500 });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Pulls, 1 in progress" }));
+    fireEvent.click(await screen.findByRole("button", { name: `Cancel pull of ${REF}` }));
+    expect(await screen.findByText("Couldn't cancel the pull. Try again.")).toBeTruthy();
+    expect(calls.filter((c) => c === "POST /api/pulls/j1/cancel")).toHaveLength(1);
+  });
+
+  it("says a pull that had already ended is over, not that the cancel worked", async () => {
+    pulls = [summary({ id: "j1" })];
+    cancelAnswer = () =>
+      Response.json(
+        { type: "pull_finished", title: "x", status: 409, detail: "d" },
+        { status: 409 },
+      );
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Pulls, 1 in progress" }));
+    fireEvent.click(await screen.findByRole("button", { name: `Cancel pull of ${REF}` }));
+    expect(await screen.findByText("This pull has already ended.")).toBeTruthy();
   });
 });

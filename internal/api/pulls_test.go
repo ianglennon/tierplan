@@ -6,6 +6,7 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
@@ -849,5 +850,140 @@ func TestListPullsShowsTheStartersAndTheAdministratorsOfTheEnvironmentOnly(t *te
 	}
 	if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/pulls"}); rec.Code != http.StatusUnauthorized {
 		t.Errorf("signed out: %d, want 401", rec.Code)
+	}
+}
+
+// Cancelling a pull (plan 05-04, D-26, T-05-17, T-05-18).
+
+func (f *authFixture) cancelPull(t *testing.T, id, cookie, csrf string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(t, authReq{method: http.MethodPost, path: "/api/pulls/" + id + "/cancel", cookie: cookie, csrf: csrf})
+}
+
+func TestCancelPullByTheStarterStopsTheNodeAuditsItAndASecondCancelIs409(t *testing.T) {
+	gate, _ := holdPulls(t)
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
+	f.addUser(t, "op1", false)
+	f.addEnvRole(t, "op1", e.ID, "operator")
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	op1, x1 := f.signIn(t, "op1", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/images/pull", body: `{"ref":"busybox:1"}`, cookie: op1, csrf: x1})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("start: %d %s", rec.Code, rec.Body)
+	}
+	var started pullStarted
+	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = f.cancelPull(t, started.JobID, op1, x1)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
+	}
+	var job pullJob
+	if err := json.Unmarshal(rec.Body.Bytes(), &job); err != nil {
+		t.Fatal(err)
+	}
+	if job.ID != started.JobID || job.State != "cancelled" || len(job.Items) != 1 || job.Items[0].State != "cancelled" || job.Items[0].Code != "cancelled" || job.FinishedAt == "" {
+		t.Fatalf("the cancelled job = %+v, want cancelled with its node cancelled", job)
+	}
+
+	rows := f.pullAudits(t)
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "cancelled" || rows[0].Details["code"] != "cancelled" || rows[0].Details["bulk"] != started.JobID {
+		t.Fatalf("audit rows = %+v, want one failure with code cancelled", rows)
+	}
+
+	again := f.cancelPull(t, started.JobID, op1, x1)
+	if again.Code != http.StatusConflict || problemType(t, again) != "pull_finished" {
+		t.Fatalf("second cancel: %d %s, want 409 pull_finished", again.Code, again.Body)
+	}
+	if got := f.listedPulls(t, op1); len(got) != 1 || got[0].State != "cancelled" {
+		t.Errorf("the list after a cancel = %+v, want the pull cancelled and still listed", got)
+	}
+}
+
+func TestCancelPullKeepsTheNodesThatFinishedDoneAndTheJobIsPartial(t *testing.T) {
+	gate, _ := holdPulls(t)
+	f, env, _, held := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true, PullHold: gate},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	rec := f.req(t, http.MethodPost, "/api/env/"+env.ID+"/images/pull", `{"ref":"busybox:1.36.1"}`)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("start: %d %s", rec.code, rec.body)
+	}
+	started := decode[pullStarted](t, rec)
+	waitFor(t, "alpha to finish and bravo to be held", func() bool {
+		job := decode[pullJob](t, f.getPull(t, started.JobID))
+		return len(job.Items) == 2 && job.Items[0].State == "done" && job.Items[1].State == "running"
+	})
+	if creates(held) != 1 {
+		t.Fatalf("the held node was asked %d times", creates(held))
+	}
+
+	cancelled := f.authFixture.cancelPull(t, started.JobID, f.cookie, f.csrf)
+	if cancelled.Code != http.StatusOK {
+		t.Fatalf("cancel: %d %s", cancelled.Code, cancelled.Body)
+	}
+	var job pullJob
+	if err := json.Unmarshal(cancelled.Body.Bytes(), &job); err != nil {
+		t.Fatal(err)
+	}
+	if job.State != "partial" || job.Items[0].State != "done" || job.Items[0].Digest == "" || job.Items[1].State != "cancelled" || job.Items[1].Code != "cancelled" {
+		t.Fatalf("job = %+v, want alpha done with its digest, bravo cancelled, partial", job)
+	}
+	rows := f.pullAudits(t)
+	if len(rows) != 2 || rows[0].Result != string(audit.ResultSuccess) || rows[1].Result != string(audit.ResultFailure) || rows[1].Reason != "cancelled" {
+		t.Fatalf("audit rows = %+v, want a success and a cancelled failure", rows)
+	}
+}
+
+func TestCancelPullIsAllowedToAnEnvAdminAndAnInstanceAdminAndNeverToAnyoneWhoCannotSeeIt(t *testing.T) {
+	gate, _ := holdPulls(t)
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", PullHold: gate})
+	for _, u := range []struct{ name, role string }{{"op1", "operator"}, {"op2", "operator"}, {"envadmin", "admin"}, {"viewer", "viewer"}} {
+		f.addUser(t, u.name, false)
+		f.addEnvRole(t, u.name, e.ID, u.role)
+	}
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	op1, x1 := f.signIn(t, "op1", false)
+	op2, x2 := f.signIn(t, "op2", false)
+	envAdmin, xa := f.signIn(t, "envadmin", false)
+	viewer, xv := f.signIn(t, "viewer", false)
+	start := func() string {
+		rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + e.ID + "/images/pull", body: `{"ref":"busybox:1"}`, cookie: op1, csrf: x1})
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("start: %d %s", rec.Code, rec.Body)
+		}
+		var s pullStarted
+		if err := json.Unmarshal(rec.Body.Bytes(), &s); err != nil {
+			t.Fatal(err)
+		}
+		return s.JobID
+	}
+	id := start()
+
+	for name, who := range map[string][2]string{"another Operator": {op2, x2}, "a Viewer": {viewer, xv}} {
+		rec := f.cancelPull(t, id, who[0], who[1])
+		if rec.Code != http.StatusNotFound || problemType(t, rec) != "pull_not_found" {
+			t.Errorf("%s: %d %s, want 404 pull_not_found", name, rec.Code, rec.Body)
+		}
+	}
+	if rec := f.cancelPull(t, "nope", op1, x1); rec.Code != http.StatusNotFound || problemType(t, rec) != "pull_not_found" {
+		t.Errorf("an unknown job: %d %s, want 404 pull_not_found", rec.Code, rec.Body)
+	}
+	if rec := f.call(t, authReq{method: http.MethodPost, path: "/api/pulls/" + id + "/cancel"}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("signed out: %d, want 401", rec.Code)
+	}
+	if job, _ := f.jobHub.Get(id); job.Finished() {
+		t.Fatalf("a refused cancel stopped the pull: %+v", job)
+	}
+
+	if rec := f.cancelPull(t, id, envAdmin, xa); rec.Code != http.StatusOK {
+		t.Errorf("an Env Admin: %d %s, want 200", rec.Code, rec.Body)
+	}
+	id = start()
+	if rec := f.cancelPull(t, id, f.cookie, f.csrf); rec.Code != http.StatusOK {
+		t.Errorf("an instance admin: %d %s, want 200", rec.Code, rec.Body)
 	}
 }
