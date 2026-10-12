@@ -135,6 +135,9 @@ var phase4DetailKeys = map[string][]string{
 // stopped on and the job ID as bulk (plan 05-01, D-31).
 var phase5DetailKeys = map[string][]string{
 	audit.ActionImagePulled: {"ref", "digest", "node", "credential", "layer", "code", "bulk"},
+	// A cancel of a pull by someone other than the person who started it is its own row, with the
+	// canceller as the actor, the job ID as bulk and the starter named (WR-B04).
+	audit.ActionImagePullCancelled: {"ref", "bulk", "started_by"},
 	// A remove or an untag records one row per node: the image's name as it was shown, the node,
 	// the code of a refusal and the bulk ID (plan 05-16, D-31).
 	audit.ActionImageRemoved:  {"ref", "node", "code", "bulk"},
@@ -175,6 +178,7 @@ func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	}
 	for key, constant := range map[string]string{
 		"image.pulled":                audit.ActionImagePulled,
+		"image.pull_cancelled":        audit.ActionImagePullCancelled,
 		"image.removed":               audit.ActionImageRemoved,
 		"image.untagged":              audit.ActionImageUntagged,
 		"registry.credential_created": audit.ActionRegistryCredentialCreated,

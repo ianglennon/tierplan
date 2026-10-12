@@ -337,7 +337,7 @@ func RegisterPulls(r *httpx.Router, d PullsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "cancelPull", Method: http.MethodPost, Path: "/api/pulls/{jobId}/cancel",
 		Summary: "Cancel a pull that is running",
-		Description: "Stops the nodes that have not finished: their downloads are cancelled, their items end cancelled and write an image.pulled audit row with the code cancelled. " +
+		Description: "Stops the nodes that have not finished: their downloads are cancelled, their items end cancelled and write an image.pulled audit row with the code cancelled. A cancel by someone other than the user who started the pull also writes an image.pull_cancelled row, with the canceller as the actor and the starter named. " +
 			"Nodes that had finished keep the image and stay done. The job ends cancelled when no node finished and partial otherwise, and the answer is the job as it stands, normally already ended. " +
 			"Only the user who started the pull, or a holder of images.pull on the pull's environment, may cancel it: anyone else who may not see the pull gets 404 pull_not_found, and one who sees it but cannot cancel gets 403 (audited as permission.denied). " +
 			"A pull that has already ended answers 409 pull_finished and nothing changes, so cancelling twice is safe. A cancel is a change and is never retried.",
@@ -419,6 +419,18 @@ func cancelPull(ctx context.Context, d PullsDeps, in *PullCancelInput) (*PullJob
 	case err != nil:
 		d.Log.Error("could not cancel a pull", "job", in.JobID, "error", err)
 		return nil, huma.Error500InternalServerError("internal error")
+	}
+	if job.Owner != pullOwner(p) && d.Audit != nil {
+		// The rows each node writes name the person who started the pull, so a cancel by someone
+		// else needs a row of its own with the canceller as the actor (WR-B04).
+		if err := d.Audit.Record(ctx, audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionImagePullCancelled, TargetType: imageTargetTyp, TargetID: job.Meta["ref"],
+			EnvID: job.EnvID, Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+			Details: map[string]string{"ref": job.Meta["ref"], "bulk": job.ID, "started_by": job.Owner},
+		}); err != nil {
+			// The pull is already stopped: the answer says so, and the gap is in the server log.
+			d.Log.Error("could not audit a cancelled pull", "job", in.JobID, "error", err)
+		}
 	}
 	// The nodes stop as soon as their requests are cancelled; the answer waits for that so
 	// it can say how many were stopped, and falls back to the job as it stands.

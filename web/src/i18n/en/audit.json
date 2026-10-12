@@ -185,6 +185,7 @@
       },
       "image": {
         "pulled": "Image pulled",
+        "pull_cancelled": "Image pull cancelled",
         "removed": "Image removed",
         "untagged": "Image name removed"
       },

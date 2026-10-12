@@ -989,9 +989,38 @@ func TestCancelPullIsAllowedToAnEnvAdminAndAnInstanceAdminAndNeverToAnyoneWhoCan
 	if rec := f.cancelPull(t, id, envAdmin, xa); rec.Code != http.StatusOK {
 		t.Errorf("an Env Admin: %d %s, want 200", rec.Code, rec.Body)
 	}
+	cancelledID := id
 	id = start()
 	if rec := f.cancelPull(t, id, f.cookie, f.csrf); rec.Code != http.StatusOK {
 		t.Errorf("an instance admin: %d %s, want 200", rec.Code, rec.Body)
+	}
+	// Each cancel by someone other than the starter is a row of its own, with the canceller as
+	// the actor and the starter named (WR-B04); the starter's own cancel writes none.
+	rows, err := f.st.Read.Query(`SELECT actor_name, env_id, target_id, details FROM audit_log WHERE action = ? ORDER BY seq`, audit.ActionImagePullCancelled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var actors, bulks []string
+	for rows.Next() {
+		var actor, env, target, details string
+		if err := rows.Scan(&actor, &env, &target, &details); err != nil {
+			t.Fatal(err)
+		}
+		d := map[string]string{}
+		if err := json.Unmarshal([]byte(details), &d); err != nil {
+			t.Fatal(err)
+		}
+		if env != e.ID || target != "docker.io/library/busybox:1" || d["ref"] != target || !strings.HasPrefix(d["started_by"], "user:") {
+			t.Errorf("cancel row = env %q target %q details %v", env, target, d)
+		}
+		actors, bulks = append(actors, actor), append(bulks, d["bulk"])
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(actors) != 2 || actors[0] != "envadmin" || bulks[0] != cancelledID || bulks[1] != id {
+		t.Errorf("cancel rows by %v for jobs %v, want the Env Admin's for %s and the instance admin's for %s", actors, bulks, cancelledID, id)
 	}
 }
 
