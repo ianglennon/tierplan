@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -47,6 +48,12 @@ var alwaysBlocked = []netip.Prefix{
 	netip.MustParsePrefix("::/128"),
 	netip.MustParsePrefix("224.0.0.0/4"),
 	netip.MustParsePrefix("ff00::/8"),
+	// Other cloud metadata addresses: AWS over IPv6, Alibaba Cloud, Oracle Cloud, and the NAT64
+	// spelling of the link-local range (WR-B01, WR-B02).
+	netip.MustParsePrefix("fd00:ec2::254/128"),
+	netip.MustParsePrefix("100.100.100.200/32"),
+	netip.MustParsePrefix("192.0.0.192/32"),
+	netip.MustParsePrefix("64:ff9b::a9fe:0/112"),
 }
 
 // EgressPolicy decides which addresses the server may connect to when it talks to a
@@ -101,6 +108,34 @@ func (p EgressPolicy) Blocked(a netip.Addr) bool {
 		}
 	}
 	return false
+}
+
+// refusesLookupTimeout bounds the name lookup of RefusesHost.
+const refusesLookupTimeout = 5 * time.Second
+
+// RefusesHost reports whether the policy refuses a connection to hostport (host or host:port) as
+// this server sees it: the host is an address the policy blocks, or a name that resolves to one.
+// It is for a call the server does not make itself, such as a registry check that a node's engine
+// makes, so the operator's ranges and the built-in ones are not open to it either. A name the
+// server cannot resolve is not refused, because the node may be the only one that can (an
+// internal DNS name); and DNS can change between this answer and the engine's own lookup, so it
+// narrows the reach rather than closing it (WR-B02).
+func (p EgressPolicy) RefusesHost(ctx context.Context, hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if a, err := netip.ParseAddr(host); err == nil {
+		return p.Blocked(a)
+	}
+	ctx, cancel := context.WithTimeout(ctx, refusesLookupTimeout)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(addrs, p.Blocked)
 }
 
 // control is the dialer hook: it sees the address the dialer is about to connect to, which

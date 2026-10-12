@@ -103,3 +103,27 @@ func TestATestFromAnEnvironmentNeverSendsTheStoredSecretToAnotherHost(t *testing
 		t.Errorf("the node was sent %d registry headers; the stored secret must not be lent to another host", len(got))
 	}
 }
+
+// A check from an environment is made by the node's engine, outside the server's egress policy, so
+// an address the policy refuses is not sent to the node at all (WR-B02).
+func TestATestFromAnEnvironmentNeverAsksANodeToReachAnAddressTheEgressPolicyRefuses(t *testing.T) {
+	f, env, node, _ := twoNodes(t,
+		dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true},
+		dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	admin := credentialUser{f.cookie, f.csrf}
+	for _, host := range []string{"169.254.169.254", "169.254.169.254:5000", "100.100.100.200", "192.0.0.192:5000"} {
+		body := `{"envId":"` + env.ID + `","type":"generic","host":"` + host + `","username":"bot","secret":"` + pullCredSecret + `","repository":"private/app"}`
+		rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test-from-env", body)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: %d %s, want a failed result", host, rec.Code, rec.Body)
+			continue
+		}
+		if got := decodeFromEnv(t, rec); got.State != "failed" || got.Code != "registry_unreachable" {
+			t.Errorf("%s: %+v, want failed registry_unreachable", host, got)
+		}
+	}
+	if got := node.fake.DistributionRefs(); len(got) != 0 {
+		t.Errorf("the node was asked about %v; a refused address must not reach an engine", got)
+	}
+}

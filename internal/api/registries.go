@@ -779,13 +779,17 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		nctx, cancel := context.WithTimeout(ctx, testBudget)
 		defer cancel()
 		var res dockerx.DistributionResult
-		err = d.Aggregator.OnNode(nctx, runEnvID, node.ID, func(c *dockerx.Client) error {
+		code := ""
+		if d.Egress.RefusesHost(nctx, pt.in.Host) {
+			// The node's engine makes this call, outside the server's egress policy, so a host the
+			// policy refuses (cloud metadata, the operator's BAYPLAN_REGISTRY_BLOCK_CIDRS) is not
+			// sent to it: it reads as unreachable, as it does from the server (WR-B02).
+			code = dockerx.PullCodeRegistryUnreachable
+		} else if err = d.Aggregator.OnNode(nctx, runEnvID, node.ID, func(c *dockerx.Client) error {
 			var e error
 			res, e = c.DistributionInspect(nctx, ref.String(), header)
 			return e
-		})
-		code := ""
-		if err != nil {
+		}); err != nil {
 			code = checkErrorCode(err)
 			if code == dockerx.PullCodeFailed || code == problemNodeUnavailable {
 				// The text stays in the server log; the answer carries the code only.
@@ -982,7 +986,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			"image_not_found, registry_unreachable, registry_tls, registry_http, rate_limited, pull_failed, agent_policy_denied when the node's agent is older than this server, node_unavailable when the node " +
 			"did not answer), never any text from the registry. Needs registries.instance. 422 repository_required without a repository; 422 validation_failed names the other fields at fault (tag_invalid, " +
 			"test_repository_invalid and those of adding a credential); 404 environment_not_found; 503 node_unavailable when no node of the environment is connected; 502 agent_policy_denied when the " +
-			"environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). Audited as registry.credential_tested with the environment, the node and via env, never the secret.",
+			"environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). A host that is, or resolves on the server to, an address the server's egress policy refuses (cloud metadata, link-local, BAYPLAN_REGISTRY_BLOCK_CIDRS) is not sent to the node: the answer is failed with registry_unreachable. Audited as registry.credential_tested with the environment, the node and via env, never the secret.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *TestInstanceCredentialFromEnvInput) (*CredentialTestFromEnvOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -1010,7 +1014,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		Description: "As testing an instance sign-in from an environment, for the credentials of one environment and run on that environment's own node: a connected manager on a swarm, else its one node. " +
 			"A stored credential (credentialId) must be this environment's own: 404 credential_not_found for the instance's or another environment's. Needs registries.manage on the environment " +
 			"(its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the other test routes: 429 rate_limited. Audited as " +
-			"registry.credential_tested with the environment, the node and via env, never the secret.",
+			"registry.credential_tested with the environment, the node and via env, never the secret. A host that the server's egress policy refuses is not sent to the node: failed with registry_unreachable.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesManage), func(ctx context.Context, in *TestEnvCredentialFromEnvInput) (*CredentialTestFromEnvOutput, error) {
 		p := httpx.PrincipalFrom(ctx)

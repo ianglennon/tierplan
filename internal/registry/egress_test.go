@@ -83,3 +83,17 @@ func TestTheZeroEgressPolicyStillRefusesTheMetadataAddress(t *testing.T) {
 		t.Error("a policy that was never constructed lets the metadata address through")
 	}
 }
+
+// RefusesHost applies the policy to a host the server does not dial itself (WR-B02).
+func TestRefusesHostJudgesLiteralAddressesAndResolvedNamesAndLeavesUnresolvableNamesToTheNode(t *testing.T) {
+	p := NewEgressPolicy([]netip.Prefix{netip.MustParsePrefix("10.9.0.0/16")})
+	for host, want := range map[string]bool{
+		"169.254.169.254": true, "169.254.169.254:5000": true, "[fe80::1]:5000": true, "[fd00:ec2::254]": true,
+		"100.100.100.200": true, "192.0.0.192": true, "10.9.1.1:443": true,
+		"10.8.1.1": false, "127.0.0.1:5000": false, "192.168.1.5": false, "registry.invalid": false,
+	} {
+		if got := p.RefusesHost(context.Background(), host); got != want {
+			t.Errorf("RefusesHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
