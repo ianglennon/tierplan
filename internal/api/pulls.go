@@ -49,9 +49,6 @@ const (
 	problemJobsUnavail    = "jobs_unavailable"
 	problemTooManyStreams = "too_many_streams"
 
-	// maxPullNodes bounds the nodes one pull may name.
-	maxPullNodes = 128
-
 	// maxPullLayers bounds the layers one item lists; an image has a few dozen.
 	maxPullLayers = 256
 	// maxPullText bounds a layer ID or status taken from the engine's progress.
