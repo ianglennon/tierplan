@@ -54,6 +54,8 @@ interface Sent {
 let sent: Sent[];
 let me: ReturnType<typeof makeMe>;
 let answer: () => Response | Promise<Response>;
+let inspectAnswer: () => Response | Promise<Response>;
+let historyAnswer: () => Response | Promise<Response>;
 let envType: "standalone" | "swarm";
 const defaults = queryClient.getDefaultOptions();
 
@@ -62,6 +64,23 @@ beforeEach(() => {
   envType = "standalone";
   me = makeMe({ envs: { [ENV]: "admin" } });
   answer = () => Response.json(detail());
+  inspectAnswer = () =>
+    Response.json({
+      masked: true,
+      inspect: { Id: ID, Config: { Env: ["API_KEY=<hidden>"] } },
+    });
+  historyAnswer = () =>
+    Response.json({
+      layers: [
+        {
+          id: `sha256:${"b".repeat(64)}`,
+          createdBy: "RUN build",
+          size: 1024,
+          created: "2026-10-01T10:00:00Z",
+          comment: "",
+        },
+      ],
+    });
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   detailRetry.attempts = 0;
   setCsrfToken(null);
@@ -121,6 +140,10 @@ beforeEach(() => {
           });
         case `/api/env/${ENV}/images/${ID}`:
           return answer();
+        case `/api/env/${ENV}/images/${ID}/inspect`:
+          return inspectAnswer();
+        case `/api/env/${ENV}/images/${ID}/history`:
+          return historyAnswer();
         case `/api/env/${ENV}/images/pull-targets`:
           return Response.json({ nodes: [] });
         case `/api/env/${ENV}/images`:
@@ -288,5 +311,88 @@ describe("image page states", () => {
       expect(screen.queryByRole("heading", { level: 2, name: "nginx:1.27" })).toBeNull(),
     );
     expect(sent.some((s) => s.path === `/api/env/${ENV}/images/${ID}`)).toBe(false);
+  });
+});
+
+describe("image Inspect tab", () => {
+  it("is a tab beside Overview and shows the document with the masking alert", async () => {
+    const router = renderAt(`${PAGE}?node=n1`);
+    const tab = await screen.findByRole("tab", { name: "Inspect" });
+    expect(screen.getByRole("tab", { name: "Overview" })).toBeTruthy();
+    fireEvent.click(tab);
+    await waitFor(() =>
+      expect(decodeURIComponent(router.state.location.pathname)).toBe(
+        `/env/${ENV}/images/${ID}/inspect`,
+      ),
+    );
+    expect(router.state.location.search).toMatchObject({ node: "n1" });
+    const doc = await screen.findByRole("region", { name: /nginx:1.27/i });
+    expect(doc.textContent).toContain("API_KEY=<hidden>");
+    expect(
+      screen.getByText(
+        "Environment variable values are hidden. Needs the reveal secrets permission to show them.",
+      ),
+    ).toBeTruthy();
+    expect(
+      sent.some((s) => s.path === `/api/env/${ENV}/images/${ID}/inspect` && s.search === "?node=n1"),
+    ).toBe(true);
+  });
+
+  it("shows no alert when nothing was hidden", async () => {
+    inspectAnswer = () => Response.json({ masked: false, inspect: { Id: ID } });
+    renderAt(`${PAGE}/inspect`);
+    await screen.findByRole("region", { name: /nginx:1.27/i });
+    expect(screen.queryByText(/Environment variable values are hidden/)).toBeNull();
+  });
+
+  it("says it could not load the inspect output, with Retry", async () => {
+    let fail = true;
+    inspectAnswer = () =>
+      fail
+        ? Response.json({ title: "x", status: 502 }, { status: 502 })
+        : Response.json({ masked: false, inspect: { Id: ID } });
+    renderAt(`${PAGE}/inspect`);
+    expect(await screen.findByText(/Couldn't load the inspect output of nginx:1.27/)).toBeTruthy();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("region", { name: /nginx:1.27/i })).toBeTruthy();
+  });
+});
+
+describe("image Layers tab", () => {
+  it("is a tab between Overview and Inspect and shows the layers", async () => {
+    const router = renderAt(PAGE);
+    const tabs = (await screen.findAllByRole("tab")).map((tab) => tab.textContent);
+    expect(tabs).toEqual(["Overview", "Layers", "Inspect"]);
+    fireEvent.click(screen.getByRole("tab", { name: "Layers" }));
+    await waitFor(() =>
+      expect(decodeURIComponent(router.state.location.pathname)).toBe(
+        `/env/${ENV}/images/${ID}/layers`,
+      ),
+    );
+    expect(await screen.findByRole("table", { name: "Layers" })).toBeTruthy();
+    expect(await screen.findByText("RUN build")).toBeTruthy();
+  });
+});
+
+describe("image page going away", () => {
+  it("turns into This image is gone when a later read finds no node with the image", async () => {
+    const router = renderAt(PAGE);
+    expect(await screen.findByRole("heading", { level: 2, name: "nginx:1.27" })).toBeTruthy();
+    answer = () =>
+      Response.json({ type: "image_not_found", title: "x", status: 404 }, { status: 404 });
+    await queryClient.invalidateQueries({ queryKey: ["env", ENV, "images"] });
+    expect(await screen.findByText("This image is gone")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+    expect(router.state.location.pathname).toContain("/images/");
+  });
+
+  it("turns the Inspect tab into the gone state too, without a reload", async () => {
+    renderAt(`${PAGE}/inspect`);
+    await screen.findByRole("region", { name: /nginx:1.27/i });
+    answer = () =>
+      Response.json({ type: "image_not_found", title: "x", status: 404 }, { status: 404 });
+    await queryClient.invalidateQueries({ queryKey: ["env", ENV, "images"] });
+    expect(await screen.findByText("This image is gone")).toBeTruthy();
   });
 });

@@ -585,3 +585,92 @@ func TestArgvWithholdsANonEmptyCommandUnlessTheCallerMayReveal(t *testing.T) {
 		t.Errorf("Argv(empty, false) = %v, %v; want an empty list, not masked", got, masked)
 	}
 }
+
+// An image's inspect document carries its config environment, which a build can have baked a
+// secret into, so Env values are withheld from a caller who may not reveal secrets (plan
+// 05-14, D-18, T-05-47).
+const imageInspectFixture = `{"Id":"sha256:abc","RepoTags":["app:1"],"Config":{"Env":["A=1","PASSWORD=hunter2","TOKEN=a=b=c","BARE"],"Labels":{"x":"y"},"Cmd":["serve"]},` +
+	`"ContainerConfig":{"Env":["OLD_SECRET=s3cret"]},"Size":12345678901234567890}`
+
+func TestMaskImageInspectReplacesEveryEnvValueInConfigAndContainerConfigAndKeepsTheRest(t *testing.T) {
+	out, masked, err := redact.MaskImageInspect([]byte(imageInspectFixture), false)
+	if err != nil {
+		t.Fatalf("MaskImageInspect: %v", err)
+	}
+	if !masked {
+		t.Error("masked = false, want true")
+	}
+	for _, leak := range []string{"hunter2", "s3cret", "a=b=c", "=1"} {
+		if strings.Contains(string(out), leak) {
+			t.Errorf("output carries %q: %s", leak, out)
+		}
+	}
+	var got struct {
+		Config struct {
+			Env    []string
+			Labels map[string]string
+			Cmd    []string
+		}
+		ContainerConfig struct{ Env []string }
+		RepoTags        []string
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	want := []string{"A=" + redact.Placeholder, "PASSWORD=" + redact.Placeholder, "TOKEN=" + redact.Placeholder, "BARE"}
+	if !slices.Equal(got.Config.Env, want) {
+		t.Errorf("Config.Env = %v, want %v", got.Config.Env, want)
+	}
+	if !slices.Equal(got.ContainerConfig.Env, []string{"OLD_SECRET=" + redact.Placeholder}) {
+		t.Errorf("ContainerConfig.Env = %v", got.ContainerConfig.Env)
+	}
+	if got.Config.Labels["x"] != "y" || !slices.Equal(got.Config.Cmd, []string{"serve"}) || !slices.Equal(got.RepoTags, []string{"app:1"}) {
+		t.Errorf("the rest of the document changed: %+v", got)
+	}
+	if !strings.Contains(string(out), "12345678901234567890") {
+		t.Errorf("a number lost digits: %s", out)
+	}
+	if !strings.Contains(string(out), "\n  \"Id\": \"sha256:abc\"") {
+		t.Errorf("output is not indented with two spaces: %s", out)
+	}
+}
+
+func TestMaskImageInspectWithRevealReturnsTheInputAndReportsNothingMasked(t *testing.T) {
+	out, masked, err := redact.MaskImageInspect([]byte(imageInspectFixture), true)
+	if err != nil || masked || string(out) != imageInspectFixture {
+		t.Fatalf("reveal = %q masked=%v err=%v", out, masked, err)
+	}
+}
+
+func TestMaskImageInspectOfAnImageWithNoEnvIsNotMasked(t *testing.T) {
+	for _, raw := range []string{`{"Id":"i"}`, `{"Id":"i","Config":{}}`, `{"Id":"i","Config":{"Env":null}}`, `{"Id":"i","Config":{"Env":[]}}`, `{"Id":"i","Config":null,"ContainerConfig":{"Env":[]}}`} {
+		out, masked, err := redact.MaskImageInspect([]byte(raw), false)
+		if err != nil || masked || !strings.Contains(string(out), `"Id": "i"`) {
+			t.Errorf("%s: out=%q masked=%v err=%v", raw, out, masked, err)
+		}
+	}
+}
+
+func TestMaskImageInspectWithholdsAnEnvOfAShapeTheEngineDoesNotSendRatherThanPassingItThrough(t *testing.T) {
+	for _, raw := range []string{
+		`{"Config":{"Env":"PASSWORD=secret"}}`,
+		`{"Config":{"Env":{"PASSWORD":"secret"}}}`,
+		`{"Config":{"Env":["A=1",{"PASSWORD":"secret"}]}}`,
+		`{"ContainerConfig":{"Env":"PASSWORD=secret"}}`,
+		`{"Config":"PASSWORD=secret"}`,
+	} {
+		out, masked, err := redact.MaskImageInspect([]byte(raw), false)
+		if err != nil || !masked || strings.Contains(string(out), "secret") {
+			t.Errorf("%s: out=%q masked=%v err=%v", raw, out, masked, err)
+		}
+	}
+}
+
+func TestMaskImageInspectOfAnythingThatIsNotAJSONObjectIsAnErrorNeverAPassthrough(t *testing.T) {
+	for _, raw := range []string{``, `{"Config":{"Env":["P=secret"]}`, `not json`, `null`, `[]`, `"P=secret"`, `{"a":1} {"Config":{"Env":["P=secret"]}}`} {
+		out, masked, err := redact.MaskImageInspect([]byte(raw), false)
+		if err == nil || out != nil || masked {
+			t.Errorf("MaskImageInspect(%q) = %q, %v, %v; want an error and no output", raw, out, masked, err)
+		}
+	}
+}

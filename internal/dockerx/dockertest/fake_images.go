@@ -17,10 +17,14 @@ import (
 var _ = registerFakeHandler((*Fake).serveImageCreate)
 var _ = registerFakeHandler((*Fake).serveDistribution)
 var _ = registerFakeHandler((*Fake).serveImageInspect)
+var _ = registerFakeHandler((*Fake).serveImageHistory)
 
-// imageInspectPath matches /images/{name}/json. The list, /images/json, has no name in front
-// of its /json and is not matched.
-var imageInspectPath = regexp.MustCompile(`^/images/(.+)/json$`)
+// imageInspectPath and imageHistoryPath match /images/{name}/json and /images/{name}/history.
+// The list, /images/json, has no name in front of its /json and is not matched.
+var (
+	imageInspectPath = regexp.MustCompile(`^/images/(.+)/json$`)
+	imageHistoryPath = regexp.MustCompile(`^/images/(.+)/history$`)
+)
 
 // resolveImage finds an image by its ID, by the ID without sha256:, or by one of its tags.
 func (c FakeConfig) resolveImage(name string) (FakeImage, bool) {
@@ -75,6 +79,39 @@ func (f *Fake) serveImageInspect(w http.ResponseWriter, r *http.Request, p strin
 		doc["ContainerConfig"] = map[string]any{"Env": fi.Env}
 	}
 	writeJSON(w, http.StatusOK, doc)
+	return true
+}
+
+// serveImageHistory answers GET /images/{name}/history. HistoryDeny answers as an agent too
+// old for the route does.
+func (f *Fake) serveImageHistory(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	m := imageHistoryPath.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	if cfg.HistoryDeny || cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	fi, ok := cfg.resolveImage(m[1])
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such image: " + m[1]})
+		return true
+	}
+	layers := fi.History
+	if len(layers) == 0 {
+		layers = []FakeLayer{{ID: fi.ID, CreatedBy: "/bin/sh -c #(nop) CMD [\"sh\"]", Size: fi.Size, Created: fi.Created}}
+	}
+	out := make([]map[string]any, 0, len(layers))
+	for _, l := range layers {
+		out = append(out, map[string]any{
+			"Id": l.ID, "CreatedBy": l.CreatedBy, "Comment": l.Comment, "Size": l.Size, "Created": l.Created, "Tags": []string{},
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 	return true
 }
 

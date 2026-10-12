@@ -240,3 +240,45 @@ func TestImageDetailAnImageTheEngineLacksIsNotFound(t *testing.T) {
 		t.Fatalf("ImageDetail(unknown) = %v, want a not-found error", err)
 	}
 }
+
+func TestImageHistoryReadsTheLayersInTheOrderTheEngineAnswers(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Images: []dockertest.FakeImage{
+		{ID: imgA, RepoTags: []string{"app:1"}, Size: 300, Created: 1788000000, History: []dockertest.FakeLayer{
+			{ID: imgA, CreatedBy: "CMD [\"serve\"]", Size: 0, Created: 1788000000},
+			{ID: "<missing>", CreatedBy: "COPY . /app", Comment: "buildkit", Size: 200, Created: 1787999000},
+			{ID: "", CreatedBy: "", Size: 100},
+		}},
+	}})
+	c := newClient(t, fake)
+	rows, err := c.ImageHistory(context.Background(), imgA)
+	if err != nil {
+		t.Fatalf("ImageHistory: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %+v, want 3", rows)
+	}
+	if rows[0].ID != imgA || rows[0].CreatedBy != `CMD ["serve"]` || rows[0].Size != 0 || rows[0].Created.Unix() != 1788000000 {
+		t.Errorf("rows[0] = %+v", rows[0])
+	}
+	if rows[1].ID != "<missing>" || rows[1].CreatedBy != "COPY . /app" || rows[1].Comment != "buildkit" || rows[1].Size != 200 {
+		t.Errorf("rows[1] = %+v", rows[1])
+	}
+	if !rows[2].Created.IsZero() || rows[2].Size != 100 {
+		t.Errorf("rows[2] = %+v, want no created time", rows[2])
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Errorf("a read wrote: %v", w)
+	}
+}
+
+func TestImageHistoryAnImageTheEngineLacksIsNotFoundAndAnAgentThatRefusesIsPolicyDenied(t *testing.T) {
+	c := newClient(t, dockertest.NewFake(t, dockertest.FakeConfig{Images: []dockertest.FakeImage{{ID: imgA}}}))
+	if _, err := c.ImageHistory(context.Background(), imgB); !dockerx.IsNotFound(err) {
+		t.Fatalf("ImageHistory(unknown) = %v, want a not-found error", err)
+	}
+	denied := newClient(t, dockertest.NewFake(t, dockertest.FakeConfig{HistoryDeny: true, Images: []dockertest.FakeImage{{ID: imgA}}}))
+	_, err := denied.ImageHistory(context.Background(), imgA)
+	if err == nil || !strings.Contains(err.Error(), "agent_policy_denied") {
+		t.Fatalf("ImageHistory on a refusing agent = %v, want agent_policy_denied", err)
+	}
+}

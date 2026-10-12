@@ -192,3 +192,172 @@ func TestImageDetailAnEncodedColonInThePathIsTheSameImage(t *testing.T) {
 		t.Fatalf("encoded colon: %d %s", rec.code, rec.body)
 	}
 }
+
+// The Inspect tab and the Layers tab (plan 05-14 task 2, D-18, T-05-47).
+
+const imageSecret = "hunter2-baked-into-the-image"
+
+var imgEnv = "sha256:" + strings.Repeat("e", 64)
+
+func imageInspectEngine() dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Images: []dockertest.FakeImage{
+			{ID: imgEnv, RepoTags: []string{"app:1"}, Size: 300, Created: 1788000000,
+				Env: []string{"API_KEY=" + imageSecret, "PLAIN=1"},
+				History: []dockertest.FakeLayer{
+					{ID: imgEnv, CreatedBy: `CMD ["serve"]`, Size: 0, Created: 1788000000},
+					{ID: "<missing>", CreatedBy: "RUN echo " + "build", Comment: "buildkit.dockerfile.v0", Size: 300, Created: 1787999000},
+				}},
+			{ID: imgDangle, Size: 7},
+		},
+	}
+}
+
+type imageInspect struct {
+	Masked  bool           `json:"masked"`
+	Inspect map[string]any `json:"inspect"`
+}
+
+type imageHistory struct {
+	Layers []struct {
+		ID        string `json:"id"`
+		CreatedBy string `json:"createdBy"`
+		Size      int64  `json:"size"`
+		Created   string `json:"created"`
+		Comment   string `json:"comment"`
+	} `json:"layers"`
+}
+
+func envOf(t *testing.T, doc map[string]any, section string) []any {
+	t.Helper()
+	cfg, ok := doc[section].(map[string]any)
+	if !ok {
+		t.Fatalf("no %s in %v", section, doc)
+	}
+	env, _ := cfg["Env"].([]any)
+	return env
+}
+
+func TestImageInspectAViewerGetsTheDocumentWithEveryEnvValueReplacedAndMaskedSaysSo(t *testing.T) {
+	f, e := dashEnv(t, imageInspectEngine())
+	get := f.asRole(t, e, "img-viewer", "viewer")
+	rec := get("images/" + imgEnv + "/inspect")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inspect: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), imageSecret) {
+		t.Fatalf("a viewer's response carries the baked-in secret: %s", rec.Body)
+	}
+	var got imageInspect
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Masked || got.Inspect["Id"] != imgEnv {
+		t.Errorf("masked=%v id=%v", got.Masked, got.Inspect["Id"])
+	}
+	for _, section := range []string{"Config", "ContainerConfig"} {
+		env := envOf(t, got.Inspect, section)
+		if len(env) != 2 || env[0] != "API_KEY=<hidden>" || env[1] != "PLAIN=<hidden>" {
+			t.Errorf("%s.Env = %v, want every value hidden", section, env)
+		}
+	}
+}
+
+func TestImageInspectAHolderOfSecretsRevealGetsTheDocumentAsTheEngineSentIt(t *testing.T) {
+	f, e := dashEnv(t, imageInspectEngine())
+	get := f.asRole(t, e, "img-admin", "admin")
+	rec := get("images/" + imgEnv + "/inspect")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inspect: %d %s", rec.Code, rec.Body)
+	}
+	var got imageInspect
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	env := envOf(t, got.Inspect, "Config")
+	if got.Masked || len(env) != 2 || env[0] != "API_KEY="+imageSecret {
+		t.Errorf("masked=%v Config.Env=%v, want the values as the engine sent them", got.Masked, env)
+	}
+}
+
+func TestImageInspectAnImageWithNoEnvIsNotMasked(t *testing.T) {
+	f, e := dashEnv(t, imageInspectEngine())
+	get := f.asRole(t, e, "img-viewer2", "viewer")
+	rec := get("images/" + imgDangle + "/inspect")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inspect: %d %s", rec.Code, rec.Body)
+	}
+	if got := decode[imageInspect](t, &envRec{code: rec.Code, body: rec.Body.Bytes()}); got.Masked {
+		t.Errorf("masked = true for an image with no Env")
+	}
+}
+
+func TestImageInspectAndHistoryUseTheDetailRoutesRulesForTheIDAndTheNode(t *testing.T) {
+	f, e := dashEnv(t, imageInspectEngine())
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	for _, what := range []string{"inspect", "history"} {
+		if rec := f.get(t, e, "images/nginx/"+what); rec.code != http.StatusNotFound && rec.code != http.StatusUnprocessableEntity {
+			t.Errorf("%s of a bad path: %d", what, rec.code)
+		}
+		if rec := f.get(t, e, "images/"+imgMissing+"/"+what); rec.code != http.StatusNotFound || rec.ptyp != "image_not_found" {
+			t.Errorf("%s unknown: %d %q, want 404 image_not_found: %s", what, rec.code, rec.ptyp, rec.body)
+		}
+		if rec := f.get(t, e, "images/"+imgEnv+"/"+what+"?node=nobody"); rec.code != http.StatusServiceUnavailable || rec.ptyp != "node_unavailable" {
+			t.Errorf("%s unknown node: %d %q, want 503 node_unavailable: %s", what, rec.code, rec.ptyp, rec.body)
+		}
+		if rec := f.get(t, e, "images/"+imgEnv+"/"+what+"?node="+e.ID); rec.code != http.StatusOK {
+			t.Errorf("%s the node named: %d %s", what, rec.code, rec.body)
+		}
+	}
+}
+
+func TestImageHistoryAnswersTheLayersInTheOrderTheEngineGaveThem(t *testing.T) {
+	f, e := dashEnv(t, imageInspectEngine())
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	rec := f.get(t, e, "images/"+imgEnv+"/history")
+	if rec.code != http.StatusOK {
+		t.Fatalf("history: %d %s", rec.code, rec.body)
+	}
+	h := decode[imageHistory](t, rec)
+	if len(h.Layers) != 2 {
+		t.Fatalf("layers = %+v", h.Layers)
+	}
+	if l := h.Layers[0]; l.ID != imgEnv || l.CreatedBy != `CMD ["serve"]` || l.Size != 0 || l.Created == "" {
+		t.Errorf("layer 0 = %+v", l)
+	}
+	if l := h.Layers[1]; l.ID != "<missing>" || l.CreatedBy != "RUN echo build" || l.Comment != "buildkit.dockerfile.v0" || l.Size != 300 {
+		t.Errorf("layer 1 = %+v", l)
+	}
+}
+
+func TestImageHistoryFromAnAgentThatRefusesTheRouteIsAgentPolicyDenied(t *testing.T) {
+	cfg := imageInspectEngine()
+	cfg.HistoryDeny = true
+	f, e := dashEnv(t, cfg)
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	rec := f.get(t, e, "images/"+imgEnv+"/history")
+	if rec.code != http.StatusBadGateway || rec.ptyp != "agent_policy_denied" {
+		t.Errorf("history: %d %q, want 502 agent_policy_denied: %s", rec.code, rec.ptyp, rec.body)
+	}
+	// The other image routes still answer.
+	if rec := f.get(t, e, "images/"+imgEnv+"/inspect"); rec.code != http.StatusOK {
+		t.Errorf("inspect: %d %s", rec.code, rec.body)
+	}
+}
+
+func TestSwarmImageInspectAndHistoryReadTheFirstNodeThatHasItOrTheNodeNamed(t *testing.T) {
+	s := newSwarmFix(t)
+	id := "sha256:" + strings.Repeat("a", 64)
+	waitFor(t, "the image on both managers", func() bool { return s.get(t, s.env.ID, "images/"+id+"/history").code == http.StatusOK })
+	if rec := s.get(t, s.env.ID, "images/"+id+"/inspect"); rec.code != http.StatusOK {
+		t.Errorf("inspect: %d %s", rec.code, rec.body)
+	}
+	if rec := s.get(t, s.env.ID, "images/"+id+"/inspect?node="+s.m2.id); rec.code != http.StatusOK {
+		t.Errorf("inspect on m2: %d %s", rec.code, rec.body)
+	}
+	// The worker is connected but does not have it.
+	if rec := s.get(t, s.env.ID, "images/"+id+"/history?node="+s.w.id); rec.code != http.StatusNotFound || rec.ptyp != "image_not_found" {
+		t.Errorf("history on the worker: %d %q, want 404 image_not_found", rec.code, rec.ptyp)
+	}
+}
