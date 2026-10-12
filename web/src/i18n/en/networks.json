@@ -168,10 +168,6 @@
       "own": "This is one of Bayplan's own containers. Taking it off a network can cut Bayplan off from this host, and Bayplan can't put it back once that happens.",
       "ownAsked": "This is one of Bayplan's own containers, so its name has to be typed first."
     },
-    "usedBy": {
-      "container": "{{name}} on {{node}}",
-      "service": "Service {{name}}"
-    },
     "errors": {
       "nameRequired": "Enter a name.",
       "nameInvalid": "Use letters, numbers, dot, dash or underscore.",

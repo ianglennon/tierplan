@@ -3,16 +3,24 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { TriangleAlert } from "lucide-react";
-import { type ReactNode, useId } from "react";
+import { Ellipsis, TriangleAlert } from "lucide-react";
+import { type ReactNode, useId, useRef, useState } from "react";
 
 import { useAllReadOnly } from "@/api/pulls";
 import { type ImageRow, imagesQuery } from "@/api/resources";
 import { NoPermission } from "@/components/full-page-state";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Empty,
   EmptyContent,
@@ -27,8 +35,11 @@ import { SearchBox } from "@/features/containers/container-list";
 import { MAX_QUERY } from "@/features/containers/list-search";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { ImageNodesCell } from "@/features/images/image-nodes-cell";
+import { inUseWhat } from "@/features/images/in-use";
+import { RemoveImageDialog } from "@/features/images/remove-image-dialog";
+import { UntagDialog } from "@/features/images/untag-dialog";
 import { usedWhat } from "@/features/images/used-by";
-import { PullImageButton } from "@/features/pulls/pull-dialog";
+import { PullDialog, PullImageButton } from "@/features/pulls/pull-dialog";
 import {
   type Column,
   NodeSelect,
@@ -43,6 +54,7 @@ import {
 } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { usePermission } from "@/hooks/use-me";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { formatBytes } from "@/lib/format";
 import { z } from "@/lib/zod-config";
@@ -132,6 +144,149 @@ function ImageCell({ envId, item, perNode }: { envId: string; item: ImageRow; pe
         </Tooltip>
       ) : null}
     </span>
+  );
+}
+
+// ImageRowActions is the row's menu: Open, Pull again…, Remove… and, when the image has two or
+// more names, Untag…. Remove… is unavailable, with the reason, for a caller who may not, on a
+// read-only host, and while something uses the image on every node that has it; Untag… is
+// allowed while the image is in use, because the image stays under its other names (D-28,
+// D-29, D-30).
+function ImageRowActions({
+  envId,
+  item,
+  swarm,
+  perNode,
+  hostName,
+}: {
+  envId: string;
+  item: ImageRow;
+  swarm: boolean;
+  perNode: boolean;
+  hostName: string;
+}) {
+  const t = useT();
+  const remove = useNeeds("images.delete", envId);
+  const pull = useNeeds("images.pull", envId);
+  const tags = (item.repoTags ?? []).filter((tag) => !isNone(tag));
+  const short = item.shortId || item.id.replace(/^sha256:/, "").slice(0, 12);
+  const name = tags[0] ?? short;
+  const holders = item.nodes ?? [];
+  const blockedEverywhere =
+    item.usedByServices > 0 || (holders.length > 0 && holders.every((n) => n.containers > 0));
+  const changeReason = remove.reason ?? (item.readOnly ? t("pulls.readOnly.reason") : undefined);
+  const removeReason =
+    changeReason ??
+    (blockedEverywhere
+      ? t("images.remove.inUseReason", {
+          what: inUseWhat(t, item.usedByContainers, item.usedByServices),
+        })
+      : undefined);
+  const pullReason = pull.reason ?? (item.readOnly ? t("pulls.readOnly.reason") : undefined);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [dialog, setDialog] = useState<"pull" | "remove" | "untag" | null>(null);
+  // Set when an item was chosen, so the menu does not hand focus back to its button before the
+  // dialog has opened.
+  const chose = useRef(false);
+  const canUntag = tags.length > 1;
+
+  function choose(which: "pull" | "remove" | "untag") {
+    chose.current = true;
+    setDialog(which);
+  }
+
+  const item_ = (label: string, onSelect: () => void, destructive = false) => (
+    <DropdownMenuItem
+      className="max-md:min-h-11"
+      variant={destructive ? "destructive" : "default"}
+      onSelect={onSelect}
+    >
+      {label}
+    </DropdownMenuItem>
+  );
+
+  return (
+    <>
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="max-md:size-11"
+            aria-label={t("actions.menu.label", { name })}
+          >
+            <Ellipsis aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          onCloseAutoFocus={(event) => {
+            if (!chose.current) return;
+            chose.current = false;
+            event.preventDefault();
+          }}
+        >
+          <DropdownMenuItem asChild className="max-md:min-h-11">
+            <Link
+              to="/env/$envId/images/$imageId"
+              params={{ envId, imageId: item.id }}
+              search={{ node: perNode ? item.nodeId || undefined : undefined }}
+            >
+              {t("actions.menu.open")}
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {tags.length > 0 ? (
+            <NeedsTooltip reason={pullReason}>
+              {item_(t("images.menu.pull"), () => choose("pull"))}
+            </NeedsTooltip>
+          ) : null}
+          <NeedsTooltip reason={removeReason}>
+            {item_(t("images.remove.action"), () => choose("remove"), true)}
+          </NeedsTooltip>
+          {canUntag ? (
+            <NeedsTooltip reason={changeReason}>
+              {item_(t("images.untag.action"), () => choose("untag"))}
+            </NeedsTooltip>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {remove.allowed ? (
+        <RemoveImageDialog
+          envId={envId}
+          imageId={item.id}
+          name={name}
+          nodes={holders.map((n) => ({ nodeId: n.nodeId, name: n.name }))}
+          swarm={swarm}
+          open={dialog === "remove"}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+      {remove.allowed && canUntag ? (
+        <UntagDialog
+          envId={envId}
+          imageId={item.id}
+          names={tags}
+          // The row knows the names of the image, not which node has which; a node without a
+          // name answers not found for it.
+          nodes={holders.map((n) => ({ nodeId: n.nodeId, name: n.name, tags }))}
+          swarm={swarm}
+          open={dialog === "untag"}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+      {pull.allowed && tags.length > 0 ? (
+        <PullDialog
+          envId={envId}
+          open={dialog === "pull"}
+          onOpenChange={(open) => setDialog(open ? "pull" : null)}
+          initialRef={name}
+          hostName={hostName}
+          swarm={swarm}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -229,6 +384,20 @@ export function ImageList({ envId, search, onSearchChange }: ImageListProps) {
       header: t(`${key}.columns.created`),
       className: "w-[120px]",
       cell: (i) => <RelativeTime value={i.created} />,
+    },
+    {
+      id: "actions",
+      header: <span className="sr-only">{t("actions.column")}</span>,
+      className: "w-11 px-1 text-end",
+      cell: (i) => (
+        <ImageRowActions
+          envId={envId}
+          item={i}
+          swarm={swarm}
+          perNode={perNode}
+          hostName={envName}
+        />
+      ),
     },
   ];
 

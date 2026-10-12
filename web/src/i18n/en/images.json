@@ -209,7 +209,49 @@
         "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
         "permission": "You no longer have permission to do that. Your access may have changed.",
         "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening."
+      },
+      "titleSwarm": "Remove {{name}} from nodes?",
+      "confirmNodes": "Remove from {{selected}} of {{total}} nodes",
+      "nodesLabel": "Nodes to remove the image from",
+      "usedBy": "Used by {{what}}",
+      "usedByService": "Used by service {{name}}",
+      "more_one": "{{name}} and {{count}} more",
+      "more_other": "{{name}} and {{count}} more",
+      "inUseConfirm": "In use by {{what}}",
+      "inUseReason": "In use by {{what}}. Open it to see what uses it.",
+      "doneNodes_one": "Removed {{name}} from {{count}} node.",
+      "doneNodes_other": "Removed {{name}} from {{count}} nodes.",
+      "partial": "Removed {{done}}, {{failed}} failed",
+      "lastNameInUse": "That is the last name of an image that is in use. Remove what uses it first.",
+      "results": {
+        "title": "Remove results",
+        "image": "Image"
       }
+    },
+    "untag": {
+      "action": "Untag…",
+      "label": "Untag {{name}}",
+      "title": "Untag {{name}}?",
+      "body": "This removes the name only. The image stays on the node under its other names.",
+      "bodyOnly": "This is the image's only name, so the image is removed.",
+      "cancel": "Cancel",
+      "confirm": "Untag {{name}}",
+      "confirmRemove": "Remove image",
+      "pending": "Untagging…",
+      "done": "Untagged {{name}}.",
+      "removed": "Removed {{name}}.",
+      "gone": "{{name}} is already gone. The list has been refreshed.",
+      "lastNameInUse": "This is the last name of an image that is in use. Remove what uses it first.",
+      "partial": "Untagged {{done}}, {{failed}} failed",
+      "chooseName": "Name to take off",
+      "nodesLabel": "Nodes to untag the image on",
+      "results": {
+        "title": "Untag results",
+        "image": "Name"
+      }
+    },
+    "menu": {
+      "pull": "Pull again…"
     }
   }
 }

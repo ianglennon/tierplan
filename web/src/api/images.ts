@@ -238,3 +238,40 @@ export function useRemoveImages(envId: string) {
     onSettled: () => refreshImages(queryClient, envId),
   });
 }
+
+export type ImageUntagResult = components["schemas"]["ImageUntagResult"];
+
+// The results of an untag, one per node, with the bulk ID the server grouped the audit rows
+// under when more than one node was asked.
+export type ImageUntagResults = ImageUntagResult[] & { bulkId?: string };
+
+// useUntagImage is the mutation behind the untag dialog: one name off an image on the nodes
+// chosen. It does not retry, and reads the lists again whatever the answer.
+export function useUntagImage(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    ImageUntagResults,
+    ImageRemoveError,
+    { imageId: string; ref: string; nodeIds: string[] }
+  >({
+    mutationFn: async ({ imageId, ref, nodeIds }) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/images/untag", {
+          params: { path: { envId } },
+          body: { imageId, ref, nodeIds },
+        });
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new ImageRemoveError(problem.status, problem.type);
+        }
+        const results: ImageUntagResults = [...(res.data.results ?? [])];
+        if (res.data.bulkId !== undefined) results.bulkId = res.data.bulkId;
+        return results;
+      } catch (e) {
+        throw e instanceof ImageRemoveError ? e : new ImageRemoveError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => refreshImages(queryClient, envId),
+  });
+}

@@ -42,6 +42,7 @@ import shell from "./en/shell.json";
 import switcher from "./en/switcher.json";
 import teams from "./en/teams.json";
 import terminal from "./en/terminal.json";
+import usedby from "./en/usedby.json";
 import userpage from "./en/userpage.json";
 import users from "./en/users.json";
 import volumes from "./en/volumes.json";
@@ -49,7 +50,7 @@ import volumes from "./en/volumes.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, registries, images) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, registries, images, usedBy) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
 // holds the containers list copy, and the "terminal" namespace the browser shell's
 // (never "shell", which is the app chrome's). Keys are shaped
@@ -94,6 +95,7 @@ export const resources = {
     switcher,
     teams,
     terminal,
+    usedBy: usedby,
     userpage,
     users,
     volumes,

@@ -743,9 +743,29 @@ export interface paths {
         put?: never;
         /**
          * Remove images
-         * @description Removes up to 25 image copies, each named by its node ID and image ID, and answers one result per target in request order. An image with several names has each name untagged first and is then deleted by ID, so the engine's must-be-forced refusal never stops a removal; force is never sent. An image that any container on its node, running or stopped, references is never removed: the result is failed with code image_in_use and the detail names up to 5 users. The users are read again from the node just before each removal, and a container that starts between the check and the call makes the engine refuse and is answered image_in_use too. An image the node does not have is failed with code not_found and writes no audit row. One that fails never stops the others. Needs images.delete (Operator) on the environment. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Every attempt on an image the node has is audited as image.removed, failures included.
+         * @description Removes up to 25 image copies, each named by its node ID and image ID, and answers one result per target in request order. An image with several names has each name untagged first and is then deleted by ID, so the engine's must-be-forced refusal never stops a removal; force is never sent. An image that any container on its node, running or stopped, references is never removed there, and an image that any swarm service spec references, even with no task, is never removed on any node, because Swarm would pull it again: the result is failed with code image_in_use and the detail names up to 5 users. The containers are read again from the node just before each removal and the service specs from a manager, and a container that starts between the check and the call makes the engine refuse and is answered image_in_use too. On a swarm whose services cannot be read nothing is removed and the target is node_unreachable. An image the node does not have is failed with code not_found and writes no audit row. One that fails never stops the others. Needs images.delete (Operator) on the environment. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Every attempt on an image the node has is audited as image.removed, failures included.
          */
         post: operations["removeImages"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/untag": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take one name off an image
+         * @description Untags one name (repository:tag) of an image on each node named in nodeIds, or on every node whose copy has that name, and answers one result per node. Untagging one of several names is always allowed, even while the image is in use: the image stays under its other names. The last name of an image that is in use is never untagged: the result is failed with code last_name_in_use. The last name of an image that is not in use is untagged and the image removed with it (removed is true, and the audit row is image.removed). A name the node does not have is failed with code not_found and writes no audit row. 404 image_not_found when nodeIds is left out and no node has the image under that name. Needs images.delete (Operator) on the environment. Every other attempt writes one image.untagged (or image.removed) row per node with a shared bulk ID.
+         */
+        post: operations["untagImage"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4103,6 +4123,47 @@ export interface components {
             /** @description The node the copy is on: the nodeId of its row in the images list. Never the display name */
             nodeId: string;
         };
+        ImageUntagRequest: {
+            /**
+             * Format: uuid
+             * @description Groups the audit rows of one request. Send a UUID to name the bulk yourself; with more than one node and none sent, the server makes one (a UUIDv7) and answers it
+             */
+            bulkId?: string;
+            /** @description The full image ID: sha256: and 64 hexadecimal characters */
+            imageId: string;
+            /** @description The nodes to untag it on, by nodeId. Left out, every node whose copy of the image has that name */
+            nodeIds?: string[] | null;
+            /** @description The name to take off the image, as the image's tags show it: repository:tag */
+            ref: string;
+        };
+        ImageUntagResponse: {
+            /** @description The bulk ID recorded in the audit rows of this request: the one sent, or the one the server made for a request with more than one node. Absent for one node with none sent */
+            bulkId?: string;
+            /** @description One entry per node, in the order of nodeIds, else by node name */
+            results: components["schemas"]["ImageUntagResult"][] | null;
+        };
+        ImageUntagResult: {
+            /**
+             * @description Why a node failed. last_name_in_use: it is the image's last name on the node and the image is in use, so untagging it would remove an image that is in use. image_in_use: the engine refused because a container uses the image. not_found: the node has no such image or no such name on it. The others are those of a remove
+             * @enum {string}
+             */
+            code?: "last_name_in_use" | "image_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
+            /** @description A plain sentence, or for action_failed the engine's message, at most 300 characters */
+            detail?: string;
+            /** @description The image ID the request named */
+            imageId: string;
+            /** @description The node ID the name was taken off, or was to be */
+            nodeId: string;
+            /** @description The name the request named */
+            ref: string;
+            /** @description True when it was the image's only name on the node and the image was not in use, so the image was removed with it; the audit row is then image.removed */
+            removed: boolean;
+            /**
+             * @description done: the name is gone from the node. failed: it was refused or could not be sent; code says why
+             * @enum {string}
+             */
+            result: "done" | "failed";
+        };
         ImageUsedByBody: {
             /** @description Containers, running or stopped, on the nodes that hold the image, then swarm services whose spec names it, even with no task */
             items: components["schemas"]["ImageUsedByItem"][] | null;
@@ -7236,6 +7297,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageRemoveResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    untagImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageUntagRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUntagResponse"];
                 };
             };
             /** @description Error */

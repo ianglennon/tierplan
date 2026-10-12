@@ -425,7 +425,7 @@ describe("images list", () => {
     renderAt("/env/e1/images");
     await screen.findByText("nginx:1.27");
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
-    expect(headers).toEqual(["Image", "Image ID", "Used by", "Size", "Created"]);
+    expect(headers).toEqual(["Image", "Image ID", "Used by", "Size", "Created", "Actions"]);
     const rows = screen.getAllByRole("row").slice(1);
     expect(cellsOf(rows[0] as HTMLElement)).toEqual([
       "nginx:1.27+1",
@@ -433,6 +433,7 @@ describe("images list", () => {
       "2 containers",
       "700 MiB",
       "1 min ago",
+      "",
     ]);
     const untagged = cellsOf(rows[1] as HTMLElement);
     expect(untagged[0]).toBe("UntaggedDangling");
@@ -857,6 +858,7 @@ describe("swarm lists", () => {
       "Used by",
       "Size",
       "Created",
+      "Actions",
     ]);
     cleanup();
     renderAt("/env/e1/images?view=node");
@@ -868,6 +870,7 @@ describe("swarm lists", () => {
       "Used by",
       "Size",
       "Created",
+      "Actions",
     ]);
     cleanup();
     renderAt("/env/e1/volumes");

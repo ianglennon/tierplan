@@ -3,9 +3,13 @@
 
 import { useQuery } from "@tanstack/react-query";
 
+import { useState } from "react";
+
 import { type ImageDetail, imageQuery, imageUsedByQuery } from "@/api/images";
+import { useAllReadOnly } from "@/api/pulls";
 import { CopyableCode, copyText } from "@/components/copyable-code";
 import { KeyValueTable } from "@/components/key-value-table";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +23,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SettingsCard } from "@/features/environments/settings-card";
+import { UntagDialog, type UntagNode } from "@/features/images/untag-dialog";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { formatBytes } from "@/lib/format";
 import { toastError, toastSuccess } from "@/lib/toast";
@@ -37,10 +43,27 @@ const key = "images.detail.overview";
 // scrolls sideways when the page is narrow.
 const CELL = "align-top font-mono text-xs break-all whitespace-normal";
 
-// NamesCard lists every tag and digest of the image, each with its Copy.
-function NamesCard({ detail }: { detail: ImageDetail }) {
+// NamesCard lists every tag and digest of the image, each with its Copy, and a tag with its
+// Untag… while the image has another name to stay under (D-29).
+function NamesCard({ envId, detail }: { envId: string; detail: ImageDetail }) {
   const t = useT();
+  const swarm = useEnvIsSwarm(envId);
+  const needs = useNeeds("images.delete", envId);
+  const readOnly = useAllReadOnly(envId);
+  // The name stays after the dialog closes so it does not change its words while it fades.
+  const [untagName, setUntagName] = useState("");
+  const [untagOpen, setUntagOpen] = useState(false);
   const names = detail.names ?? [];
+  const tags = names.filter((n) => n.kind === "tag").map((n) => n.name);
+  // Where each node has the tags: a name can be taken off only where it is.
+  const nodes: UntagNode[] = (detail.nodes ?? [])
+    .filter((n) => n.present)
+    .map((n) => ({
+      nodeId: n.nodeId,
+      name: n.name,
+      tags: (n.names ?? []).filter((name) => tags.includes(name)),
+    }));
+  const reason = needs.reason ?? (readOnly ? t("pulls.readOnly.reason") : undefined);
   async function copy(name: string) {
     if (await copyText(name)) toastSuccess(t(`${key}.names.copied`, { name }));
     else toastError(t(`${key}.names.copyFailed`));
@@ -68,22 +91,56 @@ function NamesCard({ detail }: { detail: ImageDetail }) {
                   <Badge variant="outline">{t(`${key}.names.type.${n.kind}`)}</Badge>
                 </TableCell>
                 <TableCell className="align-top">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="max-md:h-11"
-                    aria-label={t(`${key}.names.copyLabel`, { name: n.name })}
-                    onClick={() => void copy(n.name)}
-                  >
-                    {t(`${key}.names.copy`)}
-                  </Button>
+                  <span className="flex items-center justify-end gap-1">
+                    {n.kind === "tag" && tags.length > 1 ? (
+                      <NeedsTooltip reason={reason}>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="max-md:h-11"
+                          aria-label={t("images.untag.label", { name: n.name })}
+                          onClick={
+                            needs.allowed && !reason
+                              ? () => {
+                                  setUntagName(n.name);
+                                  setUntagOpen(true);
+                                }
+                              : undefined
+                          }
+                        >
+                          {t("images.untag.action")}
+                        </Button>
+                      </NeedsTooltip>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="max-md:h-11"
+                      aria-label={t(`${key}.names.copyLabel`, { name: n.name })}
+                      onClick={() => void copy(n.name)}
+                    >
+                      {t(`${key}.names.copy`)}
+                    </Button>
+                  </span>
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       )}
+      {needs.allowed ? (
+        <UntagDialog
+          envId={envId}
+          imageId={detail.id}
+          names={[untagName]}
+          nodes={nodes}
+          swarm={swarm}
+          open={untagOpen}
+          onClose={() => setUntagOpen(false)}
+        />
+      ) : null}
     </SettingsCard>
   );
 }
@@ -217,7 +274,7 @@ export function ImageOverview({ envId, imageId, node }: ImageOverviewProps) {
   return (
     <div className="grid items-start gap-6 lg:grid-cols-2">
       <div className="flex min-w-0 flex-col gap-6">
-        <NamesCard detail={data} />
+        <NamesCard envId={envId} detail={data} />
         <DetailsCard detail={data} />
       </div>
       <div className="flex min-w-0 flex-col gap-6">

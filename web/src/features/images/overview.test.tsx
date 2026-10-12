@@ -175,7 +175,12 @@ describe("image Overview Untag…", () => {
   it("opens the untag dialog for that name", async () => {
     answer = () => Response.json(several());
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Untag nginx:latest" }));
+    const button = await screen.findByRole("button", { name: "Untag nginx:latest" });
+    // Who the caller is arrives with the page; a press before that does nothing.
+    await waitFor(() => {
+      fireEvent.click(button);
+      expect(screen.queryByRole("alertdialog")).not.toBeNull();
+    });
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText("Untag nginx:latest?")).toBeTruthy();
   });
@@ -184,9 +189,11 @@ describe("image Overview Untag…", () => {
     me = makeMe({ envs: { [ENV]: "viewer" } });
     answer = () => Response.json(several());
     mount();
-    const button = await screen.findByRole("button", { name: "Untag nginx:1.27" });
-    expect(button.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.click(button);
+    const find = () => screen.getByRole("button", { name: "Untag nginx:1.27" });
+    await screen.findByRole("button", { name: "Untag nginx:1.27" });
+    // Who the caller is arrives with the page, and the button is remade when it does.
+    await waitFor(() => expect(find().getAttribute("aria-disabled")).toBe("true"));
+    fireEvent.click(find());
     expect((await screen.findAllByText("Needs Operator")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });

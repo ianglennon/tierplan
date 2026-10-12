@@ -168,11 +168,11 @@ function swarmBody(view: "merged" | "node" = "merged") {
 }
 
 describe("ImageList columns", () => {
-  it("shows Image, ID, Used by, Size and Created on a standalone host, with no Nodes column", async () => {
+  it("shows Image, ID, Used by, Size, Created and the actions column on a standalone host, with no Nodes column", async () => {
     mount();
     await screen.findByText("nginx:1.27");
     const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(heads).toEqual(["Image", "Image ID", "Used by", "Size", "Created"]);
+    expect(heads).toEqual(["Image", "Image ID", "Used by", "Size", "Created", "Actions"]);
   });
 
   it("shows the first tag with +n and the rest in a tooltip, and Untagged with a Dangling badge", async () => {
@@ -237,7 +237,7 @@ describe("ImageList on a swarm", () => {
     expect(await screen.findByRole("button", { name: "on 2/3 nodes" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "on all 3 nodes" })).toBeTruthy();
     const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(heads).toEqual(["Image", "Image ID", "Nodes", "Used by", "Size", "Created"]);
+    expect(heads).toEqual(["Image", "Image ID", "Nodes", "Used by", "Size", "Created", "Actions"]);
   });
 
   it("opens a popover with every node, its container count, and Missing where it has none", async () => {
@@ -290,7 +290,7 @@ describe("ImageList on a swarm", () => {
     mount();
     await screen.findAllByText("nginx:1.27");
     const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(heads).toEqual(["Image", "Image ID", "Node", "Used by", "Size", "Created"]);
+    expect(heads).toEqual(["Image", "Image ID", "Node", "Used by", "Size", "Created", "Actions"]);
     expect(screen.getAllByRole("row")).toHaveLength(3);
     expect(screen.getByText("node-2")).toBeTruthy();
   });

@@ -70,7 +70,7 @@ beforeEach(() => {
     vi.fn(async (req: Request) => {
       const entry: Sent = {
         method: req.method,
-        path: new URL(req.url).pathname,
+        path: decodeURIComponent(new URL(req.url).pathname),
         body: req.method === "POST" ? await req.clone().json() : undefined,
       };
       sent.push(entry);
@@ -235,7 +235,9 @@ describe("UntagDialog", () => {
     mount();
     fireEvent.click(await screen.findByRole("button", { name: `Untag ${REF}` }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(await screen.findByText(`${REF} is already gone.`)).toBeTruthy();
+    expect(
+      await screen.findByText(`${REF} is already gone. The list has been refreshed.`),
+    ).toBeTruthy();
   });
 
   it("on a swarm lists the nodes that have the name, all ticked, and untags on the ticked ones", async () => {

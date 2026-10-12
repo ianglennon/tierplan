@@ -325,6 +325,16 @@ func (c *Client) ImageUntag(ctx context.Context, name string) (removed bool, err
 // it. An image that a container uses is refused with a conflict IsConflict reports, and an
 // image that is not there at all is an error IsNotFound reports.
 func (c *Client) ImageRemove(ctx context.Context, id string, names []string) error {
+	// An image a container uses is refused before any name is taken off it, so a refusal
+	// never leaves it half untagged.
+	users, err := c.ImageUsers(ctx, id)
+	if err != nil {
+		return err
+	}
+	if len(users) > 0 {
+		return fmt.Errorf("remove image on %s: %w", c.t.Describe(),
+			cerrdefs.ErrConflict.WithMessage("image is being used by container "+users[0]))
+	}
 	untagged := false
 	for _, name := range names {
 		_, err := c.ImageUntag(ctx, name)

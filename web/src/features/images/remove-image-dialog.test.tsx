@@ -54,7 +54,7 @@ beforeEach(() => {
     vi.fn(async (req: Request) => {
       const entry: Sent = {
         method: req.method,
-        path: new URL(req.url).pathname,
+        path: decodeURIComponent(new URL(req.url).pathname),
         body: req.method === "POST" ? await req.clone().json() : undefined,
       };
       sent.push(entry);

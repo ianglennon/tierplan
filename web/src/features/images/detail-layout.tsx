@@ -6,11 +6,17 @@ import { Link, Outlet } from "@tanstack/react-router";
 import { ChevronDown, Download, Layers } from "lucide-react";
 import { useState } from "react";
 
-import { type ImageDetail, imageQuery, imageUsedByQuery, isImageGone } from "@/api/images";
+import {
+  type ImageDetail,
+  type ImageUsedBy,
+  imageQuery,
+  imageUsedByQuery,
+  isImageGone,
+} from "@/api/images";
 import { allReadOnly, pullTargetsQuery } from "@/api/pulls";
 import { copyText } from "@/components/copyable-code";
 import { NeedsTooltip } from "@/components/needs-tooltip";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +36,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { UsedByList } from "@/components/used-by-list";
+import { inUse, inUseCounts, inUseWhat, nodeUse } from "@/features/images/in-use";
 import { RemoveImageDialog } from "@/features/images/remove-image-dialog";
 import { IMAGE_TABS } from "@/features/images/tabs";
 import { usedWhat } from "@/features/images/used-by";
@@ -121,10 +129,12 @@ function HeaderActions({
   envId,
   detail,
   title,
+  usage,
 }: {
   envId: string;
   detail: ImageDetail;
   title: string;
+  usage: ImageUsedBy | undefined;
 }) {
   const t = useT();
   const swarm = useEnvIsSwarm(envId);
@@ -133,12 +143,23 @@ function HeaderActions({
   const { data: targets } = useQuery(pullTargetsQuery(envId));
   const reason = pull.reason ?? (allReadOnly(targets) ? t("pulls.readOnly.reason") : undefined);
   const remove = useNeeds("images.delete", envId);
-  // Who may comes first, then whether the host lets anything change (D-30).
-  const removeReason =
-    remove.reason ?? (allReadOnly(targets) ? t("pulls.readOnly.reason") : undefined);
   const [open, setOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
   const holders = (detail.nodes ?? []).filter((n) => n.present);
+  const removeReason =
+    // Who may comes first, then whether the host lets anything change (D-30), then whether
+    // something uses the image on every node that has it (D-28).
+    remove.reason ??
+    (allReadOnly(targets) ? t("pulls.readOnly.reason") : undefined) ??
+    (blockedEverywhere(detail, usage)
+      ? t("images.remove.inUseReason", {
+          what: inUseWhat(
+            t,
+            inUseCounts(usage?.items ?? []).containers,
+            inUseCounts(usage?.items ?? []).services,
+          ),
+        })
+      : undefined);
   const firstTag = (detail.names ?? []).find((n) => n.kind === "tag")?.name;
 
   async function copyId() {
@@ -195,6 +216,7 @@ function HeaderActions({
           imageId={detail.id}
           name={title}
           nodes={holders.map((n) => ({ nodeId: n.nodeId, name: n.name }))}
+          swarm={swarm}
           open={removing}
           onClose={() => setRemoving(false)}
         />
@@ -211,6 +233,14 @@ function HeaderActions({
       ) : null}
     </div>
   );
+}
+
+// blockedEverywhere says whether something uses the image on every node that has it, so there
+// is nowhere to remove it: a container blocks its own node, a service spec every node.
+function blockedEverywhere(detail: ImageDetail, usage: ImageUsedBy | undefined): boolean {
+  if (!usage) return false;
+  const holders = (detail.nodes ?? []).filter((n) => n.present);
+  return holders.length > 0 && holders.every((n) => inUse(nodeUse(usage.items ?? [], n.nodeId)));
 }
 
 // ImageDetailLayout is the frame of an image's page: the breadcrumb, the header with the
@@ -286,7 +316,7 @@ export function ImageDetailLayout({ envId, imageId, node }: ImageDetailLayoutPro
                 </Badge>
               ) : null}
             </div>
-            <HeaderActions envId={envId} detail={data} title={title} />
+            <HeaderActions envId={envId} detail={data} title={title} usage={usage} />
           </div>
         ) : (
           <Skeleton className="h-8 w-64" />
@@ -301,6 +331,22 @@ export function ImageDetailLayout({ envId, imageId, node }: ImageDetailLayoutPro
           </p>
         ) : null}
       </header>
+      {data && title && usage && blockedEverywhere(data, usage) ? (
+        <Alert variant="warning">
+          <AlertTitle className="break-all">{t("usedBy.image.title", { name: title })}</AlertTitle>
+          <AlertDescription className="flex flex-col gap-2">
+            <p>{t("usedBy.image.body")}</p>
+            <UsedByList
+              containers={(usage.items ?? [])
+                .filter((u) => u.kind === "container")
+                .map((u) => ({ name: u.name, node: u.node }))}
+              services={(usage.items ?? [])
+                .filter((u) => u.kind === "service")
+                .map((u) => ({ name: u.name }))}
+            />
+          </AlertDescription>
+        </Alert>
+      ) : null}
       <Tabs value="" className="gap-4">
         <TabsList
           variant="line"

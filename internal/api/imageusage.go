@@ -83,6 +83,18 @@ type imageUsage struct {
 // repository and tag (D-28, P4 D-41, D-46). The engine's own per-image container count is
 // never used: a list does not compute it by default.
 func imageUsageOf(ctx context.Context, clusters *envs.Clusters, envID string, agg envs.Aggregate) imageUsage {
+	if clusters == nil || agg.Target.Probe.Type != dockerx.TypeSwarmManager {
+		return imageUsageFrom(agg, nil, nil)
+	}
+	// A failed read leaves what the last good one held.
+	st, _ := clusters.State(ctx, envID)
+	return imageUsageFrom(agg, st.ServiceRefs, st.Read.Services)
+}
+
+// imageUsageFrom is imageUsageOf over the service specs and rows already read: refs are
+// the specs, and services their task counts, which only word a state and may be empty. A
+// caller that must not trust a cache reads the specs itself and passes them here.
+func imageUsageFrom(agg envs.Aggregate, refs []dockerx.ServiceRef, services []dockerx.ServiceRow) imageUsage {
 	u := imageUsage{containers: map[[2]string][]envs.ContainerRow{}, services: map[string][]imageServiceUse{}}
 	for _, c := range agg.Containers {
 		if c.ImageID != "" {
@@ -90,12 +102,7 @@ func imageUsageOf(ctx context.Context, clusters *envs.Clusters, envID string, ag
 			u.containers[k] = append(u.containers[k], c)
 		}
 	}
-	if clusters == nil || agg.Target.Probe.Type != dockerx.TypeSwarmManager {
-		return u
-	}
-	// A failed read leaves what the last good one held.
-	st, _ := clusters.State(ctx, envID)
-	if len(st.ServiceRefs) == 0 {
+	if len(refs) == 0 {
 		return u
 	}
 	byDigest, byTag := map[string][]string{}, map[string][]string{}
@@ -121,10 +128,10 @@ func imageUsageOf(ctx context.Context, clusters *envs.Clusters, envID string, ag
 		}
 	}
 	rows := map[string]dockerx.ServiceRow{}
-	for _, row := range st.Read.Services {
+	for _, row := range services {
 		rows[row.ID] = row
 	}
-	for _, ref := range st.ServiceRefs {
+	for _, ref := range refs {
 		spec, err := registry.ParseRef(ref.Image)
 		if err != nil {
 			continue
