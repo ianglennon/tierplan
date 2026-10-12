@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { TriangleAlert } from "lucide-react";
+
 import type { Platform } from "@/api/tags";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -35,11 +37,15 @@ export function shortDigest(digest: string): string {
 
 interface PlatformChipsProps {
   platforms: readonly Platform[];
+  // Environment context: the architectures the environment's nodes run that the tag has no
+  // platform for, and the environment's name for the tooltip (D-23). Left out elsewhere.
+  missing?: readonly string[];
+  envName?: string;
 }
 
 // PlatformChips shows a tag's platforms as outline chips: the first four, then +n with a
 // tooltip naming the rest. Everything is text; a platform is whatever the registry said.
-export function PlatformChips({ platforms }: PlatformChipsProps) {
+export function PlatformChips({ platforms, missing, envName }: PlatformChipsProps) {
   const t = useT();
   const shown = platforms.slice(0, CHIPS_SHOWN);
   const rest = platforms.slice(CHIPS_SHOWN);
@@ -60,7 +66,31 @@ export function PlatformChips({ platforms }: PlatformChipsProps) {
           <TooltipContent>{rest.map((p) => platformLabel(p)).join(", ")}</TooltipContent>
         </Tooltip>
       ) : null}
+      {(missing ?? []).map((arch) => (
+        <MissingPlatform key={arch} arch={arch} envName={envName ?? ""} />
+      ))}
     </span>
+  );
+}
+
+const FLAG = "inline-flex items-center gap-1 text-xs whitespace-nowrap text-status-warning-text";
+
+// MissingPlatform is the flag of a tag that lacks an architecture the environment's nodes run:
+// a warning icon and the words, never colour alone, with the reason in a tooltip that opens on
+// keyboard focus too (D-23, D-66). The architecture is text from the nodes.
+function MissingPlatform({ arch, envName }: { arch: string; envName: string }) {
+  const t = useT();
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the tooltip must open on keyboard focus (UI-SPEC D-66) */}
+        <span tabIndex={0} data-slot="missing-platform" className={FLAG}>
+          <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" />
+          {t("tags.missing.label", { arch })}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{t("tags.missing.tooltip", { env: envName, arch })}</TooltipContent>
+    </Tooltip>
   );
 }
 

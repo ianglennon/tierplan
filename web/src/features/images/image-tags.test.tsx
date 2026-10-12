@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ImageTags, repoOf, repositoriesOf } from "@/features/images/image-tags";
+import { ImageTags } from "@/features/images/image-tags";
+import { repoOf, repositoriesOf } from "@/features/tags/repo";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -46,6 +47,7 @@ function image(names: { name: string; kind: "tag" | "digest" }[]) {
   };
 }
 
+let me: ReturnType<typeof makeMe>;
 let names: { name: string; kind: "tag" | "digest" }[];
 let listed: string[];
 let client: QueryClient;
@@ -54,6 +56,7 @@ let changed: string[];
 beforeEach(() => {
   listed = [];
   changed = [];
+  me = makeMe({ envs: { [ENV]: "viewer" } });
   names = [{ name: "ghcr.io/acme/app:1.0", kind: "tag" }];
   vi.stubGlobal("IntersectionObserver", FakeObserver);
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -63,7 +66,12 @@ beforeEach(() => {
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
       const path = decodeURIComponent(url.pathname);
-      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "viewer" } }));
+      if (path === "/api/me") return Response.json(me);
+      if (path === "/api/environments")
+        return Response.json({
+          items: [{ id: ENV, name: "Lab host", envType: "standalone", enabled: true }],
+          total: 1,
+        });
       if (path === `/api/env/${ENV}/images/${ID}`) return Response.json(image(names));
       if (path === `/api/env/${ENV}/images/tags`) {
         listed.push(url.searchParams.get("ref") ?? "");
@@ -166,5 +174,23 @@ describe("ImageTags", () => {
     fireEvent.click(await screen.findByRole("option", { name: "ghcr.io/acme/app" }));
     expect(changed).toEqual(["ghcr.io/acme/app"]);
     expect(within(document.body).queryByText("No repository to browse")).toBeNull();
+  });
+});
+
+describe("ImageTags pull", () => {
+  it("opens the pull form on this environment with the full reference", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    mount();
+    await waitFor(() => expect(screen.getByText("1.0")).toBeTruthy());
+    const trigger = screen.getByRole("button", { name: "Actions for 1.0" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Pull to this environment" }));
+    const dialog = await screen.findByRole("dialog", { name: "Pull an image" });
+    expect((within(dialog).getByLabelText("Image") as HTMLInputElement).value).toBe(
+      "ghcr.io/acme/app:1.0",
+    );
+    expect(within(dialog).queryByRole("combobox", { name: "Environment" })).toBeNull();
+    expect(within(dialog).getByText("Pulls on Lab host.")).toBeTruthy();
   });
 });

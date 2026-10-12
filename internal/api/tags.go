@@ -316,9 +316,66 @@ func (d TagsDeps) hereOf(ctx context.Context, envID string) envHere {
 	return h
 }
 
-// missingPlatforms lists the node architectures (by OCI name, sorted) that no platform of a tag
-// can run (D-23). Not decided yet: it reports none.
-func missingPlatforms(_ []string, _ []registry.Platform) []string { return nil }
+// platformKey is how a platform is compared with a node's architecture: the OCI architecture,
+// and for 32-bit arm its variant, since a v6 binary runs on a v7 node but not the other way
+// round. An arm platform with no variant is read as v7.
+func platformKey(p registry.Platform) string {
+	arch := strings.ToLower(p.Arch)
+	if arch == "arm" {
+		v := strings.ToLower(p.Variant)
+		if v == "" {
+			v = "v7"
+		}
+		return "arm/" + v
+	}
+	return arch
+}
+
+// knownArch lists the node architectures a missing-platform flag is made for. A node that
+// reports anything else is ignored rather than flagged: a flag Bayplan cannot back is noise.
+var knownArch = map[string]bool{
+	"amd64": true, "arm64": true, "arm/v7": true, "arm/v6": true, "arm/v5": true, "386": true,
+	"ppc64le": true, "s390x": true, "riscv64": true, "mips64le": true,
+}
+
+// armRank orders the 32-bit arm variants: a node runs an image built for its own variant or an
+// older one.
+var armRank = map[string]int{"arm/v5": 5, "arm/v6": 6, "arm/v7": 7}
+
+// runsPlatform says whether a node of architecture arch can run an image built for key.
+func runsPlatform(arch, key string) bool {
+	if arch == key {
+		return true
+	}
+	nr, nok := armRank[arch]
+	kr, kok := armRank[key]
+	return nok && kok && kr <= nr
+}
+
+// missingPlatforms lists the node architectures (by OCI name, in the nodes' spelling, sorted)
+// that no platform of a tag can run (D-23). It says nothing when the tag's platforms are not
+// known, and ignores an architecture it does not know.
+func missingPlatforms(nodeArchs []string, platforms []registry.Platform) []string {
+	if len(platforms) == 0 {
+		return nil
+	}
+	keys := make([]string, len(platforms))
+	for i, p := range platforms {
+		keys[i] = platformKey(p)
+	}
+	var out []string
+	for _, arch := range nodeArchs {
+		arch = strings.ToLower(strings.TrimSpace(arch))
+		if !knownArch[arch] || slices.Contains(out, arch) {
+			continue
+		}
+		if !slices.ContainsFunc(keys, func(k string) bool { return runsPlatform(arch, k) }) {
+			out = append(out, arch)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
 
 // runningHere lists what the environment runs of the tag whose details are t: the containers
 // holding its index digest or the digest of any platform, and the swarm services their tasks

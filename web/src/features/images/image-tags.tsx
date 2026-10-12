@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { imageQuery } from "@/api/images";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -14,6 +15,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PullDialog } from "@/features/pulls/pull-dialog";
+import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
+import { useEnvName } from "@/features/resources/use-env-name";
+import { repositoriesOf } from "@/features/tags/repo";
 import { TagBrowser } from "@/features/tags/tag-browser";
 import { useT } from "@/i18n/use-t";
 
@@ -27,33 +32,18 @@ interface ImageTagsProps {
   onRepoChange?: (repo: string) => void;
 }
 
-// repoOf is the repository of an image name: the name without its tag or digest, which is how
-// a registry is asked about it. A port in the host (localhost:5000/app) is not a tag.
-export function repoOf(name: string): string {
-  const at = name.indexOf("@");
-  let ref = at >= 0 ? name.slice(0, at) : name;
-  if (ref.lastIndexOf(":") > ref.lastIndexOf("/")) ref = ref.slice(0, ref.lastIndexOf(":"));
-  return ref;
-}
-
-// repositoriesOf lists the distinct repositories an image is named under, in the order its
-// names come. An image with no name, or only the placeholder of an untagged one, has none.
-export function repositoriesOf(names: readonly { name: string }[]): string[] {
-  const out: string[] = [];
-  for (const { name } of names) {
-    if (name.startsWith("<")) continue;
-    const repo = repoOf(name);
-    if (repo && !out.includes(repo)) out.push(repo);
-  }
-  return out;
-}
-
 // ImageTags is the Tags tab: the tag browser for the image's repository, inside this
 // environment, so it shows what runs here (D-19, D-22). With several repositories a Select on
 // top chooses which. An image with no name or registry digest has nothing to browse.
 export function ImageTags({ envId, imageId, node, repo, onRepoChange }: ImageTagsProps) {
   const t = useT();
   const { data, isPending } = useQuery(imageQuery(envId, imageId, node));
+  const swarm = useEnvIsSwarm(envId);
+  const hostName = useEnvName(envId);
+  // A pull asked for from a row. The dialog is kept once opened, so a pull that is running when
+  // it is closed still ends with its toast; each new request starts a new form.
+  const [pull, setPull] = useState<{ ref: string; n: number } | null>(null);
+  const [pulling, setPulling] = useState(false);
   if (isPending) return <Skeleton className="h-40 w-full" />;
   const repos = repositoriesOf(data?.names ?? []);
   if (repos.length === 0) {
@@ -88,7 +78,27 @@ export function ImageTags({ envId, imageId, node, repo, onRepoChange }: ImageTag
           </Select>
         </div>
       ) : null}
-      <TagBrowser key={chosen} repo={chosen} variant="full" envId={envId} />
+      <TagBrowser
+        key={chosen}
+        repo={chosen}
+        variant="full"
+        envId={envId}
+        onPull={(ref) => {
+          setPull((prev) => ({ ref, n: (prev?.n ?? 0) + 1 }));
+          setPulling(true);
+        }}
+      />
+      {pull ? (
+        <PullDialog
+          key={pull.n}
+          envId={envId}
+          open={pulling}
+          onOpenChange={setPulling}
+          initialRef={pull.ref}
+          hostName={hostName}
+          swarm={swarm}
+        />
+      ) : null}
     </div>
   );
 }

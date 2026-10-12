@@ -501,6 +501,22 @@ describe("TagBrowser filter, hide switch and paging", () => {
 });
 
 describe("BrowsePage", () => {
+  it("opens the pull form from a row with the reference and an Environment select of the environments the person can pull on", async () => {
+    me = makeMe({ envs: { e1: "operator", e2: "viewer" } });
+    mount(<BrowsePage search={{ ref: "ghcr.io/acme/app" }} />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    const trigger = within(rowOf("v1.10.0")).getByRole("button", { name: "Actions for v1.10.0" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Pull to an environment…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Pull an image" });
+    expect((within(dialog).getByLabelText("Image") as HTMLInputElement).value).toBe(
+      "ghcr.io/acme/app:v1.10.0",
+    );
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Environment" }));
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual(["Lab host"]);
+  });
+
   it("shows the breadcrumb, the repository as the title and the tag browser", async () => {
     mount(<BrowsePage search={{ ref: "ghcr.io/acme/app" }} />);
     await screen.findByRole("navigation", { name: "Breadcrumb" });
@@ -844,6 +860,7 @@ describe("TagBrowser platforms", () => {
       "Created",
       "Platforms",
       "Running in",
+      "Actions",
     ]);
   });
 
@@ -857,6 +874,7 @@ describe("TagBrowser platforms", () => {
       "Created",
       "Platforms",
       "Running here",
+      "Actions",
     ]);
     expect(sent.at(-1)).toEqual({
       path: "/api/env/e1/images/tags",

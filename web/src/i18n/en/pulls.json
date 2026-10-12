@@ -18,7 +18,13 @@
       "pending": "Starting…",
       "resolved": "Pulls {{ref}}",
       "credential": "Credential: “{{name}}” ({{scope}})",
-      "credentialAnonymous": "Credential: anonymous. No stored credential matches."
+      "credentialAnonymous": "Credential: anonymous. No stored credential matches.",
+      "browse": "Browse tags",
+      "environment": {
+        "label": "Environment",
+        "placeholder": "Choose an environment",
+        "error": "Choose an environment."
+      }
     },
     "errors": {
       "refInvalid": "Enter an image like nginx:1.27 or ghcr.io/acme/app:latest.",

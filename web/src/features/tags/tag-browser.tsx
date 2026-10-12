@@ -30,6 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SearchBox } from "@/features/containers/container-list";
+import { useEnvName } from "@/features/resources/use-env-name";
 import { PlatformTable } from "@/features/tags/platform-chips";
 import { TagRow } from "@/features/tags/tag-row";
 import { useTagDetails } from "@/features/tags/use-tag-details";
@@ -84,6 +85,7 @@ export function TagBrowser({
   variant,
   envId,
   credentialEnvId,
+  onPull,
   onSelect,
   selected,
   q: qProp,
@@ -107,6 +109,7 @@ export function TagBrowser({
   const showRunning = !picker && envId === undefined;
   const showHere = !picker && envId !== undefined;
   const extraColumns = showRunning || showHere;
+  const envName = useEnvName(envId ?? "");
 
   const pages = query.data?.pages ?? [];
   const first = pages[0];
@@ -170,6 +173,11 @@ export function TagBrowser({
               {showHere ? (
                 <TableHead className="min-w-40">{t("tags.columns.runningHere")}</TableHead>
               ) : null}
+              {picker ? null : (
+                <TableHead className="w-12">
+                  <span className="sr-only">{t("tags.columns.actions")}</span>
+                </TableHead>
+              )}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -190,6 +198,9 @@ export function TagBrowser({
                     onSelect={onSelect}
                     showRunning={showRunning}
                     envId={envId}
+                    envName={envName}
+                    repo={repo}
+                    onPull={onPull}
                     expanded={open}
                     panelId={panelId}
                     onToggle={toggle}
@@ -199,7 +210,7 @@ export function TagBrowser({
                     <TableRow className="hover:bg-transparent">
                       <TableCell
                         id={panelId}
-                        colSpan={extraColumns ? 6 : 5}
+                        colSpan={extraColumns ? 7 : 6}
                         className="bg-muted/30 pl-12"
                       >
                         <PlatformTable

@@ -24,7 +24,8 @@
       "created": "Created",
       "platforms": "Platforms",
       "runningIn": "Running in",
-      "runningHere": "Running here"
+      "runningHere": "Running here",
+      "actions": "Actions"
     },
     "filter": {
       "label": "Filter tags",
@@ -130,6 +131,19 @@
         "title": "No repository to browse",
         "body": "This image has no name or registry digest, so Bayplan can't tell where it came from."
       }
+    },
+    "missing": {
+      "label": "No {{arch}}",
+      "tooltip": "Nodes in {{env}} run {{arch}}, and this tag doesn't include it."
+    },
+    "actions": {
+      "label": "Actions for {{tag}}",
+      "pullHere": "Pull to this environment",
+      "pullElsewhere": "Pull to an environment…",
+      "copyRef": "Copy repo:tag",
+      "copyDigest": "Copy repo@sha256:…",
+      "copied": "Copied {{value}}.",
+      "copyFailed": "Copy failed. Select the text and copy it manually."
     }
   }
 }

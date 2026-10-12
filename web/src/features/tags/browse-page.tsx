@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Link } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { NoPermission } from "@/components/full-page-state";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/empty";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MAX_QUERY } from "@/features/containers/list-search";
+import { PullDialog, usePullEnvironments } from "@/features/pulls/pull-dialog";
 import { TagBrowser, type TagFilterPatch } from "@/features/tags/tag-browser";
 import { useAnyEnvironmentPermission, useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -70,6 +72,11 @@ export function BrowsePage({
 }) {
   const t = useT();
   const allowed = useAnyEnvironmentPermission("images.read");
+  const environments = usePullEnvironments();
+  // A pull asked for from a row: the form asks which environment. Kept once opened, so a pull
+  // running when it is closed still ends with its toast; each new request starts a new form.
+  const [pull, setPull] = useState<{ ref: string; n: number } | null>(null);
+  const [pulling, setPulling] = useState(false);
   useDocumentTitle(search.ref || t("tags.page.breadcrumb.browse"));
   if (!allowed) return <NoPermission />;
 
@@ -90,6 +97,10 @@ export function BrowsePage({
             repo={search.ref}
             variant="full"
             credentialEnvId={search.envId}
+            onPull={(ref) => {
+              setPull((prev) => ({ ref, n: (prev?.n ?? 0) + 1 }));
+              setPulling(true);
+            }}
             q={search.q}
             hide={search.hide !== 0}
             onFilterChange={(patch: TagFilterPatch) => {
@@ -99,6 +110,18 @@ export function BrowsePage({
               onSearchChange?.(next);
             }}
           />
+          {pull ? (
+            <PullDialog
+              key={pull.n}
+              envId=""
+              environments={environments}
+              open={pulling}
+              onOpenChange={setPulling}
+              initialRef={pull.ref}
+              hostName=""
+              swarm={false}
+            />
+          ) : null}
         </>
       ) : (
         <Empty>

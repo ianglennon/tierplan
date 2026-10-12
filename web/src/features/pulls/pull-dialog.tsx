@@ -3,10 +3,10 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, KeyRound } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { ChevronRight, Download, KeyRound } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-
+import { environmentsQuery } from "@/api/environments";
 import {
   allReadOnly,
   type PullRequestError,
@@ -20,6 +20,7 @@ import { AgentUpdateNotice } from "@/components/agent-update-notice";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -32,11 +33,21 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/c
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { NodeChooser } from "@/features/images/node-chooser";
 import { failureCopy } from "@/features/pulls/failure-copy";
 import { PullProgress, useCancelPullAction } from "@/features/pulls/pull-progress";
 import { usePullJob } from "@/features/pulls/pull-stream";
+import { repoOf, tagOf } from "@/features/tags/repo";
+import { TagBrowser } from "@/features/tags/tag-browser";
+import { hasPermission, useMe } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastErrorWithAction, toastSuccess } from "@/lib/toast";
@@ -66,7 +77,22 @@ export interface PullEnvironment {
   swarm: boolean;
 }
 
+// usePullEnvironments lists the environments the signed-in person may pull on, for the form
+// that is opened from the Registries page. A disabled environment is left out.
+export function usePullEnvironments(): PullEnvironment[] {
+  const { data: me } = useMe();
+  const { data } = useQuery(environmentsQuery);
+  return useMemo(
+    () =>
+      (data?.items ?? [])
+        .filter((e) => e.enabled && hasPermission(me, "images.pull", e.id))
+        .map((e) => ({ id: e.id, name: e.name, swarm: e.envType === "swarm" })),
+    [data, me],
+  );
+}
+
 interface PullDialogProps {
+  // The environment the pull is on. Ignored when environments is given: the person chooses.
   envId: string;
   // Opened from the Registries page there is no environment yet: the form then asks which.
   environments?: PullEnvironment[];
@@ -97,17 +123,25 @@ interface Refusal {
 // never stops the job: the stream is followed by this component, not by the panel, so the
 // finishing toast still comes. The pull runs on the server.
 export function PullDialog({
-  envId,
+  envId: fixedEnvId,
+  environments,
   open,
   onOpenChange,
   initialRef,
-  hostName,
-  swarm,
+  hostName: fixedHostName,
+  swarm: fixedSwarm,
   jobId,
   jobRef,
 }: PullDialogProps) {
   const t = useT();
   const queryClient = useQueryClient();
+  // From the Registries page the person chooses the environment, and where the pull goes
+  // (its name, whether it is a swarm) follows that choice.
+  const [picked, setPicked] = useState("");
+  const chosen = environments?.find((e) => e.id === picked);
+  const envId = environments ? (chosen?.id ?? "") : fixedEnvId;
+  const hostName = chosen?.name ?? fixedHostName;
+  const swarm = chosen?.swarm ?? fixedSwarm;
   const [view, setView] = useState<"form" | "progress">(jobId ? "progress" : "form");
   const [tracked, setTracked] = useState<PullStarted | null>(
     jobId ? { jobId, ref: jobRef ?? "", credential: null, nodes: [] } : null,
@@ -196,6 +230,8 @@ export function PullDialog({
             </DialogHeader>
             <PullForm
               envId={envId}
+              environments={environments}
+              onPickEnvironment={setPicked}
               hostName={hostName}
               swarm={swarm}
               initialRef={typed}
@@ -237,7 +273,10 @@ export function PullDialog({
 }
 
 interface FormProps {
+  // "" until an environment has been chosen, in the Registries context.
   envId: string;
+  environments?: PullEnvironment[];
+  onPickEnvironment: (envId: string) => void;
   hostName: string;
   swarm: boolean;
   initialRef: string;
@@ -245,19 +284,37 @@ interface FormProps {
   onStarted: (started: PullStarted, typedRef: string) => void;
 }
 
-function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: FormProps) {
+function PullForm({
+  envId,
+  environments,
+  onPickEnvironment,
+  hostName,
+  swarm,
+  initialRef,
+  onCancel,
+  onStarted,
+}: FormProps) {
   const t = useT();
   const ids = useId();
   const start = useStartPull(envId);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   // Where it pulls: every node, or the ones chosen. Only a swarm has the choice.
-  const targets = useQuery(pullTargetsQuery(envId));
+  const targets = useQuery({ ...pullTargetsQuery(envId), enabled: envId !== "" });
   const nodes = targets.data?.nodes ?? [];
   const isSwarm = targets.data ? targets.data.swarm : swarm;
   const chooseable = isSwarm && nodes.length > 0;
   const [mode, setMode] = useState<"all" | "choose">("all");
   const [chosen, setChosen] = useState<string[]>([]);
   const [noneChosen, setNoneChosen] = useState(false);
+  const [noEnvironment, setNoEnvironment] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
+  // Another environment has other nodes: the choice made for the last one does not carry over.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: envId is what the reset follows
+  useEffect(() => {
+    setMode("all");
+    setChosen([]);
+    setNoneChosen(false);
+  }, [envId]);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: { ref: initialRef },
@@ -284,7 +341,7 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
     return () => clearTimeout(timer);
   }, [typed, settled]);
   useEffect(() => {
-    if (settled === "" || settled.length > MAX_REF) {
+    if (envId === "" || settled === "" || settled.length > MAX_REF) {
       resetCheck();
       setPreview(null);
       return;
@@ -293,7 +350,7 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
       onSuccess: (answer) => setPreview(answer),
       onError: () => setPreview(null),
     });
-  }, [settled, checkRef, resetCheck]);
+  }, [envId, settled, checkRef, resetCheck]);
 
   function refusalOf(err: PullRequestError): Refusal | null {
     switch (err.type) {
@@ -321,6 +378,10 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
   function submit(values: Values) {
     if (start.isPending) return;
     setRefusal(null);
+    if (environments && envId === "") {
+      setNoEnvironment(true);
+      return;
+    }
     const choosing = chooseable && mode === "choose";
     if (choosing && chosen.length === 0) {
       setNoneChosen(true);
@@ -336,8 +397,14 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
     );
   }
 
+  const formId = `${ids}-form`;
+  // The repository the field holds, once it holds one: the picker lists its tags.
+  const repo = repoOf(typed);
+
+  // The filter, the switch and Load 100 more of the picker are not part of the pull, so the
+  // form wraps only the fields that are: Enter in the picker's filter must not start a pull.
   return (
-    <form noValidate onSubmit={form.handleSubmit(submit)} className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       {refusal?.agentPolicy ? <AgentUpdateNotice envId={envId} /> : null}
       {refusal && !refusal.agentPolicy ? (
         <Alert variant="destructive" role="alert">
@@ -346,50 +413,115 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
       ) : null}
       <fieldset disabled={pending} className="contents">
         <FieldGroup className="gap-4">
-          <Field data-invalid={error ? true : undefined}>
-            <FieldLabel htmlFor={`${ids}-ref`}>{t("pulls.form.image.label")}</FieldLabel>
-            <Input
-              id={`${ids}-ref`}
-              autoComplete="off"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              placeholder={t("pulls.form.image.placeholder")}
-              aria-invalid={Boolean(error)}
-              aria-describedby={`${ids}-ref-helper${error ? ` ${ids}-ref-error` : ""}`}
-              className={cn("font-mono", TOUCH_HEIGHT)}
-              {...form.register("ref", {
-                onChange: () => {
-                  if (form.formState.errors.ref?.type === "server") form.clearErrors("ref");
-                },
-              })}
-            />
-            <FieldDescription id={`${ids}-ref-helper`}>
-              {t("pulls.form.image.helper")}
-            </FieldDescription>
-            {error ? <FieldError id={`${ids}-ref-error`}>{error}</FieldError> : null}
-            {preview ? (
-              <div className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
-                <p className="font-mono break-all">
-                  {t("pulls.form.resolved", { ref: preview.normalized })}
-                </p>
-                <p className="flex items-start gap-1.5">
-                  <KeyRound aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-                  <span className="min-w-0 break-words">
-                    {preview.credential
-                      ? t("pulls.form.credential", {
-                          name: preview.credential.name,
-                          scope:
-                            preview.credential.scope.kind === "instance"
-                              ? t("registries.tester.scope.instance")
-                              : (preview.credential.scope.envName ?? ""),
-                        })
-                      : t("pulls.form.credentialAnonymous")}
-                  </span>
-                </p>
-              </div>
+          <form id={formId} noValidate onSubmit={form.handleSubmit(submit)} className="contents">
+            {environments ? (
+              <Field data-invalid={noEnvironment ? true : undefined}>
+                <FieldLabel htmlFor={`${ids}-env`}>{t("pulls.form.environment.label")}</FieldLabel>
+                <Select
+                  value={envId}
+                  onValueChange={(next) => {
+                    onPickEnvironment(next);
+                    setNoEnvironment(false);
+                  }}
+                >
+                  <SelectTrigger
+                    id={`${ids}-env`}
+                    className={cn("w-full", TOUCH_HEIGHT)}
+                    aria-invalid={noEnvironment}
+                    aria-describedby={noEnvironment ? `${ids}-env-error` : undefined}
+                  >
+                    <SelectValue placeholder={t("pulls.form.environment.placeholder")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {environments.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {noEnvironment ? (
+                  <FieldError id={`${ids}-env-error`}>
+                    {t("pulls.form.environment.error")}
+                  </FieldError>
+                ) : null}
+              </Field>
             ) : null}
-          </Field>
+            <Field data-invalid={error ? true : undefined}>
+              <FieldLabel htmlFor={`${ids}-ref`}>{t("pulls.form.image.label")}</FieldLabel>
+              <Input
+                id={`${ids}-ref`}
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder={t("pulls.form.image.placeholder")}
+                aria-invalid={Boolean(error)}
+                aria-describedby={`${ids}-ref-helper${error ? ` ${ids}-ref-error` : ""}`}
+                className={cn("font-mono", TOUCH_HEIGHT)}
+                {...form.register("ref", {
+                  onChange: () => {
+                    if (form.formState.errors.ref?.type === "server") form.clearErrors("ref");
+                  },
+                })}
+              />
+              <FieldDescription id={`${ids}-ref-helper`}>
+                {t("pulls.form.image.helper")}
+              </FieldDescription>
+              {error ? <FieldError id={`${ids}-ref-error`}>{error}</FieldError> : null}
+              {preview ? (
+                <div className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+                  <p className="font-mono break-all">
+                    {t("pulls.form.resolved", { ref: preview.normalized })}
+                  </p>
+                  <p className="flex items-start gap-1.5">
+                    <KeyRound aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+                    <span className="min-w-0 break-words">
+                      {preview.credential
+                        ? t("pulls.form.credential", {
+                            name: preview.credential.name,
+                            scope:
+                              preview.credential.scope.kind === "instance"
+                                ? t("registries.tester.scope.instance")
+                                : (preview.credential.scope.envName ?? ""),
+                          })
+                        : t("pulls.form.credentialAnonymous")}
+                    </span>
+                  </p>
+                </div>
+              ) : null}
+            </Field>
+          </form>
+          {repo ? (
+            <Collapsible open={browsing} onOpenChange={setBrowsing} className="flex flex-col gap-2">
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="self-start max-md:h-11"
+                >
+                  <ChevronRight
+                    aria-hidden="true"
+                    className={cn("transition-transform", browsing && "rotate-90")}
+                  />
+                  {t("pulls.form.browse")}
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <TagPicker
+                  typed={typed}
+                  envId={envId}
+                  onChoose={(tag) =>
+                    form.setValue("ref", `${repoOf(typed)}:${tag}`, {
+                      shouldDirty: true,
+                      shouldTouch: true,
+                    })
+                  }
+                />
+              </CollapsibleContent>
+            </Collapsible>
+          ) : null}
           {chooseable ? (
             <fieldset className="flex flex-col gap-2">
               <legend className="mb-1 text-sm font-medium">{t("pulls.targets.legend")}</legend>
@@ -448,12 +580,43 @@ function PullForm({ envId, hostName, swarm, initialRef, onCancel, onStarted }: F
         <Button type="button" variant="outline" className="max-md:h-11" onClick={onCancel}>
           {t("pulls.form.cancel")}
         </Button>
-        <Button type="submit" className="max-md:h-11" disabled={pending}>
+        <Button type="submit" form={formId} className="max-md:h-11" disabled={pending}>
           {pending ? <Spinner aria-hidden="true" /> : null}
           {pending ? t("pulls.form.pending") : t("pulls.form.submit")}
         </Button>
       </DialogFooter>
-    </form>
+    </div>
+  );
+}
+
+interface TagPickerProps {
+  // What the field holds.
+  typed: string;
+  envId: string;
+  onChoose: (tag: string) => void;
+}
+
+// TagPicker is the Browse tags list: the picker variant of the tag browser for the repository
+// in the field, read through the chosen environment (or the Registries page's own routes
+// until one is chosen). Typing in the field moves the repository only once the typing stops,
+// so the registry is not asked after every key. The tag in the field is the chosen row.
+function TagPicker({ typed, envId, onChoose }: TagPickerProps) {
+  const latest = repoOf(typed);
+  const [repo, setRepo] = useState(latest);
+  useEffect(() => {
+    if (latest === repo) return;
+    const timer = setTimeout(() => setRepo(latest), PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [latest, repo]);
+  if (!repo) return null;
+  return (
+    <TagBrowser
+      repo={repo}
+      variant="picker"
+      envId={envId || undefined}
+      selected={tagOf(typed)}
+      onSelect={onChoose}
+    />
   );
 }
 
