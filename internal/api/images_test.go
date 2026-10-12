@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -359,5 +360,207 @@ func TestSwarmImageInspectAndHistoryReadTheFirstNodeThatHasItOrTheNodeNamed(t *t
 	// The worker is connected but does not have it.
 	if rec := s.get(t, s.env.ID, "images/"+id+"/history?node="+s.w.id); rec.code != http.StatusNotFound || rec.ptyp != "image_not_found" {
 		t.Errorf("history on the worker: %d %q, want 404 image_not_found", rec.code, rec.ptyp)
+	}
+}
+
+// The merged swarm list, the Per node view, the Dangling filter and the search (plan 05-15
+// task 2, D-16, D-17). The engines are fakes behind the real aggregator.
+
+type listNode struct {
+	NodeID     string `json:"nodeId"`
+	Name       string `json:"name"`
+	Containers int    `json:"containers"`
+}
+
+type listedImage struct {
+	Node             string     `json:"node"`
+	NodeID           string     `json:"nodeId"`
+	ID               string     `json:"id"`
+	RepoTags         []string   `json:"repoTags"`
+	Dangling         bool       `json:"dangling"`
+	ReadOnly         bool       `json:"readOnly"`
+	Created          string     `json:"created"`
+	UsedByContainers int        `json:"usedByContainers"`
+	UsedByServices   int        `json:"usedByServices"`
+	Nodes            []listNode `json:"nodes"`
+}
+
+type imageList struct {
+	Items           []listedImage `json:"items"`
+	Total           int           `json:"total"`
+	Truncated       bool          `json:"truncated"`
+	NodeCount       int           `json:"nodeCount"`
+	DanglingCount   int           `json:"danglingCount"`
+	UnfilteredTotal int           `json:"unfilteredTotal"`
+	NodeRefs        []listNode    `json:"nodeRefs"`
+	NotReporting    []string      `json:"notReporting"`
+}
+
+var (
+	listWeb   = hexID("1")
+	listDrift = hexID("2")
+	listAlt   = hexID("3")
+)
+
+// listSwarm is two managers holding nginx:1.27 under one ID, and a worker holding the same tag
+// under another: a drifted node.
+func listSwarm(t *testing.T) *swarmFix {
+	t.Helper()
+	return newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if host == "wrk-1" {
+			cfg.Images = []dockertest.FakeImage{
+				{ID: listDrift, RepoTags: []string{"nginx:1.27"}, Created: 50},
+				{ID: listAlt, Created: 10},
+			}
+			return
+		}
+		cfg.Images = []dockertest.FakeImage{
+			{ID: listWeb, RepoTags: []string{"nginx:1.27", "nginx:latest"}, Created: 40, Size: 100},
+			{ID: listAlt, Created: 10},
+		}
+		cfg.Containers = append(cfg.Containers,
+			dockertest.FakeContainer{ID: "c-" + host, Names: []string{"/proxy"}, ImageID: listWeb, State: "exited"})
+	})
+}
+
+func (s *swarmFix) imageList(t *testing.T, query string) imageList {
+	t.Helper()
+	rec := s.get(t, s.env.ID, "images"+query)
+	if rec.code != http.StatusOK {
+		t.Fatalf("images%s: %d %s", query, rec.code, rec.body)
+	}
+	return decode[imageList](t, rec)
+}
+
+func TestImageListMergesNodeCopiesByIDAndKeepsTheSameTagWithAnotherIDAsASecondRow(t *testing.T) {
+	s := listSwarm(t)
+	var got imageList
+	waitFor(t, "every node's images", func() bool {
+		got = s.imageList(t, "")
+		return got.Total == 3
+	})
+	// Newest first: the drifted copy (50), the managers' nginx (40), the untagged image (10).
+	if len(got.Items) != 3 || got.Items[0].ID != listDrift || got.Items[1].ID != listWeb || got.Items[2].ID != listAlt {
+		t.Fatalf("items = %+v, want drift, web, alt", got.Items)
+	}
+	web := got.Items[1]
+	if len(web.Nodes) != 2 || web.Nodes[0].Name != "mgr-1" || web.Nodes[1].Name != "mgr-2" || got.NodeCount != 3 {
+		t.Errorf("web nodes = %+v of %d, want mgr-1 and mgr-2 of 3", web.Nodes, got.NodeCount)
+	}
+	if web.Node != "" || web.NodeID != "" {
+		t.Errorf("a row of two nodes names one: %q %q", web.Node, web.NodeID)
+	}
+	if !slices.Equal(web.RepoTags, []string{"nginx:1.27", "nginx:latest"}) || web.UsedByContainers != 2 {
+		t.Errorf("web = %+v, want both tags and a stopped container on each manager", web)
+	}
+	for _, n := range web.Nodes {
+		if n.Containers != 1 {
+			t.Errorf("node %s has %d containers, want 1", n.Name, n.Containers)
+		}
+	}
+	drift := got.Items[0]
+	if len(drift.Nodes) != 1 || drift.Nodes[0].Name != "wrk-1" || drift.Node != "wrk-1" || drift.NodeID != s.w.id {
+		t.Errorf("drift = %+v, want the one node wrk-1", drift)
+	}
+	if alt := got.Items[2]; len(alt.Nodes) != 3 || !alt.Dangling || !slices.Equal(alt.RepoTags, []string{"<none>"}) {
+		t.Errorf("alt = %+v, want an untagged image on all three nodes", alt)
+	}
+	if len(got.NodeRefs) != 3 || got.NotReporting == nil {
+		t.Errorf("nodeRefs = %+v notReporting = %v", got.NodeRefs, got.NotReporting)
+	}
+	if got.UnfilteredTotal != 3 || got.DanglingCount != 1 {
+		t.Errorf("unfilteredTotal %d danglingCount %d, want 3 and 1", got.UnfilteredTotal, got.DanglingCount)
+	}
+}
+
+func TestImageListPerNodeViewHasOneRowPerNodeCopyAndTheNodeFilterNarrowsIt(t *testing.T) {
+	s := listSwarm(t)
+	var got imageList
+	waitFor(t, "every node's images", func() bool {
+		got = s.imageList(t, "?view=node")
+		return got.Total == 6
+	})
+	for _, it := range got.Items {
+		if it.NodeID == "" || it.Node == "" || len(it.Nodes) != 1 || it.Nodes[0].NodeID != it.NodeID {
+			t.Errorf("row %+v, want exactly the node it is on", it)
+		}
+	}
+	one := s.imageList(t, "?view=node&node=mgr-2")
+	if one.Total != 2 || one.Items[0].Node != "mgr-2" || one.Items[0].UsedByContainers != 1 {
+		t.Errorf("node=mgr-2: %+v", one)
+	}
+	// Merged and narrowed to a node: the rows are that node's copies, and the node count is still the cluster's.
+	merged := s.imageList(t, "?node=wrk-1")
+	if merged.Total != 2 || merged.NodeCount != 3 {
+		t.Errorf("merged on wrk-1: total %d nodeCount %d", merged.Total, merged.NodeCount)
+	}
+	if rec := s.get(t, s.env.ID, "images?view=sideways"); rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("a view that is not merged or node: %d, want 422", rec.code)
+	}
+}
+
+func TestImageListSearchMatchesTagRepositoryOrIDPrefixAndDanglingKeepsUntaggedRows(t *testing.T) {
+	s := listSwarm(t)
+	waitFor(t, "every node's images", func() bool { return s.imageList(t, "").Total == 3 })
+	for q, want := range map[string]int{
+		"nginx":                            2,
+		"NGINX:LATEST":                     1,
+		"1.27":                             2,
+		"sha256:" + strings.Repeat("1", 8): 1,
+		strings.Repeat("3", 6):             1,
+		"nothing-like-this":                0,
+	} {
+		if got := s.imageList(t, "?q="+q); got.Total != want {
+			t.Errorf("q=%q: total %d, want %d", q, got.Total, want)
+		}
+	}
+	dangling := s.imageList(t, "?dangling=1")
+	if dangling.Total != 1 || dangling.Items[0].ID != listAlt {
+		t.Errorf("dangling=1: %+v, want only the untagged image", dangling.Items)
+	}
+	// The counts are taken before the search and the dangling filter.
+	if dangling.UnfilteredTotal != 3 || dangling.DanglingCount != 1 {
+		t.Errorf("dangling=1 counts: unfiltered %d dangling %d", dangling.UnfilteredTotal, dangling.DanglingCount)
+	}
+	none := s.imageList(t, "?q=nginx&dangling=1")
+	if none.Total != 0 || none.Items == nil || len(none.Items) != 0 || none.UnfilteredTotal != 3 {
+		t.Errorf("nginx and dangling: %+v, want no rows and an empty list", none)
+	}
+}
+
+func TestImageListFiltersRunBeforeTheCapAndRowsSortNewestFirstThenByID(t *testing.T) {
+	var imgs []dockertest.FakeImage
+	// 501 untagged images made later than the one tag, so the cap alone would hide it.
+	for i := range 501 {
+		imgs = append(imgs, dockertest.FakeImage{ID: "sha256:" + strings.Repeat("0", 60) + fmt.Sprintf("%04x", i), Created: 1000})
+	}
+	imgs = append(imgs, dockertest.FakeImage{ID: hexID("f"), RepoTags: []string{"needle:1"}, Created: 1})
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", Images: imgs})
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+
+	all := decode[imageList](t, f.get(t, e, "images"))
+	if all.Total != 502 || !all.Truncated || len(all.Items) != 500 || all.UnfilteredTotal != 502 || all.DanglingCount != 501 {
+		t.Fatalf("all: total %d truncated %v items %d unfiltered %d dangling %d", all.Total, all.Truncated, len(all.Items), all.UnfilteredTotal, all.DanglingCount)
+	}
+	// Equal creation times keep a stable order, by image ID.
+	if all.Items[0].ID >= all.Items[1].ID || all.Items[0].ID != "sha256:"+strings.Repeat("0", 60)+"0000" {
+		t.Errorf("ties = %s, %s, want the lower ID first", all.Items[0].ID, all.Items[1].ID)
+	}
+	found := decode[imageList](t, f.get(t, e, "images?q=needle"))
+	if found.Total != 1 || found.Truncated || found.Items[0].ID != hexID("f") {
+		t.Errorf("q=needle: %+v, want the one tagged image even though the cap hides it unfiltered", found)
+	}
+	dangling := decode[imageList](t, f.get(t, e, "images?dangling=1"))
+	if dangling.Total != 501 || !dangling.Truncated || len(dangling.Items) != 500 {
+		t.Errorf("dangling=1: total %d items %d, want 501 and 500", dangling.Total, len(dangling.Items))
+	}
+}
+
+func TestImageListWithNoImagesIsEmptyNotNull(t *testing.T) {
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1"})
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(e.ID).State == envs.StateOnline })
+	got := decode[imageList](t, f.get(t, e, "images"))
+	if got.Items == nil || len(got.Items) != 0 || got.Total != 0 || got.UnfilteredTotal != 0 || got.NodeCount != 1 {
+		t.Errorf("empty = %+v", got)
 	}
 }
