@@ -4,6 +4,13 @@
 package registry_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -189,5 +196,67 @@ func TestValidateUpdateLetsACredentialKeepAnExpiryThatHasPassed(t *testing.T) {
 	}
 	if _, errs := registry.ValidateUpdate(in, "2026-09-01", now); len(errs) != 1 || errs[0].Code != "expiry_past" {
 		t.Errorf("a different past day: %+v, want expiry_past", errs)
+	}
+}
+
+// testCA is a self-signed certificate in PEM, for the custom CA field.
+func testCA(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "registry test CA"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func TestValidateAcceptsACustomCAAndTheInsecureSwitch(t *testing.T) {
+	in := valid()
+	in.Type, in.Host = registry.TypeGeneric, "registry.lan:5000"
+	in.CAPEM, in.Insecure = "\n"+testCA(t)+"\n", true
+	out, errs := registry.Validate(in, now)
+	if len(errs) != 0 {
+		t.Fatalf("errors = %+v", errs)
+	}
+	if !out.Insecure || out.CAPEM != strings.TrimSpace(in.CAPEM) {
+		t.Errorf("cleaned CA/insecure = %q, %v, want the trimmed PEM and true", out.CAPEM, out.Insecure)
+	}
+}
+
+func TestValidateRefusesACAThatIsTooLargeOrHoldsNoCertificate(t *testing.T) {
+	for _, c := range []struct{ name, pem string }{
+		{"text that is not a certificate", "hello"},
+		{"a PEM block that is not a certificate", "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----"},
+		{"a private key", "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----"},
+		{"more than 64 KiB", testCA(t) + strings.Repeat("#", 65536)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := valid()
+			in.CAPEM = c.pem
+			_, errs := registry.Validate(in, now)
+			if len(errs) != 1 || errs[0].Field != "caPem" || errs[0].Code != "ca_invalid" {
+				t.Fatalf("errors = %+v, want caPem ca_invalid", errs)
+			}
+			up, uerrs := registry.ValidateUpdate(registry.UpdateInput{Name: "n", Type: registry.TypeGHCR, Username: "u", CAPEM: c.pem}, "", now)
+			if len(uerrs) != 1 || uerrs[0].Field != "caPem" || uerrs[0].Code != "ca_invalid" {
+				t.Fatalf("update errors = %+v (%+v), want caPem ca_invalid", uerrs, up)
+			}
+		})
+	}
+}
+
+func TestValidateUpdateCarriesTheCAAndTheSwitchThrough(t *testing.T) {
+	ca := testCA(t)
+	out, errs := registry.ValidateUpdate(registry.UpdateInput{Name: "n", Type: registry.TypeGHCR, Username: "u", CAPEM: ca, Insecure: true}, "", now)
+	if len(errs) != 0 || out.CAPEM != strings.TrimSpace(ca) || !out.Insecure {
+		t.Fatalf("out = %+v, errors = %+v, want the CA and the switch kept", out, errs)
 	}
 }

@@ -31,6 +31,9 @@ type fakeRegistry struct {
 	// tagsStatus is the answer to the tag list of a signed-in client: 200, 401, 403 or 404.
 	tagsStatus int
 
+	// scheme is https for the usual fake and http for the plain one.
+	scheme string
+
 	user, pass string
 	mu         sync.Mutex
 	paths      []string
@@ -38,15 +41,27 @@ type fakeRegistry struct {
 
 func newFakeRegistry(t *testing.T, refuseStatus int) *fakeRegistry {
 	t.Helper()
-	f := &fakeRegistry{refuseStatus: refuseStatus, tagsStatus: http.StatusOK, user: "bot", pass: "s3cret-token-value"}
+	f := &fakeRegistry{refuseStatus: refuseStatus, tagsStatus: http.StatusOK, user: "bot", pass: "s3cret-token-value", scheme: "https"}
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
 }
 
-func (f *fakeRegistry) host() string { return strings.TrimPrefix(f.srv.URL, "https://") }
+// newPlainFakeRegistry is newFakeRegistry that speaks plain HTTP.
+func newPlainFakeRegistry(t *testing.T, refuseStatus int) *fakeRegistry {
+	t.Helper()
+	f := &fakeRegistry{refuseStatus: refuseStatus, tagsStatus: http.StatusOK, user: "bot", pass: "s3cret-token-value", scheme: "http"}
+	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *fakeRegistry) host() string { return strings.TrimPrefix(f.srv.URL, f.scheme+"://") }
 
 func (f *fakeRegistry) egress() EgressPolicy {
+	if f.scheme == "http" {
+		return NewEgressPolicy(nil)
+	}
 	pool := x509.NewCertPool()
 	pool.AddCert(f.srv.Certificate())
 	return NewEgressPolicy(nil).WithRootCAs(pool)
@@ -57,7 +72,7 @@ func (f *fakeRegistry) client(user, pass string) *Client {
 }
 
 func (f *fakeRegistry) challenge(w http.ResponseWriter, scope string) {
-	c := `Bearer realm="https://` + f.host() + `/token",service="fake"`
+	c := `Bearer realm="` + f.scheme + `://` + f.host() + `/token",service="fake"`
 	if scope != "" {
 		c += `,scope="` + scope + `"`
 	}

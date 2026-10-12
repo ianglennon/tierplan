@@ -630,3 +630,29 @@ func TestTheBackupFolderIsUnsetByDefaultSoItFollowsTheDataDirectoryAndCanBeSet(t
 		t.Errorf("the flag does not win: %q, %v", c.BackupDir, err)
 	}
 }
+
+// BAYPLAN_REGISTRY_BLOCK_CIDRS (plan 05-12, D-14): ranges registry calls refuse on top of the
+// built-in ones.
+func TestRegistryBlockCIDRsParsesCommaSeparatedPrefixes(t *testing.T) {
+	c, err := load(t, nil, envMap{"BAYPLAN_REGISTRY_BLOCK_CIDRS": "10.9.0.0/16, fd00::/8"}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.RegistryBlockCIDRs) != 2 || c.RegistryBlockCIDRs[0].String() != "10.9.0.0/16" || c.RegistryBlockCIDRs[1].String() != "fd00::/8" {
+		t.Fatalf("RegistryBlockCIDRs = %v, want [10.9.0.0/16 fd00::/8]", c.RegistryBlockCIDRs)
+	}
+}
+
+func TestRegistryBlockCIDRsIsEmptyByDefault(t *testing.T) {
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil || len(c.RegistryBlockCIDRs) != 0 {
+		t.Fatalf("RegistryBlockCIDRs = %v, %v, want none", c.RegistryBlockCIDRs, err)
+	}
+}
+
+func TestRegistryBlockCIDRsRefusesAnInvalidEntryAtStartupAndNamesIt(t *testing.T) {
+	_, err := load(t, nil, envMap{"BAYPLAN_REGISTRY_BLOCK_CIDRS": "10.9.0.0/16,not-a-range"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "BAYPLAN_REGISTRY_BLOCK_CIDRS") || !strings.Contains(err.Error(), "not-a-range") {
+		t.Fatalf("error = %v, want one naming BAYPLAN_REGISTRY_BLOCK_CIDRS and not-a-range", err)
+	}
+}

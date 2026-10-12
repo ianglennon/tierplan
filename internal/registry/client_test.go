@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,7 +43,7 @@ func TestARedirectToPlainHTTPIsRefused(t *testing.T) {
 func TestRegclientKeepsTheEgressDialerWhenItAppliesTLSSettings(t *testing.T) {
 	f := newFakeRegistry(t, http.StatusUnauthorized)
 	pem := pemOf(f.srv.Certificate())
-	c := NewClient(HostOptions{Host: "169.254.169.254", Username: "bot", Password: "x", caPEM: pem}, NewEgressPolicy(nil), "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c := NewClient(HostOptions{Host: "169.254.169.254", Username: "bot", Password: "x", CAPEM: pem}, NewEgressPolicy(nil), "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := c.Ping(context.Background()); !errors.Is(err, ErrEgressBlocked) {
 		t.Fatalf("Ping err = %v, want ErrEgressBlocked through a host with its own CA", err)
 	}
@@ -108,5 +109,102 @@ func TestProductionCodeNamesNoMirrorSettingNoDockerConfigAndNoCredentialHelper(t
 		if m := forbidden.Find(b); m != nil {
 			t.Errorf("%s names %q", f, m)
 		}
+	}
+}
+
+func quietLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// A registry with its own certificate authority fails reachable with registry_tls until the
+// credential carries that CA, and then passes every step (D-14).
+func TestClientTrustsTheCredentialsOwnCAAndNoOther(t *testing.T) {
+	f := newFakeRegistry(t, http.StatusUnauthorized)
+	// The default policy trusts the system roots only, so the test server's CA is unknown.
+	without := NewClient(HostOptions{Host: f.host(), Username: f.user, Password: f.pass}, NewEgressPolicy(nil), "test", quietLog())
+	got := Check(context.Background(), without, without, CheckInput{TestRepository: "acme/app"})
+	if got.Reachable != (StepResult{State: StepFailed, Code: CodeRegistryTLS}) {
+		t.Fatalf("without the CA: reachable = %+v, want failed registry_tls", got.Reachable)
+	}
+
+	opts := HostOptions{Host: f.host(), Username: f.user, Password: f.pass, CAPEM: pemOf(f.srv.Certificate())}
+	with := NewClient(opts, NewEgressPolicy(nil), "test", quietLog())
+	anon := NewClient(HostOptions{Host: f.host(), CAPEM: opts.CAPEM}, NewEgressPolicy(nil), "test", quietLog())
+	got = Check(context.Background(), with, anon, CheckInput{TestRepository: "acme/app"})
+	want := CheckResult{StepResult{State: StepPassed}, StepResult{State: StepPassed}, StepResult{State: StepPassed}}
+	if got != want {
+		t.Fatalf("with the CA: result = %+v, want all passed", got)
+	}
+
+	// The CA belongs to that client alone: the one that was not given it still fails.
+	got = Check(context.Background(), without, without, CheckInput{})
+	if got.Reachable.Code != CodeRegistryTLS {
+		t.Fatalf("a client without the CA after another had it: %+v, want registry_tls", got.Reachable)
+	}
+}
+
+// The switch reaches an HTTPS server whose CA nobody gave us, and a server that answers plain
+// HTTP; with it off, plain HTTP is registry_http (D-14).
+func TestClientInsecureSwitchReachesUnknownCAAndFallsBackToPlainHTTP(t *testing.T) {
+	check := func(f *fakeRegistry, insecure bool) CheckResult {
+		c := NewClient(HostOptions{Host: f.host(), Username: f.user, Password: f.pass, Insecure: insecure}, NewEgressPolicy(nil), "test", quietLog())
+		a := NewClient(HostOptions{Host: f.host(), Insecure: insecure}, NewEgressPolicy(nil), "test", quietLog())
+		return Check(context.Background(), c, a, CheckInput{TestRepository: "acme/app"})
+	}
+	allPassed := CheckResult{StepResult{State: StepPassed}, StepResult{State: StepPassed}, StepResult{State: StepPassed}}
+
+	if got := check(newFakeRegistry(t, http.StatusUnauthorized), true); got != allPassed {
+		t.Errorf("https with an unknown CA, switch on: %+v, want all passed", got)
+	}
+	if got := check(newFakeRegistry(t, http.StatusUnauthorized), false); got.Reachable.Code != CodeRegistryTLS {
+		t.Errorf("https with an unknown CA, switch off: %+v, want registry_tls", got.Reachable)
+	}
+	if got := check(newPlainFakeRegistry(t, http.StatusUnauthorized), true); got != allPassed {
+		t.Errorf("plain http, switch on: %+v, want all passed", got)
+	}
+	if got := check(newPlainFakeRegistry(t, http.StatusUnauthorized), false); got.Reachable != (StepResult{State: StepFailed, Code: CodeRegistryHTTP}) {
+		t.Errorf("plain http, switch off: %+v, want failed registry_http", got.Reachable)
+	}
+
+	// A wrong password is still refused over the fallback.
+	f := newPlainFakeRegistry(t, http.StatusUnauthorized)
+	c := NewClient(HostOptions{Host: f.host(), Username: f.user, Password: "wrong", Insecure: true}, NewEgressPolicy(nil), "test", quietLog())
+	a := NewClient(HostOptions{Host: f.host(), Insecure: true}, NewEgressPolicy(nil), "test", quietLog())
+	if got := Check(context.Background(), c, a, CheckInput{}); got.SignedIn != (StepResult{State: StepFailed, Code: CodeSignInRefused}) {
+		t.Errorf("plain http, wrong password: signed in = %+v, want failed sign_in_refused", got.SignedIn)
+	}
+}
+
+// The plain HTTP fallback dials through the same egress policy: a blocked address is refused
+// there too, and so is an operator-blocked private range (T-05-74).
+func TestClientInsecureFallbackStillRefusesBlockedAddresses(t *testing.T) {
+	c := NewClient(HostOptions{Host: "169.254.169.254", Insecure: true}, NewEgressPolicy(nil), "test", quietLog())
+	if c.fallback == nil {
+		t.Fatal("the switch built no plain HTTP client")
+	}
+	if _, err := c.fallback.Probe(context.Background()); !errors.Is(err, ErrEgressBlocked) {
+		t.Errorf("fallback probe err = %v, want ErrEgressBlocked", err)
+	}
+	if _, err := c.Probe(context.Background()); !errors.Is(err, ErrEgressBlocked) {
+		t.Errorf("probe err = %v, want ErrEgressBlocked", err)
+	}
+	if err := c.fallback.Ping(context.Background()); !errors.Is(err, ErrEgressBlocked) {
+		t.Errorf("fallback ping err = %v, want ErrEgressBlocked", err)
+	}
+
+	f := newPlainFakeRegistry(t, http.StatusUnauthorized)
+	fenced := NewEgressPolicy([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")})
+	d := NewClient(HostOptions{Host: f.host(), Insecure: true}, fenced, "test", quietLog())
+	if _, err := d.fallback.Probe(context.Background()); !errors.Is(err, ErrEgressBlocked) {
+		t.Errorf("operator-blocked range on the fallback: err = %v, want ErrEgressBlocked", err)
+	}
+	got := Check(context.Background(), d, d, CheckInput{})
+	if got.Reachable != (StepResult{State: StepFailed, Code: CodeRegistryUnreachable}) {
+		t.Errorf("operator-blocked range: reachable = %+v, want failed registry_unreachable", got.Reachable)
+	}
+}
+
+// Without the switch there is no plain HTTP client at all.
+func TestClientWithoutTheSwitchHasNoPlainHTTPFallback(t *testing.T) {
+	if c := NewClient(HostOptions{Host: "registry.example.org"}, NewEgressPolicy(nil), "test", quietLog()); c.fallback != nil {
+		t.Error("a client without the switch can fall back to plain HTTP")
 	}
 }
