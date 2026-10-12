@@ -694,7 +694,7 @@ func TestMaskImageInspectOfAnythingThatIsNotAJSONObjectIsAnErrorNeverAPassthroug
 }
 
 func TestMaskLabelsWithholdsSecretNamedValuesAndUserInfoButNotAnnotations(t *testing.T) {
-	in := map[string]string{
+	in := map[string]string{ //nolint:gosec // G101: made-up label values for the test
 		"ci.deploy_token": "t0k", "org.opencontainers.image.authors": "a@b.c", "vendor": "acme",
 		"git": "https://u:p@h/x", "empty_password": "",
 	}
@@ -718,7 +718,7 @@ func TestMaskLabelsWithholdsSecretNamedValuesAndUserInfoButNotAnnotations(t *tes
 }
 
 func TestMaskHistoryCommandKeepsOnlyTheKindOfInstruction(t *testing.T) {
-	for in, want := range map[string]string{
+	for in, want := range map[string]string{ //nolint:gosec // G101: made-up build commands for the test
 		"/bin/sh -c #(nop)  ENV API_KEY=sekrit":                "ENV <hidden>",
 		"/bin/sh -c #(nop)  ARG TOKEN=sekrit":                  "ARG <hidden>",
 		"/bin/sh -c #(nop) COPY file:abc in /app":              "COPY <hidden>",

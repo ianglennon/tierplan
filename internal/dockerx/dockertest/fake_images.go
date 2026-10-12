@@ -63,10 +63,17 @@ func (f *Fake) serveImageInspect(w http.ResponseWriter, r *http.Request, p strin
 	if arch == "" {
 		arch = "amd64"
 	}
+	config := map[string]any{"Env": orEmpty(fi.Env), "Labels": fi.Labels}
+	if len(fi.Cmd) > 0 {
+		config["Cmd"] = fi.Cmd
+	}
+	if len(fi.Entrypoint) > 0 {
+		config["Entrypoint"] = fi.Entrypoint
+	}
 	doc := map[string]any{
 		"Id": fi.ID, "RepoTags": orEmpty(fi.RepoTags), "RepoDigests": orEmpty(fi.RepoDigests),
 		"Os": os, "Architecture": arch, "Size": fi.Size,
-		"Config": map[string]any{"Env": orEmpty(fi.Env), "Labels": fi.Labels},
+		"Config": config,
 		"RootFS": map[string]any{"Type": "layers", "Layers": []string{fakeDigest("layer:" + fi.ID)}},
 	}
 	if fi.Variant != "" {
@@ -74,12 +81,6 @@ func (f *Fake) serveImageInspect(w http.ResponseWriter, r *http.Request, p strin
 	}
 	if fi.Created > 0 {
 		doc["Created"] = time.Unix(fi.Created, 0).UTC().Format(time.RFC3339Nano)
-	}
-	if len(fi.Cmd) > 0 {
-		doc["Config"].(map[string]any)["Cmd"] = fi.Cmd
-	}
-	if len(fi.Entrypoint) > 0 {
-		doc["Config"].(map[string]any)["Entrypoint"] = fi.Entrypoint
 	}
 	if len(fi.Env) > 0 {
 		doc["ContainerConfig"] = map[string]any{"Env": fi.Env}

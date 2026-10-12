@@ -306,8 +306,7 @@ func TestARunThatPanicsEndsItsJobInterruptedAndTheHubKeepsWorking(t *testing.T) 
 	t.Cleanup(h.Close)
 	job, err := h.Start(twoItems("u"), func(ctx context.Context, r *jobs.Reporter) {
 		r.Finish("n1", jobs.ItemDone, "", "", nil)
-		var m map[string]int
-		m["boom"] = 1 // a nil map write panics
+		panic("boom")
 	})
 	if err != nil {
 		t.Fatal(err)
