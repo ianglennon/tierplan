@@ -140,7 +140,13 @@ beforeEach(() => {
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
       if (url.pathname === "/api/me") return Response.json(me);
-      if (url.pathname === "/api/registries/tags") {
+      const envPath = /^\/api\/env\/([^/]+)\/images\/tags(\/details)?$/.exec(url.pathname);
+      if (envPath?.[2]) {
+        const body = (await req.json()) as DetailsBody;
+        detailsSent.push({ ...body, envId: envPath[1] });
+        return detailsAnswer({ ...body, envId: envPath[1] });
+      }
+      if (url.pathname === "/api/registries/tags" || envPath) {
         const entry: Sent = { path: url.pathname, query: Object.fromEntries(url.searchParams) };
         sent.push(entry);
         return answer(entry);
@@ -222,7 +228,7 @@ describe("TagBrowser", () => {
           },
         }),
       );
-    mount(<TagBrowser repo="nginx" variant="full" envId="e1" />);
+    mount(<TagBrowser repo="nginx" variant="full" credentialEnvId="e1" />);
     await waitFor(() =>
       expect(screen.getByText(/Using credential/).textContent).toBe(
         "Using credential “ghcr-acme” (Lab)",
@@ -542,7 +548,7 @@ describe("TagBrowser details", () => {
   });
 
   it("fills a row with a short mono digest whose tooltip holds the whole one, the age, and a chip", async () => {
-    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" envId="e1" />);
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" credentialEnvId="e1" />);
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
     scrollTo(["v1.10.0"]);
     await waitFor(() =>
@@ -829,7 +835,7 @@ describe("TagBrowser platforms", () => {
     ]);
   });
 
-  it("leaves Running in out inside an environment, where the running markers are that environment's own", async () => {
+  it("has Running here in place of Running in inside an environment, where the markers are that environment's own", async () => {
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" envId="e1" />);
     await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
@@ -838,7 +844,12 @@ describe("TagBrowser platforms", () => {
       "Digest",
       "Created",
       "Platforms",
+      "Running here",
     ]);
+    expect(sent.at(-1)).toEqual({
+      path: "/api/env/e1/images/tags",
+      query: { ref: "ghcr.io/acme/app" },
+    });
   });
 });
 
@@ -899,5 +910,75 @@ describe("TagBrowser Running in", () => {
     const cell = await openWith(running(["<b>lab</b>"]));
     expect(within(cell).getByRole("link").textContent).toBe("<b>lab</b>");
     expect(document.querySelector("b")).toBeNull();
+  });
+});
+
+describe("TagBrowser Running here", () => {
+  const here = {
+    containers: [
+      { id: "c1", name: "web", nodeId: "n1", node: "pi-1" },
+      { id: "c2", name: "api.1.abc", nodeId: "n2", node: "pi-2" },
+    ],
+    services: [{ id: "s1", name: "api", nodes: ["pi-2"] }],
+  };
+
+  async function openEnv(runningHere?: unknown) {
+    detailsAnswer = (body) =>
+      Response.json({
+        items: body.tags.map((tag) =>
+          detail(tag, tag === "v1.10.0" && runningHere ? { runningHere } : {}),
+        ),
+      });
+    mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" envId="e1" />);
+    await waitFor(() => expect(screen.getByText("v1.10.0")).toBeTruthy());
+    expect(cellsOf(rowOf("v1.10.0"))[5]?.textContent).toBe("Loading…");
+    scrollTo(["v1.10.0", "v1.9.2"]);
+    await waitFor(() =>
+      expect(cellsOf(rowOf("v1.10.0"))[2]?.textContent).toBe("sha256:a1a1a1a1a1a1"),
+    );
+    return cellsOf(rowOf("v1.10.0"))[5] as HTMLElement;
+  }
+
+  it("names the credential above the list, as the Registries page does", async () => {
+    await openEnv();
+    expect(screen.getByText(/Using credential/).textContent).toBe(
+      "Using credential “ghcr-acme” (Instance)",
+    );
+  });
+
+  it("marks a tag that runs here with a badge, and leaves a tag that does not run here unmarked", async () => {
+    const cell = await openEnv(here);
+    expect(within(cell).getByRole("button", { name: "Running here" })).toBeTruthy();
+    expect(cellsOf(rowOf("v1.9.2"))[5]?.textContent).toBe("");
+  });
+
+  it("opens a popover listing the containers as links and the services with their nodes", async () => {
+    const cell = await openEnv(here);
+    fireEvent.click(within(cell).getByRole("button", { name: "Running here" }));
+    const popover = await screen.findByRole("dialog");
+    expect(within(popover).getByText("2 containers, 1 service")).toBeTruthy();
+    const links = within(popover).getAllByRole("link");
+    expect(links.map((l) => l.textContent)).toEqual(["web", "api.1.abc"]);
+    expect(links[0]?.getAttribute("href")).toBe("/env/e1/containers/c1?node=n1");
+    expect(within(popover).getByText("pi-1")).toBeTruthy();
+    const service = within(popover).getByText("api");
+    expect(service.closest("li")?.textContent).toBe("apipi-2");
+    expect(service.closest("a")).toBeNull();
+  });
+
+  it("opens the popover from the keyboard as well", async () => {
+    const cell = await openEnv(here);
+    const trigger = within(cell).getByRole("button", { name: "Running here" });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+  });
+
+  it("reads one container as singular", async () => {
+    const cell = await openEnv({ containers: [here.containers[0]], services: [] });
+    fireEvent.click(within(cell).getByRole("button", { name: "Running here" }));
+    const popover = await screen.findByRole("dialog");
+    expect(within(popover).getByText("1 container, 0 services")).toBeTruthy();
   });
 });

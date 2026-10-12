@@ -46,8 +46,13 @@ export interface TagBrowserProps {
   repo: string;
   // full is the page and the image's Tags tab; picker is the pull form's list.
   variant: "full" | "picker";
-  // An environment whose own credentials count as well as the instance's.
+  // Environment context: the tags are read through the environment's routes with its
+  // credentials, and the rows say what runs there and what its nodes cannot run (D-22, D-23).
+  // Absent is the Registries context.
   envId?: string;
+  // Registries context only: an environment whose own credentials count as well as the
+  // instance's, without the list becoming that environment's.
+  credentialEnvId?: string;
   // Picker: what choosing a tag does, and the tag chosen.
   onSelect?: (tag: string) => void;
   selected?: string;
@@ -76,6 +81,7 @@ export function TagBrowser({
   repo,
   variant,
   envId,
+  credentialEnvId,
   onSelect,
   selected,
   q: qProp,
@@ -92,11 +98,13 @@ export function TagBrowser({
     else setLocal((prev) => ({ ...prev, ...patch }));
   }
 
-  const query = useInfiniteQuery(tagsInfiniteQuery({ repo, envId, q, hide }));
+  const query = useInfiniteQuery(tagsInfiniteQuery({ repo, envId, credentialEnvId, q, hide }));
   const picker = variant === "picker";
-  // The Registries page, which has no environment, says where each tag runs; inside an
-  // environment 05-20 marks what runs there.
+  // The Registries page, which has no environment, says which environments run each tag;
+  // inside an environment the tag says what runs there.
   const showRunning = !picker && envId === undefined;
+  const showHere = !picker && envId !== undefined;
+  const extraColumns = showRunning || showHere;
 
   const pages = query.data?.pages ?? [];
   const first = pages[0];
@@ -105,7 +113,13 @@ export function TagBrowser({
     [query.data],
   );
   const { visible, observe } = useVisibleRows();
-  const { ordered: tags, detailOf } = useTagDetails({ repo, envId, tags: listed, visible });
+  const { ordered: tags, detailOf } = useTagDetails({
+    repo,
+    envId,
+    credentialEnvId,
+    tags: listed,
+    visible,
+  });
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const panelPrefix = useId();
   function toggle(name: string) {
@@ -151,6 +165,9 @@ export function TagBrowser({
               {showRunning ? (
                 <TableHead className="min-w-40">{t("tags.columns.runningIn")}</TableHead>
               ) : null}
+              {showHere ? (
+                <TableHead className="min-w-40">{t("tags.columns.runningHere")}</TableHead>
+              ) : null}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -170,6 +187,7 @@ export function TagBrowser({
                     selected={picker && selected === tag.name}
                     onSelect={onSelect}
                     showRunning={showRunning}
+                    envId={envId}
                     expanded={open}
                     panelId={panelId}
                     onToggle={toggle}
@@ -179,7 +197,7 @@ export function TagBrowser({
                     <TableRow className="hover:bg-transparent">
                       <TableCell
                         id={panelId}
-                        colSpan={showRunning ? 6 : 5}
+                        colSpan={extraColumns ? 6 : 5}
                         className="bg-muted/30 pl-12"
                       >
                         <PlatformTable

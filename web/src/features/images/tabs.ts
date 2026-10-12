@@ -12,6 +12,7 @@ export interface ImageTab {
     | "/env/$envId/images/$imageId"
     | "/env/$envId/images/$imageId/used-by"
     | "/env/$envId/images/$imageId/layers"
+    | "/env/$envId/images/$imageId/tags"
     | "/env/$envId/images/$imageId/inspect";
   // The i18n key of the tab's label.
   labelKey: string;
@@ -37,6 +38,12 @@ export const IMAGE_TABS = [
     id: "layers",
     to: "/env/$envId/images/$imageId/layers",
     labelKey: "images.detail.tabs.layers",
+    exact: false,
+  },
+  {
+    id: "tags",
+    to: "/env/$envId/images/$imageId/tags",
+    labelKey: "images.detail.tabs.tags",
     exact: false,
   },
   {

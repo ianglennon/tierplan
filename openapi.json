@@ -2628,6 +2628,33 @@
         ],
         "type": "object"
       },
+      "EnvTagDetailsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "description": "The repository, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "tags": {
+            "description": "The tags to read, at most 25, as the list named them",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 25,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ref",
+          "tags"
+        ],
+        "type": "object"
+      },
       "EnvVar": {
         "additionalProperties": false,
         "properties": {
@@ -6546,6 +6573,64 @@
         ],
         "type": "object"
       },
+      "RunningContainerBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The container's ID",
+            "type": "string"
+          },
+          "name": {
+            "description": "The container name",
+            "type": "string"
+          },
+          "node": {
+            "description": "The display name of that node",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of the node it runs on",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "nodeId",
+          "node"
+        ],
+        "type": "object"
+      },
+      "RunningHereBody": {
+        "additionalProperties": false,
+        "properties": {
+          "containers": {
+            "description": "The running containers, a swarm task's included, by name",
+            "items": {
+              "$ref": "#/components/schemas/RunningContainerBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "services": {
+            "description": "The swarm services with a running task of the tag, by name",
+            "items": {
+              "$ref": "#/components/schemas/RunningServiceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "containers",
+          "services"
+        ],
+        "type": "object"
+      },
       "RunningInBody": {
         "additionalProperties": false,
         "properties": {
@@ -6561,6 +6646,35 @@
         "required": [
           "envId",
           "envName"
+        ],
+        "type": "object"
+      },
+      "RunningServiceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The service's ID",
+            "type": "string"
+          },
+          "name": {
+            "description": "The service name",
+            "type": "string"
+          },
+          "nodes": {
+            "description": "The display names of the nodes that run its tasks of this image, in name order",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "nodes"
         ],
         "type": "object"
       },
@@ -7254,6 +7368,16 @@
             "description": "The digest the tag points at; the index digest for a multi-platform tag. Empty when the registry could not be asked",
             "type": "string"
           },
+          "missing": {
+            "description": "Only filled in an environment's answer: the CPU architectures its nodes run, by OCI name (arm64, arm/v7), that this tag has no platform for. Empty when every node's architecture is covered, when the tag's platforms could not be read, and on the Registries page",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "platforms": {
             "description": "The runnable platforms of the tag, without attestation and unknown/unknown entries; one for a single-platform image, none when the registry could not be read",
             "items": {
@@ -7263,6 +7387,10 @@
               "array",
               "null"
             ]
+          },
+          "runningHere": {
+            "$ref": "#/components/schemas/RunningHereBody",
+            "description": "Only in an environment's answer, and only for a tag that runs there: the running containers and swarm services of that environment whose image is this tag's index digest or the digest of any of its platforms, matched by digest and not by tag text, so a tag that moved still shows where its old image runs"
           },
           "runningIn": {
             "description": "The environments the caller can read whose running containers run this tag's digest, matched by digest and not by tag text, from each environment's last snapshot; environments that are offline are skipped. Only filled on the Registries page: left empty when envId is given",
@@ -7284,6 +7412,7 @@
           "digest",
           "platforms",
           "runningIn",
+          "missing",
           "code"
         ],
         "type": "object"
@@ -11209,6 +11338,166 @@
           }
         },
         "summary": "Remove images",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/images/tags": {
+      "get": {
+        "description": "The same listing as /api/registries/tags with this environment chosen: the credential is the most specific match among the instance's credentials and this environment's own, never another environment's. Needs images.read (Viewer) on the environment. Not audited.",
+        "operationId": "envBrowseTags",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The repository to browse, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid",
+            "explode": false,
+            "in": "query",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "The repository to browse, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid",
+              "maxLength": 512,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only tags whose name contains this text, ignoring case",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "description": "Only tags whose name contains this text, ignoring case",
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Leave out signature, attestation and cache tags. On by default",
+            "explode": false,
+            "in": "query",
+            "name": "hide",
+            "schema": {
+              "default": true,
+              "description": "Leave out signature, attestation and cache tags. On by default",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Which page, from 0; 100 tags to a page, newest version first and then by name, descending",
+            "explode": false,
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 0,
+              "description": "Which page, from 0; 100 tags to a page, newest version first and then by name, descending",
+              "format": "int64",
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the tags of a repository, as an environment's reader",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/images/tags/details": {
+      "post": {
+        "description": "The details of up to 25 tags as /api/registries/tags/details gives them, for this environment: runningHere lists its running containers and swarm services whose image is the tag's index digest or the digest of any of its platforms, matched by digest even after the tag moved, and missing lists the architectures its nodes run that the tag has no platform for. Both come from the environment's last snapshot and are left out when it cannot be read. Needs images.read (Viewer) on the environment. Not audited.",
+        "operationId": "envBrowseTagDetails",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnvTagDetailsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagDetailsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the digest, date and platforms of tags, and what runs them here",
         "tags": [
           "environments"
         ]

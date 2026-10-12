@@ -117,12 +117,35 @@ type RunningInBody struct {
 
 // TagDetailBody is what the server learned about one tag.
 type TagDetailBody struct {
-	Tag       string          `json:"tag" doc:"The tag asked about"`
-	Digest    string          `json:"digest" doc:"The digest the tag points at; the index digest for a multi-platform tag. Empty when the registry could not be asked"`
-	Created   string          `json:"created,omitempty" format:"date-time" doc:"When the image was built, from its config (Docker Hub: when the tag was pushed). Left out when it could not be read"`
-	Platforms []PlatformBody  `json:"platforms" doc:"The runnable platforms of the tag, without attestation and unknown/unknown entries; one for a single-platform image, none when the registry could not be read"`
-	RunningIn []RunningInBody `json:"runningIn" doc:"The environments the caller can read whose running containers run this tag's digest, matched by digest and not by tag text, from each environment's last snapshot; environments that are offline are skipped. Only filled on the Registries page: left empty when envId is given"`
-	Code      string          `json:"code" enum:",date_unavailable,tag_not_found,needs_login,login_refused,registry_unreachable,registry_tls,rate_limited" doc:"Empty when everything was read; date_unavailable when the date could not be; tag_not_found when the registry no longer has the tag; otherwise why the registry could not be read"`
+	Tag         string           `json:"tag" doc:"The tag asked about"`
+	Digest      string           `json:"digest" doc:"The digest the tag points at; the index digest for a multi-platform tag. Empty when the registry could not be asked"`
+	Created     string           `json:"created,omitempty" format:"date-time" doc:"When the image was built, from its config (Docker Hub: when the tag was pushed). Left out when it could not be read"`
+	Platforms   []PlatformBody   `json:"platforms" doc:"The runnable platforms of the tag, without attestation and unknown/unknown entries; one for a single-platform image, none when the registry could not be read"`
+	RunningIn   []RunningInBody  `json:"runningIn" doc:"The environments the caller can read whose running containers run this tag's digest, matched by digest and not by tag text, from each environment's last snapshot; environments that are offline are skipped. Only filled on the Registries page: left empty when envId is given"`
+	RunningHere *RunningHereBody `json:"runningHere,omitempty" doc:"Only in an environment's answer, and only for a tag that runs there: the running containers and swarm services of that environment whose image is this tag's index digest or the digest of any of its platforms, matched by digest and not by tag text, so a tag that moved still shows where its old image runs"`
+	Missing     []string         `json:"missing" doc:"Only filled in an environment's answer: the CPU architectures its nodes run, by OCI name (arm64, arm/v7), that this tag has no platform for. Empty when every node's architecture is covered, when the tag's platforms could not be read, and on the Registries page"`
+	Code        string           `json:"code" enum:",date_unavailable,tag_not_found,needs_login,login_refused,registry_unreachable,registry_tls,rate_limited" doc:"Empty when everything was read; date_unavailable when the date could not be; tag_not_found when the registry no longer has the tag; otherwise why the registry could not be read"`
+}
+
+// RunningContainerBody is a container of the environment that runs a tag.
+type RunningContainerBody struct {
+	ID     string `json:"id" doc:"The container's ID"`
+	Name   string `json:"name" doc:"The container name"`
+	NodeID string `json:"nodeId" doc:"The ID of the node it runs on"`
+	Node   string `json:"node" doc:"The display name of that node"`
+}
+
+// RunningServiceBody is a swarm service of the environment that runs a tag.
+type RunningServiceBody struct {
+	ID    string   `json:"id" doc:"The service's ID"`
+	Name  string   `json:"name" doc:"The service name"`
+	Nodes []string `json:"nodes" doc:"The display names of the nodes that run its tasks of this image, in name order"`
+}
+
+// RunningHereBody is what runs a tag in the environment asked about (D-22).
+type RunningHereBody struct {
+	Containers []RunningContainerBody `json:"containers" doc:"The running containers, a swarm task's included, by name"`
+	Services   []RunningServiceBody   `json:"services" doc:"The swarm services with a running task of the tag, by name"`
 }
 
 // TagDetailsBody answers a details request, in the order of the tags asked.
@@ -165,28 +188,7 @@ func RegisterTags(r *httpx.Router, d TagsDeps) {
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
-		_, ref, cred, err := d.open(ctx, p, in.EnvID, in.Ref, in.UserAgent, tagsTarget)
-		if err != nil {
-			return nil, err
-		}
-		page, err := d.Tags.List(ctx, cred, ref, in.Q, in.Hide, in.Page)
-		if err != nil {
-			return nil, d.tagProblem(ctx, ref, cred, err)
-		}
-		d.noteSignIn(ctx, cred, "")
-		body := TagListBody{
-			Repo: page.Repo, Host: page.Host, Tags: make([]TagNameBody, len(page.Tags)),
-			Hidden: page.Hidden, Total: page.Total, More: page.More, Page: max(in.Page, 0), Capped: page.Capped, Limit: page.Limit,
-		}
-		for i, t := range page.Tags {
-			body.Tags[i] = TagNameBody{Name: t.Name, Digest: t.Digest, Created: formatTagTime(t.Created), Platforms: platformBodies(t.Platforms)}
-		}
-		if cred != nil {
-			body.Credential = Some(ResolvedCredentialBody{
-				ID: cred.ID, Name: cred.Name, Scope: candidateScope(cred.Candidate), Host: cred.Candidate.Host, Prefix: cred.Prefix,
-			})
-		}
-		return &TagListOutput{CacheControl: "no-store", Body: body}, nil
+		return d.list(ctx, p, in.EnvID, in, tagsTarget)
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -203,61 +205,184 @@ func RegisterTags(r *httpx.Router, d TagsDeps) {
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
-		req := in.Body
-		if len(req.Tags) == 0 || len(req.Tags) > TagDetailsMax {
-			return nil, httpx.Problem(http.StatusUnprocessableEntity, "", "Ask about between 1 and 25 tags.")
-		}
-		viewer, ref, cred, err := d.open(ctx, p, req.EnvID, req.Ref, in.UserAgent, tagDetailsTarget)
-		if err != nil {
-			return nil, err
-		}
-		for _, tag := range req.Tags {
-			if tag == "" || len(tag) > 128 {
-				return nil, httpx.Problem(http.StatusUnprocessableEntity, "", "A tag is between 1 and 128 characters.")
-			}
-		}
-		details := d.Tags.Details(ctx, cred, ref, req.Tags, d.nodeArch(ctx, req.EnvID))
-		var running []envRunning
-		if req.EnvID == "" {
-			running = d.runningEnvironments(ctx, viewer)
-		}
-		body := TagDetailsBody{Items: make([]TagDetailBody, len(details))}
-		for i, t := range details {
-			body.Items[i] = TagDetailBody{
-				Tag: t.Tag, Digest: t.Digest, Created: formatTagTime(t.Created), Platforms: platformBodies(t.Platforms), Code: t.Code,
-				RunningIn: runningIn(running, ref.Repo(), t),
-			}
-			if t.Code == registry.CodeLoginRefused {
-				d.noteSignIn(ctx, cred, dockerx.PullCodeUnauthorized)
-			}
-		}
-		return &TagDetailsOutput{CacheControl: "no-store", Body: body}, nil
+		return d.details(ctx, p, in.Body.EnvID, in.Body.Ref, in.Body.Tags, in.UserAgent, tagDetailsTarget)
 	})
+	registerEnvTags(r, d)
 }
 
-// nodeArch is the CPU architecture the nodes of an environment run, by its OCI name, from the
-// environment's last snapshot; empty when there is no environment, it cannot be read, or no
-// node reported one. It only chooses which image a created date is read from.
-func (d TagsDeps) nodeArch(ctx context.Context, envID string) string {
+// list answers a tag listing for a caller, whichever route they came by.
+func (d TagsDeps) list(ctx context.Context, p *rbac.Principal, envID string, in *BrowseTagsInput, target string) (*TagListOutput, error) {
+	_, ref, cred, err := d.open(ctx, p, envID, in.Ref, in.UserAgent, target)
+	if err != nil {
+		return nil, err
+	}
+	page, err := d.Tags.List(ctx, cred, ref, in.Q, in.Hide, in.Page)
+	if err != nil {
+		return nil, d.tagProblem(ctx, ref, cred, err)
+	}
+	d.noteSignIn(ctx, cred, "")
+	body := TagListBody{
+		Repo: page.Repo, Host: page.Host, Tags: make([]TagNameBody, len(page.Tags)),
+		Hidden: page.Hidden, Total: page.Total, More: page.More, Page: max(in.Page, 0), Capped: page.Capped, Limit: page.Limit,
+	}
+	for i, t := range page.Tags {
+		body.Tags[i] = TagNameBody{Name: t.Name, Digest: t.Digest, Created: formatTagTime(t.Created), Platforms: platformBodies(t.Platforms)}
+	}
+	if cred != nil {
+		body.Credential = Some(ResolvedCredentialBody{
+			ID: cred.ID, Name: cred.Name, Scope: candidateScope(cred.Candidate), Host: cred.Candidate.Host, Prefix: cred.Prefix,
+		})
+	}
+	return &TagListOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+// details answers a details request for a caller, whichever route they came by. With an
+// environment it says what runs there and which of its nodes' architectures a tag misses;
+// without one, which readable environments run each tag.
+func (d TagsDeps) details(ctx context.Context, p *rbac.Principal, envID, refText string, tags []string, userAgent, target string) (*TagDetailsOutput, error) {
+	if len(tags) == 0 || len(tags) > TagDetailsMax {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, "", "Ask about between 1 and 25 tags.")
+	}
+	viewer, ref, cred, err := d.open(ctx, p, envID, refText, userAgent, target)
+	if err != nil {
+		return nil, err
+	}
+	for _, tag := range tags {
+		if tag == "" || len(tag) > 128 {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, "", "A tag is between 1 and 128 characters.")
+		}
+	}
+	here := d.hereOf(ctx, envID)
+	details := d.Tags.Details(ctx, cred, ref, tags, here.arch())
+	var running []envRunning
+	if envID == "" {
+		running = d.runningEnvironments(ctx, viewer)
+	}
+	body := TagDetailsBody{Items: make([]TagDetailBody, len(details))}
+	for i, t := range details {
+		item := TagDetailBody{
+			Tag: t.Tag, Digest: t.Digest, Created: formatTagTime(t.Created), Platforms: platformBodies(t.Platforms), Code: t.Code,
+			RunningIn: runningIn(running, ref.Repo(), t), Missing: []string{},
+		}
+		if here.known {
+			item.RunningHere = runningHere(here.running, ref.Repo(), t)
+			item.Missing = append(item.Missing, missingPlatforms(here.archs, t.Platforms)...)
+		}
+		body.Items[i] = item
+		if t.Code == registry.CodeLoginRefused {
+			d.noteSignIn(ctx, cred, dockerx.PullCodeUnauthorized)
+		}
+	}
+	return &TagDetailsOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+// envHere is what an environment's last snapshot says about the tags asked about in it: the
+// architectures its nodes run, and the digests its running containers hold.
+type envHere struct {
+	// known is false for the Registries page and when the snapshot could not be read.
+	known bool
+	// first is the architecture of the first node that reported one, which only chooses which
+	// image a created date is read from.
+	first string
+	// archs are the distinct node architectures, in OCI names, in node order.
+	archs   []string
+	running map[string][]RunningRef
+}
+
+func (h envHere) arch() string { return h.first }
+
+// hereOf reads the environment's snapshot. An environment that cannot be read (offline, a node
+// timed out) is not an error for browsing: the answer just says nothing about what runs there.
+func (d TagsDeps) hereOf(ctx context.Context, envID string) envHere {
 	if envID == "" || d.Aggregator == nil {
-		return ""
+		return envHere{}
 	}
 	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
 	if err != nil {
-		return ""
+		return envHere{}
 	}
+	h := envHere{known: true, running: runningDigests(agg)}
 	for _, n := range agg.Nodes {
-		if n.Arch != "" {
-			return n.Arch
+		if n.Arch == "" {
+			continue
+		}
+		if h.first == "" {
+			h.first = n.Arch
+		}
+		if !slices.Contains(h.archs, n.Arch) {
+			h.archs = append(h.archs, n.Arch)
 		}
 	}
-	return ""
+	return h
+}
+
+// missingPlatforms lists the node architectures (by OCI name, sorted) that no platform of a tag
+// can run (D-23). Not decided yet: it reports none.
+func missingPlatforms(_ []string, _ []registry.Platform) []string { return nil }
+
+// runningHere lists what the environment runs of the tag whose details are t: the containers
+// holding its index digest or the digest of any platform, and the swarm services their tasks
+// belong to. Nil when nothing runs it.
+func runningHere(running map[string][]RunningRef, repo string, t registry.TagDetail) *RunningHereBody {
+	digests := []string{t.Digest}
+	for _, p := range t.Platforms {
+		digests = append(digests, p.Digest)
+	}
+	var refs []RunningRef
+	seen := map[string]bool{}
+	for _, dg := range digests {
+		if dg == "" {
+			continue
+		}
+		for _, r := range running[digestKey(repo, dg)] {
+			if !seen[r.ID+"@"+r.NodeID] {
+				seen[r.ID+"@"+r.NodeID] = true
+				refs = append(refs, r)
+			}
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	slices.SortFunc(refs, func(a, b RunningRef) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.Node, b.Node), strings.Compare(a.ID, b.ID))
+	})
+	body := &RunningHereBody{Containers: make([]RunningContainerBody, 0, len(refs)), Services: []RunningServiceBody{}}
+	services := map[string]*RunningServiceBody{}
+	for _, r := range refs {
+		body.Containers = append(body.Containers, RunningContainerBody{ID: r.ID, Name: r.Name, NodeID: r.NodeID, Node: r.Node})
+		if r.ServiceID == "" {
+			continue
+		}
+		svc := services[r.ServiceID]
+		if svc == nil {
+			svc = &RunningServiceBody{ID: r.ServiceID, Name: r.ServiceName, Nodes: []string{}}
+			services[r.ServiceID] = svc
+			body.Services = append(body.Services, *svc)
+		}
+		if !slices.Contains(svc.Nodes, r.Node) {
+			svc.Nodes = append(svc.Nodes, r.Node)
+		}
+	}
+	// The services were copied before their nodes were known; copy the finished ones.
+	for i := range body.Services {
+		svc := services[body.Services[i].ID]
+		slices.Sort(svc.Nodes)
+		body.Services[i] = *svc
+	}
+	slices.SortFunc(body.Services, func(a, b RunningServiceBody) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
+	})
+	return body
 }
 
 // The routes a refusal is audited under.
 const (
 	tagsTarget       = "GET /api/registries/tags"
 	tagDetailsTarget = "POST /api/registries/tags/details"
+
+	envTagsTarget       = "GET /api/env/{envId}/images/tags"
+	envTagDetailsTarget = "POST /api/env/{envId}/images/tags/details"
 )
 
 // formatTagTime writes a time as the API does, or "" for none.
@@ -429,4 +554,69 @@ func runningIn(running []envRunning, repo string, t registry.TagDetail) []Runnin
 		}
 	}
 	return out
+}
+
+// EnvBrowseTagsInput is the request of an environment's tag browsing route.
+type EnvBrowseTagsInput struct {
+	EnvironmentPathInput
+	Ref  string `query:"ref" required:"true" maxLength:"512" doc:"The repository to browse, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid"`
+	Q    string `query:"q" maxLength:"128" doc:"Only tags whose name contains this text, ignoring case"`
+	Hide bool   `query:"hide" default:"true" doc:"Leave out signature, attestation and cache tags. On by default"`
+	Page int    `query:"page" minimum:"0" maximum:"100" default:"0" doc:"Which page, from 0; 100 tags to a page, newest version first and then by name, descending"`
+	// UserAgent is read only to record a refusal in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// EnvTagDetailsRequest asks for the details of the tags on screen in an environment.
+type EnvTagDetailsRequest struct {
+	Ref  string   `json:"ref" required:"true" maxLength:"512" doc:"The repository, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid"`
+	Tags []string `json:"tags" required:"true" minItems:"1" maxItems:"25" doc:"The tags to read, at most 25, as the list named them"`
+}
+
+// EnvTagDetailsInput is the request of an environment's tag details route.
+type EnvTagDetailsInput struct {
+	EnvironmentPathInput
+	Body EnvTagDetailsRequest
+	// UserAgent is read only to record a refusal in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// registerEnvTags registers the tag routes of one environment (D-24a): the same listing and
+// details as the Registries page, for a reader of that environment, using the instance's
+// credentials and that environment's own, and saying what runs there and which of the
+// environment's architectures a tag misses.
+func registerEnvTags(r *httpx.Router, d TagsDeps) {
+	reads := rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment}
+	httpx.Register(r, huma.Operation{
+		OperationID: "envBrowseTags",
+		Method:      http.MethodGet,
+		Path:        "/api/env/{envId}/images/tags",
+		Summary:     "List the tags of a repository, as an environment's reader",
+		Description: "The same listing as /api/registries/tags with this environment chosen: the credential is the most specific match among the instance's credentials and this environment's own, never another environment's. " +
+			"Needs images.read (Viewer) on the environment. Not audited.",
+		Tags: []string{"environments"},
+	}, reads, func(ctx context.Context, in *EnvBrowseTagsInput) (*TagListOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		return d.list(ctx, p, in.EnvID, &BrowseTagsInput{Ref: in.Ref, Q: in.Q, Hide: in.Hide, Page: in.Page, UserAgent: in.UserAgent}, envTagsTarget)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "envBrowseTagDetails",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/images/tags/details",
+		Summary:     "Read the digest, date and platforms of tags, and what runs them here",
+		Description: "The details of up to 25 tags as /api/registries/tags/details gives them, for this environment: runningHere lists its running containers and swarm services whose image is the tag's index digest or the digest of any of its platforms, " +
+			"matched by digest even after the tag moved, and missing lists the architectures its nodes run that the tag has no platform for. Both come from the environment's last snapshot and are left out when it cannot be read. " +
+			"Needs images.read (Viewer) on the environment. Not audited.",
+		Tags: []string{"environments"},
+	}, reads, func(ctx context.Context, in *EnvTagDetailsInput) (*TagDetailsOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		return d.details(ctx, p, in.EnvID, in.Body.Ref, in.Body.Tags, in.UserAgent, envTagDetailsTarget)
+	})
 }

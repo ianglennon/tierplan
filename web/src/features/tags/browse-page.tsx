@@ -89,7 +89,7 @@ export function BrowsePage({
           <TagBrowser
             repo={search.ref}
             variant="full"
-            envId={search.envId}
+            credentialEnvId={search.envId}
             q={search.q}
             hide={search.hide !== 0}
             onFilterChange={(patch: TagFilterPatch) => {

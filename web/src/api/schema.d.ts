@@ -752,6 +752,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/images/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the tags of a repository, as an environment's reader
+         * @description The same listing as /api/registries/tags with this environment chosen: the credential is the most specific match among the instance's credentials and this environment's own, never another environment's. Needs images.read (Viewer) on the environment. Not audited.
+         */
+        get: operations["envBrowseTags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/images/tags/details": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the digest, date and platforms of tags, and what runs them here
+         * @description The details of up to 25 tags as /api/registries/tags/details gives them, for this environment: runningHere lists its running containers and swarm services whose image is the tag's index digest or the digest of any of its platforms, matched by digest even after the tag moved, and missing lists the architectures its nodes run that the tag has no platform for. Both come from the environment's last snapshot and are left out when it cannot be read. Needs images.read (Viewer) on the environment. Not audited.
+         */
+        post: operations["envBrowseTagDetails"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/images/untag": {
         parameters: {
             query?: never;
@@ -3544,6 +3584,12 @@ export interface components {
              */
             subjectType: "user" | "team";
         };
+        EnvTagDetailsRequest: {
+            /** @description The repository, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid */
+            ref: string;
+            /** @description The tags to read, at most 25, as the list named them */
+            tags: string[] | null;
+        };
         EnvVar: {
             /** @description True when the value was withheld because the caller may not reveal secrets on this environment */
             masked: boolean;
@@ -5088,11 +5134,35 @@ export interface components {
             /** @description The new token and every command and file built from it. Shown only in this answer: the server keeps the token's hash and cannot show it again. install.generation is one more than the token it replaced, and the swarm secret is named for it */
             install: components["schemas"]["InstallBody"];
         };
+        RunningContainerBody: {
+            /** @description The container's ID */
+            id: string;
+            /** @description The container name */
+            name: string;
+            /** @description The display name of that node */
+            node: string;
+            /** @description The ID of the node it runs on */
+            nodeId: string;
+        };
+        RunningHereBody: {
+            /** @description The running containers, a swarm task's included, by name */
+            containers: components["schemas"]["RunningContainerBody"][] | null;
+            /** @description The swarm services with a running task of the tag, by name */
+            services: components["schemas"]["RunningServiceBody"][] | null;
+        };
         RunningInBody: {
             /** @description The environment's ID */
             envId: string;
             /** @description The environment's name */
             envName: string;
+        };
+        RunningServiceBody: {
+            /** @description The service's ID */
+            id: string;
+            /** @description The service name */
+            name: string;
+            /** @description The display names of the nodes that run its tasks of this image, in name order */
+            nodes: string[] | null;
         };
         ScheduleRunBody: {
             /**
@@ -5412,8 +5482,12 @@ export interface components {
             created?: string;
             /** @description The digest the tag points at; the index digest for a multi-platform tag. Empty when the registry could not be asked */
             digest: string;
+            /** @description Only filled in an environment's answer: the CPU architectures its nodes run, by OCI name (arm64, arm/v7), that this tag has no platform for. Empty when every node's architecture is covered, when the tag's platforms could not be read, and on the Registries page */
+            missing: string[] | null;
             /** @description The runnable platforms of the tag, without attestation and unknown/unknown entries; one for a single-platform image, none when the registry could not be read */
             platforms: components["schemas"]["PlatformBody"][] | null;
+            /** @description Only in an environment's answer, and only for a tag that runs there: the running containers and swarm services of that environment whose image is this tag's index digest or the digest of any of its platforms, matched by digest and not by tag text, so a tag that moved still shows where its old image runs */
+            runningHere?: components["schemas"]["RunningHereBody"];
             /** @description The environments the caller can read whose running containers run this tag's digest, matched by digest and not by tag text, from each environment's last snapshot; environments that are offline are skipped. Only filled on the Registries page: left empty when envId is given */
             runningIn: components["schemas"]["RunningInBody"][] | null;
             /** @description The tag asked about */
@@ -7437,6 +7511,85 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageRemoveResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    envBrowseTags: {
+        parameters: {
+            query: {
+                /** @description The repository to browse, like ghcr.io/acme/app or nginx. A tag or digest on it is ignored. 422 ref_invalid */
+                ref: string;
+                /** @description Only tags whose name contains this text, ignoring case */
+                q?: string;
+                /** @description Leave out signature, attestation and cache tags. On by default */
+                hide?: boolean;
+                /** @description Which page, from 0; 100 tags to a page, newest version first and then by name, descending */
+                page?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    envBrowseTagDetails: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnvTagDetailsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagDetailsBody"];
                 };
             };
             /** @description Error */

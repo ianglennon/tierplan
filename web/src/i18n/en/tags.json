@@ -23,7 +23,8 @@
       "digest": "Digest",
       "created": "Created",
       "platforms": "Platforms",
-      "runningIn": "Running in"
+      "runningIn": "Running in",
+      "runningHere": "Running here"
     },
     "filter": {
       "label": "Filter tags",
@@ -112,6 +113,23 @@
     "running": {
       "more_one": "Show {{count}} more environment",
       "more_other": "Show {{count}} more environments"
+    },
+    "runningHere": {
+      "label": "Running here",
+      "title": "Running here",
+      "summary": "{{containers}}, {{services}}",
+      "containers_one": "{{count}} container",
+      "containers_other": "{{count}} containers",
+      "services_one": "{{count}} service",
+      "services_other": "{{count}} services",
+      "openContainer": "Open container {{name}}"
+    },
+    "image": {
+      "repository": "Repository",
+      "empty": {
+        "title": "No repository to browse",
+        "body": "This image has no name or registry digest, so Bayplan can't tell where it came from."
+      }
     }
   }
 }

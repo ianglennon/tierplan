@@ -73,6 +73,7 @@ export interface TagDetails {
 interface Params {
   repo: string;
   envId?: string;
+  credentialEnvId?: string;
   tags: readonly TagName[];
   // The names of the rows on screen, or null when every row counts.
   visible: ReadonlySet<string> | null;
@@ -83,8 +84,8 @@ interface Params {
 // has; one whose request failed stays pending and is asked for again the next time it comes
 // into view. When a batch arrives, the tags whose dates the list did not carry are put newest
 // first once, in the places they held (D-21).
-export function useTagDetails({ repo, envId, tags, visible }: Params): TagDetails {
-  const key = `${repo}\u0000${envId ?? ""}`;
+export function useTagDetails({ repo, envId, credentialEnvId, tags, visible }: Params): TagDetails {
+  const key = `${repo}\u0000${envId ?? ""}\u0000${credentialEnvId ?? ""}`;
   const [store, setStore] = useState<Store>(() => fresh(key));
   const [busy, setBusy] = useState(false);
   const current = store.key === key ? store : fresh(key);
@@ -115,7 +116,7 @@ export function useTagDetails({ repo, envId, tags, visible }: Params): TagDetail
     setBusy(true);
     const update = (change: (base: Store) => Store) =>
       setStore((prev) => change(prev.key === key ? prev : fresh(key)));
-    fetchTagDetails({ repo, envId }, pending)
+    fetchTagDetails({ repo, envId, credentialEnvId }, pending)
       .then((items) => {
         if (keyRef.current !== key) return;
         const byTag = new Map(items.map((d) => [d.tag, d] as const));
@@ -146,7 +147,7 @@ export function useTagDetails({ repo, envId, tags, visible }: Params): TagDetail
         update((base) => ({ ...base, failed: new Set([...base.failed, ...pending]) }));
       })
       .finally(() => setBusy(false));
-  }, [busy, tags, visible, details, failed, repo, envId, key, listed]);
+  }, [busy, tags, visible, details, failed, repo, envId, credentialEnvId, key, listed]);
 
   const ordered = useMemo(() => applyBatches(tags, current.batches), [tags, current.batches]);
   const detailOf = useCallback((name: string) => details.get(name), [details]);

@@ -211,6 +211,12 @@ func (u imageUsage) usedBy(rows []envs.ImageRow) ImageUsedByBody {
 	return body
 }
 
+// The labels swarm puts on the container of a task.
+const (
+	swarmServiceIDLabel   = "com.docker.swarm.service.id"
+	swarmServiceNameLabel = "com.docker.swarm.service.name"
+)
+
 // RunningRef is a container that runs an image, for the Running in marker of a tag.
 type RunningRef struct {
 	Kind   string
@@ -218,6 +224,10 @@ type RunningRef struct {
 	Name   string
 	NodeID string
 	Node   string
+	// ServiceID and ServiceName are the swarm service a task container belongs to, from the
+	// labels swarm sets on it; empty for a plain container.
+	ServiceID   string
+	ServiceName string
 }
 
 // digestKey names a digest of one repository, the way a reference to it is normalised:
@@ -246,7 +256,10 @@ func runningDigests(agg envs.Aggregate) map[string][]RunningRef {
 		if !runnable(c.State) {
 			continue
 		}
-		ref := RunningRef{Kind: "container", ID: c.ID, Name: c.Name, NodeID: c.NodeID, Node: c.Node}
+		ref := RunningRef{
+			Kind: "container", ID: c.ID, Name: c.Name, NodeID: c.NodeID, Node: c.Node,
+			ServiceID: c.Labels[swarmServiceIDLabel], ServiceName: c.Labels[swarmServiceNameLabel],
+		}
 		seen := map[string]bool{}
 		add := func(s string) {
 			r, err := registry.ParseRef(s)

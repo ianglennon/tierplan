@@ -11,6 +11,7 @@ export type TagList = components["schemas"]["TagListBody"];
 export type TagName = components["schemas"]["TagNameBody"];
 export type TagDetail = components["schemas"]["TagDetailBody"];
 export type Platform = components["schemas"]["PlatformBody"];
+export type RunningHereData = components["schemas"]["RunningHereBody"];
 
 // How many tags one details request asks about, as the server allows.
 export const TAG_DETAILS_BATCH = 25;
@@ -73,8 +74,12 @@ export class TagsRequestError extends Error {
 export interface TagsParams {
   // The repository as it was typed: ghcr.io/acme/app or nginx.
   repo: string;
-  // An environment whose own credentials count as well as the instance's.
+  // Environment context: the tags are read through the environment's routes, with the
+  // credentials the environment's pulls would use, and the rows say what runs there.
   envId?: string;
+  // Registries context only: an environment whose own credentials count as well as the
+  // instance's, without the page becoming that environment's.
+  credentialEnvId?: string;
   // Only tags whose name contains this text.
   q?: string;
   // Leave out signature, attestation and cache tags. On unless false.
@@ -91,24 +96,33 @@ export const TAGS_KEY = ["tags"] as const;
 // the table with its own Retry, so nothing retries by itself.
 export function tagsInfiniteQuery(p: TagsParams) {
   return infiniteQueryOptions({
-    queryKey: [...TAGS_KEY, p.repo, p.envId ?? null, p.q ?? null, p.hide !== false],
+    queryKey: [
+      ...TAGS_KEY,
+      p.repo,
+      p.envId ?? null,
+      p.credentialEnvId ?? null,
+      p.q ?? null,
+      p.hide !== false,
+    ],
     initialPageParam: 0,
     // The list stays on screen while a new filter is read, so typing does not blank it.
     placeholderData: keepPreviousData,
     queryFn: async ({ pageParam }): Promise<TagList> => {
       try {
         // A value the server would assume anyway is left out of the address it is asked.
-        const res = await api.GET("/api/registries/tags", {
-          params: {
-            query: {
-              ref: p.repo,
-              envId: p.envId,
-              q: p.q || undefined,
-              hide: p.hide === false ? false : undefined,
-              page: pageParam > 0 ? pageParam : undefined,
-            },
-          },
-        });
+        const query = {
+          ref: p.repo,
+          q: p.q || undefined,
+          hide: p.hide === false ? false : undefined,
+          page: pageParam > 0 ? pageParam : undefined,
+        };
+        const res = p.envId
+          ? await api.GET("/api/env/{envId}/images/tags", {
+              params: { path: { envId: p.envId }, query },
+            })
+          : await api.GET("/api/registries/tags", {
+              params: { query: { ...query, envId: p.credentialEnvId } },
+            });
         if (!res.data) {
           const problem = readProblem(res.error, res.response);
           throw new TagsRequestError(problem.status, problem.type, problem.fields);
@@ -128,16 +142,23 @@ export function tagsInfiniteQuery(p: TagsParams) {
 // whose credentials and node architecture count.
 export interface TagDetailsParams {
   repo: string;
+  // Environment context, as for the listing.
   envId?: string;
+  credentialEnvId?: string;
 }
 
 // fetchTagDetails reads the digest, date and platforms of up to TAG_DETAILS_BATCH tags. A tag
 // the registry could not read comes back with a code; only a request that failed as a whole
 // throws.
 export async function fetchTagDetails(p: TagDetailsParams, tags: string[]): Promise<TagDetail[]> {
-  const res = await api.POST("/api/registries/tags/details", {
-    body: { ref: p.repo, envId: p.envId, tags },
-  });
+  const res = p.envId
+    ? await api.POST("/api/env/{envId}/images/tags/details", {
+        params: { path: { envId: p.envId } },
+        body: { ref: p.repo, tags },
+      })
+    : await api.POST("/api/registries/tags/details", {
+        body: { ref: p.repo, envId: p.credentialEnvId, tags },
+      });
   if (!res.data) {
     const problem = readProblem(res.error, res.response);
     throw new TagsRequestError(problem.status, problem.type, problem.fields);

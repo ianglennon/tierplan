@@ -613,3 +613,127 @@ func TestBrowseTagDetailsMatchByDigestSoAMovedTagStillShowsWhereItsImageRuns(t *
 		t.Errorf("running in %+v, want environment A", got)
 	}
 }
+
+// An environment's tag routes (plan 05-20, IMG-03, D-22, D-23, D-24a).
+
+func (f *authFixture) envDetails(t *testing.T, u credentialUser, reg *fakeRegistry, repo, envID string, tags ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	b, _ := json.Marshal(map[string]any{"ref": reg.host() + "/" + repo, "tags": tags})
+	return f.credCall(t, u, http.MethodPost, "/api/env/"+envID+"/images/tags/details", string(b))
+}
+
+type envDetailsResp struct {
+	Items []struct {
+		Tag         string   `json:"tag"`
+		Missing     []string `json:"missing"`
+		RunningHere *struct {
+			Containers []struct {
+				ID     string `json:"id"`
+				Name   string `json:"name"`
+				NodeID string `json:"nodeId"`
+				Node   string `json:"node"`
+			} `json:"containers"`
+			Services []struct {
+				ID    string   `json:"id"`
+				Name  string   `json:"name"`
+				Nodes []string `json:"nodes"`
+			} `json:"services"`
+		} `json:"runningHere"`
+		RunningIn []struct {
+			EnvID string `json:"envId"`
+		} `json:"runningIn"`
+	} `json:"items"`
+}
+
+func TestEnvTagDetailsRunningHereListsContainersAndServicesByDigestEvenAfterTheTagMoved(t *testing.T) {
+	reg := newFakeRegistry(t)
+	img := serveImage(reg, time.Now())
+	image := reg.host() + "/acme/app"
+	f := newEnvFix(t, dockertest.FakeConfig{
+		Hostname: "node-1",
+		Images:   []dockertest.FakeImage{{ID: hexID("a"), RepoDigests: []string{image + "@" + img.digest}}},
+		Containers: []dockertest.FakeContainer{
+			// Created from 0.9, which has since been pushed again as something else: only the digest says what it runs.
+			{ID: "c-web", Names: []string{"/web"}, Image: image + ":0.9", ImageID: hexID("a"), State: "running"},
+			{ID: "c-task", Names: []string{"/api.1.xyz"}, Image: image + ":0.9@" + img.digest, ImageID: hexID("a"), State: "running",
+				Labels: map[string]string{"com.docker.swarm.service.id": "svc-api", "com.docker.swarm.service.name": "api"}},
+			{ID: "c-old", Names: []string{"/old"}, Image: image + ":0.9", ImageID: hexID("a"), State: "exited"},
+		},
+	})
+	f.trusting(t, reg)
+	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
+	a := f.add(t)
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	viewer := f.asRoleOn(t, "viewera", a.ID, "viewer")
+
+	rec := f.envDetails(t, viewer, reg, "acme/app", a.ID, "1.0", "other")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("details: %d %s", rec.Code, rec.Body)
+	}
+	got := decodeRec[envDetailsResp](t, rec)
+	if len(got.Items) != 2 {
+		t.Fatalf("items = %+v", got.Items)
+	}
+	here := got.Items[0].RunningHere
+	if here == nil {
+		t.Fatalf("1.0: no runningHere, want the containers running its digest: %s", rec.Body)
+	}
+	var names []string
+	for _, c := range here.Containers {
+		names = append(names, c.Name)
+		if c.NodeID == "" || c.Node == "" {
+			t.Errorf("container %+v has no node", c)
+		}
+	}
+	if !slices.Equal(names, []string{"api.1.xyz", "web"}) {
+		t.Errorf("containers = %v, want the two running ones (the exited one does not count)", names)
+	}
+	if len(here.Services) != 1 || here.Services[0].ID != "svc-api" || here.Services[0].Name != "api" || !slices.Equal(here.Services[0].Nodes, []string{"node-1"}) {
+		t.Errorf("services = %+v, want api on node-1", here.Services)
+	}
+	if len(got.Items[0].RunningIn) != 0 {
+		t.Errorf("runningIn = %+v, want none inside an environment", got.Items[0].RunningIn)
+	}
+	if got.Items[1].RunningHere != nil {
+		t.Errorf("other: runningHere = %+v, want none", got.Items[1].RunningHere)
+	}
+}
+
+func TestEnvBrowseTagsRunningHereRoutesNeedImagesReadOnThatEnvironmentAndUseOnlyItsCredentials(t *testing.T) {
+	reg := newFakeRegistry(t)
+	reg.tags = []string{"1.0", "2.0"}
+	serveImage(reg, time.Now())
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	f.trusting(t, reg)
+	admin := credentialUser{f.cookie, f.csrf}
+	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
+	a := f.add(t)
+	waitFor(t, "the monitor's first probe", func() bool { return f.mon.Status(a.ID).State == envs.StateOnline })
+	f.inst.Apply("Bayplan", "https://example.com/bayplan")
+	bEnv, rec := f.addAgent(t)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("add the agent environment: %d %s", rec.code, rec.body)
+	}
+	viewerA := f.asRoleOn(t, "viewera", a.ID, "viewer")
+	viewerB := f.asRoleOn(t, "viewerb", bEnv.ID, "viewer")
+	list := func(u credentialUser, envID string) *httptest.ResponseRecorder {
+		return f.credCall(t, u, http.MethodGet, "/api/env/"+envID+"/images/tags?ref="+url.QueryEscape(reg.host()+"/acme/app"), "")
+	}
+
+	ok := list(viewerA, a.ID)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("viewer of A browsing A: %d %s", ok.Code, ok.Body)
+	}
+	got := decodeRec[tagsResp](t, ok)
+	if !slices.Equal(got.names(), []string{"1.0", "2.0"}) || got.Credential == nil || got.Credential.Name != "fake-inst" {
+		t.Errorf("answer = %+v, want both tags with the instance credential", got)
+	}
+	// An environment the caller holds nothing on is hidden: 404, as every environment route answers (403 is as safe).
+	refused := func(code int) bool { return code == http.StatusNotFound || code == http.StatusForbidden }
+	if code := list(viewerB, a.ID).Code; !refused(code) {
+		t.Errorf("viewer of B browsing A: %d, want 404 or 403", code)
+	}
+	if code := f.envDetails(t, viewerB, reg, "acme/app", a.ID, "1.0").Code; !refused(code) {
+		t.Errorf("viewer of B reading A's details: %d, want 404 or 403", code)
+	}
+}

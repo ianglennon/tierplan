@@ -152,6 +152,19 @@ beforeEach(() => {
           return inspectAnswer();
         case `/api/env/${ENV}/images/${ID}/history`:
           return historyAnswer();
+        case `/api/env/${ENV}/images/tags`:
+          return Response.json({
+            repo: "library/nginx",
+            host: "docker.io",
+            credential: null,
+            tags: [{ name: "1.27" }],
+            hidden: 0,
+            total: 1,
+            more: false,
+            page: 0,
+            capped: false,
+            limit: 10000,
+          });
         case `/api/env/${ENV}/images/${ID}/used-by`:
           return usedByAnswer();
         case `/api/env/${ENV}/images/pull-targets`:
@@ -561,7 +574,7 @@ describe("image Layers tab", () => {
   it("is a tab between Used by and Inspect and shows the layers", async () => {
     const router = renderAt(PAGE);
     const tabs = (await screen.findAllByRole("tab")).map((tab) => tab.textContent);
-    expect(tabs).toEqual(["Overview", "Used by", "Layers", "Inspect"]);
+    expect(tabs).toEqual(["Overview", "Used by", "Layers", "Tags", "Inspect"]);
     fireEvent.click(screen.getByRole("tab", { name: "Layers" }));
     await waitFor(() =>
       expect(decodeURIComponent(router.state.location.pathname)).toBe(
@@ -570,6 +583,28 @@ describe("image Layers tab", () => {
     );
     expect(await screen.findByRole("table", { name: "Layers" })).toBeTruthy();
     expect(await screen.findByText("RUN build")).toBeTruthy();
+  });
+});
+
+describe("image Tags tab", () => {
+  it("is a tab between Layers and Inspect and shows the tag browser of the image's repository", async () => {
+    const router = renderAt(PAGE);
+    fireEvent.click(await screen.findByRole("tab", { name: "Tags" }));
+    await waitFor(() =>
+      expect(decodeURIComponent(router.state.location.pathname)).toBe(
+        `/env/${ENV}/images/${ID}/tags`,
+      ),
+    );
+    expect(await screen.findByRole("table", { name: "Tags of library/nginx" })).toBeTruthy();
+    expect(
+      sent.some((s) => s.path === `/api/env/${ENV}/images/tags` && s.search === "?ref=nginx"),
+    ).toBe(true);
+  });
+
+  it("says there is no repository to browse for an image with no name", async () => {
+    answer = () => Response.json(detail({ names: [], dangling: true }));
+    renderAt(`${PAGE}/tags`);
+    expect(await screen.findByText("No repository to browse")).toBeTruthy();
   });
 });
 

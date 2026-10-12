@@ -11,7 +11,7 @@ import { TableCell, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { PlatformChips, shortDigest } from "@/features/tags/platform-chips";
-import { RunningIn } from "@/features/tags/running-here";
+import { RunningHere, RunningIn } from "@/features/tags/running-here";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +26,9 @@ interface TagRowProps {
   // Full only: draw the Running in cell, which the Registries page has and an environment
   // does not.
   showRunning?: boolean;
+  // Environment context: draw what runs in this environment, as a Running here cell in the
+  // full list and as a dot beside the name in the picker.
+  envId?: string;
   // Full only: the platform table under the row, and what opens and closes it.
   expanded?: boolean;
   panelId?: string;
@@ -62,6 +65,7 @@ export function TagRow({
   selected,
   onSelect,
   showRunning,
+  envId,
   expanded,
   panelId,
   onToggle,
@@ -132,6 +136,9 @@ export function TagRow({
       <TableCell>
         <span className="flex min-w-0 items-center gap-2">
           <TruncatedText mono>{tag.name}</TruncatedText>
+          {picker && envId ? (
+            <RunningHere here={detail?.runningHere} envId={envId} variant="picker" />
+          ) : null}
           {picker && selected ? (
             <>
               <Check aria-hidden="true" className="size-4 shrink-0" />
@@ -165,6 +172,11 @@ export function TagRow({
       <TableCell className="min-w-48" aria-busy={k.platformsLoading}>
         {k.platformsLoading ? dash : platforms}
       </TableCell>
+      {envId && !picker ? (
+        <TableCell className="min-w-40" aria-busy={!detail}>
+          {detail ? <RunningHere here={detail.runningHere} envId={envId} /> : loading}
+        </TableCell>
+      ) : null}
       {showRunning && !picker ? (
         <TableCell className="min-w-40" aria-busy={!detail}>
           {detail ? <RunningIn environments={detail.runningIn ?? []} /> : loading}

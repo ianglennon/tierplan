@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Link } from "@tanstack/react-router";
+import { useRef, useState } from "react";
 
+import type { RunningHereData } from "@/api/tags";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useT } from "@/i18n/use-t";
@@ -70,5 +72,109 @@ export function RunningIn({ environments }: RunningInProps) {
         </Popover>
       ) : null}
     </span>
+  );
+}
+
+// How long the pointer may leave the badge for the popover before it closes, so crossing the
+// gap between them does not shut it.
+const CLOSE_DELAY_MS = 120;
+
+interface RunningHereProps {
+  // What the environment runs of the tag, from the server; undefined or empty is not running.
+  here: RunningHereData | undefined;
+  // The environment the containers are in, for their links.
+  envId: string;
+  // The picker draws a small online dot and the words, with no popover (UI-SPEC D-19).
+  variant?: "full" | "picker";
+}
+
+// RunningHere marks a tag whose digest runs in this environment (D-22): an outline badge with
+// an online dot, the trigger of a popover that lists the containers (linked to their pages)
+// and the services with the nodes they run on. The trigger is a real button, so Enter and
+// Space open it as a click does, and the popover also opens on hover. Names are the
+// operator's text and are drawn as text.
+export function RunningHere({ here, envId, variant = "full" }: RunningHereProps) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const containers = here?.containers ?? [];
+  const services = here?.services ?? [];
+  if (!here || containers.length + services.length === 0) return null;
+
+  const dot = (
+    <span
+      aria-hidden="true"
+      className="inline-block size-2 shrink-0 rounded-full bg-status-online"
+    />
+  );
+  if (variant === "picker") {
+    return (
+      <span className="flex items-center gap-1.5 text-xs whitespace-nowrap">
+        {dot}
+        {t("tags.runningHere.label")}
+      </span>
+    );
+  }
+
+  function hover(next: boolean) {
+    clearTimeout(timer.current);
+    if (next) setOpen(true);
+    else timer.current = setTimeout(() => setOpen(false), CLOSE_DELAY_MS);
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          className="gap-1.5 max-md:min-h-11"
+          onMouseEnter={() => hover(true)}
+          onMouseLeave={() => hover(false)}
+        >
+          {dot}
+          {t("tags.runningHere.label")}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-80"
+        onMouseEnter={() => hover(true)}
+        onMouseLeave={() => hover(false)}
+      >
+        <p className="font-medium">{t("tags.runningHere.title")}</p>
+        <p className="text-muted-foreground">
+          {t("tags.runningHere.summary", {
+            containers: t("tags.runningHere.containers", { count: containers.length }),
+            services: t("tags.runningHere.services", { count: services.length }),
+          })}
+        </p>
+        <ul className="flex max-h-60 flex-col gap-1 overflow-y-auto">
+          {containers.map((c) => (
+            <li key={`c|${c.nodeId}|${c.id}`} className="flex items-baseline justify-between gap-3">
+              <Link
+                to="/env/$envId/containers/$containerId"
+                params={{ envId, containerId: c.id }}
+                search={{ node: c.nodeId }}
+                aria-label={t("tags.runningHere.openContainer", { name: c.name })}
+                className="min-w-0 rounded-sm break-all text-accent-ink hover:underline"
+              >
+                {c.name}
+              </Link>
+              <span className="shrink-0 text-muted-foreground">{c.node}</span>
+            </li>
+          ))}
+          {services.map((s) => (
+            <li key={`s|${s.id}`} className="flex items-baseline justify-between gap-3">
+              <span className="min-w-0 break-all">{s.name}</span>
+              <span className="shrink-0 text-right text-muted-foreground">
+                {(s.nodes ?? []).join(", ")}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
