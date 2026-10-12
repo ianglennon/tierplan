@@ -5,6 +5,7 @@ package registry
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -192,4 +193,47 @@ func validHost(s string) bool {
 		return err == nil && n >= 1 && n <= 65535
 	}
 	return true
+}
+
+// UpdateInput is what a person types to change a credential: every field of CreateInput
+// except the layer, which a credential never leaves. Secret empty means keep the stored one.
+type UpdateInput struct {
+	Name   string
+	Type   string
+	Host   string
+	Prefix string
+	// Username is the registry sign-in.
+	Username string
+	// Secret is a replacement. Empty keeps the stored secret, which is neither read nor
+	// sent anywhere. It is never logged.
+	Secret      string
+	HubFallback bool
+	// Expires is an optional day, YYYY-MM-DD; empty clears it.
+	Expires string
+}
+
+// ValidateUpdate checks a change as Validate checks an addition, with two differences: an
+// empty secret is fine (it keeps the stored one), and an expiry day equal to prevExpires (the
+// stored one, as YYYY-MM-DD, or empty) may have passed, so a credential that has expired can
+// still have its name or secret corrected. It returns the input cleaned.
+func ValidateUpdate(in UpdateInput, prevExpires string, now time.Time) (UpdateInput, []FieldError) {
+	keepSecret := in.Secret == ""
+	forCreate := CreateInput{
+		Name: in.Name, Type: in.Type, Host: in.Host, Prefix: in.Prefix, Username: in.Username,
+		Secret: in.Secret, HubFallback: in.HubFallback, Expires: in.Expires,
+	}
+	if keepSecret {
+		forCreate.Secret = "placeholder" // so Validate does not ask for a secret that is not changing
+	}
+	clean, errs := Validate(forCreate, now)
+	if keepSecret {
+		clean.Secret = ""
+	}
+	if strings.TrimSpace(in.Expires) != "" && strings.TrimSpace(in.Expires) == prevExpires {
+		errs = slices.DeleteFunc(errs, func(e FieldError) bool { return e.Field == "expires" && e.Code == "expiry_past" })
+	}
+	return UpdateInput{
+		Name: clean.Name, Type: clean.Type, Host: clean.Host, Prefix: clean.Prefix, Username: clean.Username,
+		Secret: clean.Secret, HubFallback: clean.HubFallback, Expires: clean.Expires,
+	}, errs
 }

@@ -1806,6 +1806,51 @@
         ],
         "type": "object"
       },
+      "CredentialPatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expires": {
+            "description": "A day, YYYY-MM-DD, or an empty string for none. 422 expiry_invalid, and expiry_past for a day that has gone (the credential's own unchanged day is never refused)",
+            "maxLength": 32,
+            "type": "string"
+          },
+          "host": {
+            "description": "A new registry host. Ignored for dockerhub and ghcr; 422 host_required or host_invalid",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "hubFallback": {
+            "description": "Whether it is used for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken)",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "A new name, unique among the instance credentials. Same rules as when adding; 422 name_required or name_invalid",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "prefix": {
+            "description": "A new namespace; an empty string covers the whole registry. 422 prefix_invalid, and hub_prefix_required for docker.io with neither a prefix nor hubFallback",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "secret": {
+            "description": "A replacement password or token. Left out or empty keeps the stored secret, which is never read back. A new one is sealed with the vault and replaces it. It is never returned by any route",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "type": {
+            "description": "dockerhub, ghcr, gitlab or generic; 422 type_invalid for anything else",
+            "maxLength": 32,
+            "type": "string"
+          },
+          "username": {
+            "description": "A new registry user name; 422 username_required",
+            "maxLength": 512,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "CredentialRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12219,7 +12264,7 @@
         ]
       },
       "post": {
-        "description": "Stores a sign-in for a registry host and an optional namespace, used for pulls and tag browsing on every environment. The secret is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes. Audited as registry.credential_created without the secret.",
+        "description": "Stores a sign-in for a registry host and an optional namespace, used for pulls and tag browsing on every environment. The secret is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes; the 409 names that credential in its errors list (location conflict.credential). Audited as registry.credential_created without the secret.",
         "operationId": "createInstanceCredential",
         "requestBody": {
           "content": {
@@ -12313,6 +12358,66 @@
           }
         },
         "summary": "Read one registry credential",
+        "tags": [
+          "registries"
+        ]
+      },
+      "patch": {
+        "description": "Changes the members that are sent and keeps the rest. The secret is write-only: leave it out or send it empty to keep the stored one, which is neither read nor returned; send a new one and it is sealed again and replaces it, and the answer carries only its last 4 characters (12 or more characters). There is no scope: a credential never moves between layers. Needs registries.instance. A credential of an environment answers 404 credential_not_found here, exactly like one that does not exist. 422 validation_failed names every field at fault with the same codes as adding; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes, naming it in its errors list (location conflict.credential). Audited as registry.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret.",
+        "operationId": "updateInstanceCredential",
+        "parameters": [
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change an instance registry credential",
         "tags": [
           "registries"
         ]

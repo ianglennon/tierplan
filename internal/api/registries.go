@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -63,6 +64,28 @@ type CreateCredentialInput struct {
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      CredentialRequest
+}
+
+// CredentialPatchRequest is the body of PATCH /api/registries/{credentialId}. Every member is
+// optional: one left out keeps what is stored, and one sent as an empty string clears a prefix
+// or an expiry. There is no scope: a credential never moves between layers.
+type CredentialPatchRequest struct {
+	Name        *string `json:"name,omitempty" maxLength:"256" doc:"A new name, unique among the instance credentials. Same rules as when adding; 422 name_required or name_invalid"`
+	Type        *string `json:"type,omitempty" maxLength:"32" doc:"dockerhub, ghcr, gitlab or generic; 422 type_invalid for anything else"`
+	Host        *string `json:"host,omitempty" maxLength:"512" doc:"A new registry host. Ignored for dockerhub and ghcr; 422 host_required or host_invalid"`
+	Prefix      *string `json:"prefix,omitempty" maxLength:"512" doc:"A new namespace; an empty string covers the whole registry. 422 prefix_invalid, and hub_prefix_required for docker.io with neither a prefix nor hubFallback"`
+	Username    *string `json:"username,omitempty" maxLength:"512" doc:"A new registry user name; 422 username_required"`
+	Secret      *string `json:"secret,omitempty" maxLength:"4096" doc:"A replacement password or token. Left out or empty keeps the stored secret, which is never read back. A new one is sealed with the vault and replaces it. It is never returned by any route"`
+	HubFallback *bool   `json:"hubFallback,omitempty" doc:"Whether it is used for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken)"`
+	Expires     *string `json:"expires,omitempty" maxLength:"32" doc:"A day, YYYY-MM-DD, or an empty string for none. 422 expiry_invalid, and expiry_past for a day that has gone (the credential's own unchanged day is never refused)"`
+}
+
+// UpdateCredentialInput is the request of the update route.
+type UpdateCredentialInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent    string `header:"User-Agent" hidden:"true"`
+	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
+	Body         CredentialPatchRequest
 }
 
 // CredentialScopeBody says where a credential applies.
@@ -174,11 +197,11 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		case errors.As(err, &ve):
 			return credentialFieldProblems(ve)
 		case errors.Is(err, registry.ErrNameTaken):
-			return httpx.Problem(http.StatusConflict, problemCredentialNameTaken, "Another instance credential already has that name.")
+			return conflictProblem(err, problemCredentialNameTaken, "Another instance credential already has that name.")
 		case errors.Is(err, registry.ErrHostPrefixTaken):
-			return httpx.Problem(http.StatusConflict, problemHostPrefixTaken, "Another instance credential already covers that registry and namespace.")
+			return conflictProblem(err, problemHostPrefixTaken, "Another instance credential already covers that registry and namespace.")
 		case errors.Is(err, registry.ErrHubFallbackTaken):
-			return httpx.Problem(http.StatusConflict, problemHubFallbackTaken, "Another instance credential is already used for all Docker Hub pulls.")
+			return conflictProblem(err, problemHubFallbackTaken, "Another instance credential is already used for all Docker Hub pulls.")
 		case errors.Is(err, registry.ErrNotFound):
 			return httpx.Problem(http.StatusNotFound, problemCredentialNotFound, "credential not found")
 		}
@@ -216,7 +239,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			"included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. " +
 			"Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, " +
 			"prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken " +
-			"when another instance credential clashes. Audited as registry.credential_created without the secret.",
+			"when another instance credential clashes; the 409 names that credential in its errors list (location conflict.credential). Audited as registry.credential_created without the secret.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *CreateCredentialInput) (*CredentialOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -238,6 +261,48 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		})
 		if err != nil {
 			return nil, fail("create credential", err)
+		}
+		return &CredentialOutput{CacheControl: "no-store", Body: credentialBody(c, true, nil)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "updateInstanceCredential",
+		Method:      http.MethodPatch,
+		Path:        "/api/registries/{credentialId}",
+		Summary:     "Change an instance registry credential",
+		Description: "Changes the members that are sent and keeps the rest. The secret is write-only: leave it out or send it empty to keep the stored one, which is neither read nor returned; " +
+			"send a new one and it is sealed again and replaces it, and the answer carries only its last 4 characters (12 or more characters). There is no scope: a credential never moves between layers. " +
+			"Needs registries.instance. A credential of an environment answers 404 credential_not_found here, exactly like one that does not exist. 422 validation_failed names every field at fault " +
+			"with the same codes as adding; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes, naming it in its errors list (location conflict.credential). " +
+			"Audited as registry.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret.",
+		Tags: []string{"registries"},
+	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *UpdateCredentialInput) (*CredentialOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		cur, err := d.Store.Get(ctx, in.CredentialID)
+		if err != nil {
+			return nil, fail("get credential", err)
+		}
+		// This family manages the instance layer only. An environment's credential is not
+		// reachable through it, whatever the caller holds.
+		if cur.EnvID != "" {
+			return nil, fail("get credential", registry.ErrNotFound)
+		}
+		c, _, err := d.Store.Update(ctx, in.CredentialID, mergeCredentialPatch(cur, in.Body), func(ctx context.Context, tx *sql.Tx, c registry.Credential, changed []string) error {
+			details := credentialAuditDetails(c)
+			details["changed"] = strings.Join(changed, ",")
+			return d.Audit.RecordTx(ctx, tx, audit.Entry{
+				Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialUpdated, TargetType: credentialTargetType, TargetID: c.ID,
+				Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent, Details: details,
+			})
+		})
+		if err != nil {
+			return nil, fail("update credential", err)
 		}
 		return &CredentialOutput{CacheControl: "no-store", Body: credentialBody(c, true, nil)}, nil
 	})
@@ -303,6 +368,41 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		}
 		return &CredentialOutput{CacheControl: "no-store", Body: body(ctx, v, c)}, nil
 	})
+}
+
+// mergeCredentialPatch lays the members of a patch over the stored credential. The secret is
+// not part of the stored credential at all: it is the replacement, or empty to keep the one
+// that is stored.
+func mergeCredentialPatch(cur registry.Credential, patch CredentialPatchRequest) registry.UpdateInput {
+	in := registry.UpdateInput{
+		Name: cur.Name, Type: cur.Type, Host: cur.Host, Prefix: cur.Prefix, Username: cur.Username, HubFallback: cur.HubFallback,
+	}
+	if cur.ExpiresAt != nil {
+		in.Expires = cur.ExpiresAt.UTC().Format(time.DateOnly)
+	}
+	for dst, src := range map[*string]*string{
+		&in.Name: patch.Name, &in.Type: patch.Type, &in.Host: patch.Host, &in.Prefix: patch.Prefix,
+		&in.Username: patch.Username, &in.Secret: patch.Secret, &in.Expires: patch.Expires,
+	} {
+		if src != nil {
+			*dst = *src
+		}
+	}
+	if patch.HubFallback != nil {
+		in.HubFallback = *patch.HubFallback
+	}
+	return in
+}
+
+// conflictProblem answers a clash within the layer as a 409 that names the other credential
+// in its errors list, so the page can say which one.
+func conflictProblem(err error, ptype, detail string) error {
+	m := &huma.ErrorModel{Type: ptype, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict, Detail: detail}
+	var ce *registry.ConflictError
+	if errors.As(err, &ce) && ce.With != "" {
+		m.Errors = []*huma.ErrorDetail{{Location: "conflict.credential", Message: ce.With}}
+	}
+	return m
 }
 
 // envName is the name of an environment, or nil for an instance credential or one that is gone.

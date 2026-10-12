@@ -161,3 +161,33 @@ func TestValidateReportsEveryFieldAtFaultAtOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateUpdateAcceptsAnEmptySecretAndStillCleansTheRest(t *testing.T) {
+	in, errs := registry.ValidateUpdate(registry.UpdateInput{
+		Name: "  ghcr-acme ", Type: registry.TypeGHCR, Host: "ignored.example", Prefix: " acme ", Username: " bot ",
+	}, "", now)
+	if len(errs) != 0 {
+		t.Fatalf("errors = %+v, want none for an empty secret", errs)
+	}
+	if in.Name != "ghcr-acme" || in.Host != "ghcr.io" || in.Prefix != "acme" || in.Username != "bot" || in.Secret != "" {
+		t.Errorf("cleaned = %+v", in)
+	}
+}
+
+func TestValidateUpdateRefusesASecretOfOnlySpaces(t *testing.T) {
+	_, errs := registry.ValidateUpdate(registry.UpdateInput{Name: "n", Type: registry.TypeGHCR, Username: "u", Secret: "   "}, "", now)
+	if len(errs) != 1 || errs[0].Field != "secret" || errs[0].Code != "secret_required" {
+		t.Errorf("errors = %+v, want secret_required", errs)
+	}
+}
+
+func TestValidateUpdateLetsACredentialKeepAnExpiryThatHasPassed(t *testing.T) {
+	past := "2026-10-01"
+	in := registry.UpdateInput{Name: "n", Type: registry.TypeGHCR, Username: "u", Expires: past}
+	if _, errs := registry.ValidateUpdate(in, past, now); len(errs) != 0 {
+		t.Errorf("the credential's own past day: %+v", errs)
+	}
+	if _, errs := registry.ValidateUpdate(in, "2026-09-01", now); len(errs) != 1 || errs[0].Code != "expiry_past" {
+		t.Errorf("a different past day: %+v, want expiry_past", errs)
+	}
+}

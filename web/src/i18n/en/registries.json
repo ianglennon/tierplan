@@ -76,11 +76,16 @@
         "title": "Add a registry credential",
         "description": "Stored encrypted. The secret can't be shown again after you save."
       },
+      "edit": {
+        "title": "Edit {{name}}"
+      },
       "close": "Close",
       "cancel": "Cancel",
       "submit": "Save credential",
+      "save": "Save changes",
       "pending": "Saving…",
       "success": "Added credential {{name}}.",
+      "saved": "Saved {{name}}.",
       "loadError": {
         "title": "Couldn't load this credential.",
         "body": "Check the connection and try again.",
@@ -104,7 +109,8 @@
       "scope": {
         "label": "Scope",
         "instance": "All environments (instance)",
-        "helper": "Instance credentials apply to every environment. Pick an environment to limit it to one."
+        "helper": "Instance credentials apply to every environment. Pick an environment to limit it to one.",
+        "fixed": "A credential's scope can't change. Create a new one instead."
       },
       "host": {
         "label": "Registry",
@@ -121,6 +127,9 @@
       },
       "secret": {
         "label": "Secret",
+        "editLabel": "New secret (optional)",
+        "keepLast4": "Leave empty to keep the one ending {{last4}}",
+        "keepStored": "Leave empty to keep the stored secret",
         "show": "Show secret",
         "hide": "Hide secret"
       },

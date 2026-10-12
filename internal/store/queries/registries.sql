@@ -22,3 +22,29 @@ SELECT id, env_id, name, type, host, prefix, username, secret_last4, hub_fallbac
        created_at, updated_at, created_by
 FROM registry_credentials
 ORDER BY (env_id IS NOT NULL), env_id, host, prefix, name, id;
+
+-- name: UpdateRegistryCredential :execrows
+-- Everything but the secret and the layer. A credential never moves between layers.
+UPDATE registry_credentials
+SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, expires_at = ?, updated_at = ?
+WHERE id = ?;
+
+-- name: UpdateRegistryCredentialSecret :execrows
+-- Re-seals the secret. Only called when a new one was given; otherwise the stored envelope is
+-- never touched.
+UPDATE registry_credentials
+SET secret_sealed = ?, secret_last4 = ?, updated_at = ?
+WHERE id = ?;
+
+-- name: DeleteRegistryCredential :one
+DELETE FROM registry_credentials WHERE id = ? RETURNING id;
+
+-- name: FindRegistryCredentialClash :one
+-- The name of the other credential of the same layer that a refused write clashed with, so
+-- the page can say which one. kind is 'name', 'prefix' or 'hub'.
+SELECT name FROM registry_credentials
+WHERE env_id IS sqlc.narg(env_id) AND id <> sqlc.arg(id)
+  AND ((sqlc.arg(kind) = 'name' AND name = sqlc.arg(name))
+    OR (sqlc.arg(kind) = 'prefix' AND host = sqlc.arg(host) AND prefix = sqlc.arg(prefix))
+    OR (sqlc.arg(kind) = 'hub' AND hub_fallback = 1))
+LIMIT 1;

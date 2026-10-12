@@ -9,6 +9,7 @@ import type { components } from "@/api/schema";
 
 export type Credential = components["schemas"]["CredentialBody"];
 export type CredentialRequest = components["schemas"]["CredentialRequest"];
+export type CredentialPatch = components["schemas"]["CredentialPatchRequest"];
 export type RegistryType = Credential["type"];
 
 // How often the Last test and Last use cells are read again while the page is open.
@@ -40,6 +41,10 @@ export class CredentialRequestError extends Error {
   readonly status: number;
   readonly type?: string;
   readonly fields: ProblemField[];
+  // The name of the other credential a 409 clashed with, when the server gave it.
+  get conflictName(): string | undefined {
+    return this.fields.find((f) => f.location === "conflict.credential")?.message;
+  }
   constructor(status: number, type?: string, fields: ProblemField[] = [], method = "GET") {
     super(`${method} registries failed (${status})`);
     this.name = "CredentialRequestError";
@@ -101,6 +106,43 @@ export function useCreateCredential() {
     retry: false,
     // The mutation's variables hold the secret that was typed. With no time to live
     // the cache lets go of them as soon as the sheet that made the request is gone.
+    gcTime: 0,
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: REGISTRIES_KEY });
+    },
+  });
+}
+
+// patchCredential changes one instance credential. Members left out keep what is stored;
+// a secret left out (or empty) keeps the stored secret, which no route ever returns. It
+// never retries, and the submitted body is never copied into the error.
+export async function patchCredential(id: string, body: CredentialPatch): Promise<Credential> {
+  try {
+    const res = await api.PATCH("/api/registries/{credentialId}", {
+      params: { path: { credentialId: id } },
+      body,
+    });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new CredentialRequestError(problem.status, problem.type, problem.fields, "PATCH");
+    }
+    return res.data;
+  } catch (e) {
+    throw e instanceof CredentialRequestError
+      ? e
+      : new CredentialRequestError(0, undefined, [], "PATCH");
+  }
+}
+
+// useUpdateCredential is the mutation behind the edit sheet's Save changes. Like the
+// create it keeps nothing the user typed: no retry, no cache time for the variables that
+// hold a replacement secret, and the list and the credential are read again whatever the
+// answer.
+export function useUpdateCredential() {
+  const queryClient = useQueryClient();
+  return useMutation<Credential, CredentialRequestError, { id: string; body: CredentialPatch }>({
+    mutationFn: ({ id, body }) => patchCredential(id, body),
+    retry: false,
     gcTime: 0,
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: REGISTRIES_KEY });

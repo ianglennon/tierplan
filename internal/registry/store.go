@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +30,21 @@ var (
 	// ErrHubFallbackTaken means the layer already has its one Docker Hub fallback credential.
 	ErrHubFallbackTaken = errors.New("registry: this layer already has a Docker Hub fallback credential")
 )
+
+// ConflictError is a clash within the layer, carrying the name of the other credential that
+// holds the name, the host and prefix or the Hub fallback, so the page can say which one.
+// It matches ErrNameTaken, ErrHostPrefixTaken or ErrHubFallbackTaken with errors.Is.
+type ConflictError struct {
+	// Kind is the sentinel that says what clashed.
+	Kind error
+	// With is the other credential's name; empty when it could not be read.
+	With string
+}
+
+func (e *ConflictError) Error() string { return e.Kind.Error() }
+
+// Unwrap lets errors.Is match the sentinel.
+func (e *ConflictError) Unwrap() error { return e.Kind }
 
 // ValidationError is a submission Validate refused. Nothing was stored.
 type ValidationError struct {
@@ -146,7 +162,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput, actorID string, hook
 	defer func() { _ = tx.Rollback() }() // a no-op once committed
 	q := s.st.Q.WithTx(tx)
 	if err := q.InsertRegistryCredential(ctx, params); err != nil {
-		return Credential{}, clash(err)
+		return Credential{}, clash(ctx, q, err, id, in.EnvID, in.Name, in.Host, in.Prefix)
 	}
 	row, err := q.GetRegistryCredential(ctx, id)
 	if err != nil {
@@ -162,6 +178,105 @@ func (s *Store) Create(ctx context.Context, in CreateInput, actorID string, hook
 		return Credential{}, fmt.Errorf("registry: commit: %w", err)
 	}
 	return c, nil
+}
+
+// UpdateHook runs inside the transaction that stores a change, after the update, with the
+// credential as it now is and the names of the fields that changed. An error rolls the change
+// back: the audit row of an update is written here, so a change never exists without it.
+type UpdateHook func(ctx context.Context, tx *sql.Tx, c Credential, changed []string) error
+
+// Update validates in, applies it to the credential and runs hook (which may be nil) in the
+// same transaction. An empty Secret keeps the stored one: its envelope is not read or touched.
+// A new one is sealed again under the credential's own ID and its last characters replaced.
+// It returns the credential as it now is and the names of the fields that changed, sorted
+// (expires, host, hub_fallback, name, prefix, secret, type, username); the secret is only ever
+// the word secret. A form that changes nothing writes nothing, runs no hook and returns no
+// changed fields. ErrNotFound for an unknown ID, *ValidationError for a refused change and a
+// *ConflictError for a clash within the layer. The input is never logged.
+func (s *Store) Update(ctx context.Context, id string, in UpdateInput, hook UpdateHook) (Credential, []string, error) {
+	now := s.now().UTC()
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Credential{}, nil, fmt.Errorf("registry: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+
+	row, err := q.GetRegistryCredential(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Credential{}, nil, ErrNotFound
+	}
+	if err != nil {
+		return Credential{}, nil, fmt.Errorf("registry: read: %w", err)
+	}
+	cur := credentialOf(row)
+	prevExpires := ""
+	if cur.ExpiresAt != nil {
+		prevExpires = cur.ExpiresAt.UTC().Format(time.DateOnly)
+	}
+	in, errs := ValidateUpdate(in, prevExpires, now)
+	if len(errs) > 0 {
+		return Credential{}, nil, &ValidationError{Fields: errs}
+	}
+
+	var changed []string
+	for _, f := range []struct {
+		name string
+		diff bool
+	}{
+		{"expires", in.Expires != prevExpires},
+		{"host", in.Host != cur.Host},
+		{"hub_fallback", in.HubFallback != cur.HubFallback},
+		{"name", in.Name != cur.Name},
+		{"prefix", in.Prefix != cur.Prefix},
+		{"secret", in.Secret != ""},
+		{"type", in.Type != cur.Type},
+		{"username", in.Username != cur.Username},
+	} {
+		if f.diff {
+			changed = append(changed, f.name)
+		}
+	}
+	if len(changed) == 0 {
+		return cur, nil, nil
+	}
+
+	params := sqlc.UpdateRegistryCredentialParams{
+		ID: id, Name: in.Name, Type: in.Type, Host: in.Host, Prefix: in.Prefix, Username: in.Username,
+		HubFallback: boolInt(in.HubFallback), UpdatedAt: now.UnixNano(),
+	}
+	if in.Expires != "" {
+		end, _ := ExpiryEnd(in.Expires) // ValidateUpdate accepted it
+		params.ExpiresAt = sql.NullInt64{Int64: end.UnixNano(), Valid: true}
+	}
+	if _, err := q.UpdateRegistryCredential(ctx, params); err != nil {
+		return Credential{}, nil, clash(ctx, q, err, id, cur.EnvID, in.Name, in.Host, in.Prefix)
+	}
+	if slices.Contains(changed, "secret") {
+		sealed, err := s.v.Seal(vault.ContextRegistryCred+id, []byte(in.Secret))
+		if err != nil {
+			return Credential{}, nil, fmt.Errorf("registry: seal the secret: %w", err)
+		}
+		if _, err := q.UpdateRegistryCredentialSecret(ctx, sqlc.UpdateRegistryCredentialSecretParams{
+			ID: id, SecretSealed: sealed, SecretLast4: Last4(in.Secret), UpdatedAt: now.UnixNano(),
+		}); err != nil {
+			return Credential{}, nil, fmt.Errorf("registry: store the secret: %w", err)
+		}
+	}
+	row, err = q.GetRegistryCredential(ctx, id)
+	if err != nil {
+		return Credential{}, nil, fmt.Errorf("registry: read back: %w", err)
+	}
+	c := credentialOf(row)
+	if hook != nil {
+		if err := hook(ctx, tx, c, changed); err != nil {
+			return Credential{}, nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Credential{}, nil, fmt.Errorf("registry: commit: %w", err)
+	}
+	return c, changed, nil
 }
 
 // Get returns one credential, or ErrNotFound.
@@ -189,20 +304,31 @@ func (s *Store) List(ctx context.Context) ([]Credential, error) {
 	return out, nil
 }
 
-// clash maps a unique-index failure to the typed conflict the caller words. The message names
-// the columns of the index that refused the row.
-func clash(err error) error {
+// clash maps a unique-index failure to the typed conflict the caller words, naming the other
+// credential that holds what was asked for. The message names the columns of the index that
+// refused the row. self is the credential being written, which is never its own conflict.
+func clash(ctx context.Context, q *sqlc.Queries, err error, self, envID, name, host, prefix string) error {
 	msg := err.Error()
 	if !strings.Contains(msg, "UNIQUE constraint failed") {
-		return fmt.Errorf("registry: insert: %w", err)
+		return fmt.Errorf("registry: write: %w", err)
 	}
+	var kind error
+	var how string
 	switch {
 	case strings.Contains(msg, "registry_credentials.name"):
-		return ErrNameTaken
+		kind, how = ErrNameTaken, "name"
 	case strings.Contains(msg, "registry_credentials.prefix"):
-		return ErrHostPrefixTaken
+		kind, how = ErrHostPrefixTaken, "prefix"
+	default:
+		kind, how = ErrHubFallbackTaken, "hub"
 	}
-	return ErrHubFallbackTaken
+	with, qerr := q.FindRegistryCredentialClash(ctx, sqlc.FindRegistryCredentialClashParams{
+		EnvID: nullString(envID), ID: self, Kind: how, Name: name, Host: host, Prefix: prefix,
+	})
+	if qerr != nil {
+		return &ConflictError{Kind: kind}
+	}
+	return &ConflictError{Kind: kind, With: with}
 }
 
 func credentialOf(r sqlc.GetRegistryCredentialRow) Credential {

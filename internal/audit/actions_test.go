@@ -139,7 +139,9 @@ var phase5DetailKeys = map[string][]string{
 	// name, the layer, the host and prefix, the type, the username, whether it is the Docker
 	// Hub fallback and the expiry day (plan 05-05, D-31).
 	audit.ActionRegistryCredentialCreated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
-	audit.ActionRegistryCredentialUpdated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
+	// An update adds the names of the fields that changed, comma-joined, the secret only as
+	// the word secret (plan 05-07).
+	audit.ActionRegistryCredentialUpdated: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires", "changed"},
 	audit.ActionRegistryCredentialDeleted: {"name", "layer", "host", "prefix", "type", "username", "hub_fallback", "expires"},
 }
 

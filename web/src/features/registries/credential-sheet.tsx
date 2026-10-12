@@ -4,17 +4,19 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
 import {
   type Credential,
+  type CredentialPatch,
   type CredentialRequest,
   CredentialRequestError,
   credentialQuery,
   credentialsQuery,
   type RegistryType,
   useCreateCredential,
+  useUpdateCredential,
 } from "@/api/registries";
 import { KeyValueTable } from "@/components/key-value-table";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -81,39 +83,48 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-// Messages are i18n keys, never literals (D-65).
-const schema = z
-  .object({
-    type: z.enum(TYPES),
-    name: z.string(),
-    host: z.string(),
-    prefix: z.string(),
-    username: z.string(),
-    secret: z.string(),
-    hubFallback: z.boolean(),
-    expires: z.string(),
-  })
-  .superRefine((v, ctx) => {
-    const issue = (path: keyof typeof v, code: string) =>
-      ctx.addIssue({ code: "custom", path: [path], message: `registries.sheet.errors.${code}` });
-    const name = v.name.trim();
-    if (name === "") issue("name", "name_required");
-    else if (name.length > MAX_NAME) issue("name", "name_invalid");
-    // Docker Hub and GHCR have one address that the server fills in.
-    if (presetFor(v.type).hostEditable) {
-      const host = v.host.trim();
-      if (host === "") issue("host", "host_required");
-      else if (!HOST.test(host)) issue("host", "host_invalid");
-    }
-    const prefix = v.prefix.trim();
-    if (prefix !== "" && !PREFIX.test(prefix)) issue("prefix", "prefix_invalid");
-    if (v.username.trim() === "") issue("username", "username_required");
-    if (v.secret.trim() === "") issue("secret", "secret_required");
-    if (v.expires !== "" && (!DATE.test(v.expires) || v.expires < today())) {
-      issue("expires", "expiry_invalid");
-    }
-  });
-type Values = z.infer<typeof schema>;
+// Messages are i18n keys, never literals (D-65). When a credential is edited the secret is
+// optional (empty keeps the stored one) and an expiry day it already has is not checked
+// against today, so a credential that has expired can still be corrected.
+function makeSchema(editing: boolean, keepExpires: string) {
+  return z
+    .object({
+      type: z.enum(TYPES),
+      name: z.string(),
+      host: z.string(),
+      prefix: z.string(),
+      username: z.string(),
+      secret: z.string(),
+      hubFallback: z.boolean(),
+      expires: z.string(),
+    })
+    .superRefine((v, ctx) => {
+      const issue = (path: keyof typeof v, code: string) =>
+        ctx.addIssue({ code: "custom", path: [path], message: `registries.sheet.errors.${code}` });
+      const name = v.name.trim();
+      if (name === "") issue("name", "name_required");
+      else if (name.length > MAX_NAME) issue("name", "name_invalid");
+      // Docker Hub and GHCR have one address that the server fills in.
+      if (presetFor(v.type).hostEditable) {
+        const host = v.host.trim();
+        if (host === "") issue("host", "host_required");
+        else if (!HOST.test(host)) issue("host", "host_invalid");
+      }
+      const prefix = v.prefix.trim();
+      if (prefix !== "" && !PREFIX.test(prefix)) issue("prefix", "prefix_invalid");
+      if (v.username.trim() === "") issue("username", "username_required");
+      if (!editing && v.secret.trim() === "") issue("secret", "secret_required");
+      if (editing && v.secret !== "" && v.secret.trim() === "") issue("secret", "secret_required");
+      if (
+        v.expires !== "" &&
+        v.expires !== keepExpires &&
+        (!DATE.test(v.expires) || v.expires < today())
+      ) {
+        issue("expires", "expiry_invalid");
+      }
+    });
+}
+type Values = z.infer<ReturnType<typeof makeSchema>>;
 
 const FIELDS = [
   "type",
@@ -141,14 +152,31 @@ const DEFAULTS: Values = {
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
+// The form of an existing credential. The secret is never in it: the server has none to
+// give, and the field starts empty.
+function valuesOf(c: Credential): Values {
+  return {
+    type: c.type,
+    name: c.name,
+    host: c.host,
+    prefix: c.prefix,
+    username: c.username,
+    secret: "",
+    hubFallback: c.hubFallback,
+    expires: c.expiresAt ? c.expiresAt.slice(0, 10) : "",
+  };
+}
+
 // What a refusal of the whole request comes to, shown as one alert.
 interface Refusal {
   message: string;
 }
 
 interface CredentialSheetProps {
-  mode: "add" | "view";
-  // The credential to show; view mode only.
+  // add: the empty form. edit: the form of a credential the caller may change; one they may
+  // only see opens as the details. view: the read-only details.
+  mode: "add" | "edit" | "view";
+  // The credential to show or change; edit and view modes.
   credentialId?: string;
   // Called when the sheet is closed, whether it was saved or not. The owner removes
   // the sheet, so what was typed goes with it.
@@ -162,11 +190,9 @@ interface CredentialSheetProps {
 // closes and when the credential is saved, and the details show only its last
 // characters.
 export function CredentialSheet({ mode, credentialId, onClose }: CredentialSheetProps) {
-  return mode === "add" ? (
-    <AddSheet onClose={onClose} />
-  ) : (
-    <ViewSheet credentialId={credentialId ?? ""} onClose={onClose} />
-  );
+  if (mode === "add") return <FormSheet onClose={onClose} />;
+  if (mode === "edit") return <EditSheet credentialId={credentialId ?? ""} onClose={onClose} />;
+  return <ViewSheet credentialId={credentialId ?? ""} onClose={onClose} />;
 }
 
 // The sheet's frame: 560px at most, the full width of a phone, and a body that scrolls
@@ -203,24 +229,83 @@ function SheetFrame({
   );
 }
 
-function AddSheet({ onClose }: { onClose: () => void }) {
+// EditSheet loads the credential, then shows its form. Skeleton fields and a disabled Save
+// stand in until it arrives; one the caller may only see opens as the details instead.
+function EditSheet({ credentialId, onClose }: { credentialId: string; onClose: () => void }) {
+  const t = useT();
+  const query = useQuery(credentialQuery(credentialId));
+  const credential = query.data;
+  if (credential?.canManage) {
+    return <FormSheet key={credential.id} credential={credential} onClose={onClose} />;
+  }
+  if (credential) return <ViewSheet credentialId={credentialId} onClose={onClose} />;
+  return (
+    <SheetFrame
+      title={t("registries.title")}
+      description={t("registries.sheet.add.description")}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      footer={
+        <>
+          <Button type="button" variant="outline" className={TOUCH_HEIGHT} onClick={onClose}>
+            {t("registries.sheet.cancel")}
+          </Button>
+          <Button type="button" className={TOUCH_HEIGHT} disabled>
+            {t("registries.sheet.save")}
+          </Button>
+        </>
+      }
+    >
+      {query.isError ? (
+        <SheetLoadError
+          error={query.error}
+          onRetry={() => void query.refetch()}
+          retrying={query.isFetching}
+        />
+      ) : (
+        <SkeletonFields />
+      )}
+    </SheetFrame>
+  );
+}
+
+function SkeletonFields() {
+  return (
+    <div className="flex flex-col gap-3" aria-busy="true">
+      {Array.from({ length: 7 }, (_, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton rows
+        <Skeleton key={i} className="h-5 w-full" aria-hidden="true" />
+      ))}
+    </div>
+  );
+}
+
+// FormSheet is the form of a credential: empty to add one, or filled with the stored fields
+// of the one being edited. In edit mode the secret is optional and never shown: left empty
+// it keeps the stored one.
+function FormSheet({ credential, onClose }: { credential?: Credential; onClose: () => void }) {
   const t = useT();
   const ids = useId();
   const queryClient = useQueryClient();
+  const editing = credential !== undefined;
+  const defaults = useMemo(() => (credential ? valuesOf(credential) : DEFAULTS), [credential]);
+  const schema = useMemo(() => makeSchema(editing, defaults.expires), [editing, defaults.expires]);
   const create = useCreateCredential();
+  const update = useUpdateCredential();
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [showSecret, setShowSecret] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
-    defaultValues: DEFAULTS,
+    defaultValues: defaults,
     mode: "onSubmit",
   });
   const errors = form.formState.errors;
   const dirty = form.formState.isDirty;
   const type = form.watch("type");
   const preset = presetFor(type);
-  const pending = create.isPending;
+  const pending = create.isPending || update.isPending;
 
   const errorOf = (field: keyof Values) => {
     const key = errors[field]?.message;
@@ -237,7 +322,7 @@ function AddSheet({ onClose }: { onClose: () => void }) {
   // close drops everything that was typed, the secret first among it, then tells the
   // owner. Nothing the person typed outlives the sheet (D-05).
   function close() {
-    form.reset(DEFAULTS);
+    form.reset(defaults);
     setShowSecret(false);
     onClose();
   }
@@ -268,12 +353,15 @@ function AddSheet({ onClose }: { onClose: () => void }) {
         };
       }
       case "hub_fallback_taken": {
-        const holder = queryClient
-          .getQueryData<Credential[]>(credentialsQuery.queryKey)
-          ?.find((c) => c.hubFallback && c.scope.kind === "instance");
+        const holder =
+          err.conflictName ??
+          queryClient
+            .getQueryData<Credential[]>(credentialsQuery.queryKey)
+            ?.find((c) => c.hubFallback && c.scope.kind === "instance" && c.id !== credential?.id)
+            ?.name;
         return {
           message: holder
-            ? t("registries.sheet.errors.hubFallbackTaken", { name: holder.name, scope })
+            ? t("registries.sheet.errors.hubFallbackTaken", { name: holder, scope })
             : t("registries.sheet.errors.hubFallbackTakenUnnamed", { scope }),
         };
       }
@@ -296,8 +384,33 @@ function AddSheet({ onClose }: { onClose: () => void }) {
   }
 
   function submit(values: Values) {
-    if (create.isPending) return;
+    if (pending) return;
     setRefusal(null);
+    if (credential) {
+      // A change sends every field of the form but the scope, which cannot change. The
+      // secret goes only when one was typed: left out, the server keeps the stored one.
+      const patch: CredentialPatch = {
+        name: values.name.trim(),
+        type: values.type,
+        username: values.username.trim(),
+        prefix: values.prefix.trim(),
+        hubFallback: values.type === "dockerhub" && values.hubFallback,
+        expires: values.expires,
+        ...(preset.hostEditable ? { host: values.host.trim() } : {}),
+        ...(values.secret.trim() ? { secret: values.secret } : {}),
+      };
+      update.mutate(
+        { id: credential.id, body: patch },
+        {
+          onSuccess: (saved) => {
+            toastSuccess(t("registries.sheet.saved", { name: saved.name }));
+            close();
+          },
+          onError: (err) => setRefusal(refusalOf(err)),
+        },
+      );
+      return;
+    }
     const body: CredentialRequest = {
       name: values.name.trim(),
       type: values.type,
@@ -329,7 +442,11 @@ function AddSheet({ onClose }: { onClose: () => void }) {
   return (
     <>
       <SheetFrame
-        title={t("registries.sheet.add.title")}
+        title={
+          credential
+            ? t("registries.sheet.edit.title", { name: credential.name })
+            : t("registries.sheet.add.title")
+        }
         description={t("registries.sheet.add.description")}
         onOpenChange={(open) => {
           if (!open) requestClose();
@@ -352,7 +469,7 @@ function AddSheet({ onClose }: { onClose: () => void }) {
                   {t("registries.sheet.pending")}
                 </>
               ) : (
-                t("registries.sheet.submit")
+                t(editing ? "registries.sheet.save" : "registries.sheet.submit")
               )}
             </Button>
           </>
@@ -428,15 +545,22 @@ function AddSheet({ onClose }: { onClose: () => void }) {
                 <FieldLabel htmlFor={`${ids}-scope`}>
                   {t("registries.sheet.scope.label")}
                 </FieldLabel>
-                <Select value="instance">
+                <Select value={credential ? scopeValue(credential) : "instance"} disabled={editing}>
                   <SelectTrigger id={`${ids}-scope`} className="w-full max-md:h-11">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="instance">{t("registries.sheet.scope.instance")}</SelectItem>
+                    {credential?.scope.envId ? (
+                      <SelectItem value={credential.scope.envId}>
+                        {credential.scope.envName ?? credential.scope.envId}
+                      </SelectItem>
+                    ) : null}
                   </SelectContent>
                 </Select>
-                <FieldDescription>{t("registries.sheet.scope.helper")}</FieldDescription>
+                <FieldDescription>
+                  {t(editing ? "registries.sheet.scope.fixed" : "registries.sheet.scope.helper")}
+                </FieldDescription>
               </Field>
 
               <Field data-invalid={errors.host ? true : undefined}>
@@ -508,7 +632,9 @@ function AddSheet({ onClose }: { onClose: () => void }) {
 
               <Field data-invalid={errors.secret ? true : undefined}>
                 <FieldLabel htmlFor={`${ids}-secret`}>
-                  {t("registries.sheet.secret.label")}
+                  {t(
+                    editing ? "registries.sheet.secret.editLabel" : "registries.sheet.secret.label",
+                  )}
                 </FieldLabel>
                 <InputGroup className="max-md:h-11">
                   <InputGroupInput
@@ -518,6 +644,13 @@ function AddSheet({ onClose }: { onClose: () => void }) {
                     autoCapitalize="off"
                     autoCorrect="off"
                     spellCheck={false}
+                    placeholder={
+                      credential
+                        ? credential.last4
+                          ? t("registries.sheet.secret.keepLast4", { last4: credential.last4 })
+                          : t("registries.sheet.secret.keepStored")
+                        : undefined
+                    }
                     {...errorProps("secret")}
                     {...form.register("secret")}
                   />
@@ -610,6 +743,11 @@ function AddSheet({ onClose }: { onClose: () => void }) {
   );
 }
 
+// The value of the read-only scope select: the instance, or the environment's ID.
+function scopeValue(c: Credential): string {
+  return c.scope.envId ?? "instance";
+}
+
 function capitalise(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
@@ -646,12 +784,7 @@ function ViewSheet({ credentialId, onClose }: { credentialId: string; onClose: (
           retrying={query.isFetching}
         />
       ) : (
-        <div className="flex flex-col gap-3" aria-busy="true">
-          {Array.from({ length: 7 }, (_, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton rows
-            <Skeleton key={i} className="h-5 w-full" aria-hidden="true" />
-          ))}
-        </div>
+        <SkeletonFields />
       )}
     </SheetFrame>
   );

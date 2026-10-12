@@ -10,6 +10,51 @@ import (
 	"database/sql"
 )
 
+const deleteRegistryCredential = `-- name: DeleteRegistryCredential :one
+DELETE FROM registry_credentials WHERE id = ? RETURNING id
+`
+
+func (q *Queries) DeleteRegistryCredential(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, deleteRegistryCredential, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
+const findRegistryCredentialClash = `-- name: FindRegistryCredentialClash :one
+SELECT name FROM registry_credentials
+WHERE env_id IS ?1 AND id <> ?2
+  AND ((?3 = 'name' AND name = ?4)
+    OR (?3 = 'prefix' AND host = ?5 AND prefix = ?6)
+    OR (?3 = 'hub' AND hub_fallback = 1))
+LIMIT 1
+`
+
+type FindRegistryCredentialClashParams struct {
+	EnvID  sql.NullString
+	ID     string
+	Kind   interface{}
+	Name   string
+	Host   string
+	Prefix string
+}
+
+// The name of the other credential of the same layer that a refused write clashed with, so
+// the page can say which one. kind is 'name', 'prefix' or 'hub'.
+func (q *Queries) FindRegistryCredentialClash(ctx context.Context, arg FindRegistryCredentialClashParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, findRegistryCredentialClash,
+		arg.EnvID,
+		arg.ID,
+		arg.Kind,
+		arg.Name,
+		arg.Host,
+		arg.Prefix,
+	)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
 const getRegistryCredential = `-- name: GetRegistryCredential :one
 SELECT id, env_id, name, type, host, prefix, username, secret_last4, hub_fallback, ca_pem, insecure,
        expires_at, last_test_at, last_test_ok, last_test_detail, last_failure_at, last_failure_code,
@@ -195,4 +240,69 @@ func (q *Queries) ListRegistryCredentials(ctx context.Context) ([]ListRegistryCr
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateRegistryCredential = `-- name: UpdateRegistryCredential :execrows
+UPDATE registry_credentials
+SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, expires_at = ?, updated_at = ?
+WHERE id = ?
+`
+
+type UpdateRegistryCredentialParams struct {
+	Name        string
+	Type        string
+	Host        string
+	Prefix      string
+	Username    string
+	HubFallback int64
+	ExpiresAt   sql.NullInt64
+	UpdatedAt   int64
+	ID          string
+}
+
+// Everything but the secret and the layer. A credential never moves between layers.
+func (q *Queries) UpdateRegistryCredential(ctx context.Context, arg UpdateRegistryCredentialParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateRegistryCredential,
+		arg.Name,
+		arg.Type,
+		arg.Host,
+		arg.Prefix,
+		arg.Username,
+		arg.HubFallback,
+		arg.ExpiresAt,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateRegistryCredentialSecret = `-- name: UpdateRegistryCredentialSecret :execrows
+UPDATE registry_credentials
+SET secret_sealed = ?, secret_last4 = ?, updated_at = ?
+WHERE id = ?
+`
+
+type UpdateRegistryCredentialSecretParams struct {
+	SecretSealed string
+	SecretLast4  string
+	UpdatedAt    int64
+	ID           string
+}
+
+// Re-seals the secret. Only called when a new one was given; otherwise the stored envelope is
+// never touched.
+func (q *Queries) UpdateRegistryCredentialSecret(ctx context.Context, arg UpdateRegistryCredentialSecretParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateRegistryCredentialSecret,
+		arg.SecretSealed,
+		arg.SecretLast4,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

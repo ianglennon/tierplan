@@ -1549,7 +1549,7 @@ export interface paths {
         put?: never;
         /**
          * Add an instance registry credential
-         * @description Stores a sign-in for a registry host and an optional namespace, used for pulls and tag browsing on every environment. The secret is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes. Audited as registry.credential_created without the secret.
+         * @description Stores a sign-in for a registry host and an optional namespace, used for pulls and tag browsing on every environment. The secret is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: the answer carries only its last 4 characters, and only for a secret of 12 or more characters. Needs registries.instance, which only instance admins hold. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, host_required, host_invalid, prefix_invalid, username_required, secret_required, hub_prefix_required, hub_fallback_not_hub, expiry_invalid, expiry_past); 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes; the 409 names that credential in its errors list (location conflict.credential). Audited as registry.credential_created without the secret.
          */
         post: operations["createInstanceCredential"];
         delete?: never;
@@ -1575,7 +1575,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change an instance registry credential
+         * @description Changes the members that are sent and keeps the rest. The secret is write-only: leave it out or send it empty to keep the stored one, which is neither read nor returned; send a new one and it is sealed again and replaces it, and the answer carries only its last 4 characters (12 or more characters). There is no scope: a credential never moves between layers. Needs registries.instance. A credential of an environment answers 404 credential_not_found here, exactly like one that does not exist. 422 validation_failed names every field at fault with the same codes as adding; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another instance credential clashes, naming it in its errors list (location conflict.credential). Audited as registry.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret.
+         */
+        patch: operations["updateInstanceCredential"];
         trace?: never;
     };
     "/api/settings": {
@@ -2937,6 +2941,24 @@ export interface components {
         CredentialListBody: {
             /** @description Instance credentials first, then each environment's, by host and prefix */
             items: components["schemas"]["CredentialBody"][] | null;
+        };
+        CredentialPatchRequest: {
+            /** @description A day, YYYY-MM-DD, or an empty string for none. 422 expiry_invalid, and expiry_past for a day that has gone (the credential's own unchanged day is never refused) */
+            expires?: string;
+            /** @description A new registry host. Ignored for dockerhub and ghcr; 422 host_required or host_invalid */
+            host?: string;
+            /** @description Whether it is used for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken) */
+            hubFallback?: boolean;
+            /** @description A new name, unique among the instance credentials. Same rules as when adding; 422 name_required or name_invalid */
+            name?: string;
+            /** @description A new namespace; an empty string covers the whole registry. 422 prefix_invalid, and hub_prefix_required for docker.io with neither a prefix nor hubFallback */
+            prefix?: string;
+            /** @description A replacement password or token. Left out or empty keeps the stored secret, which is never read back. A new one is sealed with the vault and replaces it. It is never returned by any route */
+            secret?: string;
+            /** @description dockerhub, ghcr, gitlab or generic; 422 type_invalid for anything else */
+            type?: string;
+            /** @description A new registry user name; 422 username_required */
+            username?: string;
         };
         CredentialRequest: {
             /** @description An optional day, YYYY-MM-DD. It lasts to the end of that day, UTC. 422 expiry_invalid, and expiry_past for a day that has gone */
@@ -8236,6 +8258,43 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateInstanceCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialPatchRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {
