@@ -425,9 +425,10 @@ describe("images list", () => {
     renderAt("/env/e1/images");
     await screen.findByText("nginx:1.27");
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
-    expect(headers).toEqual(["Image", "Image ID", "Used by", "Size", "Created", "Actions"]);
+    expect(headers).toEqual(["", "Image", "Image ID", "Used by", "Size", "Created", "Actions"]);
     const rows = screen.getAllByRole("row").slice(1);
     expect(cellsOf(rows[0] as HTMLElement)).toEqual([
+      "Only dangling images can be deleted in bulk. Open an image to remove it.",
       "nginx:1.27+1",
       "0123456789ab",
       "2 containers",
@@ -436,10 +437,10 @@ describe("images list", () => {
       "",
     ]);
     const untagged = cellsOf(rows[1] as HTMLElement);
-    expect(untagged[0]).toBe("UntaggedDangling");
-    expect(untagged[1]).toBe("fedcba987654");
-    expect(untagged[2]).toBe("Not in use");
-    expect(untagged[3]).toBe("1.5 KiB");
+    expect(untagged[1]).toBe("UntaggedDangling");
+    expect(untagged[2]).toBe("fedcba987654");
+    expect(untagged[3]).toBe("Not in use");
+    expect(untagged[4]).toBe("1.5 KiB");
     const none = screen.getByText("Untagged");
     expect(none.className).toContain("text-muted-foreground");
     expect(screen.getByText("0123456789ab").className).toContain("font-mono");
@@ -852,6 +853,7 @@ describe("swarm lists", () => {
     renderAt("/env/e1/images");
     await screen.findByText("nginx:1.27");
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "",
       "Image",
       "Image ID",
       "Nodes",
@@ -864,6 +866,7 @@ describe("swarm lists", () => {
     renderAt("/env/e1/images?view=node");
     await screen.findByText("nginx:1.27");
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "",
       "Image",
       "Image ID",
       "Node",
@@ -915,13 +918,13 @@ describe("swarm lists", () => {
       renderAt("/env/e1/images?view=node");
       await screen.findAllByText("ghcr.io/ianglennon/bayplan-agent:0.1.0");
       let rows = screen.getAllByRole("row").slice(1);
-      expect(rows.map((r) => cellsOf(r as HTMLElement)[2])).toEqual(["n1", "n2"]);
+      expect(rows.map((r) => cellsOf(r as HTMLElement)[3])).toEqual(["n1", "n2"]);
 
       answers["/api/env/e1/images"] = imagesOn(["n2", "n3"]);
       await queryClient.invalidateQueries({ queryKey: listKey("e1", "images") });
       await waitFor(() => {
         rows = screen.getAllByRole("row").slice(1);
-        expect(rows.map((r) => cellsOf(r as HTMLElement)[2])).toEqual(["n2", "n3"]);
+        expect(rows.map((r) => cellsOf(r as HTMLElement)[3])).toEqual(["n2", "n3"]);
       });
       expect(sameKeyWarningsOf(spy)).toEqual([]);
     } finally {
