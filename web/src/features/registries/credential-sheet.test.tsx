@@ -31,6 +31,7 @@ let environments: { id: string; name: string }[];
 let envPosted: { path: string; body: Record<string, unknown> }[];
 let envPatched: { path: string; body: Record<string, unknown> }[];
 let testSent: Record<string, unknown>[];
+let testPaths: string[];
 let testStatus: number;
 let testBody: unknown;
 let testGate: Promise<void> | null;
@@ -85,6 +86,7 @@ beforeEach(() => {
   envPosted = [];
   envPatched = [];
   testSent = [];
+  testPaths = [];
   testStatus = 200;
   testBody = passedTest;
   testGate = null;
@@ -111,7 +113,8 @@ beforeEach(() => {
         posted.push((await req.json()) as Record<string, unknown>);
         return Response.json(postBody, { status: postStatus });
       }
-      if (url.pathname === "/api/registries/test" && req.method === "POST") {
+      if (/^\/api\/(env\/[^/]+\/)?registries\/test$/.test(url.pathname) && req.method === "POST") {
+        testPaths.push(url.pathname);
         testSent.push((await req.json()) as Record<string, unknown>);
         if (testGate) await testGate;
         return Response.json(testBody, { status: testStatus });
@@ -995,5 +998,79 @@ describe("CredentialSheet test block", () => {
           .map((q) => q.state.data),
       ),
     ).not.toContain(SECRET);
+  });
+});
+
+describe("CredentialSheet test block of a saved credential", () => {
+  const testButton = () => screen.getByRole("button", { name: "Test credential" });
+
+  it("tests the stored secret when the secret field is empty, naming the credential", async () => {
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    expect((testButton() as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText("Enter a secret.")).toBeNull();
+    fireEvent.click(testButton());
+    await screen.findByRole("status");
+    expect(testSent).toEqual([
+      { credentialId: "c1", type: "ghcr", username: "deploy", prefix: "acme" },
+    ]);
+    expect(testPaths).toEqual(["/api/registries/test"]);
+  });
+
+  it("sends a typed secret with the credential and uses the environment's route for an environment credential", async () => {
+    stored = credential({ scope: { kind: "environment", envId: "e1", envName: "Lab" } });
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    type("New secret (optional)", SECRET);
+    fireEvent.click(testButton());
+    await screen.findByRole("status");
+    expect(testPaths).toEqual(["/api/env/e1/registries/test"]);
+    expect(testSent[0]).toMatchObject({ credentialId: "c1", secret: SECRET });
+  });
+
+  it("uses the environment's route when a new credential is scoped to an environment", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
+    mount();
+    await screen.findByText("Add a registry credential");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+    fireEvent.click(testButton());
+    await screen.findByRole("status");
+    expect(testPaths).toEqual(["/api/env/e1/registries/test"]);
+    expect(testSent[0]).not.toHaveProperty("credentialId");
+  });
+
+  it("shows the stored last test on open, and the warning when it failed", async () => {
+    stored = credential({
+      lastTest: { at: "2026-10-12T09:00:00Z", ok: false, detail: "sign_in_refused" },
+    });
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    const block = screen.getByRole("heading", { name: "Test" }).closest("section") as HTMLElement;
+    expect(within(block).getByText("Failed")).toBeTruthy();
+    expect(
+      screen.getByText("The last test failed. You can still save this credential."),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("shows a stored pass without the warning", async () => {
+    stored = credential({ lastTest: { at: "2026-10-12T09:00:00Z", ok: true, detail: "" } });
+    mount("edit", "c1");
+    await screen.findByText("Edit ghcr-acme");
+    const block = screen.getByRole("heading", { name: "Test" }).closest("section") as HTMLElement;
+    expect(within(block).getByText("Passed")).toBeTruthy();
+    expect(
+      screen.queryByText("The last test failed. You can still save this credential."),
+    ).toBeNull();
+  });
+
+  it("does not offer Test in the read-only details", async () => {
+    stored = credential({ canManage: false });
+    mount("view", "c1");
+    await screen.findByRole("table", { name: "Credential details" });
+    expect(screen.queryByRole("button", { name: "Test credential" })).toBeNull();
   });
 });

@@ -175,6 +175,19 @@ export function ExpiresCell({ expiresAt }: { expiresAt: string | null }) {
   return <RelativeTime value={expiresAt} />;
 }
 
+// The codes a test stores as its detail, each with a short sentence for the tooltip. The
+// server stores a code and never text from the registry.
+const TEST_REASONS = [
+  "registry_unreachable",
+  "registry_tls",
+  "registry_http",
+  "sign_in_refused",
+  "no_pull_access",
+  "repository_not_found",
+  "rate_limited",
+  "check_failed",
+];
+
 export function LastTestCell({ test }: { test: Credential["lastTest"] }) {
   const t = useT();
   if (test === null) {
@@ -186,14 +199,17 @@ export function LastTestCell({ test }: { test: Credential["lastTest"] }) {
       <RelativeTime value={test.at} />
     </DotText>
   );
-  // The failure reason is a short sentence the server wrote, shown as text.
+  // The failure reason is a code the server stored, worded here; anything else is shown as text.
   if (test.ok || !test.detail) return cell;
+  const reason = TEST_REASONS.includes(test.detail)
+    ? t(`registries.test.short.${test.detail}`)
+    : test.detail;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span>{cell}</span>
       </TooltipTrigger>
-      <TooltipContent className="max-w-sm">{test.detail}</TooltipContent>
+      <TooltipContent className="max-w-sm">{reason}</TooltipContent>
     </Tooltip>
   );
 }

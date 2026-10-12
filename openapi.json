@@ -1996,6 +1996,11 @@
       "CredentialTestRequest": {
         "additionalProperties": false,
         "properties": {
+          "credentialId": {
+            "description": "A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment",
+            "maxLength": 64,
+            "type": "string"
+          },
           "host": {
             "description": "The registry host, as when adding; 422 host_required or host_invalid",
             "maxLength": 512,
@@ -10619,6 +10624,67 @@
           }
         },
         "summary": "Which registry credential a pull of an image would use",
+        "tags": [
+          "registries"
+        ]
+      }
+    },
+    "/api/env/{envId}/registries/test": {
+      "post": {
+        "description": "As testing an instance sign-in, for the credentials of one environment: the same three steps from the Bayplan server, on unsaved values or on a stored credential of this environment (credentialId; 404 credential_not_found for the instance's or another environment's). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the instance family: 429 rate_limited. Audited as registry.credential_tested with the environment, never the secret.",
+        "operationId": "testEnvCredential",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialTestResultBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Test an environment registry sign-in from the server",
         "tags": [
           "registries"
         ]

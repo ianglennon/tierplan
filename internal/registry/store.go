@@ -452,6 +452,32 @@ func (s *Store) openSecret(ctx context.Context, id string) ([]byte, error) {
 	return plain, nil
 }
 
+// Secret opens the stored secret of a credential for one test of it, and returns it as a
+// string the caller hands straight to a registry client and drops. It is the only way the
+// secret leaves the store besides the pull header, and no route returns it.
+func (s *Store) Secret(ctx context.Context, id string) (string, error) {
+	plain, err := s.openSecret(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return string(plain), nil
+}
+
+// RecordTest remembers the outcome of a test of the saved values, now: whether it passed
+// and, when it did not, the code of the first step that failed. A test that passed also
+// clears the last sign-in failure, because the credential has just been seen to work. A
+// credential deleted meanwhile is not an error.
+func (s *Store) RecordTest(ctx context.Context, id string, ok bool, detail string) error {
+	_, err := s.st.Q.SetRegistryCredentialTest(ctx, sqlc.SetRegistryCredentialTestParams{
+		At: sql.NullInt64{Int64: s.now().UnixNano(), Valid: true}, Ok: sql.NullInt64{Int64: boolInt(ok), Valid: true},
+		Detail: detail, ID: id,
+	})
+	if err != nil {
+		return fmt.Errorf("registry: record the test of credential %s: %w", id, err)
+	}
+	return nil
+}
+
 // RecordFailure remembers that the registry refused to sign in with the credential, now, with
 // the code the pull failed with (D-07). A credential deleted meanwhile is not an error.
 func (s *Store) RecordFailure(ctx context.Context, id, code string) error {

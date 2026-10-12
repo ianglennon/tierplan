@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -247,6 +248,7 @@ type ResolveOutput struct {
 // CredentialTestRequest is the body of the credential test routes. The values are the sheet's
 // as they stand, saved or not.
 type CredentialTestRequest struct {
+	CredentialID   string `json:"credentialId,omitempty" maxLength:"64" doc:"A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment"`
 	Type           string `json:"type,omitempty" maxLength:"32" doc:"dockerhub, ghcr, gitlab or generic, as when adding; 422 type_invalid"`
 	Host           string `json:"host,omitempty" maxLength:"512" doc:"The registry host, as when adding; 422 host_required or host_invalid"`
 	Prefix         string `json:"prefix,omitempty" maxLength:"512" doc:"The namespace the credential covers. Recorded with the test; it does not change what is tried"`
@@ -435,54 +437,6 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 	unavailable := func() error {
 		return httpx.Problem(http.StatusServiceUnavailable, problemRegistriesUnavailable, "Registry credentials are not available on this server.")
 	}
-	limiter := &testLimiter{}
-	clients := d.Clients
-	if clients == nil {
-		clients = registry.NewClientCache(d.Egress, d.Version, d.Log)
-	}
-	// runTest tries the sign-in of a submission against its registry, from this server, and
-	// audits it. The secret is only ever passed to the registry client.
-	runTest := func(ctx context.Context, p *rbac.Principal, envID, userAgent string, req CredentialTestRequest) (*CredentialTestOutput, error) {
-		in, repo, ve := validateTest(req, false, time.Now())
-		if ve != nil {
-			return nil, credentialFieldProblems(ve)
-		}
-		if !limiter.allow(p.ID) {
-			return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tests. Wait a minute and try again.")
-		}
-		opts := registry.HostOptions{Host: in.Host, Username: in.Username, Password: in.Secret}
-		tctx, cancel := context.WithTimeout(ctx, testBudget)
-		defer cancel()
-		res := registry.Check(tctx, clients.New(opts), clients.Anonymous(in.Host), registry.CheckInput{
-			HostOptions: opts, Type: in.Type, Prefix: in.Prefix, TestRepository: repo,
-		})
-		layer := registry.LayerInstance
-		if envID != "" {
-			layer = registry.LayerEnvironment
-		}
-		details := map[string]string{
-			"layer": layer, "host": in.Host, "prefix": in.Prefix, "type": in.Type, "via": "server",
-			"reachable": res.Reachable.State, "signed_in": res.SignedIn.State, "can_pull": res.CanPull.State,
-		}
-		if repo != "" {
-			details["repository"] = repo
-		}
-		result, reason := audit.ResultSuccess, ""
-		if res.Failed() {
-			result, reason = audit.ResultFailure, res.FailureCode()
-			details["code"] = reason
-		}
-		if err := d.Audit.Record(ctx, audit.Entry{
-			Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialTested, TargetType: credentialTargetType,
-			EnvID: envID, Result: result, Reason: reason, IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
-		}); err != nil {
-			d.Log.Error("could not audit a credential test", "host", in.Host, "error", err)
-			return nil, huma.Error500InternalServerError("internal error")
-		}
-		return &CredentialTestOutput{CacheControl: "no-store", Body: CredentialTestResultBody{
-			Reachable: stepBody(res.Reachable), SignedIn: stepBody(res.SignedIn), CanPull: stepBody(res.CanPull), TestedAt: time.Now().UTC(),
-		}}, nil
-	}
 	// create stores a credential of the instance layer (envID empty) or of one environment, and
 	// writes its audit row in the same transaction, carrying the environment.
 	create := func(ctx context.Context, p *rbac.Principal, envID, userAgent string, req CredentialRequest) (registry.Credential, error) {
@@ -512,6 +466,87 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			return registry.Credential{}, registry.ErrNotFound
 		}
 		return c, err
+	}
+	limiter := &testLimiter{}
+	clients := d.Clients
+	if clients == nil {
+		clients = registry.NewClientCache(d.Egress, d.Version, d.Log)
+	}
+	// runTest tries the sign-in of a submission against its registry, from this server, and
+	// audits it. The submission names a stored credential of this layer (credentialId), or it
+	// does not. A stored credential fills in what was left blank and, with no secret typed,
+	// lends its stored secret, which goes to the registry client and nowhere else. The outcome
+	// is stored only when the test ran on the saved values.
+	runTest := func(ctx context.Context, p *rbac.Principal, envID, userAgent string, req CredentialTestRequest) (*CredentialTestOutput, error) {
+		var stored *registry.Credential
+		if req.CredentialID != "" {
+			c, err := lookup(ctx, envID, req.CredentialID)
+			if err != nil {
+				return nil, failIn(envID != "", "get credential to test", err)
+			}
+			stored = &c
+			req.Type = cmp.Or(req.Type, c.Type)
+			req.Host = cmp.Or(req.Host, c.Host)
+			req.Username = cmp.Or(req.Username, c.Username)
+		}
+		in, repo, ve := validateTest(req, stored != nil, time.Now())
+		if ve != nil {
+			return nil, credentialFieldProblems(ve)
+		}
+		secret := in.Secret
+		if secret == "" {
+			// validateTest only lets this through for a stored credential.
+			var err error
+			if secret, err = d.Store.Secret(ctx, stored.ID); err != nil {
+				return nil, failIn(envID != "", "open the stored secret to test", err)
+			}
+		}
+		if !limiter.allow(p.ID) {
+			return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tests. Wait a minute and try again.")
+		}
+		// The test is of the saved values when nothing it uses was changed from them.
+		saved := stored != nil && req.Secret == "" && in.Type == stored.Type && in.Host == stored.Host && in.Username == stored.Username
+		opts := registry.HostOptions{Host: in.Host, Username: in.Username, Password: secret}
+		tctx, cancel := context.WithTimeout(ctx, testBudget)
+		defer cancel()
+		res := registry.Check(tctx, clients.New(opts), clients.Anonymous(in.Host), registry.CheckInput{
+			HostOptions: opts, Type: in.Type, Prefix: in.Prefix, TestRepository: repo,
+		})
+		layer := registry.LayerInstance
+		if envID != "" {
+			layer = registry.LayerEnvironment
+		}
+		details := map[string]string{
+			"layer": layer, "host": in.Host, "prefix": in.Prefix, "type": in.Type, "via": "server",
+			"reachable": res.Reachable.State, "signed_in": res.SignedIn.State, "can_pull": res.CanPull.State,
+		}
+		entry := audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialTested, TargetType: credentialTargetType,
+			EnvID: envID, Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
+		}
+		if stored != nil {
+			entry.TargetID = stored.ID
+			details["name"] = stored.Name
+		}
+		if repo != "" {
+			details["repository"] = repo
+		}
+		if res.Failed() {
+			entry.Result, entry.Reason = audit.ResultFailure, res.FailureCode()
+			details["code"] = entry.Reason
+		}
+		if err := d.Audit.Record(ctx, entry); err != nil {
+			d.Log.Error("could not audit a credential test", "host", in.Host, "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		if saved {
+			if err := d.Store.RecordTest(ctx, stored.ID, !res.Failed(), res.FailureCode()); err != nil {
+				d.Log.Error("could not store the result of a credential test", "credential", stored.ID, "error", err)
+			}
+		}
+		return &CredentialTestOutput{CacheControl: "no-store", Body: CredentialTestResultBody{
+			Reachable: stepBody(res.Reachable), SignedIn: stepBody(res.SignedIn), CanPull: stepBody(res.CanPull), TestedAt: time.Now().UTC(),
+		}}, nil
 	}
 	// update changes a credential of one layer and audits it, carrying the environment.
 	update := func(ctx context.Context, p *rbac.Principal, envID, id, userAgent string, patch CredentialPatchRequest) (registry.Credential, error) {
@@ -627,7 +662,30 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
 		return runTest(ctx, p, "", in.UserAgent, in.Body)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "testEnvCredential",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/registries/test",
+		Summary:     "Test an environment registry sign-in from the server",
+		Description: "As testing an instance sign-in, for the credentials of one environment: the same three steps from the Bayplan server, on unsaved values or on a stored credential of this environment " +
+			"(credentialId; 404 credential_not_found for the instance's or another environment's). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. " +
+			"The 10 tests a minute per user are shared with the instance family: 429 rate_limited. Audited as registry.credential_tested with the environment, never the secret.",
+		Tags: []string{"registries"},
+	}, rbac.Require(rbac.PermRegistriesManage), func(ctx context.Context, in *TestEnvCredentialInput) (*CredentialTestOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		return runTest(ctx, p, in.EnvID, in.UserAgent, in.Body)
 	})
 
 	httpx.Register(r, huma.Operation{

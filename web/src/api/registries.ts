@@ -270,15 +270,27 @@ export function useResolveCredential(envId: string) {
   });
 }
 
+// What the test mutation is given: the values of the sheet, and the environment of the
+// credential being added or edited (absent for the instance layer), which picks the route
+// family. A body naming a credentialId tests that stored credential, with its stored secret
+// when none was typed.
+export interface TestCredentialVariables {
+  body: CredentialTestRequest;
+  envId?: string;
+}
+
 // postTestCredential runs the three-step test from the server on the values of the sheet,
-// saved or not. It never retries: each test is a sign-in attempt, and the server limits how
-// many a user may make. The request body (which holds the secret) is never copied into the
-// error.
-export async function postTestCredential(
-  body: CredentialTestRequest,
-): Promise<CredentialTestResult> {
+// saved or not, through the route of the credential's layer. It never retries: each test is a
+// sign-in attempt, and the server limits how many a user may make. The request body (which
+// holds the secret) is never copied into the error.
+export async function postTestCredential({
+  body,
+  envId,
+}: TestCredentialVariables): Promise<CredentialTestResult> {
   try {
-    const res = await api.POST("/api/registries/test", { body });
+    const res = envId
+      ? await api.POST("/api/env/{envId}/registries/test", { params: { path: { envId } }, body })
+      : await api.POST("/api/registries/test", { body });
     if (!res.data) {
       const problem = readProblem(res.error, res.response);
       throw new CredentialRequestError(problem.status, problem.type, problem.fields, "POST");
@@ -291,13 +303,18 @@ export async function postTestCredential(
   }
 }
 
-// useTestCredential is the mutation behind the sheet's Test credential. It writes nothing
-// to the list, so it invalidates nothing; the variables hold the secret that was typed, so the
-// cache lets go of them at once.
+// useTestCredential is the mutation behind the sheet's Test credential. The variables hold
+// the secret that was typed, so the cache lets go of them at once. A test of a stored
+// credential may have stored its result, so the list is read again; a test of unsaved values
+// writes nothing.
 export function useTestCredential() {
-  return useMutation<CredentialTestResult, CredentialRequestError, CredentialTestRequest>({
-    mutationFn: (body) => postTestCredential(body),
+  const queryClient = useQueryClient();
+  return useMutation<CredentialTestResult, CredentialRequestError, TestCredentialVariables>({
+    mutationFn: postTestCredential,
     retry: false,
     gcTime: 0,
+    onSuccess: (_result, { body }) => {
+      if (body.credentialId) void queryClient.invalidateQueries({ queryKey: REGISTRIES_KEY });
+    },
   });
 }

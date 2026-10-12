@@ -82,3 +82,13 @@ UPDATE registry_credentials SET last_failure_at = ?, last_failure_code = ? WHERE
 -- A pull that worked with the credential clears the failure it had. Writes only when there is one.
 UPDATE registry_credentials SET last_failure_at = NULL, last_failure_code = ''
 WHERE id = ? AND last_failure_at IS NOT NULL;
+
+-- name: SetRegistryCredentialTest :execrows
+-- Remembers the outcome of the last test run on the saved values (D-12). detail is a stable
+-- code, never text from the registry. A test that passed also clears the last sign-in failure,
+-- because the credential has just been seen to work.
+UPDATE registry_credentials
+SET last_test_at = sqlc.arg(at), last_test_ok = sqlc.arg(ok), last_test_detail = sqlc.arg(detail),
+    last_failure_at = CASE WHEN sqlc.arg(ok) = 1 THEN NULL ELSE last_failure_at END,
+    last_failure_code = CASE WHEN sqlc.arg(ok) = 1 THEN '' ELSE last_failure_code END
+WHERE id = sqlc.arg(id);

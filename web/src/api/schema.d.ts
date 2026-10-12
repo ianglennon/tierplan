@@ -900,6 +900,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/registries/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test an environment registry sign-in from the server
+         * @description As testing an instance sign-in, for the credentials of one environment: the same three steps from the Bayplan server, on unsaved values or on a stored credential of this environment (credentialId; 404 credential_not_found for the instance's or another environment's). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the instance family: 429 rate_limited. Audited as registry.credential_tested with the environment, never the secret.
+         */
+        post: operations["testEnvCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/registries/{credentialId}": {
         parameters: {
             query?: never;
@@ -3104,6 +3124,8 @@ export interface components {
             ok: boolean;
         };
         CredentialTestRequest: {
+            /** @description A stored credential of this layer to test. A field left blank is taken from it, and with no secret sent the stored secret is tried. When nothing is changed from what is stored, the result is remembered on the credential. 404 credential_not_found for one of another layer or environment */
+            credentialId?: string;
             /** @description The registry host, as when adding; 422 host_required or host_invalid */
             host?: string;
             /** @description The namespace the credential covers. Recorded with the test; it does not change what is tried */
@@ -7122,6 +7144,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResolveBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testEnvCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialTestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialTestResultBody"];
                 };
             };
             /** @description Error */

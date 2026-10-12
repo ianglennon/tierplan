@@ -375,13 +375,16 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
   const latestTestKey = useRef(testKey);
   latestTestKey.current = testKey;
   const stale = tested !== null && tested.key !== testKey;
-  const nothingToTest = watched[2].trim() === "";
+  // A saved credential can be tested on its stored secret; only a new one needs one typed.
+  const nothingToTest = !editing && watched[2].trim() === "";
+  const storedFailed = tested === null && credential?.lastTest != null && !credential.lastTest.ok;
   const testFailed =
-    tested !== null &&
-    !stale &&
-    [tested.result.reachable, tested.result.signedIn, tested.result.canPull].some(
-      (step) => step.state === "failed",
-    );
+    storedFailed ||
+    (tested !== null &&
+      !stale &&
+      [tested.result.reachable, tested.result.signedIn, tested.result.canPull].some(
+        (step) => step.state === "failed",
+      ));
 
   // A new credential starts in the first place its author may add one: the instance for an
   // instance administrator, otherwise their environment (preselected when they have one).
@@ -541,12 +544,16 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
     const key = testKey;
     tester.mutate(
       {
-        type: values.type,
-        username: values.username.trim(),
-        secret: values.secret,
-        ...(preset.hostEditable ? { host: values.host.trim() } : {}),
-        ...(values.prefix.trim() ? { prefix: values.prefix.trim() } : {}),
-        ...(repo ? { testRepository: repo } : {}),
+        envId: credential ? (credential.scope.envId ?? undefined) : envOfScope(values.scope),
+        body: {
+          ...(credential ? { credentialId: credential.id } : {}),
+          type: values.type,
+          username: values.username.trim(),
+          ...(values.secret ? { secret: values.secret } : {}),
+          ...(preset.hostEditable ? { host: values.host.trim() } : {}),
+          ...(values.prefix.trim() ? { prefix: values.prefix.trim() } : {}),
+          ...(repo ? { testRepository: repo } : {}),
+        },
       },
       {
         onSuccess: (result) => {
@@ -948,6 +955,12 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                     <AlertDescription>{testError}</AlertDescription>
                   </Alert>
                 ) : null}
+                {tested === null && credential?.lastTest ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span>{t("registries.test.lastTest")}</span>
+                    <LastTestCell test={credential.lastTest} />
+                  </div>
+                ) : null}
                 {tested ? (
                   <TestResult
                     result={tested.result}
@@ -989,6 +1002,11 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
       </AlertDialog>
     </>
   );
+}
+
+// The environment a scope value names, or undefined for the instance layer.
+function envOfScope(scope: string): string | undefined {
+  return scope === INSTANCE ? undefined : scope;
 }
 
 // The value of the read-only scope select: the instance, or the environment's ID.

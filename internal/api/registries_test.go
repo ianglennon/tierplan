@@ -1373,3 +1373,200 @@ func TestTheEleventhTestInAMinuteIsRateLimited(t *testing.T) {
 		t.Errorf("audit rows = %d, want 10: the refused one writes none", len(actions))
 	}
 }
+
+// Testing a stored credential and remembering the result (plan 05-11 task 2, D-12).
+
+type storedTest struct {
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail"`
+	At     string `json:"at"`
+}
+
+func (f *authFixture) storedTest(t *testing.T, u credentialUser, id string) *storedTest {
+	t.Helper()
+	rec := f.credCall(t, u, http.MethodGet, "/api/registries/"+id, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get: %d %s", rec.Code, rec.Body)
+	}
+	var c struct {
+		LastTest *storedTest `json:"lastTest"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil {
+		t.Fatal(err)
+	}
+	return c.LastTest
+}
+
+func (f *fakeRegistry) credential(name, secret string) string {
+	b, _ := json.Marshal(map[string]string{"name": name, "type": "generic", "host": f.host(), "username": f.user, "secret": secret})
+	return string(b)
+}
+
+func TestTestingAStoredCredentialUsesItsStoredSecretAndRemembersTheResult(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	c := f.storeCredential(t, admin, reg.credential("mine", reg.pass))
+	if f.storedTest(t, admin, c.ID) != nil {
+		t.Fatal("a new credential has a last test")
+	}
+
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test", `{"credentialId":"`+c.ID+`","testRepository":"acme/app"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeTest(t, rec); got.SignedIn.State != "passed" || got.CanPull.State != "passed" {
+		t.Fatalf("result = %+v, want passed with the stored secret", got)
+	}
+	last := f.storedTest(t, admin, c.ID)
+	if last == nil || !last.OK || last.Detail != "" || last.At == "" {
+		t.Fatalf("lastTest = %+v, want a pass", last)
+	}
+	_, details := f.registryAudit(t)
+	if got := details[len(details)-1]; got["name"] != "mine" || got["signed_in"] != "passed" {
+		t.Errorf("audit details = %v, want the credential's name", got)
+	}
+	if strings.Contains(rec.Body.String(), reg.pass) {
+		t.Errorf("the answer carries the stored secret: %s", rec.Body)
+	}
+}
+
+func TestAFailedTestOfTheStoredValuesIsRememberedWithItsCode(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	c := f.storeCredential(t, admin, reg.credential("stale-token", "an-old-secret-value-1234"))
+
+	rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test", `{"credentialId":"`+c.ID+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeTest(t, rec); got.SignedIn != (testStep{"failed", "sign_in_refused"}) {
+		t.Fatalf("result = %+v", got)
+	}
+	last := f.storedTest(t, admin, c.ID)
+	if last == nil || last.OK || last.Detail != "sign_in_refused" {
+		t.Fatalf("lastTest = %+v, want a failure with the code", last)
+	}
+	// A credential can be saved after a failed test: the failed result blocks nothing.
+	if rec := f.credCall(t, admin, http.MethodPatch, "/api/registries/"+c.ID, `{"username":"someone-else"}`); rec.Code != http.StatusOK {
+		t.Errorf("save after a failed test: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestATestOfChangedValuesIsAnsweredAndNotRemembered(t *testing.T) {
+	f := newAuthFixture(t, config.Config{})
+	reg := newFakeRegistry(t)
+	f.trusting(t, reg)
+	admin := f.asAdmin(t)
+	c := f.storeCredential(t, admin, reg.credential("mine", "an-old-secret-value-1234"))
+
+	for name, body := range map[string]string{
+		"a typed secret":   `{"credentialId":"` + c.ID + `","secret":"` + reg.pass + `"}`,
+		"another username": `{"credentialId":"` + c.ID + `","username":"someone-else","secret":"` + reg.pass + `"}`,
+	} {
+		rec := f.credCall(t, admin, http.MethodPost, "/api/registries/test", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+		if f.storedTest(t, admin, c.ID) != nil {
+			t.Errorf("%s: a test of values that are not saved was remembered", name)
+		}
+	}
+}
+
+func TestATestNamesACredentialOfItsOwnLayerAndEnvironmentOnly(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, b := f.twoEnvironments(t)
+	reg := newFakeRegistry(t)
+	f.trusting(t, reg)
+	admin := credentialUser{f.cookie, f.csrf}
+	instance := f.storeCredential(t, admin, reg.credential("layer-instance", reg.pass))
+	mk := func(env string) credentialResp {
+		rec := f.credCall(t, admin, http.MethodPost, "/api/env/"+env+"/registries", reg.credential("layer-"+env, reg.pass))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create: %d %s", rec.Code, rec.Body)
+		}
+		return decodeCred(t, rec)
+	}
+	inA, inB := mk(a.ID), mk(b.ID)
+
+	for name, tc := range map[string]struct{ path, id string }{
+		"an environment's credential through the instance family": {"/api/registries/test", inA.ID},
+		"the instance's credential through an environment":        {"/api/env/" + a.ID + "/registries/test", instance.ID},
+		"another environment's credential":                        {"/api/env/" + a.ID + "/registries/test", inB.ID},
+		"an unknown credential":                                   {"/api/registries/test", "nope"},
+	} {
+		rec := f.credCall(t, admin, http.MethodPost, tc.path, `{"credentialId":"`+tc.id+`"}`)
+		if rec.Code != http.StatusNotFound || problemType(t, rec) != "credential_not_found" {
+			t.Errorf("%s: %d %s, want 404 credential_not_found", name, rec.Code, rec.Body)
+		}
+	}
+	if f.storedTest(t, admin, inA.ID) != nil || f.storedTest(t, admin, instance.ID) != nil {
+		t.Error("a refused test was remembered")
+	}
+
+	rec := f.credCall(t, admin, http.MethodPost, "/api/env/"+a.ID+"/registries/test", `{"credentialId":"`+inA.ID+`"}`)
+	if rec.Code != http.StatusOK || decodeTest(t, rec).SignedIn.State != "passed" {
+		t.Fatalf("its own: %d %s", rec.Code, rec.Body)
+	}
+	if last := f.storedTest(t, admin, inA.ID); last == nil || !last.OK {
+		t.Errorf("lastTest = %+v, want a pass", last)
+	}
+	var envID, layer string
+	if err := f.st.Read.QueryRow(`SELECT COALESCE(env_id, ''), details->>'layer' FROM audit_log WHERE action = 'registry.credential_tested' ORDER BY seq DESC LIMIT 1`).Scan(&envID, &layer); err != nil {
+		t.Fatal(err)
+	}
+	if envID != a.ID || layer != "environment" {
+		t.Errorf("audit env_id = %q, layer = %q, want %s and environment", envID, layer, a.ID)
+	}
+}
+
+func TestAnEnvAdminTestsTheirEnvironmentAndAnOperatorCannot(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, b := f.twoEnvironments(t)
+	reg := newFakeRegistry(t)
+	f.trusting(t, reg)
+	envAdmin := f.asRoleOn(t, "envadmin", a.ID, "admin")
+	operator := f.asRoleOn(t, "operator", a.ID, "operator")
+
+	rec := f.credCall(t, envAdmin, http.MethodPost, "/api/env/"+a.ID+"/registries/test", reg.body(reg.pass, "acme/app"))
+	if rec.Code != http.StatusOK || decodeTest(t, rec).CanPull.State != "passed" {
+		t.Fatalf("env Admin: %d %s", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, operator, http.MethodPost, "/api/env/"+a.ID+"/registries/test", reg.body(reg.pass, "")); rec.Code != http.StatusForbidden {
+		t.Errorf("Operator: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, envAdmin, http.MethodPost, "/api/env/"+b.ID+"/registries/test", reg.body(reg.pass, "")); rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
+		t.Errorf("Admin of A on B: %d %s, want 403 or 404", rec.Code, rec.Body)
+	}
+}
+
+func TestBothFamiliesShareOneLimitOfTenTestsAMinutePerUser(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, _ := f.twoEnvironments(t)
+	admin := credentialUser{f.cookie, f.csrf}
+	body := `{"type":"generic","host":"169.254.169.254","username":"bot","secret":"does-not-matter-1234"}`
+	for i := range 10 {
+		path := "/api/registries/test"
+		if i%2 == 1 {
+			path = "/api/env/" + a.ID + "/registries/test"
+		}
+		if rec := f.credCall(t, admin, http.MethodPost, path, body); rec.Code != http.StatusOK {
+			t.Fatalf("test %d: %d %s", i+1, rec.Code, rec.Body)
+		}
+	}
+	for _, path := range []string{"/api/registries/test", "/api/env/" + a.ID + "/registries/test"} {
+		rec := f.credCall(t, admin, http.MethodPost, path, body)
+		if rec.Code != http.StatusTooManyRequests || problemType(t, rec) != "rate_limited" {
+			t.Errorf("%s: %d %s, want 429 rate_limited", path, rec.Code, rec.Body)
+		}
+	}
+	// Another user has a limit of their own.
+	other := f.asRoleOn(t, "envadmin", a.ID, "admin")
+	if rec := f.credCall(t, other, http.MethodPost, "/api/env/"+a.ID+"/registries/test", body); rec.Code != http.StatusOK {
+		t.Errorf("another user: %d %s, want 200", rec.Code, rec.Body)
+	}
+}

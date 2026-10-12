@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { CredentialTestResult } from "@/api/registries";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { LastTestCell } from "@/features/registries/credential-table";
 import { TestResult } from "@/features/registries/test-result";
 import "@/i18n";
 
@@ -127,5 +129,47 @@ describe("TestResult", () => {
     expect(region.getAttribute("aria-live")).toBe("off");
     expect(region.className).toContain("opacity-60");
     expect(within(region).getByText("Result is for the earlier values")).toBeTruthy();
+  });
+});
+
+describe("LastTestCell", () => {
+  const at = "2026-10-12T10:00:00Z";
+
+  it("shows Not tested, Passed and Failed with a time", () => {
+    const { rerender } = render(
+      <TooltipProvider>
+        <LastTestCell test={null} />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText("Not tested")).toBeTruthy();
+    rerender(
+      <TooltipProvider>
+        <LastTestCell test={{ at, ok: true, detail: "" }} />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText("Passed")).toBeTruthy();
+    rerender(
+      <TooltipProvider>
+        <LastTestCell test={{ at, ok: false, detail: "sign_in_refused" }} />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText("Failed")).toBeTruthy();
+  });
+
+  it("words the stored code in the tooltip and shows any other detail as text", async () => {
+    const cell = (detail: string) => (
+      <TooltipProvider>
+        <LastTestCell test={{ at, ok: false, detail }} />
+      </TooltipProvider>
+    );
+    render(cell("sign_in_refused"));
+    fireEvent.focus(screen.getByText("Failed"));
+    expect(
+      (await screen.findAllByText("The registry refused this username and secret.")).length,
+    ).toBeGreaterThan(0);
+    cleanup();
+    render(cell("something else"));
+    fireEvent.focus(screen.getByText("Failed"));
+    expect((await screen.findAllByText("something else")).length).toBeGreaterThan(0);
   });
 });

@@ -356,6 +356,37 @@ func (q *Queries) SetRegistryCredentialFailure(ctx context.Context, arg SetRegis
 	return result.RowsAffected()
 }
 
+const setRegistryCredentialTest = `-- name: SetRegistryCredentialTest :execrows
+UPDATE registry_credentials
+SET last_test_at = ?1, last_test_ok = ?2, last_test_detail = ?3,
+    last_failure_at = CASE WHEN ?2 = 1 THEN NULL ELSE last_failure_at END,
+    last_failure_code = CASE WHEN ?2 = 1 THEN '' ELSE last_failure_code END
+WHERE id = ?4
+`
+
+type SetRegistryCredentialTestParams struct {
+	At     sql.NullInt64
+	Ok     sql.NullInt64
+	Detail string
+	ID     string
+}
+
+// Remembers the outcome of the last test run on the saved values (D-12). detail is a stable
+// code, never text from the registry. A test that passed also clears the last sign-in failure,
+// because the credential has just been seen to work.
+func (q *Queries) SetRegistryCredentialTest(ctx context.Context, arg SetRegistryCredentialTestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setRegistryCredentialTest,
+		arg.At,
+		arg.Ok,
+		arg.Detail,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateRegistryCredential = `-- name: UpdateRegistryCredential :execrows
 UPDATE registry_credentials
 SET name = ?, type = ?, host = ?, prefix = ?, username = ?, hub_fallback = ?, expires_at = ?, updated_at = ?

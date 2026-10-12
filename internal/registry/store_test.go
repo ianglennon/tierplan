@@ -610,3 +610,56 @@ func TestDeletingAnEnvironmentDeletesItsCredentialsInTheSameStatement(t *testing
 		t.Errorf("candidates for the removed environment = %+v, %v; only the instance's remain", cands, err)
 	}
 }
+
+func TestRecordTestStoresTheOutcomeAndAPassingTestClearsTheLastFailure(t *testing.T) {
+	s, _, _ := newStore(t)
+	ctx := context.Background()
+	c := create(t, s, nil)
+	if c.LastTest != nil {
+		t.Fatalf("a new credential has a last test: %+v", c.LastTest)
+	}
+	if err := s.RecordFailure(ctx, c.ID, "pull_unauthorized"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.RecordTest(ctx, c.ID, false, "sign_in_refused"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, c.ID)
+	if err != nil || got.LastTest == nil || got.LastTest.OK || got.LastTest.Detail != "sign_in_refused" || !got.LastTest.At.Equal(now) {
+		t.Fatalf("after a failed test: %+v, %v", got.LastTest, err)
+	}
+	if got.LastFailure == nil {
+		t.Error("a failed test cleared the last sign-in failure")
+	}
+
+	if err := s.RecordTest(ctx, c.ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Get(ctx, c.ID)
+	if err != nil || got.LastTest == nil || !got.LastTest.OK || got.LastTest.Detail != "" {
+		t.Fatalf("after a passing test: %+v, %v", got.LastTest, err)
+	}
+	if got.LastFailure != nil {
+		t.Errorf("a passing test left the failure %+v", got.LastFailure)
+	}
+}
+
+func TestRecordTestOfADeletedCredentialIsNotAnError(t *testing.T) {
+	s, _, _ := newStore(t)
+	if err := s.RecordTest(context.Background(), "gone", true, ""); err != nil {
+		t.Fatalf("RecordTest: %v", err)
+	}
+}
+
+func TestSecretOpensTheStoredSecretAndNotFoundForAnUnknownCredential(t *testing.T) {
+	s, _, _ := newStore(t)
+	c := create(t, s, nil)
+	got, err := s.Secret(context.Background(), c.ID)
+	if err != nil || got != longSecret {
+		t.Fatalf("Secret = %q, %v", got, err)
+	}
+	if _, err := s.Secret(context.Background(), "nope"); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("Secret of an unknown credential: %v, want ErrNotFound", err)
+	}
+}

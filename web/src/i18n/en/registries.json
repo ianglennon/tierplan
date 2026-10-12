@@ -292,6 +292,17 @@
         "rateLimited": "Too many tests. Wait a minute and try again.",
         "permission": "You no longer have permission to do that. Your access may have changed.",
         "generic": "Couldn't run the test. Try again."
+      },
+      "lastTest": "Last test",
+      "short": {
+        "registry_unreachable": "Couldn't reach the registry. Check the address, DNS and firewall.",
+        "registry_tls": "The registry's certificate isn't trusted.",
+        "registry_http": "The host answered, but not like a Docker registry.",
+        "sign_in_refused": "The registry refused this username and secret.",
+        "no_pull_access": "Signed in, but this credential can't pull the test repository. Check its scopes.",
+        "repository_not_found": "The test repository wasn't found.",
+        "rate_limited": "The registry is limiting requests.",
+        "check_failed": "The test couldn't finish."
       }
     }
   }
