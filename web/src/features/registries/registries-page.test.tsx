@@ -295,6 +295,17 @@ describe("RegistriesPage permissions", () => {
     expect(changes).toEqual([{ credential: "alpha" }]);
   });
 
+  it("enables Add credential for an environment Admin, who is not an instance administrator", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
+    credentials = [credential("alpha")];
+    mount();
+    await screen.findByText("alpha");
+    const add = screen.getByRole("button", { name: "Add credential" });
+    expect(add.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(add);
+    expect(changes).toEqual([{ credential: "new" }]);
+  });
+
   it("offers a manager Edit and a destructive Delete… after a separator", async () => {
     me = makeMe({ instanceAdmin: true });
     credentials = [credential("alpha", { canManage: true })];

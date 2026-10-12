@@ -860,6 +860,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/registries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a registry credential to an environment
+         * @description Stores a sign-in that applies to this environment's pulls and tag browsing only, and wins over an instance credential for the same registry host and namespace (D-02). Everything else is as adding an instance credential: the secret is sealed with the vault and never returned, only its last 4 characters (12 or more characters). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403 and an environment the caller cannot see 404 environment_not_found. 422 validation_failed names every field at fault with a stable code, as for the instance family; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another credential of this environment clashes (an instance credential never does). Audited as registry.credential_created with the environment, without the secret.
+         */
+        post: operations["createEnvCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/registries/resolve": {
         parameters: {
             query?: never;
@@ -6948,6 +6968,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createEnvCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialBody"];
                 };
             };
             /** @description Error */

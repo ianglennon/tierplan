@@ -328,6 +328,20 @@ func (s *Store) Get(ctx context.Context, id string) (Credential, error) {
 	return credentialOf(row), nil
 }
 
+// GetInEnv returns one credential of one environment. A credential of another environment, or of
+// the instance layer, is ErrNotFound exactly like one that does not exist, so a route of one
+// environment never reaches a credential that is not its own.
+func (s *Store) GetInEnv(ctx context.Context, envID, id string) (Credential, error) {
+	c, err := s.Get(ctx, id)
+	if err != nil {
+		return Credential{}, err
+	}
+	if envID == "" || c.EnvID != envID {
+		return Credential{}, ErrNotFound
+	}
+	return c, nil
+}
+
 // List returns every credential: the instance ones first, then each environment's, by host and prefix.
 func (s *Store) List(ctx context.Context) ([]Credential, error) {
 	rows, err := s.st.RQ.ListRegistryCredentials(ctx)

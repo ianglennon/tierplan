@@ -81,12 +81,15 @@ export const credentialQuery = (id: string) =>
       count < 2 && !(error instanceof CredentialRequestError && error.status === 404),
   });
 
-// postCredential adds one instance credential. It never retries: a create whose answer
-// was lost may have happened (P2 D-42). The submitted body is never copied into the
-// error, so the secret travels no further than the request.
-export async function postCredential(body: CredentialRequest): Promise<Credential> {
+// postCredential adds one credential: of the environment named by envId, or an instance
+// credential when there is none. It never retries: a create whose answer was lost may have
+// happened (P2 D-42). The submitted body is never copied into the error, so the secret travels
+// no further than the request.
+export async function postCredential(body: CredentialRequest, envId?: string): Promise<Credential> {
   try {
-    const res = await api.POST("/api/registries", { body });
+    const res = envId
+      ? await api.POST("/api/env/{envId}/registries", { params: { path: { envId } }, body })
+      : await api.POST("/api/registries", { body });
     if (!res.data) {
       const problem = readProblem(res.error, res.response);
       throw new CredentialRequestError(problem.status, problem.type, problem.fields, "POST");
@@ -99,13 +102,20 @@ export async function postCredential(body: CredentialRequest): Promise<Credentia
   }
 }
 
+// What the create mutation is given: the request, and the environment it is for. An absent
+// envId is the instance layer; the scope chosen in the sheet picks the route family.
+export interface CreateCredentialVariables {
+  body: CredentialRequest;
+  envId?: string;
+}
+
 // useCreateCredential is the mutation behind the sheet's Save credential. It reads the
 // list again whatever the answer, and puts nothing the user typed in the cache: the
 // request body is the mutation's variables, which are dropped when it settles.
 export function useCreateCredential() {
   const queryClient = useQueryClient();
-  return useMutation<Credential, CredentialRequestError, CredentialRequest>({
-    mutationFn: postCredential,
+  return useMutation<Credential, CredentialRequestError, CreateCredentialVariables>({
+    mutationFn: ({ body, envId }) => postCredential(body, envId),
     retry: false,
     // The mutation's variables hold the secret that was typed. With no time to live
     // the cache lets go of them as soon as the sheet that made the request is gone.

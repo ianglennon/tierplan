@@ -66,6 +66,14 @@ type CreateCredentialInput struct {
 	Body      CredentialRequest
 }
 
+// CreateEnvCredentialInput is the path and body of the environment create route.
+type CreateEnvCredentialInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      CredentialRequest
+}
+
 // CredentialPatchRequest is the body of PATCH /api/registries/{credentialId}. Every member is
 // optional: one left out keeps what is stored, and one sent as an empty string clears a prefix
 // or an expiry. There is no scope: a credential never moves between layers.
@@ -233,7 +241,7 @@ func (v credentialViewer) canManage(c registry.Credential) bool {
 	if c.EnvID == "" {
 		return v.admin()
 	}
-	return v.admin() || v.holds(c.EnvID, rbac.Perm("registries.manage"))
+	return v.admin() || v.holds(c.EnvID, rbac.PermRegistriesManage)
 }
 
 // RegisterRegistries registers the registry credential routes that are not in an environment's
@@ -243,25 +251,44 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
-	fail := func(what string, err error) error {
+	// failIn words a refusal for the layer it happened in: the instance's or one environment's.
+	failIn := func(inEnv bool, what string, err error) error {
 		var ve *registry.ValidationError
+		holder := "instance credential"
+		if inEnv {
+			holder = "credential of this environment"
+		}
 		switch {
 		case errors.As(err, &ve):
 			return credentialFieldProblems(ve)
 		case errors.Is(err, registry.ErrNameTaken):
-			return conflictProblem(err, problemCredentialNameTaken, "Another instance credential already has that name.")
+			return conflictProblem(err, problemCredentialNameTaken, "Another "+holder+" already has that name.")
 		case errors.Is(err, registry.ErrHostPrefixTaken):
-			return conflictProblem(err, problemHostPrefixTaken, "Another instance credential already covers that registry and namespace.")
+			return conflictProblem(err, problemHostPrefixTaken, "Another "+holder+" already covers that registry and namespace.")
 		case errors.Is(err, registry.ErrHubFallbackTaken):
-			return conflictProblem(err, problemHubFallbackTaken, "Another instance credential is already used for all Docker Hub pulls.")
+			return conflictProblem(err, problemHubFallbackTaken, "Another "+holder+" is already used for all Docker Hub pulls.")
 		case errors.Is(err, registry.ErrNotFound):
 			return httpx.Problem(http.StatusNotFound, problemCredentialNotFound, "credential not found")
 		}
 		d.Log.Error("registry credential request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
 	}
+	fail := func(what string, err error) error { return failIn(false, what, err) }
 	unavailable := func() error {
 		return httpx.Problem(http.StatusServiceUnavailable, problemRegistriesUnavailable, "Registry credentials are not available on this server.")
+	}
+	// create stores a credential of the instance layer (envID empty) or of one environment, and
+	// writes its audit row in the same transaction, carrying the environment.
+	create := func(ctx context.Context, p *rbac.Principal, envID, userAgent string, req CredentialRequest) (registry.Credential, error) {
+		return d.Store.Create(ctx, registry.CreateInput{
+			EnvID: envID, Name: req.Name, Type: req.Type, Host: req.Host, Prefix: req.Prefix, Username: req.Username,
+			Secret: req.Secret, HubFallback: req.HubFallback, Expires: req.Expires,
+		}, p.ID, func(ctx context.Context, tx *sql.Tx, c registry.Credential) error {
+			return d.Audit.RecordTx(ctx, tx, audit.Entry{
+				Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialCreated, TargetType: credentialTargetType, TargetID: c.ID,
+				EnvID: envID, Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: credentialAuditDetails(c),
+			})
+		})
 	}
 	viewerOf := func(ctx context.Context, p *rbac.Principal) (credentialViewer, error) {
 		global, perEnv, err := d.Checker.EffectivePermissions(ctx, p)
@@ -301,20 +328,38 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		if d.Store == nil {
 			return nil, unavailable()
 		}
-		req := in.Body
-		c, err := d.Store.Create(ctx, registry.CreateInput{
-			Name: req.Name, Type: req.Type, Host: req.Host, Prefix: req.Prefix, Username: req.Username,
-			Secret: req.Secret, HubFallback: req.HubFallback, Expires: req.Expires,
-		}, p.ID, func(ctx context.Context, tx *sql.Tx, c registry.Credential) error {
-			return d.Audit.RecordTx(ctx, tx, audit.Entry{
-				Actor: p.AuditActor(), Action: audit.ActionRegistryCredentialCreated, TargetType: credentialTargetType, TargetID: c.ID,
-				Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent, Details: credentialAuditDetails(c),
-			})
-		})
+		c, err := create(ctx, p, "", in.UserAgent, in.Body)
 		if err != nil {
 			return nil, fail("create credential", err)
 		}
 		return &CredentialOutput{CacheControl: "no-store", Body: credentialBody(c, true, nil)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "createEnvCredential",
+		Method:        http.MethodPost,
+		Path:          "/api/env/{envId}/registries",
+		Summary:       "Add a registry credential to an environment",
+		DefaultStatus: http.StatusCreated,
+		Description: "Stores a sign-in that applies to this environment's pulls and tag browsing only, and wins over an instance credential for the same registry host and namespace (D-02). " +
+			"Everything else is as adding an instance credential: the secret is sealed with the vault and never returned, only its last 4 characters (12 or more characters). " +
+			"Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403 and an environment the caller cannot see 404 environment_not_found. " +
+			"422 validation_failed names every field at fault with a stable code, as for the instance family; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another credential " +
+			"of this environment clashes (an instance credential never does). Audited as registry.credential_created with the environment, without the secret.",
+		Tags: []string{"registries"},
+	}, rbac.Require(rbac.PermRegistriesManage), func(ctx context.Context, in *CreateEnvCredentialInput) (*CredentialOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		c, err := create(ctx, p, in.EnvID, in.UserAgent, in.Body)
+		if err != nil {
+			return nil, failIn(true, "create environment credential", err)
+		}
+		return &CredentialOutput{CacheControl: "no-store", Body: credentialBody(c, true, d.envName(ctx, c.EnvID))}, nil
 	})
 
 	httpx.Register(r, huma.Operation{

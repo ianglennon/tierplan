@@ -42,6 +42,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `networks.manage` | environment | no | no | yes | yes | no | Create and delete networks |
 | `networks.read` | environment | yes | yes | yes | yes | no | View networks |
 | `registries.instance` | global | no | no | no | yes | yes | Manage registry credentials that apply to every environment |
+| `registries.manage` | environment | no | no | yes | yes | no | Manage this environment's registry credentials |
 | `secrets.reveal` | environment | no | extra | yes | yes | yes | Reveal secret values |
 | `settings.read` | global | no | no | no | yes | no | View settings |
 | `settings.write` | global | no | no | no | yes | no | Change settings |

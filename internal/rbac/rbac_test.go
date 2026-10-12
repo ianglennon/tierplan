@@ -74,6 +74,7 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 		"janitor.policy":         x,
 		"shells.manage":          e(rbac.RoleAdmin),
 		"registries.instance":    g(true),
+		"registries.manage":      e(rbac.RoleAdmin),
 	}
 	for name, w := range want {
 		p, ok := m[name]

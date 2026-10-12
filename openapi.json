@@ -10414,6 +10414,67 @@
         ]
       }
     },
+    "/api/env/{envId}/registries": {
+      "post": {
+        "description": "Stores a sign-in that applies to this environment's pulls and tag browsing only, and wins over an instance credential for the same registry host and namespace (D-02). Everything else is as adding an instance credential: the secret is sealed with the vault and never returned, only its last 4 characters (12 or more characters). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403 and an environment the caller cannot see 404 environment_not_found. 422 validation_failed names every field at fault with a stable code, as for the instance family; 409 credential_name_taken, host_prefix_taken or hub_fallback_taken when another credential of this environment clashes (an instance credential never does). Audited as registry.credential_created with the environment, without the secret.",
+        "operationId": "createEnvCredential",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Add a registry credential to an environment",
+        "tags": [
+          "registries"
+        ]
+      }
+    },
     "/api/env/{envId}/registries/resolve": {
       "post": {
         "description": "Answers with the same function pulls choose a credential with: the exact registry host, the longest whole-segment namespace prefix across the instance credentials and this environment's, the environment's credential winning a tie, and a Docker Hub fallback last. The answer names the credential and why, and lists the other credentials for the registry with what became of each. Only the instance layer and this environment's layer are consulted, and no secret is ever returned. An unparsable reference is 422 ref_invalid. Needs images.read on the environment. Not audited: it reads nothing but the choice.",

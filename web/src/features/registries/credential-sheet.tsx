@@ -4,9 +4,10 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
+import { environmentsQuery } from "@/api/environments";
 import {
   type Credential,
   type CredentialPatch,
@@ -61,6 +62,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CredentialBadge } from "@/features/registries/credential-badge";
 import { ExpiresCell, LastTestCell, maskOf } from "@/features/registries/credential-table";
 import { hostAfterTypeChange, PRESETS, presetFor } from "@/features/registries/presets";
+import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -74,6 +76,9 @@ const HOST = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$/i;
 // A namespace: lower-case path segments with no slash at either end.
 const PREFIX = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// The Scope select's value for the instance layer; any other value is an environment's ID.
+const INSTANCE = "instance";
 
 const TYPES = PRESETS.map((p) => p.type) as [RegistryType, ...RegistryType[]];
 
@@ -89,6 +94,7 @@ function today(): string {
 function makeSchema(editing: boolean, keepExpires: string) {
   return z
     .object({
+      scope: z.string(),
       type: z.enum(TYPES),
       name: z.string(),
       host: z.string(),
@@ -139,6 +145,7 @@ const FIELDS = [
 
 // The empty form. Docker Hub is first in the toggle, so it is what the sheet opens on.
 const DEFAULTS: Values = {
+  scope: INSTANCE,
   type: "dockerhub",
   name: "",
   host: presetFor("dockerhub").host,
@@ -156,6 +163,7 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 // give, and the field starts empty.
 function valuesOf(c: Credential): Values {
   return {
+    scope: scopeValue(c),
     type: c.type,
     name: c.name,
     host: c.host,
@@ -281,6 +289,36 @@ function SkeletonFields() {
   );
 }
 
+// A place a credential can be added: the instance layer, or one environment.
+interface ScopeChoice {
+  value: string;
+  label: string;
+}
+
+// useScopeChoices lists where the signed-in user may add a credential (D-01, D-30): the
+// instance layer for a holder of registries.instance, and each environment where they hold
+// registries.manage. The environments come from the list the switcher already reads. ready
+// is false until that list has arrived, so a default is not chosen from half the options.
+function useScopeChoices(): { choices: ScopeChoice[]; ready: boolean } {
+  const t = useT();
+  const me = useMe();
+  const environments = useQuery(environmentsQuery);
+  return useMemo(() => {
+    const choices: ScopeChoice[] = [];
+    if (hasPermission(me.data, "registries.instance")) {
+      choices.push({ value: INSTANCE, label: t("registries.sheet.scope.instance") });
+    }
+    const named = (environments.data?.items ?? [])
+      .filter((e) => hasPermission(me.data, "registries.manage", e.id))
+      .map((e) => ({ value: e.id, label: e.name }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return {
+      choices: [...choices, ...named],
+      ready: me.isSuccess && (environments.isSuccess || environments.isError),
+    };
+  }, [t, me.data, me.isSuccess, environments.data, environments.isSuccess, environments.isError]);
+}
+
 // FormSheet is the form of a credential: empty to add one, or filled with the stored fields
 // of the one being edited. In edit mode the secret is optional and never shown: left empty
 // it keeps the stored one.
@@ -296,6 +334,7 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [showSecret, setShowSecret] = useState(false);
   const [discarding, setDiscarding] = useState(false);
+  const { choices, ready } = useScopeChoices();
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: defaults,
@@ -304,8 +343,18 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
   const errors = form.formState.errors;
   const dirty = form.formState.isDirty;
   const type = form.watch("type");
+  const scope = form.watch("scope");
   const preset = presetFor(type);
   const pending = create.isPending || update.isPending;
+
+  // A new credential starts in the first place its author may add one: the instance for an
+  // instance administrator, otherwise their environment (preselected when they have one).
+  // This is the form's own starting point, so it does not count as a change.
+  useEffect(() => {
+    if (editing || !ready || choices.length === 0) return;
+    if (choices.some((c) => c.value === scope)) return;
+    form.reset({ ...form.getValues(), scope: choices[0]?.value ?? INSTANCE });
+  }, [editing, ready, choices, scope, form]);
 
   const errorOf = (field: keyof Values) => {
     const key = errors[field]?.message;
@@ -335,19 +384,27 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
   }
 
   function refusalOf(err: CredentialRequestError): Refusal | null {
-    const scope = t("registries.sheet.errors.scopeInstance");
     const values = form.getValues();
+    const layer = credential ? scopeValue(credential) : values.scope;
+    // The layer the clash is in, in words: all environments, or the environment's name.
+    const scopeName =
+      layer === INSTANCE
+        ? t("registries.sheet.errors.scopeInstance")
+        : (credential?.scope.envName ?? choices.find((c) => c.value === layer)?.label ?? layer);
     switch (err.type) {
       case "credential_name_taken":
         return {
-          message: t("registries.sheet.errors.nameTaken", { name: values.name.trim(), scope }),
+          message: t("registries.sheet.errors.nameTaken", {
+            name: values.name.trim(),
+            scope: scopeName,
+          }),
         };
       case "host_prefix_taken": {
         const host = presetFor(values.type).hostEditable ? values.host.trim() : preset.host;
         const prefix = values.prefix.trim();
         return {
           message: t("registries.sheet.errors.hostPrefixTaken", {
-            scope: capitalise(scope),
+            scope: capitalise(scopeName),
             target: prefix ? `${host}/${prefix}` : host,
           }),
         };
@@ -357,12 +414,12 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
           err.conflictName ??
           queryClient
             .getQueryData<Credential[]>(credentialsQuery.queryKey)
-            ?.find((c) => c.hubFallback && c.scope.kind === "instance" && c.id !== credential?.id)
+            ?.find((c) => c.hubFallback && scopeValue(c) === layer && c.id !== credential?.id)
             ?.name;
         return {
           message: holder
-            ? t("registries.sheet.errors.hubFallbackTaken", { name: holder, scope })
-            : t("registries.sheet.errors.hubFallbackTakenUnnamed", { scope }),
+            ? t("registries.sheet.errors.hubFallbackTaken", { name: holder, scope: scopeName })
+            : t("registries.sheet.errors.hubFallbackTakenUnnamed", { scope: scopeName }),
         };
       }
     }
@@ -421,13 +478,17 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
       ...(values.type === "dockerhub" && values.hubFallback ? { hubFallback: true } : {}),
       ...(values.expires ? { expires: values.expires } : {}),
     };
-    create.mutate(body, {
-      onSuccess: (made) => {
-        toastSuccess(t("registries.sheet.success", { name: made.name }));
-        close();
+    // The scope chosen in the sheet picks the route family: the instance's or the environment's.
+    create.mutate(
+      { body, envId: values.scope === INSTANCE ? undefined : values.scope },
+      {
+        onSuccess: (made) => {
+          toastSuccess(t("registries.sheet.success", { name: made.name }));
+          close();
+        },
+        onError: (err) => setRefusal(refusalOf(err)),
       },
-      onError: (err) => setRefusal(refusalOf(err)),
-    });
+    );
   }
 
   function changeType(next: RegistryType) {
@@ -545,19 +606,36 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                 <FieldLabel htmlFor={`${ids}-scope`}>
                   {t("registries.sheet.scope.label")}
                 </FieldLabel>
-                <Select value={credential ? scopeValue(credential) : "instance"} disabled={editing}>
-                  <SelectTrigger id={`${ids}-scope`} className="w-full max-md:h-11">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="instance">{t("registries.sheet.scope.instance")}</SelectItem>
-                    {credential?.scope.envId ? (
-                      <SelectItem value={credential.scope.envId}>
-                        {credential.scope.envName ?? credential.scope.envId}
-                      </SelectItem>
-                    ) : null}
-                  </SelectContent>
-                </Select>
+                <Controller
+                  control={form.control}
+                  name="scope"
+                  render={({ field }) => (
+                    <Select
+                      value={field.value}
+                      disabled={editing}
+                      onValueChange={(next) => field.onChange(next)}
+                    >
+                      <SelectTrigger id={`${ids}-scope`} className="w-full max-md:h-11">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {credential ? (
+                          <SelectItem value={scopeValue(credential)}>
+                            {credential.scope.envId
+                              ? (credential.scope.envName ?? credential.scope.envId)
+                              : t("registries.sheet.scope.instance")}
+                          </SelectItem>
+                        ) : (
+                          choices.map((c) => (
+                            <SelectItem key={c.value} value={c.value}>
+                              {c.label}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
                 <FieldDescription>
                   {t(editing ? "registries.sheet.scope.fixed" : "registries.sheet.scope.helper")}
                 </FieldDescription>

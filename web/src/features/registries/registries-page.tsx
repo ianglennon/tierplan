@@ -42,13 +42,17 @@ interface RegistriesPageProps {
 
 // RegistriesPage is the credential list everyone who reads images can open (D-09). The
 // server limits the rows to what the caller may see; this only decides what to show.
-// Adding is for an instance administrator (registries.instance), and everyone else
-// sees the same table read-only.
+// Adding is for an instance administrator (registries.instance) and an environment Admin
+// (registries.manage), and everyone else sees the same table read-only.
 export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) {
   const t = useT();
   useDocumentTitle(t("registries.title"));
   const allowed = useAnyEnvironmentPermission("images.read");
-  const canAdd = usePermission("registries.instance");
+  // Adding is for an instance administrator (instance credentials) and for an Admin of an
+  // environment (that environment's credentials); the sheet offers each only their own scopes.
+  const canAddInstance = usePermission("registries.instance");
+  const canAddEnvironment = useAnyEnvironmentPermission("registries.manage");
+  const canAdd = canAddInstance || canAddEnvironment;
   const credentials = useQuery({ ...credentialsQuery, enabled: allowed });
   // The credential whose delete confirmation is open.
   const [deleting, setDeleting] = useState<Credential | null>(null);
@@ -62,8 +66,8 @@ export function RegistriesPage({ search, onSearchChange }: RegistriesPageProps) 
     [environments.data],
   );
 
-  // ?credential=new is the add form, which only an instance administrator has. For
-  // anyone else the parameter is dropped, so a shared link shows the list.
+  // ?credential=new is the add form, which only an instance administrator or an environment
+  // Admin has. For anyone else the parameter is dropped, so a shared link shows the list.
   const addDenied = allowed && !canAdd && search.credential === "new";
   useEffect(() => {
     if (addDenied) onSearchChange({ credential: undefined });

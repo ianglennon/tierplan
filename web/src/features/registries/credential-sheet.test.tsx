@@ -27,6 +27,8 @@ let postStatus: number;
 let postBody: unknown;
 let stored: Record<string, unknown> | null;
 let closed: number;
+let environments: { id: string; name: string }[];
+let envPosted: { path: string; body: Record<string, unknown> }[];
 
 const credential = (extra: Record<string, unknown> = {}) => ({
   id: "c1",
@@ -57,6 +59,11 @@ beforeEach(() => {
   postBody = credential();
   stored = credential();
   closed = 0;
+  environments = [
+    { id: "e1", name: "Lab" },
+    { id: "e2", name: "Prod" },
+  ];
+  envPosted = [];
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -64,6 +71,11 @@ beforeEach(() => {
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
       if (url.pathname === "/api/me") return Response.json(me);
+      if (url.pathname === "/api/environments") return Response.json({ items: environments });
+      if (/^\/api\/env\/[^/]+\/registries$/.test(url.pathname) && req.method === "POST") {
+        envPosted.push({ path: url.pathname, body: (await req.json()) as Record<string, unknown> });
+        return Response.json(postBody, { status: postStatus });
+      }
       if (url.pathname === "/api/registries" && req.method === "POST") {
         posted.push((await req.json()) as Record<string, unknown>);
         return Response.json(postBody, { status: postStatus });
@@ -159,7 +171,9 @@ describe("CredentialSheet add mode", () => {
       "GitLab",
       "Generic v2",
     ]);
-    expect(screen.getByLabelText("Scope").textContent).toContain("All environments (instance)");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Scope").textContent).toContain("All environments (instance)"),
+    );
   });
 
   it("fills a read-only host and says which token to use for Docker Hub", async () => {
@@ -631,5 +645,109 @@ describe("CredentialSheet conflicts", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("You no longer have permission to do that.");
     expect(closed).toBe(0);
+  });
+});
+
+describe("CredentialSheet scope", () => {
+  const fill = async () => {
+    await screen.findByText("Add a registry credential");
+    choose("GHCR");
+    type("Name", "ghcr-acme");
+    type("Username", "deploy");
+    type("Secret", SECRET);
+  };
+  const scopeSelect = () => screen.getByRole("combobox", { name: "Scope" });
+  const openScope = () => fireEvent.keyDown(scopeSelect(), { key: "Enter" });
+
+  it("preselects the one environment an environment Admin administers, with no instance option", async () => {
+    me = makeMe({ envs: { e1: "admin", e2: "viewer" } });
+    mount();
+    await waitFor(() => expect(scopeSelect().textContent).toContain("Lab"));
+    openScope();
+    const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(options).toEqual(["Lab"]);
+    expect(
+      screen.getByText(
+        "Instance credentials apply to every environment. Pick an environment to limit it to one.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("sends the request to the environment's route, not the instance's", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
+    mount();
+    await waitFor(() => expect(scopeSelect().textContent).toContain("Lab"));
+    await fill();
+    save();
+    await waitFor(() => expect(closed).toBe(1));
+    expect(posted).toEqual([]);
+    expect(envPosted).toEqual([
+      {
+        path: "/api/env/e1/registries",
+        body: { name: "ghcr-acme", type: "ghcr", username: "deploy", secret: SECRET },
+      },
+    ]);
+  });
+
+  it("lists the instance and each environment an instance administrator may add to, and posts to the one chosen", async () => {
+    mount();
+    await waitFor(() => expect(scopeSelect().textContent).toContain("All environments (instance)"));
+    openScope();
+    const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(options).toEqual(["All environments (instance)", "Lab", "Prod"]);
+    fireEvent.keyDown(screen.getByRole("option", { name: "Prod" }), { key: "Enter" });
+    await waitFor(() => expect(scopeSelect().textContent).toContain("Prod"));
+    await fill();
+    save();
+    await waitFor(() => expect(closed).toBe(1));
+    expect(posted).toEqual([]);
+    expect(envPosted.map((p) => p.path)).toEqual(["/api/env/e2/registries"]);
+  });
+
+  it("offers only the environments where the user is Admin", async () => {
+    me = makeMe({ envs: { e1: "admin", e2: "operator" } });
+    mount();
+    await waitFor(() => expect(scopeSelect().textContent).toContain("Lab"));
+    openScope();
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual(["Lab"]);
+  });
+
+  it("names the environment when its Docker Hub fallback is already taken", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
+    postStatus = 409;
+    postBody = {
+      title: "Conflict",
+      status: 409,
+      type: "hub_fallback_taken",
+      errors: [{ location: "conflict.credential", message: "hub-all" }],
+    };
+    mount();
+    await waitFor(() => expect(scopeSelect().textContent).toContain("Lab"));
+    await screen.findByText("Add a registry credential");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use for all Docker Hub pulls" }));
+    type("Name", "hub-two");
+    type("Username", "me");
+    type("Secret", SECRET);
+    save();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "“hub-all” already uses all Docker Hub pulls for Lab. Untick it there first.",
+    );
+    expect(closed).toBe(0);
+  });
+
+  it("says which environment already has a credential for the registry", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
+    postStatus = 409;
+    postBody = { title: "Conflict", status: 409, type: "host_prefix_taken" };
+    mount();
+    await waitFor(() => expect(scopeSelect().textContent).toContain("Lab"));
+    await fill();
+    type("Namespace (optional)", "acme");
+    save();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Lab already has a credential for ghcr.io/acme. Edit that one instead.",
+    );
   });
 });

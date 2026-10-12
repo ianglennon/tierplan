@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/config"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/vault"
 )
@@ -846,4 +847,160 @@ func TestResolvingRefusesAnUnreadableReferenceAndACallerWhoCannotReadTheEnvironm
 	if rec := f.credCall(t, credentialUser{cookie, csrf}, http.MethodPost, path, `{"ref":"nginx"}`); rec.Code != http.StatusNotFound {
 		t.Errorf("a user with no role: %d %s, want 404", rec.Code, rec.Body)
 	}
+}
+
+// Environment-layer credentials (plan 05-10, IMG-01, IMG-02, D-01, D-02, D-30).
+
+const envCredBody = `{"name":"ghcr-team","type":"generic","host":"localhost:5000","prefix":"private","username":"bot","secret":"` + pullCredSecret + `"}`
+
+func TestAnEnvAdminAddsAnEnvCredentialForTheirEnvironmentAndItIsAuditedWithThatEnvironment(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, _ := f.twoEnvironments(t)
+	admin := f.asRoleOn(t, "envadmin", a.ID, "admin")
+
+	rec := f.credCall(t, admin, http.MethodPost, "/api/env/"+a.ID+"/registries", envCredBody)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	c := decodeCred(t, rec)
+	if c.ID == "" || c.Scope.Kind != "environment" || c.Scope.EnvID == nil || *c.Scope.EnvID != a.ID ||
+		c.Scope.EnvName == nil || *c.Scope.EnvName != a.Name || !c.CanManage || c.Last4 != "6789" {
+		t.Errorf("credential = %+v, want an environment credential of %s that the caller manages", c, a.Name)
+	}
+	if strings.Contains(rec.Body.String(), pullCredSecret) {
+		t.Errorf("the response carries the secret: %s", rec.Body)
+	}
+
+	var envID, layer string
+	if err := f.st.Read.QueryRow(`SELECT COALESCE(env_id, ''), details->>'layer' FROM audit_log WHERE action = 'registry.credential_created'`).Scan(&envID, &layer); err != nil {
+		t.Fatal(err)
+	}
+	if envID != a.ID || layer != "environment" {
+		t.Errorf("audit env_id = %q layer = %q, want %s and environment", envID, layer, a.ID)
+	}
+	// The Env Admin reads that row on the audit page (P3 audit scoping).
+	list := f.credCall(t, admin, http.MethodGet, "/api/audit", "")
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"registry.credential_created"`) {
+		t.Errorf("audit page: %d %s, want the environment's credential row", list.Code, list.Body)
+	}
+}
+
+func TestEnvCredentialRoutesRefuseWhoHoldNoAdminRoleOnTheEnvironmentAndHideOthers(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, b := f.twoEnvironments(t)
+	f.addUser(t, "nobody", false)
+	nobodyCookie, nobodyCSRF := f.signIn(t, "nobody", false)
+
+	for name, tc := range map[string]struct {
+		u    credentialUser
+		want int
+	}{
+		"operator of A":     {f.asRoleOn(t, "operator", a.ID, "operator"), http.StatusForbidden},
+		"viewer of A":       {f.asRoleOn(t, "viewer", a.ID, "viewer"), http.StatusForbidden},
+		"admin of B only":   {f.asRoleOn(t, "adminb", b.ID, "admin"), http.StatusNotFound},
+		"user with no role": {credentialUser{nobodyCookie, nobodyCSRF}, http.StatusNotFound},
+	} {
+		rec := f.credCall(t, tc.u, http.MethodPost, "/api/env/"+a.ID+"/registries", envCredBody)
+		if rec.Code != tc.want {
+			t.Errorf("%s: %d %s, want %d", name, rec.Code, rec.Body, tc.want)
+		}
+		if tc.want == http.StatusNotFound && problemType(t, rec) != "environment_not_found" {
+			t.Errorf("%s: %s, want environment_not_found", name, rec.Body)
+		}
+	}
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT count(*) FROM registry_credentials`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("rows = %d, %v; a refused create stores nothing", n, err)
+	}
+	// An instance administrator may add to any environment.
+	if rec := f.credCall(t, credentialUser{f.cookie, f.csrf}, http.MethodPost, "/api/env/"+b.ID+"/registries", envCredBody); rec.Code != http.StatusCreated {
+		t.Errorf("instance admin: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestEnvCredentialMayShareAnInstanceCredentialsHostAndPrefixButNotTwiceInOneEnvironment(t *testing.T) {
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, _ := f.twoEnvironments(t)
+	admin := credentialUser{f.cookie, f.csrf}
+	f.storeCredential(t, admin, `{"name":"ghcr-team","type":"generic","host":"localhost:5000","prefix":"private","username":"inst","secret":"`+credToken+`"}`)
+
+	// D-02: the same name, host and prefix as the instance's is allowed in an environment.
+	first := f.credCall(t, admin, http.MethodPost, "/api/env/"+a.ID+"/registries", envCredBody)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first: %d %s", first.Code, first.Body)
+	}
+	// A second in the same environment for the same host and prefix is host_prefix_taken, naming the first.
+	dup := f.credCall(t, admin, http.MethodPost, "/api/env/"+a.ID+"/registries",
+		`{"name":"other","type":"generic","host":"localhost:5000","prefix":"private","username":"bot","secret":"`+pullCredSecret+`"}`)
+	if dup.Code != http.StatusConflict || problemType(t, dup) != "host_prefix_taken" || !strings.Contains(dup.Body.String(), "ghcr-team") {
+		t.Errorf("duplicate: %d %s, want 409 host_prefix_taken naming ghcr-team", dup.Code, dup.Body)
+	}
+	if strings.Contains(dup.Body.String(), "instance credential") {
+		t.Errorf("the conflict words the wrong layer: %s", dup.Body)
+	}
+	bad := f.credCall(t, admin, http.MethodPost, "/api/env/"+a.ID+"/registries", `{"name":""}`)
+	if bad.Code != http.StatusUnprocessableEntity || problemType(t, bad) != "validation_failed" {
+		t.Errorf("invalid: %d %s, want 422 validation_failed", bad.Code, bad.Body)
+	}
+}
+
+func TestAnEnvCredentialAnAdminAddedIsUsedByThatEnvironmentsPullsAndNoOthers(t *testing.T) {
+	cfg := dockertest.FakeConfig{Hostname: "alpha", SwarmState: "active", SwarmControl: true}
+	f, env, node, _ := twoNodes(t, cfg, dockertest.FakeConfig{Hostname: "bravo", SwarmState: "active", SwarmControl: true},
+		pairFacts("alpha", false), pairFacts("bravo", false))
+	// A second environment, with one node of its own.
+	other := f.srv.NewEnvironment(t, "Other")
+	charlieFacts := pairFacts("charlie", false)
+	charlieFacts.Swarm.ClusterID = "cluster-2"
+	otherNode := f.connect(t, other, dockertest.FakeConfig{Hostname: "charlie", SwarmState: "active", SwarmControl: true}, charlieFacts)
+	f.whenState(t, other.ID, "online")
+	f.whenProbed(t, envs.AgentTarget(otherNode.id))
+
+	admin := credentialUser{f.cookie, f.csrf}
+	// The instance credential covers the same registry and namespace, with another user.
+	if rec := f.credCall(t, admin, http.MethodPost, "/api/registries",
+		`{"name":"inst","type":"generic","host":"localhost:5000","prefix":"private","username":"instbot","secret":"`+credToken+`"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("instance create: %d %s", rec.Code, rec.Body)
+	}
+	envAdmin := f.asRoleOn(t, "envadmin", env.ID, "admin")
+	if rec := f.credCall(t, envAdmin, http.MethodPost, "/api/env/"+env.ID+"/registries", envCredBody); rec.Code != http.StatusCreated {
+		t.Fatalf("environment create: %d %s", rec.Code, rec.Body)
+	}
+
+	// The environment's own credential wins for its pulls (D-02) ...
+	started := f.startPullOn(t, env.ID)
+	if job := f.pullDone(t, started.JobID); job.State != "done" {
+		t.Fatalf("job = %+v", job)
+	}
+	for _, h := range node.fake.PullAuth() {
+		if user, pw, _ := decodedPullAuth(t, h); user != "bot" || pw != pullCredSecret {
+			t.Errorf("the environment's pull used %q, want its own credential", user)
+		}
+	}
+	if len(node.fake.PullAuth()) != 1 {
+		t.Errorf("headers = %q, want one", node.fake.PullAuth())
+	}
+
+	// ... and another environment's pulls use the instance credential, never this one.
+	started = f.startPullOn(t, other.ID)
+	if job := f.pullDone(t, started.JobID); job.State != "done" {
+		t.Fatalf("job = %+v", job)
+	}
+	h := otherNode.fake.PullAuth()
+	if len(h) != 1 {
+		t.Fatalf("headers = %q, want one", h)
+	}
+	if user, pw, _ := decodedPullAuth(t, h[0]); user != "instbot" || pw != credToken {
+		t.Errorf("the other environment's pull used %q, want the instance credential", user)
+	}
+}
+
+// startPullOn pulls the private image on one environment as the signed-in admin.
+func (f *agentFix) startPullOn(t *testing.T, envID string) pullStarted {
+	t.Helper()
+	rec := f.req(t, http.MethodPost, "/api/env/"+envID+"/images/pull", `{"ref":"`+privateRef+`"}`)
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("pull: %d %s", rec.code, rec.body)
+	}
+	return decode[pullStarted](t, rec)
 }

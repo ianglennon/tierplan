@@ -457,3 +457,48 @@ func TestCandidatesAreTheInstanceLayerAndOneEnvironmentsWithNoSecretAndNoOtherEn
 		t.Errorf("an environment with none of its own: %+v, %v, want only the instance one", none, err)
 	}
 }
+
+func TestAnEnvironmentMayHoldTheHostAndPrefixOfAnInstanceCredentialButNotTwice(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a", "Alpha")
+	addEnvironment(t, st, "env-b", "Beta")
+	create(t, s, nil) // the instance credential for ghcr.io/acme
+
+	// D-02: the same host and prefix in an environment is allowed, and so is the same name.
+	own := create(t, s, func(in *registry.CreateInput) { in.EnvID = "env-a" })
+	if own.EnvID != "env-a" || own.Layer() != registry.LayerEnvironment {
+		t.Fatalf("credential = %+v, want the environment layer of env-a", own)
+	}
+	// Another environment holds the same too: the layers are per environment.
+	create(t, s, func(in *registry.CreateInput) { in.EnvID = "env-b" })
+
+	in := valid()
+	in.EnvID, in.Name = "env-a", "another"
+	if _, err := s.Create(context.Background(), in, "admin-1", nil); !errors.Is(err, registry.ErrHostPrefixTaken) {
+		t.Errorf("a second credential for the same host and prefix in one environment: %v, want ErrHostPrefixTaken", err)
+	}
+}
+
+func TestGetInEnvIsOnlyTheCredentialsOwnEnvironment(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a", "Alpha")
+	addEnvironment(t, st, "env-b", "Beta")
+	instance := create(t, s, nil)
+	inA := create(t, s, func(in *registry.CreateInput) { in.EnvID = "env-a" })
+
+	ctx := context.Background()
+	got, err := s.GetInEnv(ctx, "env-a", inA.ID)
+	if err != nil || got.ID != inA.ID || got.EnvID != "env-a" {
+		t.Fatalf("GetInEnv(env-a, own) = %+v, %v", got, err)
+	}
+	for name, c := range map[string]struct{ env, id string }{
+		"another environment's credential": {"env-b", inA.ID},
+		"an instance credential":           {"env-a", instance.ID},
+		"an unknown ID":                    {"env-a", "no-such"},
+		"an empty environment":             {"", inA.ID},
+	} {
+		if _, err := s.GetInEnv(ctx, c.env, c.id); !errors.Is(err, registry.ErrNotFound) {
+			t.Errorf("%s: %v, want ErrNotFound", name, err)
+		}
+	}
+}
