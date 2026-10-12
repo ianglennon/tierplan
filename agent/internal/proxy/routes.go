@@ -198,6 +198,23 @@ var routes = []route{
 		query:        map[string]*regexp.Regexp{"fromImage": fromImageValue, "tag": pullTag, "platform": platformValue},
 		registryAuth: true,
 	},
+	// The list ("images list", above) is matched first, so GET /images/json is
+	// never read as the inspect of an image whose name has no slash.
+	{name: "image inspect", method: http.MethodGet, path: pathOf(`images/` + imageNameShape + `/json`)},
+	{name: "image history", method: http.MethodGet, path: pathOf(`images/` + imageNameShape + `/history`)},
+	{
+		// force is absent on purpose: without it the engine itself refuses to
+		// remove an image a container uses. platforms is absent because Bayplan
+		// removes whole images.
+		name: "image remove", method: http.MethodDelete, path: pathOf(`images/` + imageNameShape),
+		query: map[string]*regexp.Regexp{"noprune": boolValue},
+	},
+	// The distribution check asks the registry whether this host may pull an
+	// image, with the credential the pull would use.
+	{
+		name: "distribution", method: http.MethodGet, path: pathOf(`distribution/` + imageNameShape + `/json`),
+		registryAuth: true,
+	},
 
 	// Disk usage, for the size of volumes only.
 	{
