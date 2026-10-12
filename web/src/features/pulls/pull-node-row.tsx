@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { Link } from "@tanstack/react-router";
 import { Check, ChevronRight, Copy } from "lucide-react";
 import { useId, useState } from "react";
 
@@ -19,47 +20,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { type FailureCredential, failureCopy } from "@/features/pulls/failure-copy";
+import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatBytes } from "@/lib/format";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
-// The registry host of a normalised reference: docker.io/library/nginx:1.27 is docker.io.
-export function registryHost(ref: string): string {
-  return ref.split("/")[0] ?? ref;
-}
-
 // shortDigest keeps the algorithm and the first twelve characters: sha256:0123456789ab.
 export function shortDigest(digest: string): string {
   const [algo, hex] = digest.split(":");
   return hex ? `${algo}:${hex.slice(0, 12)}` : digest.slice(0, 19);
-}
-
-// The i18n key of the sentence for a failure code. A code the SPA does not know gets the
-// generic sentence: a code is never shown as it is.
-const FAILURE_KEYS: Record<string, string> = {
-  pull_denied: "denied",
-  pull_unauthorized: "denied",
-  image_not_found: "notFound",
-  invalid_reference: "invalidReference",
-  rate_limited: "rateLimited",
-  registry_unreachable: "unreachable",
-  registry_tls: "tls",
-  registry_http: "http",
-  node_unreachable: "nodeUnreachable",
-  host_read_only: "hostReadOnly",
-  cancelled: "cancelled",
-  interrupted: "interrupted",
-};
-
-type Translate = (key: string, options?: Record<string, unknown>) => string;
-
-// failureMessage is the sentence for a failed node: the words for the code, with the
-// node, the registry and the reference filled in. It never includes anything the server
-// or the registry said.
-export function failureMessage(t: Translate, code: string, node: string, ref: string): string {
-  const key = FAILURE_KEYS[code] ?? "generic";
-  return t(`pulls.failure.${key}`, { node, ref, host: registryHost(ref) });
 }
 
 type Display = "waiting" | "running" | "done" | "failed" | "cancelled";
@@ -92,12 +63,17 @@ interface PullNodeRowProps {
   // The normalised reference being pulled.
   imageRef: string;
   envId: string;
+  // The credential the pull used, null when it was anonymous; failures name it.
+  credential?: FailureCredential | null;
+  // The environment's name, said as the scope of an environment credential.
+  envName?: string;
 }
 
 // PullNodeRow is one node of a pull: its state, its bar with the amount beside it, the
 // digest once it is done or the reason it failed, and the layers on request.
-export function PullNodeRow({ item, imageRef, envId }: PullNodeRowProps) {
+export function PullNodeRow({ item, imageRef, envId, credential, envName }: PullNodeRowProps) {
   const t = useT();
+  const canAdd = usePermission("registries.instance");
   const panelId = useId();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -111,6 +87,17 @@ export function PullNodeRow({ item, imageRef, envId }: PullNodeRowProps) {
       : null;
   const failed = item.state === "failed" || item.state === "cancelled";
   const agentPolicy = item.code === "agent_policy_denied";
+  const failure = failed
+    ? failureCopy(t, item.code, {
+        credential: credential ?? null,
+        envName,
+        ref: imageRef,
+        node: item.name,
+      })
+    : null;
+  // Add credential is for whoever may add one; Test credential opens one the person can see.
+  const action =
+    failure?.action && (failure.action.kind === "test" || canAdd) ? failure.action : null;
 
   async function copyDigest() {
     if (await copyText(item.digest)) {
@@ -198,17 +185,28 @@ export function PullNodeRow({ item, imageRef, envId }: PullNodeRowProps) {
       ) : null}
 
       {failed && agentPolicy ? <AgentUpdateNotice envId={envId} /> : null}
-      {failed && !agentPolicy ? (
+      {failed && !agentPolicy && failure ? (
         // A node the person cancelled is told in plain words, not as an alarm.
-        <p
+        <div
           role={item.state === "cancelled" ? "status" : "alert"}
           className={cn(
-            "text-sm break-words",
+            "flex flex-col gap-1 text-sm break-words",
             item.state === "cancelled" ? "text-muted-foreground" : "text-status-offline-text",
           )}
         >
-          {failureMessage(t, item.code, item.name, imageRef)}
-        </p>
+          <p>{failure.text}</p>
+          {action ? (
+            <p>
+              <Link
+                to={action.to}
+                search={action.search}
+                className="inline-flex rounded-sm text-accent-ink underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-md:min-h-11 max-md:items-center"
+              >
+                {action.label}
+              </Link>
+            </p>
+          ) : null}
+        </div>
       ) : null}
 
       {/* One polite announcement when a node is done; a failure is announced by its alert. */}

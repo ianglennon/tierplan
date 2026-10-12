@@ -34,7 +34,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
 import { NodeChooser } from "@/features/images/node-chooser";
-import { failureMessage } from "@/features/pulls/pull-node-row";
+import { failureCopy } from "@/features/pulls/failure-copy";
 import { PullProgress, useCancelPullAction } from "@/features/pulls/pull-progress";
 import { usePullJob } from "@/features/pulls/pull-stream";
 import { useNeeds } from "@/hooks/use-needs";
@@ -154,7 +154,14 @@ export function PullDialog({
       );
     } else if (done === 0) {
       const first = items.find((i) => i.state !== "done");
-      const reason = first ? failureMessage(t, first.code, first.name, ref) : "";
+      const reason = first
+        ? failureCopy(t, first.code, {
+            credential: job.credential,
+            envName: hostName,
+            ref,
+            node: first.name,
+          }).text
+        : "";
       toastErrorWithAction(
         t("pulls.toast.failed", { ref, reason }),
         t("pulls.toast.details"),
@@ -167,7 +174,7 @@ export function PullDialog({
         reopen,
       );
     }
-  }, [finished, job, tracked, envId, queryClient, t, reopen]);
+  }, [finished, job, tracked, envId, hostName, queryClient, t, reopen]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -202,6 +209,8 @@ export function PullDialog({
               imageRef={tracked.ref}
               nodes={tracked.nodes ?? []}
               job={stream.job}
+              credential={tracked.credential}
+              envName={hostName}
               status={stream.status}
               gone={stream.gone}
               accessLost={stream.accessLost}

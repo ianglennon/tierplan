@@ -168,15 +168,50 @@ describe("PullProgress", () => {
       ),
     );
     const alerts = screen.getAllByRole("alert").map((a) => a.textContent);
-    expect(alerts).toContain(
-      "Pull denied by docker.io. Check that the image exists and that you can pull it.",
-    );
+    expect(
+      alerts.some((a) =>
+        a?.startsWith(
+          `No stored credential matches ${REF}, so it was pulled anonymously. Add one.`,
+        ),
+      ),
+    ).toBe(true);
     expect(alerts).toContain(
       "node-2 couldn't reach docker.io. Check its network, DNS and firewall.",
     );
     expect(document.body.textContent).not.toContain("pull_denied");
     expect(document.body.textContent).not.toContain("registry_unreachable");
     expect(screen.getByRole("heading", { name: `Couldn't pull ${REF}` })).toBeTruthy();
+  });
+
+  it("names the credential above the rows, with its scope", () => {
+    const j = job([item({ state: "running" })]);
+    mount({ ...j, credential: { id: "c-1", name: "ghcr-acme", layer: "instance" } });
+    expect(screen.getByText("Credential: “ghcr-acme” (Instance)")).toBeTruthy();
+    cleanup();
+    mount(
+      { ...j, credential: { id: "c-2", name: "team", layer: "environment" } },
+      { envName: "Prod" },
+    );
+    expect(screen.getByText("Credential: “team” (Prod)")).toBeTruthy();
+  });
+
+  it("uses the credential the start answered with until the first snapshot", () => {
+    mount(undefined, { credential: { id: "c-1", name: "ghcr-acme", layer: "instance" } });
+    expect(screen.getByText("Credential: “ghcr-acme” (Instance)")).toBeTruthy();
+  });
+
+  it("says which credential a refused pull used, with a link to test it, as an alert", () => {
+    const j = {
+      ...job([item({ state: "failed", code: "pull_unauthorized" })], "failed"),
+      credential: { id: "c-1", name: "ghcr-acme", layer: "instance" as const },
+    };
+    mount(j);
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain(
+      "Pull denied using credential “ghcr-acme” (Instance). Check its scopes or test it.",
+    );
+    const link = within(alert).getByRole("link", { name: "Test credential" });
+    expect(link.getAttribute("href")).toBe("/registries?credential=c-1");
   });
 
   it("offers Try again only when every node failed, and never retries by itself", () => {

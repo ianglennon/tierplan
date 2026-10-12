@@ -7,6 +7,7 @@ import { type PullItem, type PullJob, useCancelPull } from "@/api/pulls";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { scopeOf } from "@/features/pulls/failure-copy";
 import { PullNodeRow } from "@/features/pulls/pull-node-row";
 import type { PullStreamStatus } from "@/features/pulls/pull-stream";
 import { useT } from "@/i18n/use-t";
@@ -19,6 +20,11 @@ interface PullProgressProps {
   // The nodes the pull was started on, shown as waiting until the first snapshot arrives.
   nodes: ReadonlyArray<{ nodeId: string; name: string }>;
   job?: PullJob;
+  // The credential the pull was started with, for the line above the rows until the first
+  // snapshot of the job says it. Null is an anonymous pull.
+  credential?: PullJob["credential"];
+  // The environment's name, said as the scope of an environment credential.
+  envName?: string;
   status: PullStreamStatus;
   gone?: boolean;
   accessLost?: boolean;
@@ -58,6 +64,8 @@ export function PullProgress({
   imageRef,
   nodes,
   job,
+  credential: startedWith,
+  envName,
   status,
   gone,
   accessLost,
@@ -75,6 +83,8 @@ export function PullProgress({
     );
   }, [job, nodes]);
 
+  // The job's own answer wins; before the first snapshot the answer to the start stands.
+  const credential = job ? job.credential : (startedWith ?? null);
   const finished = job !== undefined && job.state !== "running";
   const anyDone = items.some((i) => i.state === "done");
   const allFailed = finished && items.length > 0 && items.every((i) => i.state === "failed");
@@ -95,7 +105,14 @@ export function PullProgress({
         >
           {t(title, { ref: imageRef })}
         </h2>
-        <p className="text-sm text-muted-foreground">{t("pulls.progress.credential")}</p>
+        <p className="text-sm text-muted-foreground">
+          {credential
+            ? t("pulls.progress.credential", {
+                name: credential.name,
+                scope: scopeOf(t, credential, envName),
+              })
+            : t("pulls.progress.credentialAnonymous")}
+        </p>
       </div>
 
       {gone ? (
@@ -120,7 +137,14 @@ export function PullProgress({
 
       <ul aria-label={t("pulls.progress.nodes")} aria-live="off" className="flex flex-col gap-2">
         {items.map((item) => (
-          <PullNodeRow key={item.nodeId} item={item} imageRef={imageRef} envId={envId} />
+          <PullNodeRow
+            key={item.nodeId}
+            item={item}
+            imageRef={imageRef}
+            envId={envId}
+            credential={credential}
+            envName={envName}
+          />
         ))}
       </ul>
 
